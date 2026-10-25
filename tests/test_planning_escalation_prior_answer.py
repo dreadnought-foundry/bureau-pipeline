@@ -471,15 +471,17 @@ class TestTheBlockSitsUnderTheRecommendation:
 class TestTheSignaturesDRE6452ReadsAreFrozen:
     """DRE-6452 calls `escalate(linear_ops, card, reason, choices=…)`, reads
     `Outcome.parked` and `Outcome.stood_down`, and calls `refusal(reason)`
-    before it. This card changes none of them."""
+    before it. This card changes none of them. DRE-7178 adds one keyword,
+    `from_lane`, last and defaulted to None, so every one of those calls
+    reads exactly as before."""
 
     def test_escalate(self):
         assert str(inspect.signature(planning_escalation.escalate)) == (
             "(linear_ops, identifier: 'str', reason: 'str | None', transport: "
             "'bool' = False, rewrite: 'bool' = False, *, issue: 'dict | None' = "
             "None, comments=None, attempt_since: 'str | None' = None, "
-            "last_words: 'str | None' = None, choices: 'dict | None' = None) -> "
-            "'Outcome'")
+            "last_words: 'str | None' = None, choices: 'dict | None' = None, "
+            "from_lane: 'str | None' = None) -> 'Outcome'")
 
     def test_refusal(self):
         assert str(inspect.signature(planning_escalation.refusal)) == (

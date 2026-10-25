@@ -142,6 +142,18 @@ class DeclarationTest(unittest.TestCase):
                          (tags["proof-dispatch:"]["printed_by"], tags["proof-dispatch:"]["constant"]))
         self.assertEqual(WORKFLOW, tags["proof identity:"]["printed_by"])
         self.assertIn("proof local run:", tags)
+        # DRE-6939: the model home's line, in every selecting step's log.
+        self.assertEqual(("scripts/model_home.py", "TAG"),
+                         (tags["model-home:"]["printed_by"], tags["model-home:"]["constant"]))
+        self.assertIn("DRE-6939", tags["model-home:"]["when"])
+        # DRE-6986: the carry's line, in model-home-carry.yml's carry step.
+        self.assertEqual(("scripts/model_home_carry.py", "TAG"),
+                         (tags["model-home-carry:"]["printed_by"],
+                          tags["model-home-carry:"]["constant"]))
+        self.assertIn("DRE-6986", tags["model-home-carry:"]["when"])
+        self.assertIn("model-home-carry.yml", tags["model-home-carry:"]["when"])
+        self.assertIn("Carry the merged choices into the home",
+                      tags["model-home-carry:"]["when"])
         for entry in tags.values():
             self.assertEqual(["tag", "printed_by", "constant", "when"], list(entry))
 
@@ -343,6 +355,25 @@ class OutOfReachTest(unittest.TestCase):
         got = self.reach(criterion, caller_slug="bureau-pipeline")
         self.assertEqual(1, len(got), got)
         self.assertEqual([], self.reach(criterion, caller_slug="portico"))
+
+    def test_the_sandbox_press_is_held_for_agent_bureau_only(self):
+        # DRE-7779: the console proof-reader presses on the sandbox, and only
+        # an agent-bureau proof run holds it (DRE-7772).
+        reading = _reading(_doc(), "console-sandbox-press")
+        self.assertEqual("optional", reading["held"])
+        self.assertEqual(["agent-bureau"], reading["held_for"])
+        self.assertEqual({"agent-bureau": "scripts/console_proof_reader.py"},
+                         reading["queries_declared_by"])
+        for criterion in (
+                "Sandbox press: on `agent-bureau-demo`, the run sends `createTask`; "
+                "the record quotes the command's JSON object.",
+                "The run reads the live console refuse a press off the sandbox through "
+                "`scripts/console_proof_reader.py refusal-probe`, and the record quotes "
+                "its JSON object."):
+            self.assertEqual([], self.reach(criterion, caller_slug="agent-bureau"), criterion)
+            got = self.reach(criterion, caller_slug="bureau-pipeline")
+            self.assertEqual([f"{reading['what']} — {reading['why']}"], got, criterion)
+            self.assertTrue(got[0].startswith(reading["what"]), got)
 
     def test_as_the_proof_reader_identity_is_within_reach_for_every_caller(self):
         criterion = ("The card's comments, read as the proof-reader identity, carry one "

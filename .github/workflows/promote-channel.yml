@@ -7,7 +7,8 @@
 # invoked again.
 #
 # What this workflow automates is ONE ref: `stable`, kept on the newest
-# harness-proven commit on main. Read the scope narrowly, because the file is
+# harness-proven commit on main whose own unit suite (`Pipeline Tests`) has
+# ended green (DRE-6993). Read the scope narrowly, because the file is
 # easy to over-read: nothing pins `stable`, no product-repo stub is
 # re-pointed, and cutting or re-pointing `vN` stays operator-only. "Agents
 # author, human promotes, harness proves" still describes the fleet-facing
@@ -122,6 +123,38 @@
 #      was, and the next run re-evaluates; a crash after filing the card and
 #      before the move leaves a true card and an unmoved channel.
 #
+# THE UNIT SUITE (DRE-6993). On 2026-10-11 `stable` sat on commits whose own
+# `Pipeline Tests` run on main was red from 12:27 to 13:33 PT: run
+# 38169771118 moved it to 4472399a at 12:53:25, two minutes after that
+# commit's suite (run 38167776550) had ended `failure`. The decision has
+# weighed the suite since DRE-6968; this file hands it over. Every route
+# reads the candidate's own `tests.yml` push run on main, both passes weigh
+# it, and the suite's end starts this workflow again, so `stable` moves once
+# the later of the two proofs is green. A run the suite started carries the
+# SUITE's conclusion, so `--woken-by` keeps it from being read as the
+# harness's, and nothing below names a unit-suite run as the harness run.
+#
+#   Q1 WHO INITIATES. A `workflow_run` on `Pipeline Tests`, initiated like
+#      the harness's: by whoever pushed to main, or by the nightly schedule.
+#      Nothing gates on the actor here, and the forced arm stays unreachable
+#      from any `workflow_run` (`--manual` is a dispatch's alone).
+#   Q2 WHICH SECRETS STORE. A `workflow_run` always runs in this repository
+#      with its normal store, whatever started the run it follows — so a
+#      pull request's run must never start it. `branches: [main]` keeps
+#      every ordinary pull request out, and the job's `if:` turns away the
+#      one that passes that filter: a fork whose branch is named `main`.
+#   Q3 RETRY / RE-RUN. Each attempt of a `Pipeline Tests` run that ends
+#      starts the promotion again, and the record read is the run's latest
+#      attempt. A re-run of this workflow re-reads the record.
+#   Q4 COMMAND LIMITS. `branches:` matches the starting run's head branch,
+#      not its event, hence the `if:`. The runs list takes `head_sha`,
+#      `branch` and `event` and answers newest first; `per_page=1` keeps the
+#      newest. The suite has no concurrency group, so a push to main never
+#      cancels another commit's suite.
+#   Q5 CRASH MID-FLOW. A read that fails writes `{}`, which the decision
+#      answers `unit-suite-unproven`: nothing moves, and the run fails in its
+#      last step so the hold is seen, as a blocked mirror check does.
+#
 # The decision lives in scripts/promote_channel.py (unit-tested red and green
 # in tests/test_promote_channel.py and tests/test_promote_channel_by_hand.py)
 # and the check in scripts/mirror_check.py (tests/test_mirror_check.py); this
@@ -130,8 +163,14 @@
 name: Promote Channel
 
 on:
+  # DRE-6993: the commit's own unit suite starts it too, so `stable` moves
+  # once the later of the two ends green. `main` only: without the filter
+  # every pull request's `Pipeline Tests` run would start a promotion, and
+  # the console's receipt would come from a run that printed none. A harness
+  # run dispatched on another ref no longer starts it either.
   workflow_run:
-    workflows: ["Integration Harness"]
+    workflows: ["Integration Harness", "Pipeline Tests"]
+    branches: [main]
     types: [completed]
   # The by-hand route (DRE-4111). Dispatching needs repo write, which is the
   # operator gate; the proof gate is the candidate's own commit status and is
@@ -185,7 +224,9 @@ permissions:
 
 jobs:
   promote:
-    # EVERY completed harness run reaches the decision (DRE-3070) — the
+    # EVERY completed harness run on main reaches the decision (DRE-3070;
+    # a run on any other branch has not started this workflow since DRE-6993,
+    # the trigger's `branches: [main]`) — the
     # condition that used to live here (`conclusion == 'success' &&
     # head_branch == 'main'`) is now the decision's own first two questions,
     # answered out loud instead of silently.
@@ -206,6 +247,14 @@ jobs:
     # of the PR-head runs the gates exist to keep cheap. Nothing else about
     # the shape changes — the dispatch reaches the same decision, spends the
     # same reads, and is refused by the same rails.
+    #
+    # DRE-6993: the one gate here. `branches: [main]` above passes a pull
+    # request from a fork whose branch is named `main`, and a `workflow_run`
+    # gets this repository's secrets whatever started it — so a starting run
+    # whose event is `pull_request` is turned away before any step.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.event != 'pull_request'
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 10 until DRE-6496. The mirror check's own step is capped at 15, and the
     # clone and the install before it take minutes of their own; the rest of
@@ -229,8 +278,9 @@ jobs:
         id: resolve
         if: >-
           github.event_name == 'workflow_dispatch' ||
-          (github.event.workflow_run.conclusion == 'success' &&
-           github.event.workflow_run.head_branch == 'main')
+          (github.event.workflow_run.head_branch == 'main' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.name == 'Pipeline Tests'))
         env:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
@@ -258,8 +308,9 @@ jobs:
         id: app
         if: >-
           github.event_name == 'workflow_dispatch' ||
-          (github.event.workflow_run.conclusion == 'success' &&
-           github.event.workflow_run.head_branch == 'main')
+          (github.event.workflow_run.head_branch == 'main' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.name == 'Pipeline Tests'))
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
@@ -272,6 +323,9 @@ jobs:
       # settles it, and a cancelled run is now the ORDINARY case on a busy
       # night — two API calls per displaced merge would be pure noise. The
       # decision step reads `{}` (the file is absent) and never gets that far.
+      # A `Pipeline Tests` start fetches whatever it concluded (DRE-6993), as
+      # do the three steps around this one: a red suite must reach the
+      # decision with a candidate to be named `unit-suite-red`.
       #
       # THIS IS THE PROOF, on both routes (DRE-4111). It is the COMMIT's own
       # status, so it carries the stamp of whichever harness run proved the
@@ -280,8 +334,9 @@ jobs:
       - name: Fetch the candidate's combined commit status
         if: >-
           github.event_name == 'workflow_dispatch' ||
-          (github.event.workflow_run.conclusion == 'success' &&
-           github.event.workflow_run.head_branch == 'main')
+          (github.event.workflow_run.head_branch == 'main' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.name == 'Pipeline Tests'))
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ steps.resolve.outputs.candidate }}
@@ -301,8 +356,9 @@ jobs:
         id: ancestry
         if: >-
           github.event_name == 'workflow_dispatch' ||
-          (github.event.workflow_run.conclusion == 'success' &&
-           github.event.workflow_run.head_branch == 'main')
+          (github.event.workflow_run.head_branch == 'main' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.name == 'Pipeline Tests'))
         env:
           GH_TOKEN: ${{ github.token }}
           CANDIDATE: ${{ steps.resolve.outputs.candidate }}
@@ -345,11 +401,41 @@ jobs:
           echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
           echo "${DEFAULT_BRANCH}...${CANDIDATE:-<none>} = ${STATUS:-<unreadable>}"
 
+      # THE CANDIDATE'S OWN UNIT SUITE (DRE-6993), read once, on every route:
+      # its newest `tests.yml` run on main for a push of exactly this commit,
+      # as `{run_id, status, conclusion}`. Never the run that started this
+      # one — `Pipeline Tests` also runs nightly, and a dispatch has no
+      # starting run. A read that fails, or finds no run, writes `{}`, which
+      # the decision answers `unit-suite-unproven`: never promote on a suite
+      # nobody read.
+      - name: Read the candidate's own unit suite
+        id: unit
+        if: >-
+          github.event_name == 'workflow_dispatch' ||
+          (github.event.workflow_run.head_branch == 'main' &&
+           (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.name == 'Pipeline Tests'))
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          echo '{}' > unit_suite.json
+          if [ -n "$CANDIDATE" ]; then
+            gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/tests.yml/runs?head_sha=${CANDIDATE}&branch=${DEFAULT_BRANCH}&event=push&per_page=1" \
+              --jq '.workflow_runs[0] // {} | if .id then {run_id: .id, status, conclusion} else {} end' \
+              > unit_suite.json || echo '{}' > unit_suite.json
+          fi
+          echo "unit suite of ${CANDIDATE:-<none>}: $(cat unit_suite.json)"
+
       # THE PROOF ALONE (DRE-6496). The decision as it always was, and the
       # question the mirror check below is gated on: would this run move the
       # channel? A refusal here is the run's answer — `decide` replays the same
       # arguments and returns it unchanged — so a PR-head, displaced, held or
-      # already-current run never clones agent-bureau. The arguments are saved
+      # already-current run never clones agent-bureau, and since DRE-6993
+      # neither does a commit whose own unit suite is red, still running or
+      # unread: `--unit-suite` is weighed on both passes. The arguments are saved
       # NUL-separated, because the reason is somebody's typing.
       - name: Decide on the proof
         id: proof
@@ -369,6 +455,10 @@ jobs:
           # the commit status, which says whether the sha was ever proved by
           # any run — a cancelled run must not ride an older run's stamp.
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          # Which workflow started this run (DRE-6993). For `Pipeline Tests`
+          # the conclusion above is the suite's, and the decision does not
+          # read it as the harness's; empty on a dispatch.
+          WOKEN_BY: ${{ github.event.workflow_run.name }}
           # The branch the run was on. Through env, never interpolated into
           # the shell line — a head branch is attacker-controllable text on a
           # fork PR (the tests.yml `BASE_REF` rule).
@@ -403,6 +493,8 @@ jobs:
             --hold "$HOLD" \
             --conclusion "$CONCLUSION" \
             --branch "$BRANCH" \
+            --unit-suite unit_suite.json \
+            --woken-by "$WOKEN_BY" \
             "${ARGS[@]}")
           printf '%s\0' "${ARGS[@]}" > "$RUNNER_TEMP/decide-args"
           python3 scripts/promote_channel.py "${ARGS[@]}"
@@ -639,8 +731,11 @@ jobs:
           PROMOTED: ${{ steps.decide.outputs.promote }}
           FROM_SHA: ${{ steps.ancestry.outputs.head }}
           TO_SHA: ${{ steps.resolve.outputs.candidate }}
-          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
-          HARNESS_AT: ${{ github.event.workflow_run.updated_at }}
+          # The starting run is the harness run only when the harness started
+          # it (DRE-6993). A `Pipeline Tests` start passes neither, and the
+          # proving run is read off the commit's own status, as on a dispatch.
+          HARNESS_RUN: ${{ github.event.workflow_run.name == 'Integration Harness' && github.event.workflow_run.html_url || '' }}
+          HARNESS_AT: ${{ github.event.workflow_run.name == 'Integration Harness' && github.event.workflow_run.updated_at || '' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           STABLE_NOW="$(gh api \
@@ -670,7 +765,10 @@ jobs:
       # would show "4 behind · current" on the ordinary half-hour cadence.
       # Five reads at most (the branch head, the ref, the compare, the
       # newest run, and that run's `--log-failed` when it went red — that is
-      # where the scenario names come from). Reporting only: exit 0 always,
+      # where the scenario names come from — or, when it went green past
+      # `stable`, that commit's own `tests.yml` push run: a red, missing or
+      # verdictless suite reads `blocked` with `scenarios=unit-suite`, so the
+      # console's alarm sees a channel the suite holds, DRE-6993). Reporting only: exit 0 always,
       # and a read that fails prints `unknown`, never a number nobody
       # fetched.
       - name: Where the channel stands
@@ -681,7 +779,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          GATE_RUN: ${{ github.event.workflow_run.id }}
+          # The harness's run, never a unit-suite run (DRE-6993): this is
+          # only the fallback when the harness's newest run on the branch
+          # cannot be listed, and a `Pipeline Tests` run is not one.
+          GATE_RUN: ${{ github.event.workflow_run.name == 'Integration Harness' && github.event.workflow_run.id || '' }}
         run: |
           python3 scripts/release_train.py --repo "$GITHUB_REPOSITORY" \
             channel --default-branch "$DEFAULT_BRANCH" --gate-run "$GATE_RUN"
@@ -770,6 +871,9 @@ jobs:
           REASON: ${{ steps.decide.outputs.reason }}
           PROMOTED: ${{ steps.decide.outputs.promote }}
           HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          # The starting run's workflow (DRE-6993): a `Pipeline Tests` run is
+          # named under "Woken by", never as the harness run.
+          WOKEN_BY: ${{ github.event.workflow_run.name }}
           CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SCENARIOS: ${{ steps.channel.outputs.scenarios }}
@@ -802,7 +906,11 @@ jobs:
             echo ""
             echo "${REASON}"
             echo ""
-            echo "Harness run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
+            if [ -n "$HARNESS_RUN" ] && [ "$WOKEN_BY" != "Integration Harness" ]; then
+              echo "Woken by: ${WOKEN_BY} run ${HARNESS_RUN}"
+            else
+              echo "Harness run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$PROMOTED" = "true" ]; then
             {
@@ -880,13 +988,27 @@ jobs:
       # no such outcome, so neither is failed here. The Pipeline Medic may
       # re-run a red run once; a re-run repeats the refusal and moves nothing,
       # the exemption self-medic.yml already records for this workflow.
+      #
+      # DRE-6993 adds `unit-suite-unproven`, for the same reason: a hold
+      # nobody can read. `unit-suite-red` and `unit-suite-not-finished` end
+      # green — the red `Pipeline Tests` run is already the signal and
+      # Red-Main Repair is already started by it, and a running suite starts
+      # this workflow again when it ends. The accepted cost: a suite run on
+      # main canceled and never run again ends `unit-suite-unproven`, the
+      # medic retries this run once, and a second red run gets its diagnosis.
       - name: Fail a run the blocked check held
         if: >-
-          steps.decide.outputs.outcome == 'mirror-check-blocked' &&
+          (steps.decide.outputs.outcome == 'mirror-check-blocked' ||
+           steps.decide.outputs.outcome == 'unit-suite-unproven') &&
           (github.event_name == 'workflow_dispatch' ||
            github.event.workflow_run.head_branch == 'main')
         env:
+          OUTCOME: ${{ steps.decide.outputs.outcome }}
           REASON: ${{ steps.decide.outputs.reason }}
         run: |
-          echo "::error title=Mirror check blocked::${REASON}"
+          if [ "$OUTCOME" = "unit-suite-unproven" ]; then
+            echo "::error title=Unit suite unproven::${REASON}"
+          else
+            echo "::error title=Mirror check blocked::${REASON}"
+          fi
           exit 1

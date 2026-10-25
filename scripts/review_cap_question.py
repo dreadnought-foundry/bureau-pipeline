@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""The question a spent review budget asks (DRE-6189).
+"""The question a spent review budget asks (DRE-6189, DRE-6841).
 
 When the review lane's re-trigger budget is spent on a head (REVIEW_NUDGE_CAP,
-DRE-5231), the sweep parks the card in Green Light (DRE-6181) and posts the
+DRE-5231), the sweep parks the card in Green Light (DRE-6181) — or, for a
+proof record, holds it In Review (below) — and posts the
 same question on the pull request as a fix-loop blocker. This module composes
 both texts from the evidence the sweep already holds — the budget, the head,
 what the critic and the Verifier say on it, the gate's newest hold note —
@@ -33,6 +34,24 @@ this one. Each offers dropping the change — closing the pull
 request and canceling the card by hand, the one answer no mechanism makes,
 and the cancel is what lifts the hold (`card-closed`). The merge gate reads
 no Operator decision, so nothing here offers one as a way past a check.
+
+A proof record (`agent/DRE-<n>-proof-record`) is never parked: the sweep
+holds it In Review for the operator (DRE-6841), and asks through the variant
+— `compose_proof_record(...)` and `pr_blocker_proof_record(...)`, the same
+evidence, the same notice, blocker line and key, its own three lines. The
+gate's refusal of a record is "proof record not proven", which is the
+operator's to answer, so the variant words two cases apart:
+
+  * the gate declined the record at the head as not proven
+    (`declined_not_proven`): the Finding quotes the note and asks whether to
+    accept the unmet rows by operator decision, record the event with
+    `🔬 proof-observed`, or drop the record;
+  * any other way to the cap — no critic verdict at the head, a decline for
+    another reason, a verdict the carry cannot bind: there is no row to
+    accept, so it asks whether to start the review again by hand, push the
+    record to a new head, or drop it.
+
+Neither asks a person to read the change, and neither names the CEO.
 
 Readers: the hygiene agent's Green Light lane, through
 `hygiene_green_light.recommendation(reason, note=<the comment>)` (DRE-6196);
@@ -195,6 +214,14 @@ def compose(*, card, pr_number, head, tag, critic, verifier, spent, hours,
     return "\n\n".join((notice, lines, _way_back(card), _key(head)))
 
 
+def _blocker(lines, way_back, pr_number, head) -> str:
+    answer = ("To answer here, comment on this pull request opening with: "
+              f"{fix_context.DECISION_EXAMPLE}")
+    blocker = (f"{fix_context.BLOCKER_PREFIX} {REVIEW_NUDGE_CAP_KEY} "
+               f"PR #{pr_number} @{head}:")
+    return "\n\n".join((blocker, lines, way_back, answer, _key(head)))
+
+
 def pr_blocker(*, card, pr_number, head, tag, critic, verifier, spent, hours,
                gate_note_line, cap) -> str:
     """The fix-loop blocker the same park posts on the pull request."""
@@ -202,8 +229,122 @@ def pr_blocker(*, card, pr_number, head, tag, critic, verifier, spent, hours,
         card=card, pr_number=pr_number, head=head, tag=tag, critic=critic,
         verifier=verifier, spent=spent, hours=hours,
         gate_note_line=gate_note_line, cap=cap))
-    answer = ("To answer here, comment on this pull request opening with: "
-              f"{fix_context.DECISION_EXAMPLE}")
-    blocker = (f"{fix_context.BLOCKER_PREFIX} {REVIEW_NUDGE_CAP_KEY} "
-               f"PR #{pr_number} @{head}:")
-    return "\n\n".join((blocker, lines, _way_back(card), answer, _key(head)))
+    return _blocker(lines, _way_back(card), pr_number, head)
+
+
+# --------------------------------------------------------------------------- #
+# the proof-record variant (DRE-6841)                                          #
+# --------------------------------------------------------------------------- #
+
+#: What the gate's decline reason opens with when a proof record's unmet rows
+#: are what hold it — `proof_dispatch.NOT_PROVEN`, restated for the reason the
+#: keys above are; the tests hold the two equal.
+NOT_PROVEN = "proof record not proven:"
+
+#: The gate's hold note up to the head it names, and what follows the head.
+_DECLINED_AT = "Merge gate: declined @"
+_REASON_AFTER = " — "
+
+_DROP_RECORD = "closing the pull request and canceling the card by hand"
+
+# What the operator decides about a proof record at the cap: (question, the
+# sweep's pick, why). The two questions are the card's contract, word for word.
+_NOT_PROVEN_ROWS = (
+    "Accept the unmet rows by operator decision, record the event with "
+    "proof-observed, or drop the record?",
+    "Record the event with proof-observed",
+    "the gate declined the record only because rows are unmet, and an "
+    "observed event proves a row where an operator decision only accepts it; "
+    "accept the rows when the event cannot happen, and drop the record when "
+    "it should not ship",
+)
+_START_AGAIN = (
+    "Start the review again by hand, push the record to a new head, or drop "
+    "the record?",
+    "Start the review again by hand",
+    "the budget was spent on reviews that never answered on this head, so "
+    "there is no unmet row to accept, and one review started by hand is the "
+    "shortest way to an answer",
+)
+_PUSH_AGAIN = (
+    _START_AGAIN[0],
+    "Push the record to a new head",
+    "the gate declined this head for a reason other than unmet rows, and a "
+    "new head is what the gate and the review read again",
+)
+
+
+def declined_not_proven(gate_note_line: str | None, head: str) -> bool:
+    """Is `gate_note_line` the gate declining the record AT `head` as not
+    proven — `Merge gate: declined @<head> — proof record not proven: …`?
+    A decline at an earlier head says nothing about this one."""
+    _, found, rest = (gate_note_line or "").partition(_DECLINED_AT)
+    sha, after, reason = rest.partition(_REASON_AFTER)
+    return bool(found and after and head) and sha.strip() == head \
+        and reason.startswith(NOT_PROVEN)
+
+
+def _ask_record(*, head, critic, gate_note_line) -> tuple:
+    if declined_not_proven(gate_note_line, head):
+        return _NOT_PROVEN_ROWS
+    if _token(critic) == "none":
+        return _START_AGAIN
+    return _PUSH_AGAIN
+
+
+def proof_record_escalation(*, card, pr_number, head, tag, critic, verifier,
+                            spent, hours, gate_note_line,
+                            cap) -> console_escalation.Escalation:
+    """The one reading of a proof record's evidence both its texts render."""
+    if tag not in _BUDGET:
+        raise ValueError(f"unknown re-trigger tag {tag!r}; expected "
+                         f"{GATE_NUDGE_KEY!r} or {REVIEW_NUDGE_KEY!r}")
+    question, pick, reason = _ask_record(head=head, critic=critic,
+                                         gate_note_line=gate_note_line)
+    parts = [f"Pull request #{pr_number} is a proof record."]
+    if _token(critic) == "none":
+        parts.append(f"There is no critic verdict at {head[:7]}.")
+    parts.append(_finding(head=head, tag=tag, critic=critic, verifier=verifier,
+                          spent=spent, hours=hours,
+                          gate_note_line=gate_note_line, cap=cap))
+    return console_escalation.Escalation(
+        finding=" ".join(parts),
+        question=question,
+        recommendation=pick,
+        why=f"{reason} — the hold lifts only on a new head of the record, "
+            f"and {card} stays {REVIEW_LANE} until then",
+    )
+
+
+def _way_back_record(card) -> str:
+    return (
+        f"{card} is held In Review for the operator, and the sweep "
+        "re-triggers nothing more on this head. The hold lifts on its own "
+        "once a new head lands on the pull request — a row accepted or "
+        "reworded and pushed — and no comment on this card or the pull "
+        f"request lifts it. Dropping the record means {_DROP_RECORD}: the "
+        "cancel is what lifts the hold."
+    )
+
+
+def compose_proof_record(*, card, pr_number, head, tag, critic, verifier,
+                         spent, hours, gate_note_line, cap) -> str:
+    """The Linear comment the review cap posts on a proof record's card,
+    which it holds In Review instead of parking (DRE-6841)."""
+    lines = console_escalation.render(proof_record_escalation(
+        card=card, pr_number=pr_number, head=head, tag=tag, critic=critic,
+        verifier=verifier, spent=spent, hours=hours,
+        gate_note_line=gate_note_line, cap=cap))
+    notice = f"🚨 {REVIEW_NUDGE_CAP_KEY} PR #{pr_number} @{head}:"
+    return "\n\n".join((notice, lines, _way_back_record(card), _key(head)))
+
+
+def pr_blocker_proof_record(*, card, pr_number, head, tag, critic, verifier,
+                            spent, hours, gate_note_line, cap) -> str:
+    """The fix-loop blocker the same hold posts on the proof record's pull
+    request, so a person's Operator decision has a blocker to answer."""
+    lines = console_escalation.render(proof_record_escalation(
+        card=card, pr_number=pr_number, head=head, tag=tag, critic=critic,
+        verifier=verifier, spent=spent, hours=hours,
+        gate_note_line=gate_note_line, cap=cap))
+    return _blocker(lines, _way_back_record(card), pr_number, head)

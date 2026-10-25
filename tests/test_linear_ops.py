@@ -261,5 +261,68 @@ def test_the_sweep_drops_epics_before_its_merged_backstop():
     assert 'c["identifier"] not in epics' in inspect.getsource(reconcile.wip_base)
 
 
+# --------------------------------------------------------------------------
+# `proof-waiting-until`: a hold that waits only for a time (DRE-7228)
+# --------------------------------------------------------------------------
+UNTIL_OBSERVED = ("the day of jobs on the pinned machine family, counted from "
+                  "DRE-6548's live-at time")
+#: The card's own line for DRE-6549, pinned as a string.
+UNTIL_LINE = ("🔬 proof-waiting: the day of jobs on the pinned machine family, "
+              "counted from DRE-6548's live-at time — needs "
+              "not-before=2026-10-12T14:33-07:00")
+
+
+def test_proof_waiting_until_posts_the_stamped_hold_through_the_same_receipt():
+    import pipeline_act
+    import proof_record
+
+    with patch.object(linear_ops, "cmd_comment") as comment:
+        linear_ops.cmd_proof_waiting_until("DRE-6549", UNTIL_OBSERVED,
+                                           "2026-10-12T14:33-07:00")
+    assert comment.call_count == 1
+    ident, body = comment.call_args.args[:2]
+    assert ident == "DRE-6549"
+    assert body == pipeline_act.receipt("proof-observation-pending", UNTIL_LINE)
+    # The hold it writes is the one shape the dispatcher reads as time-only.
+    assert proof_record.time_only(body.split("\n", 1)[0]) is not None
+
+
+def test_proof_waiting_until_writes_the_needs_half_through_proof_waiting():
+    """The `needs` half is the command's, never the caller's: exactly
+    `not-before=<the time>`, handed to the ordinary hold's writer."""
+    with patch.object(linear_ops, "cmd_proof_waiting") as waiting:
+        linear_ops.cmd_proof_waiting_until("DRE-6549", UNTIL_OBSERVED,
+                                           " 2026-10-12T14:33-07:00 ")
+    waiting.assert_called_once_with("DRE-6549", UNTIL_OBSERVED,
+                                    "not-before=2026-10-12T14:33-07:00")
+    assert linear_ops.NOT_BEFORE == "not-before="
+
+
+@pytest.mark.parametrize(("observed", "when", "says"), [
+    (UNTIL_OBSERVED, "2026-10-12T14:33", "UTC offset"),
+    (UNTIL_OBSERVED, "2026-10-12 14:33 PT", "does not parse"),
+    (UNTIL_OBSERVED, "tomorrow afternoon", "does not parse"),
+    (UNTIL_OBSERVED, "", "does not parse"),
+    ("the CEO's press on Approve", "2026-10-12T14:33-07:00", "the CEO's press"),
+    ("", "2026-10-12T14:33-07:00", "empty"),
+    ("a run while the budget exhausted note stands", "2026-10-12T14:33-07:00",
+     "budget exhausted"),
+], ids=["no-offset", "pt-prose", "words", "empty-time", "ceo-press",
+        "empty-observed", "console-marker"])
+def test_proof_waiting_until_refuses_with_the_reason_and_posts_nothing(observed, when, says):
+    with patch.object(linear_ops, "cmd_comment") as comment:
+        with pytest.raises(linear_ops.LinearError) as caught:
+            linear_ops.cmd_proof_waiting_until("DRE-6549", observed, when)
+    comment.assert_not_called()
+    assert says in str(caught.value)
+
+
+def test_proof_waiting_until_is_reachable_from_the_command_line():
+    source = (ROOT / "scripts" / "linear_ops.py").read_text(encoding="utf-8")
+    assert '"proof-waiting-until": cmd_proof_waiting_until' in source
+    # …and the usage block names it, with its three arguments.
+    assert "proof-waiting-until <DRE-N>" in linear_ops.__doc__
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

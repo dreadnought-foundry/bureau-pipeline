@@ -583,10 +583,10 @@ class TestTheEscalationReReadsTheLaneBeforeItParks:
     # --- the segment is read from the contract, never enumerated -------------
     def test_the_segment_test_reads_the_contract(self):
         doc = _mutated_contract()
-        _lane(doc, "Todo")["segment"] = lane_contract.lane(
+        _lane(doc, "Hand-work")["segment"] = lane_contract.lane(
             planning_escalation.ORIGIN)["segment"]
-        assert planning_escalation.in_escalation_segment("Todo", contract=doc)
-        assert not planning_escalation.in_escalation_segment("Todo")
+        assert planning_escalation.in_escalation_segment("Hand-work", contract=doc)
+        assert not planning_escalation.in_escalation_segment("Hand-work")
 
     def test_a_lane_the_contract_does_not_carry_is_not_ours(self):
         """Unknown is never a pass: a lane nobody declared cannot be shown to
@@ -1188,13 +1188,14 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
     def test_a_work_lane_that_can_be_entered_without_the_verdict_is_a_problem(self):
         """The routing verdict is written at Planning's exit and nowhere else,
         so a work lane whose entrance does not require one is a lane a card can
-        reach without ever being planned."""
+        reach without ever being planned. Queued is the lane the planning
+        exit lands in since DRE-6742."""
         doc = _mutated_contract()
-        backlog = _lane(doc, "Backlog")
-        backlog["clauses"]["entrance"]["text"] = "Somebody put it here."
-        backlog["clauses"]["evidence"]["text"] = "The card exists."
+        queued = _lane(doc, "Queued")
+        queued["clauses"]["entrance"]["text"] = "Somebody put it here."
+        queued["clauses"]["evidence"]["text"] = "The card exists."
         problems = planning_escalation.bypass_problems(contract=doc)
-        assert any("Backlog" in p for p in problems), problems
+        assert any("Queued" in p for p in problems), problems
 
     def test_the_escalation_may_not_park_in_the_work_segment(self):
         """An escalation that landed in the build queue would BE the bypass:

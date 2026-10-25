@@ -1128,44 +1128,54 @@ class GateWiringTest(unittest.TestCase):
 
 class TddRuleReconciledTest(unittest.TestCase):
     """#2247's verdict stated the rule as *"a RED-test commit immediately
-    before each implementation commit"*. `check_tdd_commits.py` enforces
-    *"at least one commit touching tests/ STRICTLY BEFORE the first commit
-    that changes non-test code"*. Those are different standards, only one is
-    enforced, and the gap is where the false finding lived. The critic reads
-    standards/engineering.md — so the standard has to state the enforced
-    rule, and say that the stricter reading is not a gate."""
+    before each implementation commit"*, while `check_tdd_commits.py`
+    enforced one RED commit before the FIRST code commit. Two floors, only
+    one checked, and the gap is where a 22-hour dispute lived (DRE-3005).
+    DRE-3009 closes it from the other side: the check now enforces the
+    stricter rule, the rule is ONE constant in the script, and the standard
+    the critic reads carries that constant word for word."""
 
     def standard(self) -> str:
         with open(os.path.join(REPO, "standards", "engineering.md"),
                   encoding="utf-8") as f:
             return f.read()
 
-    def test_the_standard_states_the_enforced_rule(self):
-        text = self.standard().lower()
-        self.assertIn("strictly before", text)
-        self.assertIn("first commit that changes non-test code", text)
+    def rule(self) -> str:
+        sys.path.insert(0, SCRIPTS)
+        try:
+            import check_tdd_commits
+        finally:
+            sys.path.remove(SCRIPTS)
+        return check_tdd_commits.RULE
 
-    def test_the_standard_says_one_red_commit_not_one_per_commit(self):
-        text = self.standard().lower()
-        self.assertIn("not one before every", text)
+    @staticmethod
+    def norm(text: str) -> str:
+        return " ".join(text.split())
+
+    def test_the_standard_states_the_scripts_rule_word_for_word(self):
+        # One rule, two files, and the script is the one that decides. If
+        # either is reworded without the other, this is what notices.
+        self.assertIn(self.norm(self.rule()), self.norm(self.standard()))
+
+    def test_the_standard_states_the_rule_once(self):
+        self.assertEqual(
+            self.norm(self.standard()).count(self.norm(self.rule())), 1
+        )
+
+    def test_the_standard_no_longer_states_the_once_per_branch_rule(self):
+        text = self.norm(self.standard()).lower()
+        self.assertNotIn("not one before every", text)
+        self.assertNotIn("hold a branch to that rule and no other", text)
+
+    def test_the_standard_tells_a_reviewer_to_hold_to_the_checks_result(self):
+        text = self.norm(self.standard()).lower()
+        self.assertIn("the check's result", text)
 
     def test_the_standard_names_the_enforcer(self):
         self.assertIn("check_tdd_commits.py", self.standard())
 
-    def test_the_standard_tells_a_reviewer_not_to_block_on_the_stricter_read(self):
-        text = self.standard().lower()
-        self.assertIn("dre-3005", text)
-
-    def test_the_wording_matches_the_script_that_enforces_it(self):
-        # One rule, two files, and the script is the one that decides. If
-        # the docstring is reworded, this test is the thing that notices.
-        with open(os.path.join(SCRIPTS, "check_tdd_commits.py"),
-                  encoding="utf-8") as f:
-            doc = f.read().lower()
-        self.assertIn("strictly", doc)
-        self.assertIn("before the first commit that changes non-test", doc)
-        standard = self.standard().lower()
-        self.assertIn("strictly before", standard)
+    def test_the_standard_keeps_the_dre_3005_history(self):
+        self.assertIn("dre-3005", self.standard().lower())
 
 
 if __name__ == "__main__":

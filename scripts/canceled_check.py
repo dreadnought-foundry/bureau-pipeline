@@ -42,6 +42,19 @@ before. On 2026-10-09 the shard was canceled FIRST and named its 15-minute
 limit, so that case is unchanged. The annotations are read by the caller, only
 for `collateral_candidates`, and handed in to `split` — this module stays pure.
 
+A FAILED TEST INSIDE (DRE-7018). bureau-pipeline #1042, 2026-10-11, head
+c4be402a: `scripts unit tests (walks)` printed `3 failed, 49 passed` at 16:02
+PT and was stopped at its 45-minute limit at 16:08 PT. Its one test step reads
+`cancelled`, so nothing but the job's log records the failures, and a person
+was told nothing automatic was coming. So the caller reads each canceled
+job's log, `failed_tests` reads the test runner's own result lines before the
+cancel line, and a canceled check whose log shows a failed test is read as a
+`failure` by `split`. The fail-fast reading is made first, on the conclusions
+as GitHub gave them, so such a check never makes a sibling collateral; and a
+run that also holds a plain canceled check stays UNKNOWN as a whole, as a
+failure beside a cancellation always has. A log that could not be read, or
+shows no failed test, changes nothing.
+
 WHAT HAPPENS TO AN UNKNOWN RUN (`decide`):
 
   * still going — waited on; GitHub refuses to re-run an unfinished run;
@@ -87,6 +100,24 @@ _LIMIT = re.compile(
     r"(?:(?P<minutes_word>\d+)\s+minutes?\b"
     r"|(?:(?P<h>\d+)h)?(?:(?P<m>\d+)m)?(?:(?P<s>\d+)s)?)",
     re.IGNORECASE,
+)
+
+#: The runner's line for a job stopped by a cancellation; nothing after it is
+#: the job's own result.
+CANCEL_LINE = "##[error]The operation was canceled."
+# The runner's timestamp on every log line, and the one space after it.
+_STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z ")
+_ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+# A test id: a test file, optionally followed by `::` and the test's own path.
+_TEST_ID = r"[^\s:]+\.py(?:::\S.*?)?"
+#: A test runner's result lines that name a failed test, read after the
+#: timestamp is taken off. One entry per wording, so a second test runner's
+#: wording is one more entry.
+FAILED_TEST_PATTERNS = (
+    # pytest's short test summary: `FAILED <id> - <message>`.
+    re.compile(rf"^(?:FAILED|ERROR) (?P<test>{_TEST_ID})(?: - .*)?$"),
+    # pytest -v: `<id> FAILED [ 61%]`.
+    re.compile(rf"^(?P<test>{_TEST_ID}) (?:FAILED|ERROR)\s+\[\s*\d+%\]$"),
 )
 
 
@@ -167,26 +198,62 @@ def collateral_candidates(check_runs) -> tuple:
     return tuple(found)
 
 
-def split(check_runs, limits=None) -> Split:
+def collateral(check_runs, limits=None) -> tuple:
+    """The canceled checks that are fail-fast collateral (DRE-6780): the
+    candidates `limits` maps to None, read on the conclusions as given."""
+    limits = limits or {}
+    return tuple(c for c in collateral_candidates(check_runs)
+                 if c.get("id") in limits and not limits[c.get("id")])
+
+
+def failed_tests(log_text) -> list:
+    """The tests a job's log shows failing, in order and without repeats, read
+    only before its first cancel line (DRE-7018). A line counts when, with
+    the runner's timestamp taken off, one of `FAILED_TEST_PATTERNS` reads it;
+    a line opening with spaces or `E ` is a test's quoted output and is never
+    read. No log, or none of those lines, is an empty list."""
+    found: list = []
+    for raw in str(log_text or "").splitlines():
+        line = _ANSI.sub("", raw.lstrip("﻿").rstrip("\r"))
+        line = _STAMP.sub("", line, count=1)
+        if line.startswith(CANCEL_LINE):
+            break
+        if line.startswith((" ", "\t", "E ")):
+            continue
+        for pattern in FAILED_TEST_PATTERNS:
+            matched = pattern.match(line.rstrip())
+            if matched:
+                if matched.group("test") not in found:
+                    found.append(matched.group("test"))
+                break
+    return found
+
+
+def split(check_runs, limits=None, failed_inside=None) -> Split:
     """The head's red checks, split into red runs and unknown runs.
 
     `limits` maps a collateral candidate's check id to the time limit its
     annotations name, or None when they name none; a check missing from it
     had annotations that could not be read. A candidate mapped to None is
-    fail-fast collateral and dropped (DRE-6780); anything else is as before."""
-    limits = limits or {}
-    collateral = {id(c) for c in collateral_candidates(check_runs)
-                  if c.get("id") in limits and not limits[c.get("id")]}
+    fail-fast collateral and dropped (DRE-6780).
+
+    `failed_inside` maps a canceled check's id to the tests its log shows
+    failing (DRE-7018). One mapped to a non-empty list is read as a `failure`
+    — after the collateral reading, which is made on GitHub's conclusions.
+    Anything else is as before."""
+    failed_inside = failed_inside or {}
+    dropped = {id(c) for c in collateral(check_runs, limits)}
     red: list = []
     unknown: dict = {}
     for run_id, checks in _red_by_run(check_runs).items():
-        checks = [c for c in checks if id(c) not in collateral]
-        canceled = [c for c in checks if c.get("conclusion") == CANCELLED]
+        checks = [c for c in checks if id(c) not in dropped]
+        canceled = [c for c in checks if c.get("conclusion") == CANCELLED
+                    and not failed_inside.get(c.get("id"))]
         if canceled and run_id is None:
             # No run to group by: each canceled check is unknown on its own,
             # and a failure beside it is red as before.
             unknown.setdefault(None, tuple(canceled))
-            red.extend(c for c in checks if c.get("conclusion") != CANCELLED)
+            red.extend(c for c in checks if c not in canceled)
         elif canceled:
             unknown[run_id] = tuple(checks)
         else:

@@ -46,7 +46,7 @@ parent epic is not in an active state. DRE-2735 made the gate verdict-driven
 where there is no parent: the one-off's ROUTING VERDICT is its approval,
 "written at Planning exit" — and this module is that exit. So the one-off route
 carries the mechanical routing check with it and stamps what it decides. Absent
-that verdict the most common card this design produces would sit in Backlog
+that verdict the most common card this design produces would sit in Queued
 forever, re-planned by the relevance-decay rule and landed right back in the
 same hole, burning a planner run each cycle.
 
@@ -97,12 +97,12 @@ skips the critic on it and runs the exit on it.
 
 A card sent back to Planning used to leave on the verdict it was sent back
 from: `_one_off_check` found the old one and stamped nothing, and the sweep
-routed the card on it — DRE-4724 went back to Todo marked `hand-built` on a
-WORKBENCH its rewrite had removed the reason for. So the exit retires, on the
-record, every verdict written before the card re-entered Planning
-(`routing_verdict.retiring`), takes off a `hand-built` the old verdict put on
-when the new one does not, and then decides and stamps exactly as for a card
-on its first trip.
+routed the card on it — DRE-4724 went back to the start lane marked
+`hand-built` on a WORKBENCH its rewrite had removed the reason for. So the
+exit retires, on the record, every verdict written before the card re-entered
+Planning (`routing_verdict.retiring`), takes off a `hand-built` the old verdict
+put on when the new one does not, and then decides and stamps exactly as for a
+card on its first trip.
 
 ## An epic still to be planned waits on its open blocker (DRE-6651)
 
@@ -111,7 +111,7 @@ card, and the planner could only ask the CEO "wait, or plan now?" — a question
 the board already answered. So `decide`, on an epic, also reads its formal
 blockers, its children and its lane history, and writes `wait=true` with
 `waits_on` when a blocker is open, it has no children and it was never moved to
-In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it to Backlog
+In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it to Queued
 and dispatches no planner. Any read that fails writes `wait=false`.
 
 CLI:
@@ -479,7 +479,7 @@ def _read_returned_child(lops, identifier: str, comment_bodies,
 
 @dataclass(frozen=True)
 class EpicWait:
-    """Does this epic wait in Backlog on its formal blockers (DRE-6651)?
+    """Does this epic wait in Queued on its formal blockers (DRE-6651)?
     `waits_on` names each open blocker with its state when it does, else ""."""
 
     wait: bool
@@ -507,7 +507,7 @@ def epic_wait(card: dict, history) -> EpicWait:
 
     An epic with children or an earlier green light is one DRE-6407 released
     at its blocker's build-done and `mid_epic.py discovery --kind amendment`
-    sent back to be re-planned. Holding it in Backlog would park running work
+    sent back to be re-planned. Holding it in Queued would park running work
     with nothing to bring it back, so it is planned and the reason says why.
     """
     import prose_blockers
@@ -914,8 +914,8 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
     # DRE-6651: only an epic reads its blockers — every other route never waits.
     if route.shape == mid_epic.EPIC_SHAPE:
         waiting = _read_epic_wait(linear_ops, identifier)
-        print(f"planning route: {identifier} "
-              f"{'waits in Backlog' if waiting.wait else 'is planned'} — {waiting.reason}")
+        said = f"waits in {lane_contract.QUEUE_LANE}" if waiting.wait else "is planned"
+        print(f"planning route: {identifier} {said} — {waiting.reason}")
     else:
         waiting = _no_wait(f"it is shaped {route.shape}, and only an epic waits")
     _write_outputs(github_output, [
@@ -930,7 +930,7 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
         ("parent", child.parent),
         # DRE-5805: the one-off critic is skipped, and the exit run, on this.
         (PERSON_OUTPUT, person),
-        # DRE-6651: plan.yml's wait step parks the epic in Backlog on this.
+        # DRE-6651: plan.yml's wait step parks the epic in the queue on this.
         ("wait", "true" if waiting.wait else "false"),
         ("waits_on", waiting.waits_on),
     ])

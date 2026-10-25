@@ -232,6 +232,10 @@ class Board:
 
 @pytest.fixture(autouse=True)
 def _pin(monkeypatch):
+    # The sweep reads the wall clock, so every age `_iso` writes is measured
+    # from this test's start — never from import, which a slow CI part can
+    # leave more than the 10-minute margin of `younger-than-the-cadence` ago.
+    monkeypatch.setattr(sys.modules[__name__], "NOW", datetime.now(UTC))
     monkeypatch.setattr(reconcile, "REPO", "dreadnought-foundry/bureau-pipeline")
     monkeypatch.setattr(reconcile, "REPO_SLUG", OWNER)
     ledgers = (reconcile._write_failures, reconcile._read_failures,

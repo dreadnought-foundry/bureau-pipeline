@@ -63,6 +63,12 @@ Env (harness.yml sets all of these):
                         can share the sandbox instead of queueing (DRE-3075).
   HARNESS_VERDICT_TIMEOUT / HARNESS_MERGE_TIMEOUT / HARNESS_POLL_INTERVAL
                         seconds, optional overrides
+  HARNESS_BUILDER_LINE_INPUT / HARNESS_BUILDER_LINE_VAR
+                        optional — the dispatch input `builder_line` and the
+                        repository variable `HARNESS_BUILDER_LINE`. `on` makes
+                        the probe fixtures end each pull request description
+                        with the builder's model line (DRE-7619); the input
+                        wins, then the variable, then `off`.
   HARNESS_WAIT_DEADLINE_MINUTES
                         minutes, optional — how often a wait stops to ask
                         whether the SANDBOX is still alive (DRE-3076). The
@@ -82,7 +88,7 @@ import os
 import re
 import sys
 
-from harness import app_token, framework, sandbox_health
+from harness import app_token, builder_line, framework, sandbox_health
 from harness.github_api import GitHub
 from harness.scenarios import discover
 
@@ -502,6 +508,13 @@ def main(argv=None) -> int:
             "note: HARNESS_WAIT_DEADLINE_MINUTES=0 — no sandbox-liveness "
             "check; a stuck wait runs its full budget"
         )
+    # The builder's model line (DRE-7619): resolved once, logged once, before
+    # any scenario starts, and handed to every scenario in its ctx.state.
+    builder_state, builder_source = builder_line.resolve(
+        os.environ.get(builder_line.INPUT_ENV),
+        os.environ.get(builder_line.VARIABLE_ENV),
+    )
+    print(builder_line.status_line(builder_state, builder_source))
     print(
         f"harness run {run_id} on {args.repo} [namespace {namespace}]: "
         f"scenarios {names}"
@@ -547,6 +560,7 @@ def main(argv=None) -> int:
             wait_deadline=deadline,
             sandbox_probe=sandbox_probe,
             queue_watch=queue_watch,
+            state={builder_line.STATE_KEY: builder_state},
         )
         result = framework.run_scenario(available[name], ctx)
         results.append(result)

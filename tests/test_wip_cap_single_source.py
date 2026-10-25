@@ -229,6 +229,111 @@ class SelfHostStubsTest(unittest.TestCase):
         self.assertTrue(any("quoted string" in v for v in violations), violations)
 
 
+SELF_STUBS = ("self-reconcile.yml", "self-plan.yml", "self-linear-sync.yml")
+
+
+class SelfHostCapFollowsTheConsoleTest(unittest.TestCase):
+    """DRE-6783: this repo's three promotion stubs pass no `max_wip`, so the
+    number the console writes — this repo's `BUREAU_MAX_WIP` variable — is
+    what all three paths promote at, and with none set they promote at the
+    default 8, the number the stubs used to write. While a stub wrote "8",
+    that literal beat the variable (DRE-6631's order) and the console showed
+    Bureau Pipeline's number as locked (DRE-6782)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.docs = {
+            p.name: yaml.safe_load(p.read_text())
+            for p in sorted(WORKFLOWS.glob("*.yml"))
+        }
+
+    def _job(self, stub):
+        return next(iter(self.docs[stub]["jobs"].values()))
+
+    def _resolve_every_path(self, variable):
+        """{stub: (cap, source)} — each real stub's `with:` rendered through
+        the reusable it calls into MAX_WIP, then resolved by the sweep's own
+        `cap_and_source` against this checkout, which is the caller checkout
+        every promotion job reads ($GITHUB_WORKSPACE)."""
+        import reconcile
+
+        resolved = {}
+        for stub in SELF_STUBS:
+            job = self._job(stub)
+            reusable = cwc._called_reusable(job)
+            self.assertIn(reusable, ("reconcile.yml", "plan.yml", "linear-sync.yml"), stub)
+            raw = cwc.effective_cap(self.docs[reusable], job.get("with") or {})
+            self.assertIsNotNone(raw, f"{stub} -> {reusable} exposes no cap")
+            resolved[stub] = reconcile.cap_and_source(raw, str(ROOT), variable)
+        return resolved
+
+    def test_no_self_stub_passes_a_number(self):
+        for stub in SELF_STUBS:
+            self.assertNotIn("max_wip", self._job(stub).get("with") or {}, stub)
+
+    def test_with_no_variable_every_path_promotes_at_the_default_8(self):
+        """Nothing changes on merge: 8 was the number the stubs wrote."""
+        import reconcile
+
+        self.assertEqual(8, reconcile.DEFAULT_MAX_WIP)
+        for variable in (None, ""):
+            resolved = self._resolve_every_path(variable)
+            for stub, (cap, source) in resolved.items():
+                self.assertEqual(8, cap, (stub, source))
+                self.assertTrue(source.startswith("the default 8"), (stub, source))
+
+    def test_the_variable_is_the_cap_on_every_path(self):
+        """The console's write reaches the sweep and both fast paths alike —
+        0 included, which holds the repo."""
+        for value in ("5", "12", "0"):
+            resolved = self._resolve_every_path(value)
+            self.assertEqual(
+                {(int(value), "the caller's BUREAU_MAX_WIP variable")},
+                set(resolved.values()),
+                (value, resolved),
+            )
+
+    def test_each_stub_header_says_where_the_number_lives(self):
+        """The header names the variable and its default in place of the
+        restart history ("3", then "8") the stubs no longer carry."""
+        for stub in SELF_STUBS:
+            header = []
+            for line in (WORKFLOWS / stub).read_text().splitlines():
+                if not line.startswith("#"):
+                    break
+                header.append(line)
+            text = " ".join(" ".join(header).replace("#", " ").split())
+            self.assertIn("BUREAU_MAX_WIP", text, stub)
+            self.assertIn("default 8", text, stub)
+            for history in ("DRE-5733", "DRE-5954", '"3"'):
+                self.assertNotIn(history, text, stub)
+
+    def test_the_checker_fails_a_number_written_on_one_path_only(self):
+        """check_wip_cap.py over a copy of the live workflow directory where
+        ONE stub writes a number again: the repo would promote at two caps,
+        and the build goes red."""
+        import shutil
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "workflows"
+            shutil.copytree(WORKFLOWS, copy)
+            path = copy / "self-plan.yml"
+            text = path.read_text()
+            edited = text.replace(
+                "      pipeline_ref: main\n",
+                '      pipeline_ref: main\n      max_wip: "8"\n',
+                1,
+            )
+            self.assertNotEqual(text, edited, "self-plan.yml has no pipeline_ref line")
+            path.write_text(edited)
+            violations, _stats = cwc.check_dir(copy)
+        self.assertTrue(
+            any("self-plan.yml" in v and "do not" in v for v in violations),
+            violations,
+        )
+
+
 class ScriptFallbackTest(unittest.TestCase):
     """reconcile.py's own read of MAX_WIP. Threading a workflow_call input
     into the env introduces a failure mode the old literal did not have: on

@@ -2,7 +2,7 @@
 (DRE-2034). The lane was called In QA until DRE-2726 folded it into In Review;
 the cap is the same cap and moved with it.
 
-THE BUG: main()'s In-QA-no-PR branch requeues to Todo UNCAPPED — no DEAD_TAG
+THE BUG: main()'s In-QA-no-PR branch requeued to Todo UNCAPPED — no DEAD_TAG
 receipt, no REQUEUE_CAP check. A card whose PR read persistently misses (the
 class the loud-read fix closes; or a genuinely vanished PR) loops In Review →
 Todo → In Progress → In Review forever, burning an agent run per lap, while the
@@ -94,16 +94,20 @@ def test_review_lane_requeue_below_cap_counts_the_shared_dead_tag():
         reconcile.linear_ops, "cmd_state"
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment") as cmd_comment:
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-2034", "Todo")
+    # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+    cmd_state.assert_called_once_with("DRE-2034", reconcile.QUEUE_LANE, "--park")
     add_label.assert_not_called()
     bodies = [c.args[1] for c in cmd_comment.call_args_list]
     assert any(reconcile.DEAD_TAG in b for b in bodies), (
         "the In Review requeue must count toward the shared dead-run cap"
     )
+    assert any(f"requeued to {reconcile.QUEUE_LANE}" in b for b in bodies), (
+        "the receipt names the lane the requeue wrote"
+    )
 
 
 def test_review_lane_requeue_at_cap_holds_instead_of_looping():
-    """ACCEPTANCE: at the cap the card parks needs-human in Backlog — no
+    """ACCEPTANCE: at the cap the card parks needs-human in Queued — no
     third lap. On the unfixed code this FAILS: it requeues to Todo again.
     Since DRE-6186 that is the second strike: the planner has had the card."""
     mocks = _sweep_mocks(bodies=_HANDED_OFF)
@@ -115,7 +119,7 @@ def test_review_lane_requeue_at_cap_holds_instead_of_looping():
         reconcile.main()
     add_label.assert_called_once_with("DRE-2034", reconcile.HOLD_LABEL)
     # --park: deliberate HOLD-cap park, same DRE-1885 opt-out as In Progress.
-    cmd_state.assert_called_once_with("DRE-2034", "Backlog", "--park")
+    cmd_state.assert_called_once_with("DRE-2034", "Queued", "--park")
     assert ("DRE-2034", "Todo") not in [c.args for c in cmd_state.call_args_list]
 
 

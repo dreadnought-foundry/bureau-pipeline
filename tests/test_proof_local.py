@@ -703,6 +703,10 @@ class DocTest(unittest.TestCase):
         self.assertSays("its own sign-in page offers no password path")
         self.assertSays("`[A-Za-z_][A-Za-z0-9_]*`")
         self.assertSays("before the first declared page is opened")
+        # DRE-6818: the browser step plants the session; nothing waits on a
+        # follow-up, and `login` names the screen it cannot draw.
+        self.assertNotRegex(self.text, _loose("Until that follow-up lands"))
+        self.assertSays("`proof-login: not run —")
 
     def test_it_keeps_the_login_file_rules_for_the_session_kind(self):
         section = _section(self.text, "The `session` kind")

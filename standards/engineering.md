@@ -14,15 +14,32 @@ is the floor. Every rule here exists because its violation shipped a bug.
   the branch is still local and a rebase is still yours to do:
   `python3 scripts/check_tdd_commits.py origin/<default> HEAD` (in a product
   repo the pipeline checkout puts it at
-  `.bureau-pipeline/scripts/check_tdd_commits.py`). Exit 1 means reorder now.
+  `.bureau-pipeline/scripts/check_tdd_commits.py`). Exit 1 means reorder now
+  — or, for a code commit after the first that qualifies, reword its message
+  to carry the `TDD-Exempt:` trailer the failure lists.
   The same check runs in CI as `TDD commit discipline`, where the only remedy
   left is a human rewriting your branch — this is the last moment it is free.
-- **The rule as it is ENFORCED, in one sentence.** That script is the rule and
-  this is its restatement: *at least one commit touching `tests/` must appear
-  **STRICTLY BEFORE** the first commit that changes non-test code.* One RED
-  commit before the FIRST implementation commit — **not one before every
-  implementation commit**. Docs-only and ops-only branches are exempt, and so
-  is a `.py` change that is docstrings alone, and so is one confined to a
+- **The rule as it is ENFORCED, in one sentence.** That script holds it as one
+  constant, prints it on every run, and this is that constant word for word:
+  *Every code commit needs a test commit since the previous code commit — for
+  the first code commit, since the branch began. Any code commit after the
+  first may instead carry an exemption from `config/tdd-exemptions.json`.*
+  A code commit touches at least one path the check classifies as code; a test
+  commit touches a test path and no code path, so a commit carrying both is a
+  code commit and is not its own test. The pairing is positional — the check
+  proves the order, and whether the test is real is still the critic's (no
+  vacuous tests, below). The exemptions are data in that file (DRE-3009):
+  `deletion` is detected from the diff (every code path in the commit adds
+  zero lines), and `refactor`, `config` and `generated` are claimed with a
+  `TDD-Exempt: <id>` git trailer on the commit. None of them ever covers the
+  first code commit, so every branch with code still opens with a real RED
+  commit. A branch cannot exempt itself: in bureau-pipeline the list is read
+  at the merge base, and in every other repo from the pipeline's own copy. A
+  branch whose merge base predates the list is judged by the once-per-branch
+  floor it started under — one test commit strictly before the first code
+  commit — until it merges the default branch in or rebases. Docs-only and
+  ops-only commits are not code commits and need nothing, and neither is a
+  `.py` change that is docstrings alone, nor one confined to a
   GENERATED region — every differing line strictly between a `BEGIN generated`
   and an `END generated` marker, markers untouched (DRE-3896). That last one is
   safe only because the region's content is proved elsewhere: `python3
@@ -40,7 +57,10 @@ is the floor. Every rule here exists because its violation shipped a bug.
   `console/design/` or a root `design/` — counts as docs; `.css` and source
   there stay code (DRE-3763). The same formats under a root `architecture/`
   — decisions, forensics, proof records and their screenshots — count as
-  docs by the same rule, and source there stays code (DRE-5311). A root `models.json` counts as DATA, beside
+  docs by the same rule, and source there stays code (DRE-5311). Plain-text
+  evidence — a `.txt` or `.log` capture such as a saved email or a log
+  excerpt — counts as docs under `architecture/` only; under the two design
+  folders and anywhere else it stays code (DRE-7330). A root `models.json` counts as DATA, beside
   `config/` and `agents.yaml`: it is the Anthropic catalog snapshot, derived
   from the vendor's model list and refreshed by hand, and there is no RED
   test to write for a list somebody else publishes (DRE-3879, CEO's signed
@@ -48,12 +68,16 @@ is the floor. Every rule here exists because its violation shipped a bug.
   anywhere else in the tree is somebody's source file and stays code, and the
   exemption says which FILES need a test committed first, never whether the
   rule applies: a `.py` change riding on the same pull request still owes its
-  RED test first, and no check is skipped. **Reviewers: hold a branch to
-  that rule and no other.** "A RED test immediately before each implementation
-  commit" is a stricter standard nothing enforces, and blocking on it rejects a
-  compliant branch — it cost agent-bureau #2247 ~22 hours, a fix-loop attempt
-  and an operator decision (DRE-3005). Whether to tighten what is enforced is
-  an operator/standards call; until it is made, the enforced rule is the rule.
+  RED test first, and no check is skipped. **Reviewers: hold a branch to the
+  check's result.** Until DRE-3009 the check enforced one RED commit per
+  branch while this standard's "the test existed before the fix" read per
+  fix: two floors, one enforced. A critic blocking on the stricter, unenforced
+  reading cost agent-bureau #2247 ~22 hours, a fix-loop attempt and an
+  operator decision (DRE-3005). The operator's decision of 2026-09-03 — "we
+  should always be doing TDD" — made the stricter standard the one the check
+  enforces, so there is one floor and the check is its arbiter. The one
+  judgment left to a reviewer is each commit the check prints as `claimed:`,
+  read against that entry's `critic_checks` sentence.
 - **Scope = exactly the card.** No drive-by refactors, no scope creep. If the
   card is wrong or ambiguous, STOP and write the blocker — a wrong guess costs a
   full review cycle.

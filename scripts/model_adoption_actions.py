@@ -12,11 +12,13 @@ record per candidate —
 This module ACTS on that record, the four ways the adoption workflow (DRE-3898)
 calls it, and no others:
 
-    apply <candidate-id> [--snapshot <catalog.json>] [--config <models.yaml>]
-          [--prices <model-prices.yaml>] [--check]
-    render pr-title|pr-body|question-title|question-body|record-title|record-body
-           --decision <decision.json> [--trial <trial.json>]
+    apply <candidate-id> --expect-written-at <written_at>
+          [--snapshot <catalog.json>] [--prices <model-prices.yaml>]
+          [--result <file>] [--check]
+    render pr-title|question-title|question-body|record-title|record-body
+           --decision <decision.json> [--trial <trial.json>] [--applied <file>]
     open-record-card --decision <decision.json> --run-url <url>
+                     [--trial <trial.json>] [--applied <file>]
     open-question-card --decision <decision.json>
 
 It sits beside the rule the way `repair_card.py` sits beside
@@ -25,31 +27,46 @@ the rule's own `classify_catalog` for the id it is given, and the two `open-*`
 commands refuse (exit 2, Linear untouched) a record whose `rule` is not the one
 they act on.
 
-APPLY IS A TEXT EDIT, NEVER A RE-DUMP
--------------------------------------
-`config/models.yaml` carries the record of every spend decision ever made in it
-as comments and `reason:` blocks. A YAML round-trip drops every one of them, so
-the edit is made on the text: each `- model: <old-id>` line on a ladder the
-Decision names becomes `- model: <candidate-id>`, a `review_separation` rule
-naming an id that has left every ladder moves with it (the DRE-3892
-carry-forward the file itself describes), and each id that has left every
-ladder is appended under `retired:` with a dated reason. Nothing else changes.
-The result must then pass `model_fallback.policy_errors` or nothing is written —
-an `effort:` level declared for the replaced id, for instance, is refused
-rather than carried to a model nobody chose that level for.
+APPLY WRITES THE HOME, AND NO FILE (DRE-6943)
+---------------------------------------------
+The choices live in the model home — the repository variable
+`BUREAU_MODEL_CHOICES`, read through `model_home` — and the daily adoption is
+the one writer of it besides the console. `apply` reads the home AGAIN right
+before it writes. When that read's `written_at` differs from the one `classify`
+recorded (`--expect-written-at`), the home changed while the trial ran — a
+console save, most likely, which this writer's lock does not cover — and
+nothing is written: the run ends green and says so in one sentence, and
+tomorrow's run sorts again against the new document. Otherwise the new document
+is built from the fresh read — the candidate where each replaced rung stood in
+its group, and in every project choice that names a replaced id;
+`written_by: daily-adoption`; `written_at` now — judged by
+`model_home.home_errors`, and written with ONE `PATCH` using the token in
+`BUREAU_MODEL_HOME_WRITE_TOKEN`. `--check` judges the document it would write
+and writes nothing.
+
+It edits no file. `config/models.yaml` still carries today's route's ladders
+until part 3 takes the choices out of it (DRE-6983), and
+`model_fallback.policy_errors` refuses a `retired:` id one of them still names
+— so the old id stays priced and unretired, and when it has left every group
+and project of the home the record card says so in one sentence. Retiring it
+is a person's code change, never this workflow's edit.
 
 THE LINEAR HALF COPIES `repair_card.py`
 ---------------------------------------
 Linear is imported lazily behind an ops object a test replaces, a Linear
-failure is never raised (the record card is owed and the workflow carries on
-on a cardless branch), and the result is `$GITHUB_OUTPUT` lines. The record
-card lands in `In Progress` with a `WORKBENCH` verdict, never `Todo`: a card
-entering Todo is dispatched, and this work is already being done by the run
-that files it.
+failure is never raised (the record card is owed and the run carries on), and
+the result is `$GITHUB_OUTPUT` lines. The record card is created in `Done`
+with a `WORKBENCH` verdict, never moved there: only a move into `In Progress`
+from a waiting lane is a build dispatch (DRE-7107), a card created in its lane
+has no lane before it, and the write it records is already made by the run
+that files it. A run that wrote
+nothing files its record in `Canceled` instead: Done would claim a change
+nobody made, and the next daily run sorts the candidate again.
 """
 
 from __future__ import annotations
 
+import copy
 import difflib
 import json
 import os
@@ -65,22 +82,42 @@ import dependabot_card  # noqa: E402
 import github_output  # noqa: E402
 import model_adoption as ma  # noqa: E402
 import model_catalog  # noqa: E402
+import model_fallback as mf  # noqa: E402
+import model_home as mh  # noqa: E402
 from model_adoption import classify_catalog, load_prices  # noqa: E402,F401
-from model_fallback import policy_errors  # noqa: E402
+
+#: Every command of this CLI reads the home (DRE-6939's contract, checked by
+#: DRE-6940's `check_model_home_scope.py`): `apply` and the question body read
+#: it, and the workflow's rule is one token for every step that runs this file.
+READS_MODEL_HOME = ("*",)
 
 #: The CLI, exactly as DRE-3898's workflow calls it.
 COMMANDS = ("apply", "render", "open-record-card", "open-question-card")
-RENDER_TARGETS = ("pr-title", "pr-body", "question-title", "question-body",
+#: `pr-title` stays because the in-flight check matches an adoption pull
+#: request opened before DRE-6943 on it; an adoption opens none now.
+RENDER_TARGETS = ("pr-title", "question-title", "question-body",
                   "record-title", "record-body")
 
-#: Both cards are filed against this repo: the file an adoption edits lives here.
+#: The name the adoption writes the home under — a role word, never a person.
+WRITER = "daily-adoption"
+#: The token `apply` writes the home with: the bureau App's installation on
+#: dreadnought-foundry, `variables: write`, minted in the same job.
+WRITE_TOKEN_ENV = "BUREAU_MODEL_HOME_WRITE_TOKEN"
+
+#: Both cards are filed against this repo: the pipeline whose choices move.
 REPO_SLUG = "bureau-pipeline"
 
-#: The record card: where the work already is, and a verdict that says the
-#: fleet has nothing to dispatch for it — `repair_card.py`'s shape, for the
-#: same reason, and the same `automation` mark (`dependabot_card.LABEL`):
-#: automation filed it, never `hand-built`, which is the CEO's alone (DRE-6228).
-RECORD_LANE = "In Progress"
+#: The record card: Done, because the write it records is made — no pull
+#: request will ever close it — and a verdict that says the fleet has nothing
+#: to dispatch for it, `repair_card.py`'s, with the same `automation` mark
+#: (`dependabot_card.LABEL`): automation filed it, never `hand-built`, which is
+#: the CEO's alone (DRE-6228).
+RECORD_LANE = "Done"
+#: A run that wrote nothing made no change for Done to claim, and there is no
+#: work left on it — the next daily run sorts the candidate again — so its
+#: record is filed Canceled. `config/lane-contract.json` admits this workflow
+#: to both lanes, for the record card alone.
+UNWRITTEN_LANE = "Canceled"
 RECORD_VERDICT = "WORKBENCH"
 RECORD_LABELS = (f"repo:{REPO_SLUG}", "agent:devops", "initiative:bureau",
                  dependabot_card.LABEL)
@@ -110,9 +147,10 @@ _VERDICT_MARKERS = (
 )
 
 
-#: The first line of every pull request body this module renders. A model swap
-#: changes nothing a person using a product sees (`standards/whats-new.md`,
-#: DRE-5573) — and the `agent/` branches the workflow opens on owe the line.
+#: The first line of every pull request body the adoption workflow renders —
+#: since DRE-6943 only the pin raise's, which `claude_code_pin.py` imports from
+#: here. A Claude Code pin changes nothing a person using a product sees
+#: (`standards/whats-new.md`, DRE-5573), and its `agent/` branch owes the line.
 WHATS_NEW_NONE = "What's new: none"
 
 
@@ -257,27 +295,48 @@ def _ladder_phrase(names: list[str]) -> str:
     return ", ".join(parts[:-1]) + " and " + parts[-1]
 
 
+def _home_config() -> dict | None:
+    """The home's ladders in `classify_catalog`'s shape, or None when the home
+    is not read — the read prints the home's tagged line to stderr."""
+    outcome = mh.read()
+    if outcome.get("state") != mh.READ:
+        return None
+    return ma.home_config(outcome["document"])
+
+
 def _new_family_rung(config, prices) -> tuple[str | None, str | None, dict | None]:
     """For a family no ladder runs: the ladder discovery lets a new model join
-    (`discovery.on_new_model`) and its top rung, the nearest thing we run
-    there — read from the config, never assumed."""
-    config = config if config is not None else ma.load_config()
+    (`discovery.on_new_model`, a code-side fact) and its top rung, the nearest
+    thing we run there — read from the HOME (DRE-6943), never assumed. With no
+    home read the ladder is named and its top is None."""
+    if config is None:
+        config = _home_config()
+        if config is None:
+            target = str((mf.CONFIG.get("discovery") or {}).get("on_new_model") or "")
+            return (target or None), None, None
     prices = prices if prices is not None else load_prices()
     target = str(((config.get("discovery") or {}).get("on_new_model")) or "")
     rungs = model_catalog._ladder_ids((config.get("ladders") or {}).get(target))
     if not rungs:
-        return None, None, None
+        return (target or None), "", None
     top = rungs[0]
     entry = prices.get(top)
     return target, top, ({"input": entry["input"], "output": entry["output"]}
                          if isinstance(entry, Mapping) else None)
 
 
+#: Where the CEO answers an `ask` himself: the console page that edits the
+#: home, which offers every priced model (CEO decision, 2026-10-10).
+SET_IT_YOURSELF = ("You can set it yourself on the Settings › Agents & models page, "
+                   "where it is already offered the day it is priced.")
+
+
 def question_body(decision, config=None, prices=None) -> str:
     """The CEO's spending question. The first paragraph is the whole question:
     what Anthropic now offers and at what price, the nearest thing we run and
-    its price, the ladder it would join, and that nothing is adopted until he
-    answers. No file path, no command, no verdict marker anywhere."""
+    its price, the ladder it would join — read from the home — and that
+    nothing is adopted until he answers; then where he can set it himself. No
+    file path, no command, no verdict marker anywhere."""
     phrase, named_rung = _ask_class(decision)
     candidate = decision["candidate"]
     name = decision.get("display_name") or candidate
@@ -315,6 +374,9 @@ def question_body(decision, config=None, prices=None) -> str:
 
     if nearest:
         near = f"The nearest model we run is {nearest}, {_per_million(nearest_price)}."
+    elif nearest is None and phrase == ma.ASK_NEW_FAMILY:
+        near = ("We could not read today which model leads the ladder it would "
+                "join.")
     else:
         near = "We run nothing close to it today."
     if ladders:
@@ -326,8 +388,7 @@ def question_body(decision, config=None, prices=None) -> str:
     body = "\n\n".join([
         first,
         "What each answer does:\n\n"
-        "- Yes: the model is added through an ordinary reviewed change, and our "
-        "agents start using it once that change is merged.\n"
+        f"- Yes: {SET_IT_YOURSELF} Our agents use it from their next run.\n"
         "- No: nothing changes, and we keep running what we run today.",
         f"Why this came to you: {why}",
     ])
@@ -335,7 +396,7 @@ def question_body(decision, config=None, prices=None) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# The pull request and the record card                                         #
+# The record card                                                              #
 # --------------------------------------------------------------------------- #
 
 def _evidence(decision) -> str:
@@ -377,13 +438,6 @@ def _trial(trial) -> str:
     ])
 
 
-_RULE_ONE = (
-    "This pull request was opened by the model adoption workflow under DRE-3892 "
-    "rule 1 — a newer version of a model family we already run, at the same or "
-    "a lower declared price — and the critic and the merge gate are its review."
-)
-
-
 def _summary(decision) -> str:
     moves = ", ".join(f"`{r.get('model')}` on the {r.get('ladder')} ladder"
                       for r in _replaces(decision))
@@ -391,53 +445,68 @@ def _summary(decision) -> str:
     return f"{name} (`{decision['candidate']}`) replaces {moves}."
 
 
-def pr_body(decision, trial=None) -> str:
-    body = "\n\n".join([
-        WHATS_NEW_NONE,
-        _summary(decision),
-        _evidence(decision),
-        _trial(trial),
-        _RULE_ONE,
-    ])
-    return _quiet(body) + "\n"
+#: Where the change is made, in the record's words.
+_THE_HOME = ("the home — the one place the model choices live, the ones the "
+             "Settings › Agents & models page edits")
 
 
 def record_branch(card: str, candidate: str) -> str:
+    """The head an adoption pull request opened before DRE-6943 sat on — the
+    in-flight check still matches it, and an adoption opens none now."""
     return f"agent/{card}-adopt-{candidate}"
 
 
 def fallback_branch(candidate: str) -> str:
+    """The card-owed head of such a pull request, matched the same way."""
     return f"agent/model-adoption-{candidate}"
 
 
-def record_body(decision, *, run_url: str = "", branch: str = "", trial=None) -> str:
-    """The board's record of the adoption: the PR body's evidence plus the
-    branch and the run. `linear-sync` closes the card when the PR merges,
-    through the card id in the branch name."""
-    branch = branch or record_branch("<this card>", decision["candidate"])
-    body = "\n\n".join([
+def _what_happened(decision, applied) -> str:
+    outcome = (applied or {}).get("outcome")
+    if outcome == "written":
+        return (f"{_summary(decision)} The daily model adoption made that change "
+                f"in {_THE_HOME}. It wrote the home under its own name, "
+                f"`{WRITER}`, at {(applied or {}).get('written_at') or 'an unrecorded time'}, "
+                "after the trial below passed, under DRE-3892 rule 1, and the "
+                "console's history shows the write. This card is the board's "
+                "record of that adoption.")
+    if outcome:
+        return (f"{_summary(decision)} That is the change the daily model "
+                f"adoption would make in {_THE_HOME}, and this run made none of "
+                "it. This card is the board's record of why.")
+    return (f"{_summary(decision)} The daily model adoption makes that change in "
+            f"{_THE_HOME}, once the trial below passes, under DRE-3892 rule 1.")
+
+
+def record_body(decision, *, run_url: str = "", trial=None, applied=None) -> str:
+    """The board's record of the adoption: what moved where, the home as the
+    place the ladder changed, every sentence `apply` said (`applied`, the file
+    its `--result` wrote), the run, the evidence and the trial."""
+    said = [str(line) for line in (applied or {}).get("sentences") or []]
+    written = (applied or {}).get("outcome") == "written"
+    candidate = decision["candidate"]
+    olds = ", ".join(f"`{m}`" for m in dict.fromkeys(
+        str(r.get("model")) for r in _replaces(decision)))
+    body = "\n\n".join(part for part in [
         "## What happened",
-        _summary(decision) + " The model adoption workflow is making the change "
-        "under DRE-3892 rule 1, through an ordinary pull request the critic "
-        "reviews and the merge gate merges. This card is the board's record of "
-        "that adoption: it carries the pull request and closes when it merges.",
-        f"- Workflow run: {run_url or 'not recorded'}\n- Branch: `{branch}`",
+        _what_happened(decision, applied),
+        "\n".join(f"- {line}" for line in said),
+        f"- Workflow run: {run_url or 'not recorded'}",
         _evidence(decision),
         _trial(trial),
         "## Acceptance criteria",
-        f"- [ ] The adoption pull request on `{branch}` merges through the critic "
-        "and the merge gate.\n"
-        "- [ ] Closed by the merge, through the card id in the branch name.",
-    ])
+        (f"- [x] The home names `{candidate}` where {olds} stood, written by "
+         f"`{WRITER}`." if written else
+         f"- [ ] The next daily run sorts `{candidate}` again against the home "
+         "as it stands then."),
+    ] if part)
     return _quiet(body) + "\n"
 
 
 def render(target: str, decision, trial=None, *, run_url: str = "",
-           branch: str = "") -> str:
+           applied=None) -> str:
     if target == "pr-title":
         return pr_title(decision)
-    if target == "pr-body":
-        return pr_body(decision, trial)
     if target == "question-title":
         return question_title(decision)
     if target == "question-body":
@@ -445,238 +514,162 @@ def render(target: str, decision, trial=None, *, run_url: str = "",
     if target == "record-title":
         return record_title(decision)
     if target == "record-body":
-        return record_body(decision, run_url=run_url, branch=branch, trial=trial)
+        return record_body(decision, run_url=run_url, trial=trial, applied=applied)
     raise Refused(f"unknown render target {target!r} — one of {list(RENDER_TARGETS)}")
 
 
 # --------------------------------------------------------------------------- #
-# apply — config/models.yaml, edited as text                                   #
+# apply — the home, read again and written once                                #
 # --------------------------------------------------------------------------- #
 
-_TOP_KEY = re.compile(r"^([A-Za-z_][\w-]*):(.*)$")
-_CHILD_KEY = re.compile(r"^(\s+)([A-Za-z_][\w-]*):\s*(#.*)?$")
-_RUNG = re.compile(r"^(\s*-\s+model:\s*)(['\"]?)([^'\"\s#]+)\2(\s*(?:#.*)?)$")
-_SEPARATION = re.compile(
-    r"^(\s*(?:-\s+)?(?:built_on|reviewers_use):\s*)(['\"]?)([^'\"\s#]+)\2(\s*(?:#.*)?)$"
-)
-_PROJECT_ENTRY = re.compile(
-    r"^(\s+)([A-Za-z_][\w-]*)(:\s*)(['\"]?)([^'\"\s#]+)\4(\s*(?:#.*)?)$"
-)
+def home_changed_sentence(found: str) -> str:
+    """What `apply` says when the home moved while the trial ran."""
+    return (f"the home changed at {found} while the trial ran; nothing written; "
+            "tomorrow's run sorts again")
 
 
-def _split(line: str) -> tuple[str, str]:
-    """A line and its ending, so every untouched line is written back whole."""
-    body = line.rstrip("\r\n")
-    return body, line[len(body):]
+def unread_sentence(reason: str) -> str:
+    """What `apply` says when the home cannot be read again."""
+    return (f"the home could not be read again ({reason}); nothing written; "
+            "tomorrow's run sorts again")
 
 
-def _ladder_ids(config) -> dict[str, list[str]]:
-    return {str(name): model_catalog._ladder_ids(rungs)
-            for name, rungs in ((config or {}).get("ladders") or {}).items()}
+def already_sentence(candidate: str, found: str) -> str:
+    """What a rerun says when its own earlier write is the change it finds."""
+    return (f"the home already names {candidate}, written by the daily adoption "
+            f"at {found}; nothing written")
 
 
-def _kind_ladders(config) -> dict[str, str]:
-    """`{kind: the ladder it names}` off a parsed config."""
-    return {str(kind): str(spec.get("ladder") if isinstance(spec, Mapping) else spec)
-            for kind, spec in ((config or {}).get("kinds") or {}).items()}
+def not_retired_sentence(old: str) -> str:
+    """What the record card says of an old id the adoption took off every
+    group and project of the home: it stays priced and unretired, and its
+    retirement is a person's decision, later."""
+    return (f"{old} is on no group and no project of the home and is not "
+            "retired; retiring it is a code change a person makes once part 3 "
+            "has taken the choices out of config/models.yaml")
 
 
-def _moved_projects(projects, wanted, kinds, candidate):
-    """`projects` as `_move_projects` should leave it: each exception naming a
-    replaced rung of its own kind's ladder reads the candidate."""
-    if not isinstance(projects, Mapping):
-        return projects
-    return {
-        slug: ({kind: candidate if (kinds.get(kind), model) in wanted else model
-                for kind, model in entry.items()}
-               if isinstance(entry, Mapping) else entry)
-        for slug, entry in projects.items()
-    }
+def _now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def apply_text(text: str, decision, today: str) -> str:
-    """`config/models.yaml` with the Decision applied, as a text edit.
-
-    Raises `Refused` when the Decision is not `adopt`, when a rung it names is
-    not where it says, or when the edit did not produce exactly the ladders it
-    meant to — the parsed result is compared against the intended one, so a
-    line matched by mistake is caught here rather than in production.
-    """
-    import yaml
-
+def adopted_document(doc, decision, written_at: str) -> dict:
+    """The home `doc` with the Decision applied: in each group the Decision
+    names, the candidate where the rung it replaces stood; in every project
+    choice naming a replaced id, the candidate; `written_by: daily-adoption`
+    and `written_at`. Everything else is the document as it was read."""
     _require(decision, ma.RULE_ADOPT, "apply")
     candidate = decision["candidate"]
     wanted = {(str(r.get("ladder")), str(r.get("model"))) for r in _replaces(decision)}
     if not wanted:
         raise Refused(f"{candidate} replaces no rung, so there is nothing to apply")
-
-    lines = text.splitlines(keepends=True)
-    top = None
-    ladder = None
-    child_indent = None
-    hit: set[tuple[str, str]] = set()
-    for i, line in enumerate(lines):
-        body, end = _split(line)
-        if not body.strip() or body.lstrip().startswith("#"):
-            continue
-        found = _TOP_KEY.match(body)
-        if found:
-            top, ladder, child_indent = found.group(1), None, None
-            continue
-        if top != "ladders":
-            continue
-        child = _CHILD_KEY.match(body)
-        indent = len(body) - len(body.lstrip())
-        if child and (child_indent is None or indent == child_indent):
-            child_indent, ladder = indent, child.group(2)
-            continue
-        rung = _RUNG.match(body)
-        if rung and (ladder, rung.group(3)) in wanted:
-            hit.add((ladder, rung.group(3)))
-            lines[i] = (f"{rung.group(1)}{rung.group(2)}{candidate}"
-                        f"{rung.group(2)}{rung.group(4)}{end}")
-
-    missed = sorted(wanted - hit)
+    olds = {model for _, model in wanted}
+    new = copy.deepcopy(dict(doc))
+    groups = new.get("groups") or {}
+    missed = sorted((group, model) for group, model in wanted
+                    if model not in ((groups.get(group) or {}).get("models") or []))
     if missed:
-        raise Refused("the Decision names rung(s) the config does not hold: "
-                      + ", ".join(f"{m} on the {l} ladder" for l, m in missed))
+        raise Refused("the Decision names rung(s) the home does not hold: "
+                      + ", ".join(f"{m} in the {g} group" for g, m in missed))
+    for key, group in groups.items():
+        group["models"] = list(dict.fromkeys(
+            candidate if (str(key), m) in wanted else m for m in group["models"]))
+    for entry in (new.get("projects") or {}).values():
+        for group, model in list(entry.items()):
+            if model in olds:
+                entry[group] = candidate
+    new["written_by"] = WRITER
+    new["written_at"] = written_at
+    return new
 
-    before = yaml.safe_load(text) or {}
-    old_ladders = _ladder_ids(before)
-    staying = {m for ids in _ladder_ids(
-        yaml.safe_load("".join(lines)) or {}).values() for m in ids}
-    gone = [m for m in dict.fromkeys(str(r.get("model")) for r in _replaces(decision))
-            if m not in staying]
 
-    lines = _move_separation(lines, gone, candidate)
-    kinds = _kind_ladders(before)
-    lines = _move_projects(lines, wanted, kinds, candidate)
-    retired = set(model_catalog._ladder_ids(before.get("retired")))
-    lines = _retire(lines, [m for m in gone if m not in retired], candidate, today)
-    result = "".join(lines)
+def left_the_home(doc, decision) -> list[str]:
+    """The replaced ids `doc` names in no group and no project."""
+    named = {m for group in (doc.get("groups") or {}).values()
+             for m in group.get("models") or []}
+    named |= {m for entry in (doc.get("projects") or {}).values()
+              for m in entry.values()}
+    return [m for m in dict.fromkeys(str(r.get("model")) for r in _replaces(decision))
+            if m not in named]
 
-    expected = {
-        name: [candidate if (name, m) in wanted else m for m in ids]
-        for name, ids in old_ladders.items()
+
+def _read_home() -> tuple[dict | None, dict]:
+    """`(document as written, outcome)`: the home read again, judged as a
+    reader judges it, its tagged line on stderr. The document is the one in
+    the variable, nothing set aside — what a writer builds on, so an entry
+    this checkout cannot judge is refused by `home_errors`, never dropped."""
+    try:
+        text = mh._source(None, None)
+        outcome = mh._outcome(mh.NOT_SET) if text is None else mh.judge(text)
+    except mh._Unreadable as exc:
+        text, outcome = None, mh._outcome(mh.UNREADABLE, str(exc))
+    except Exception as exc:  # noqa: BLE001 — the line says it; nothing is written
+        text, outcome = None, mh._outcome(
+            mh.UNREADABLE, f"the reader failed ({type(exc).__name__}: {exc})")
+    print(mh.status_line(outcome), file=sys.stderr)
+    if outcome.get("state") != mh.READ:
+        return None, outcome
+    return json.loads(text), outcome
+
+
+def _http_patch(url: str, headers: Mapping, body: str, timeout: float) -> tuple[int, str]:
+    """`(status, body)` of one PATCH. An HTTP error status is an answer, not
+    a raise; a network failure or a timeout raises."""
+    import urllib.error
+    import urllib.request
+
+    request = urllib.request.Request(url, data=body.encode("utf-8"),
+                                     headers=dict(headers), method="PATCH")
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        try:
+            text = exc.read().decode("utf-8", "replace")
+        except Exception:  # noqa: BLE001
+            text = ""
+        return exc.code, text
+
+
+def write_home(text: str, token: str) -> None:
+    """ONE `PATCH` of the variable with `{"value": text}`, no retry. Raises
+    `Refused` on anything but a 2xx answer."""
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+        "Content-Type": "application/json",
+        "User-Agent": "bureau-pipeline-model-adoption",
     }
-    after = yaml.safe_load(result) or {}
-    if _ladder_ids(after) != expected:
-        raise Refused("the text edit did not produce the intended ladders — "
-                      "nothing written")
-    if after.get("projects") != _moved_projects(before.get("projects"), wanted,
-                                                kinds, candidate):
-        raise Refused("the text edit did not produce the intended `projects` "
-                      "exceptions — nothing written")
-    return result
-
-
-def _move_separation(lines: list[str], gone: list[str], candidate: str) -> list[str]:
-    """A `review_separation` rule naming a rung that has left every ladder
-    moves with it — the overlap it declares moved on both ladders at once."""
-    top = None
-    out = []
-    for line in lines:
-        body, end = _split(line)
-        found = _TOP_KEY.match(body)
-        if found:
-            top = found.group(1)
-        field = _SEPARATION.match(body) if top == "review_separation" else None
-        if field and field.group(3) in gone:
-            line = (f"{field.group(1)}{field.group(2)}{candidate}"
-                    f"{field.group(2)}{field.group(4)}{end}")
-        out.append(line)
-    return out
-
-
-def _move_projects(lines: list[str], wanted, kinds: dict[str, str],
-                   candidate: str) -> list[str]:
-    """A `projects.<slug>.<kind>` exception naming a rung the Decision replaces
-    on THAT KIND'S ladder moves with it (DRE-6633). An exception is the choice
-    of a rung, and the rung moved — under the CEO's rule of 2026-09-14 a
-    same-family successor at no higher price replaces its rung by itself.
-
-    An exception for a kind whose ladder the Decision does not touch is left
-    alone even when it names the same id: that id is still on that kind's
-    ladder, so it is still admissible.
-    """
-    top = None
-    slug_indent = None
-    out = []
-    for line in lines:
-        body, end = _split(line)
-        if not body.strip() or body.lstrip().startswith("#"):
-            out.append(line)
-            continue
-        found = _TOP_KEY.match(body)
-        if found:
-            top, slug_indent = found.group(1), None
-            out.append(line)
-            continue
-        indent = len(body) - len(body.lstrip())
-        if top != "projects" or slug_indent is None or indent <= slug_indent:
-            if top == "projects":
-                slug_indent = indent
-            out.append(line)
-            continue
-        entry = _PROJECT_ENTRY.match(body)
-        if entry and (kinds.get(entry.group(2)), entry.group(5)) in wanted:
-            line = (f"{entry.group(1)}{entry.group(2)}{entry.group(3)}"
-                    f"{entry.group(4)}{candidate}{entry.group(4)}"
-                    f"{entry.group(6)}{end}")
-        out.append(line)
-    return out
-
-
-def _retire(lines: list[str], ids: list[str], candidate: str, today: str) -> list[str]:
-    """Append each id under `retired:`, after the block's last entry."""
-    if not ids:
-        return lines
-    start = next((i for i, line in enumerate(lines)
-                  if _split(line)[0].startswith("retired:")), None)
-    if start is None:
-        raise Refused("the config has no `retired:` block to record the old id in")
-    if _split(lines[start])[0][len("retired:"):].split("#")[0].strip():
-        raise Refused("`retired:` is written inline; this edit appends to a block")
-    last = start
-    item_indent = None
-    for i in range(start + 1, len(lines)):
-        body = _split(lines[i])[0]
-        if not body.strip():
-            continue
-        if not body[0].isspace() and not body.startswith("-"):
-            break
-        last = i
-        if item_indent is None and body.lstrip().startswith("- "):
-            item_indent = body[: len(body) - len(body.lstrip())]
-    item_indent = "  " if item_indent is None else item_indent
-    ending = _split(lines[last])[1] or "\n"
-    if not _split(lines[last])[1]:
-        lines[last] = lines[last] + ending
-    added = []
-    for old in ids:
-        added += [
-            f"{item_indent}- model: {old}{ending}",
-            f'{item_indent}  reason: "replaced by {candidate} on {today} — '
-            f'automated same-family adoption (DRE-3892)"{ending}',
-        ]
-    return lines[: last + 1] + added + lines[last + 1:]
+    try:
+        status, answer = _http_patch(mh.API_URL, headers, json.dumps({"value": text}),
+                                     mh.TIMEOUT_SECONDS)
+    except Exception as exc:  # noqa: BLE001
+        raise Refused(f"the write to the home did not reach GitHub "
+                      f"({mh.one_line(exc)})") from exc
+    if not 200 <= status < 300:
+        raise Refused(f"GitHub answered HTTP {status} to the write of the home "
+                      f"({mh.one_line(answer)})")
 
 
 def _parse_apply_args(argv):
     candidate = None
     snapshot = None
-    config_path = ma.CONFIG_PATH
     prices_path = ma.PRICES_PATH
+    expect = None
+    result = None
     check = False
     rest = list(argv)
     while rest:
         arg = rest.pop(0)
         if arg == "--snapshot" and rest:
             snapshot = rest.pop(0)
-        elif arg == "--config" and rest:
-            config_path = rest.pop(0)
         elif arg == "--prices" and rest:
             prices_path = rest.pop(0)
+        elif arg == "--expect-written-at" and rest:
+            expect = rest.pop(0)
+        elif arg == "--result" and rest:
+            result = rest.pop(0)
         elif arg == "--check":
             check = True
         elif not arg.startswith("--") and candidate is None:
@@ -685,54 +678,107 @@ def _parse_apply_args(argv):
             raise Refused(f"unknown or incomplete option {arg!r}")
     if not candidate:
         raise Refused("apply needs a <candidate-id>")
-    return candidate, snapshot, Path(config_path), Path(prices_path), check
+    if not expect and not check:
+        raise Refused("apply needs --expect-written-at <written_at>, the home "
+                      "classify read — without it a change made during the "
+                      "trial could be overwritten")
+    return candidate, snapshot, Path(prices_path), expect, result, check
+
+
+def _say(outcome: str, written_at, sentences: list[str], result) -> None:
+    """Each sentence on stdout and in the step summary, and the result file
+    the record card reads."""
+    for line in sentences:
+        print(line)
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary and sentences:
+        with open(summary, "a") as fh:
+            fh.write("\n" + "\n\n".join(sentences) + "\n")
+    if result:
+        Path(result).write_text(json.dumps(
+            {"outcome": outcome, "written_at": written_at, "sentences": sentences}) + "\n")
 
 
 def _cmd_apply(argv) -> int:
-    """Classify, refuse anything but `adopt`, edit, validate, then write —
-    or, with `--check`, print the diff and write nothing."""
+    """Read the home again; if it moved since `classify`, write nothing and
+    say so (exit 0). Else classify against it, refuse anything but `adopt`,
+    build the document, judge it with `home_errors`, and write it with one
+    `PATCH` — or, with `--check`, print what would change and write nothing."""
     try:
-        candidate, snapshot, config_path, prices_path, check = _parse_apply_args(argv)
+        candidate, snapshot, prices_path, expect, result, check = _parse_apply_args(argv)
+    except Refused as exc:
+        print(f"::error::apply refused: {exc}")
+        return 2
+
+    doc, outcome = _read_home()
+    if doc is None:
+        reason = outcome.get("reason") or "no home is named to this step"
+        _say("unread", None, [unread_sentence(reason)], result)
+        return 0
+    found = doc.get("written_at")
+    if expect and found != expect:
+        shown = mh.one_line(found)
+        named = any(candidate in (g.get("models") or [])
+                    for g in (doc.get("groups") or {}).values())
+        if doc.get("written_by") == WRITER and named:
+            _say("already", found, [already_sentence(candidate, shown)], result)
+        else:
+            _say("home-changed", found, [home_changed_sentence(shown)], result)
+        return 0
+
+    try:
         if snapshot:
             catalog = ma.load_catalog_file(snapshot)
         else:
             model_catalog.clear_catalog_cache()
             catalog = model_catalog.fetch_catalog(fetch=ma._fake_catalog_from_env())
-        text = config_path.read_text()
         prices = load_prices(prices_path)
-        config = ma.load_config(config_path)
-        decision = next((d for d in classify_catalog(catalog, config, prices)
+        decision = next((d for d in classify_catalog(catalog, ma.home_config(doc), prices)
                          if d["candidate"] == candidate), None)
         if decision is None:
             raise Refused(f"{candidate} is not a candidate — the catalog does not "
-                          "list it, or it is already configured")
+                          "list it, or the home already runs it")
         _require(decision, ma.RULE_ADOPT, "apply")
-        today = datetime.now(timezone.utc).date().isoformat()
-        result = apply_text(text, decision, today)
+        new = adopted_document(doc, decision, _now())
     except (OSError, ValueError) as exc:
         print(f"::error::apply refused: {exc}")
         return 2
 
-    import yaml
-
-    violations = policy_errors(yaml.safe_load(result), prices)
+    text = json.dumps(new, indent=2) + "\n"
+    violations = mh.home_errors(text, mf.declared_prices(prices_path), mh.code_side(),
+                                mf.declared_repo_slugs())
     if violations:
-        print(f"::error::apply refused: adopting {candidate} would leave "
-              f"{config_path} in violation of policy — nothing written")
+        print(f"::error::apply refused: adopting {candidate} would leave the home "
+              "breaking its rules — nothing written")
         for violation in violations:
             print(f"  - {violation}")
         return 2
 
-    diff = "".join(difflib.unified_diff(
-        text.splitlines(keepends=True), result.splitlines(keepends=True),
-        fromfile=str(config_path), tofile=str(config_path)))
+    retired = set(mh.code_side().get("retired") or ())
+    sentences = [not_retired_sentence(old) for old in left_the_home(new, decision)
+                 if old not in retired]
     if check:
-        print(diff, end="")
+        print("".join(difflib.unified_diff(
+            json.dumps(doc, indent=2).splitlines(keepends=True), text.splitlines(keepends=True),
+            fromfile="the home as read", tofile="the home apply would write")), end="")
+        for line in sentences:
+            print(line)
         return 0
-    config_path.write_text(result)
+
+    token = os.environ.get(WRITE_TOKEN_ENV) or ""
+    if not token:
+        print(f"::error::apply refused: {WRITE_TOKEN_ENV} is empty, so the write "
+              "token mint failed — nothing written")
+        return 2
+    try:
+        write_home(text, token)
+    except Refused as exc:
+        print(f"::error::apply refused: {exc} — nothing written")
+        return 2
     print(f"applied: {candidate} replaces "
-          + ", ".join(f"{r['model']} on {r['ladder']}" for r in _replaces(decision))
-          + f" in {config_path}")
+          + ", ".join(f"{r['model']} in the {r['ladder']} group" for r in _replaces(decision))
+          + f" in the home, written by {WRITER} at {new['written_at']}")
+    _say("written", new["written_at"], sentences, result)
     return 0
 
 
@@ -779,57 +825,49 @@ def _find(ops, title, what):
 def record_verdict_why(decision, run_url: str) -> str:
     return (
         f"Filed by the model adoption workflow (run {run_url}) for the adoption "
-        f"of {decision['candidate']}. The workflow opens the pull request itself, "
-        "so there is nothing here to dispatch — the card is the board's record "
-        "of an adoption in flight."
+        f"of {decision['candidate']}. The workflow writes the home itself, so "
+        "there is nothing here to dispatch — the card is the board's record of "
+        "what the write did."
     )
 
 
-def open_record_card(decision, *, run_url: str, ops=None) -> dict:
-    """File (or find) the adoption's record card and name its branch.
+def open_record_card(decision, *, run_url: str, ops=None, trial=None,
+                     applied=None) -> dict:
+    """File (or find) the adoption's record card, its body saying what
+    `apply` did (`applied`, the file its `--result` wrote): in Done when it
+    wrote the home, in Canceled when it wrote nothing.
 
     Raises `Refused` — before any Linear call — on a Decision that is not
-    `adopt`. Otherwise NEVER raises: a Linear failure returns the fallback
-    branch with `card_owed` true, and the adoption proceeds on it.
+    `adopt`. Otherwise NEVER raises: a Linear failure returns `card_owed`
+    true, and the run carries on.
     """
     _require(decision, ma.RULE_ADOPT, "open-record-card")
     title = record_title(decision)
-    candidate = decision["candidate"]
     ops = ops or _Ops()
 
     existing = _find(ops, title, "record card")
     if existing:
-        return {"card": existing, "card_url": "",
-                "branch": record_branch(existing, candidate),
-                "card_owed": False, "note": ""}
+        return {"card": existing, "card_url": "", "card_owed": False, "note": ""}
 
+    body = record_body(decision, run_url=run_url, trial=trial, applied=applied)
+    written = (applied or {}).get("outcome") == "written"
     try:
-        issue = ops.create_card(title, record_body(decision, run_url=run_url),
-                                repo_slug=REPO_SLUG, labels=list(RECORD_LABELS),
-                                lane=RECORD_LANE)
+        issue = ops.create_card(title, body, repo_slug=REPO_SLUG,
+                                labels=list(RECORD_LABELS),
+                                lane=RECORD_LANE if written else UNWRITTEN_LANE)
     except Exception as exc:  # noqa: BLE001 — the ONE thing that must not fail
-        print(f"record card: NOT filed ({exc}) — the adoption proceeds on "
-              f"{fallback_branch(candidate)} and the pull request says the card "
-              "is owed", file=sys.stderr)
-        return {"card": "", "card_url": "", "branch": fallback_branch(candidate),
-                "card_owed": True, "note": str(exc).replace("\n", " ")[:300]}
+        print(f"record card: NOT filed ({exc}) — the card is owed",
+              file=sys.stderr)
+        return {"card": "", "card_url": "", "card_owed": True,
+                "note": str(exc).replace("\n", " ")[:300]}
 
     card = issue["identifier"]
-    branch = record_branch(card, candidate)
     try:
         ops.stamp_card(card, RECORD_VERDICT, record_verdict_why(decision, run_url))
     except Exception as exc:  # noqa: BLE001
         print(f"record card: {card} filed but its routing verdict did not stamp "
               f"({exc})", file=sys.stderr)
-    try:
-        # The branch is named after the card, so it is written in once the
-        # card has a number.
-        ops.set_description(card, record_body(decision, run_url=run_url,
-                                              branch=branch))
-    except Exception as exc:  # noqa: BLE001
-        print(f"record card: {card} filed but its branch was not written in "
-              f"({exc})", file=sys.stderr)
-    return {"card": card, "card_url": issue.get("url") or "", "branch": branch,
+    return {"card": card, "card_url": issue.get("url") or "",
             "card_owed": False, "note": ""}
 
 
@@ -886,10 +924,23 @@ def _options(argv, allowed) -> tuple[list[str], dict]:
     return positional, opts
 
 
+def load_applied(path) -> dict | None:
+    """What `apply --result` wrote, or None without one. A file that cannot
+    be read records that it could not, rather than stopping the record."""
+    if not path:
+        return None
+    try:
+        data = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return {"outcome": "unknown", "written_at": None,
+                "sentences": ["what the write did was not recorded by this run"]}
+    return dict(data) if isinstance(data, Mapping) else None
+
+
 def _cmd_render(argv) -> int:
     try:
         positional, opts = _options(
-            argv, ("--decision", "--trial", "--run-url", "--branch"))
+            argv, ("--decision", "--trial", "--run-url", "--applied"))
         if len(positional) != 1 or positional[0] not in RENDER_TARGETS:
             raise Refused(f"render needs one target of {list(RENDER_TARGETS)}")
         if "--decision" not in opts:
@@ -897,7 +948,7 @@ def _cmd_render(argv) -> int:
         text = render(positional[0], load_decision(opts["--decision"]),
                       load_trial(opts.get("--trial")),
                       run_url=opts.get("--run-url", ""),
-                      branch=opts.get("--branch", ""))
+                      applied=load_applied(opts.get("--applied")))
     except (OSError, ValueError) as exc:
         print(f"::error::render refused: {exc}", file=sys.stderr)
         return 2
@@ -907,14 +958,16 @@ def _cmd_render(argv) -> int:
 
 def _cmd_open(cmd, argv, ops) -> int:
     try:
-        allowed = ("--decision", "--run-url") if cmd == "open-record-card" else (
-            "--decision",)
+        allowed = ("--decision", "--run-url", "--trial", "--applied") \
+            if cmd == "open-record-card" else ("--decision",)
         positional, opts = _options(argv, allowed)
         if positional or "--decision" not in opts:
             raise Refused(f"{cmd} takes --decision <decision.json> only")
         if cmd == "open-record-card" and "--run-url" not in opts:
             raise Refused("open-record-card needs --run-url <url>")
         decision = load_decision(opts["--decision"])
+        trial = load_trial(opts.get("--trial"))
+        applied = load_applied(opts.get("--applied"))
         # Refusals come before the output channel is shut, and before Linear.
         if cmd == "open-record-card":
             _require(decision, ma.RULE_ADOPT, cmd)
@@ -930,7 +983,8 @@ def _cmd_open(cmd, argv, ops) -> int:
     # on stdout — human text belongs on stderr whoever wrote it (DRE-4202).
     with github_output.only_outputs():
         if cmd == "open-record-card":
-            result = open_record_card(decision, run_url=opts["--run-url"], ops=ops)
+            result = open_record_card(decision, run_url=opts["--run-url"], ops=ops,
+                                      trial=trial, applied=applied)
         else:
             result = open_question_card(decision, ops=ops)
     sys.stdout.write(outputs(result))

@@ -98,8 +98,10 @@ UNFIXABLE_CHECKS: dict[str, UnfixableCheck] = {
     TDD_CHECK_NAME: UnfixableCheck(
         check_name=TDD_CHECK_NAME,
         what=(
-            "the branch's commits are in the wrong order — no commit touching "
-            "`tests/` comes before the first commit that changes non-test code"
+            "the branch's commits are in the wrong order — a code commit has "
+            "no test commit since the previous code commit (for the first "
+            "code commit, since the branch began), and a later one carries no "
+            "exemption from `config/tdd-exemptions.json`"
         ),
         why_unfixable=(
             "the finding is the ORDER of commits that already exist, and order "
@@ -109,7 +111,9 @@ UNFIXABLE_CHECKS: dict[str, UnfixableCheck] = {
         ),
         remedy=(
             "someone with permission to rewrite this branch reorders the "
-            "existing commits so a test commit comes first (an interactive "
+            "existing commits so a test commit comes before each code commit "
+            "the check names, or rewords a later code commit's message to "
+            "carry the `TDD-Exempt:` trailer it qualifies for (an interactive "
             "rebase, or cherry-picking them onto a fresh branch in test-first "
             "order) and force-pushes. The CONTENT does not change: the "
             "resulting tree must be identical to the one it replaces, which is "

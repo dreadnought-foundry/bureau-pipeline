@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """The promotion gate's refusals, read back as a clock (DRE-4207).
 
-`reconcile.promote_ready` refuses or holds a Backlog card, prints why, and —
+`reconcile.promote_ready` refuses or holds a Queued card, prints why, and —
 for the refusals — posts the reason on the card ONCE (`_surface_once`). Nothing
 read that refusal again, so a card refused for the same reason on sweep after
 sweep for five days read, from outside, exactly like a card waiting its turn:
-Backlog holds both, and the only detector was a person reading a sweep log
+the queue holds both, and the only detector was a person reading a sweep log
 (DRE-4198). This module is the pure half of the fix. It never touches Linear and
 imports neither `reconcile` nor `linear_ops`; the wiring card (DRE-4210) builds
-the records and only calls it.
+the records and only calls it. Its lines name the queue as `lane_contract`
+writes it (`QUEUE_LANE`, DRE-6749), never a lane literal.
 
 ## The clock is the receipt's age
 
@@ -29,7 +30,7 @@ already runs for an epic's prose defect, generalized.
   only for an epic a blocker epic released, so the hold on any other epic's
   children stands until a person asks again, and the record names the epic.
 * `HELD_TAGS` — a FACT about the card after the pass, never a log line:
-  `needs-human` (left in Backlog wearing the label), `agent-blocker` (left with
+  `needs-human` (left in Queued wearing the label), `agent-blocker` (left with
   an open `🛑 Agent blocked` marker), `stale-verdict`, `live-recheck`. A person
   was already told once; these are counted for the idle-board alarm and never
   clocked per card. `first_seen` is the receipt the hold left where one exists,
@@ -60,6 +61,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # The one Pacific renderer the sweep's receipts share. Import-safe: dead_run
 # does no I/O at import and pulls in neither reconcile nor linear_ops.
 import dead_run  # noqa: E402 — after the path insert, by design
+# The queue's names (DRE-6749). Import-safe too: it reads the contract file and
+# nothing else.
+import lane_contract  # noqa: E402
 
 #: Refusals the gate surfaces on a card and no sweep can clear on its own.
 #: The last is `epic_cap.UNDECIDED_TAG`, spelled because this module imports
@@ -205,8 +209,8 @@ def idle_board(active: int, spent: int, cap: int, refused: list[Refused],
     lowest = min((r.identifier for r in refused), key=_number)
     line = (
         f"{IDLE_LINE_OPENER}{cap}: nothing was dispatched and {cards} {noun} in "
-        f"Backlog stand refused or held, lowest {lowest} — no sweep will promote "
-        "them, a person must act"
+        f"{lane_contract.QUEUE_LANE} stand refused or held, lowest {lowest} — no "
+        "sweep will promote them, a person must act"
     )
     dated = [(age, r) for r in refused
              if (age := _age(r.first_seen, now)) is not None]
@@ -216,8 +220,8 @@ def idle_board(active: int, spent: int, cap: int, refused: list[Refused],
     if age < IDLE_BOARD_MINUTES:
         return line, None
     entry = (
-        f"{LEDGER_IDLE_OPENER}{cap}: {cards} {noun} in Backlog stand refused or "
-        f"held with nothing dispatched; the oldest receipt, on {oldest.identifier}, "
-        f"is {_hours(age)}h old — a person must act"
+        f"{LEDGER_IDLE_OPENER}{cap}: {cards} {noun} in {lane_contract.QUEUE_LANE} "
+        "stand refused or held with nothing dispatched; the oldest receipt, on "
+        f"{oldest.identifier}, is {_hours(age)}h old — a person must act"
     )
     return line, entry

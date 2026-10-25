@@ -22,11 +22,14 @@ first line of the quoted reason (`strip_stamp`).
 
 The MARKER is the posted comment:
 
-    🛑 Agent blocked: class=<class> · <reason> — parked in Backlog until … Run: <url>
+    🛑 Agent blocked: class=<class> · <reason> — parked in Queued until … Run: <url>
 
 `marker_class` reads `class=` and is None for a legacy marker without one;
 `marker_reason` is the text between the `·` (a legacy marker: the prefix) and
-the LAST ` — parked in Backlog`, stripped, so a multi-line reason survives.
+the LAST ` — parked in <lane>`, stripped, so a multi-line reason survives. The
+lane is the queue under either of its names (`lane_contract.QUEUE_LANES`,
+DRE-6747): the clause names the lane the card parked in, and a marker posted
+before the cutover names the one `Queued` replaces.
 
 `classify(text)`: a valid first-line stamp wins; else the phrases, matched
 case-insensitively against the whole text; phrases of more than one class, or
@@ -51,7 +54,9 @@ A person's call is a None return, never `NotNow`.
 The library is stdlib-only and import-safe. `classify-card` and `board` are
 the two subcommands that import the pipeline's readers, and they import them
 inside the subcommand: `reconcile` reads `REPO` when it is imported. Neither
-writes anything.
+writes anything. `marker_reason` reads the queue's names off `lane_contract`
+inside the call for the same reason: `classify` and `reason`, the poster's
+two, never import it.
 """
 
 from __future__ import annotations
@@ -67,8 +72,9 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 CONFIG = os.path.join("config", "blocker-classes.json")
 
-#: The poster's trailing clause; the reason ends at its LAST occurrence.
-PARKED = " — parked in Backlog"
+#: The poster's trailing clause, before the lane it names; the reason ends at
+#: the LAST occurrence of it under any name the queue has (`_parked`).
+PARKED = " — parked in "
 
 _ACTION = re.compile(r"[a-z_]+")
 _MARKER_CLASS = re.compile(r"class=([^\s·]+)\s*·\s*")
@@ -186,15 +192,24 @@ def marker_class(body: str | None) -> str | None:
 
 def marker_reason(body: str | None) -> str:
     """The reason a marker quotes: after the `·` (a legacy marker: after the
-    prefix), up to the LAST ` — parked in Backlog`, stripped."""
+    prefix), up to the LAST ` — parked in <lane>` for any name the queue has,
+    stripped."""
     rest = _after_prefix(body or "")
     if rest is None:
         return ""
     match = _MARKER_CLASS.match(rest)
     if match:
         rest = rest[match.end():]
-    cut = rest.rfind(PARKED)
+    cut = max(rest.rfind(clause) for clause in _parked())
     return (rest[:cut] if cut >= 0 else rest).strip()
+
+
+def _parked() -> tuple:
+    """The trailing clause under every name the queue has — `Queued`, then the
+    lane it replaces (`lane_contract.QUEUE_LANES`, DRE-6747)."""
+    from lane_contract import QUEUE_LANES  # noqa: PLC0415 — the library stays stdlib-only
+
+    return tuple(f"{PARKED}{lane}" for lane in QUEUE_LANES)
 
 
 def _blocker(body: str) -> Blocker:

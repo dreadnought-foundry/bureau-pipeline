@@ -1,9 +1,9 @@
 """The planner's rerun reads its own death marker and moves down the ladder (DRE-3824).
 
-What broke (2026-09-12/13, DRE-3693): every planner run on `claude-fable-5-1`
+What broke (2026-09-12/13, DRE-3693): every planner run on Fable 5.1
 died at once — 1 turn, $0, `is_error`, one run's text "You've hit your monthly
 spend limit". plan.yml's "Record is_error death" step stamped
-`model-error: claude-fable-5-1` and promised "the medic rerun will switch to the
+`model-error: <Fable's id>` and promised "the medic rerun will switch to the
 alternate model". Nothing read the marker: the Select-model step asks only the
 availability probe, and in subscription mode the probe gets 429 for every model
 and calls that available. The 15:46 PT rerun on 2026-09-12 chose Fable again,
@@ -17,6 +17,12 @@ on Fable whenever Fable works.
 
 These tests run the step's REAL shell against the real selector, with the
 Linear read stubbed, so the wiring is proven by execution rather than by grep.
+The selector is a fixture tree's (tests/model_fixture.py), built with
+`regenerate=False`, and it selects on the frozen home document
+(`model_fixture.fixture_home()`, handed over through `home_env`, DRE-6990), so
+a console save that moves the planner or reorders its group leaves these rules
+standing: every model id below is a model of the document's judgement group,
+named for its place on it.
 """
 
 import json
@@ -32,13 +38,15 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 WF = os.path.join(ROOT, ".github", "workflows", "plan.yml")
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
+sys.path.insert(0, os.path.join(ROOT, "tests"))
 
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
 
-FABLE51 = "claude-fable-5-1"
-# The planner ladder's Opus rung — `claude-opus-5-5` since DRE-4836.
-OPUS55 = "claude-opus-5-5"
-SONNET = "claude-sonnet-4-6"
+# The planner's walk in the frozen document: the top rung, and the one below it.
+HOME = model_fixture.fixture_home()
+JUDGEMENT = model_fixture.ladder(HOME, HOME["agents"]["planner"])
+TOP, SECOND = JUDGEMENT[0], JUDGEMENT[1]
 
 HEARTBEAT_NEEDLE = "planner agent starting"
 
@@ -82,13 +90,11 @@ print(sum(1 for b in bodies if needle in b))
 class SelectModelStepRunsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
-        scripts = os.path.join(self.tmp, ".bureau-pipeline", "scripts")
-        os.makedirs(scripts)
-        shutil.copy(os.path.join(ROOT, "scripts", "model_fallback.py"), scripts)
-        shutil.copytree(os.path.join(ROOT, "config"),
-                        os.path.join(self.tmp, ".bureau-pipeline", "config"))
-        with open(os.path.join(scripts, "linear_ops.py"), "w") as fh:
-            fh.write(STUB_LINEAR_OPS)
+        # The checkout the step runs in: a fixture tree, its selector reading
+        # the frozen document as its home (DRE-6939), and Linear stubbed.
+        self.tree = model_fixture.fixture_tree(
+            os.path.join(self.tmp, ".bureau-pipeline"), regenerate=False)
+        (self.tree / "scripts" / "linear_ops.py").write_text(STUB_LINEAR_OPS)
         self.log = os.path.join(self.tmp, "linear.log")
 
     def tearDown(self):
@@ -100,7 +106,7 @@ class SelectModelStepRunsTest(unittest.TestCase):
         )
         out_file = os.path.join(self.tmp, "gh_output")
         summary = os.path.join(self.tmp, "summary")
-        env = dict(os.environ)
+        env = model_fixture.home_env(self.tree, HOME)
         env.update({
             "GITHUB_OUTPUT": out_file,
             "GITHUB_STEP_SUMMARY": summary,
@@ -109,7 +115,7 @@ class SelectModelStepRunsTest(unittest.TestCase):
             "STUB_THREAD": json.dumps(thread),
             "STUB_LINEAR_LOG": self.log,
             "BUREAU_FAKE_AVAILABLE": json.dumps(
-                available or {FABLE51: True, OPUS55: True, SONNET: True}
+                available or {model: True for model in JUDGEMENT}
             ),
         })
         if linear_fails:
@@ -117,6 +123,8 @@ class SelectModelStepRunsTest(unittest.TestCase):
         proc = subprocess.run(["bash", "-e", "-c", run], cwd=self.tmp,
                               env=env, capture_output=True, text=True)
         self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        # The selector answered from the document, not its defaults in the code.
+        self.assertIn("model-home: read", proc.stderr)
         outputs = dict(
             line.split("=", 1) for line in open(out_file).read().splitlines()
             if "=" in line
@@ -130,34 +138,36 @@ class SelectModelStepRunsTest(unittest.TestCase):
         return ("🪦 planner died with API/model error (is_error) on "
                 f"{model}\n{mf.error_marker(model)}")
 
-    def test_a_death_on_fable_in_the_last_attempt_moves_the_planner_to_opus(self):
-        # DRE-3693's thread at 14:28 PT on 2026-09-13, in shape.
-        out = self.run_step([self.heartbeat(FABLE51), self.death(FABLE51)])
-        self.assertEqual(out["model"], OPUS55)
+    def test_a_death_on_the_top_rung_in_the_last_attempt_moves_the_planner_down(self):
+        # DRE-3693's thread at 14:28 PT on 2026-09-13, in shape: Fable died,
+        # and the rerun planned on Opus, the rung below it.
+        out = self.run_step([self.heartbeat(TOP), self.death(TOP)])
+        self.assertEqual(out["model"], SECOND)
         self.assertTrue(out["why"].startswith("DEGRADED"), out["why"])
 
-    def test_a_card_with_no_death_stays_on_fable(self):
-        out = self.run_step([self.heartbeat(FABLE51)])
-        self.assertEqual(out["model"], FABLE51)
+    def test_a_card_with_no_death_stays_on_the_top_rung(self):
+        out = self.run_step([self.heartbeat(TOP)])
+        self.assertEqual(out["model"], TOP)
 
-    def test_an_old_fable_death_before_a_later_attempt_does_not_hold_fable_off(self):
-        # Fable died once, Opus planned after it: the next plan tries Fable again.
+    def test_an_old_death_before_a_later_attempt_does_not_hold_the_top_rung_off(self):
+        # The top rung died once, the rung below planned after it: the next
+        # plan tries the top again.
         out = self.run_step([
-            self.heartbeat(FABLE51), self.death(FABLE51), self.heartbeat(OPUS55),
+            self.heartbeat(TOP), self.death(TOP), self.heartbeat(SECOND),
         ])
-        self.assertEqual(out["model"], FABLE51)
+        self.assertEqual(out["model"], TOP)
 
     def test_a_linear_failure_keeps_the_first_choice(self):
-        out = self.run_step([self.heartbeat(FABLE51), self.death(FABLE51)],
+        out = self.run_step([self.heartbeat(TOP), self.death(TOP)],
                             linear_fails=True)
-        self.assertEqual(out["model"], FABLE51)
+        self.assertEqual(out["model"], TOP)
 
     def test_the_read_asks_for_the_chosen_model_since_the_last_heartbeat(self):
         self.run_step([])
         calls = [json.loads(l) for l in open(self.log).read().splitlines()]
         self.assertEqual(calls, [{
             "card": "DRE-3693",
-            "needle": mf.error_marker(FABLE51),
+            "needle": mf.error_marker(TOP),
             "since": HEARTBEAT_NEEDLE,
         }])
 
@@ -175,7 +185,7 @@ class TheTwoHalvesAgreeTest(unittest.TestCase):
     def test_the_death_step_writes_the_marker_the_select_step_reads(self):
         record = step("Record is_error death")["run"]
         self.assertIn("error_marker", record)
-        self.assertEqual(mf.error_marker(OPUS55), f"model-error: {OPUS55}")
+        self.assertEqual(mf.error_marker(SECOND), f"model-error: {SECOND}")
         self.assertIn('"model-error: $MODEL"', step("Select model")["run"])
 
 

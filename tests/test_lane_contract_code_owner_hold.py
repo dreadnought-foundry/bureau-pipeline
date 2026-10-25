@@ -75,14 +75,16 @@ def test_the_console_is_a_glossary_writer_that_lives_in_agent_bureau():
     assert "console" in lane_contract.writers()
 
 
-def test_green_light_names_six_kinds_and_the_weekly_report_is_one():
+def test_green_light_names_seven_kinds_and_the_weekly_report_is_one():
     # Six since DRE-6414 added the sweep's question about an epic grown past
-    # the size the CEO approved (`epic-growth`).
+    # the size the CEO approved (`epic-growth`); seven since DRE-5234 added the
+    # release train's notice of a deferred release (`deferred-release`).
     entrance = lane("Green Light")["clauses"]["entrance"]
     assert "weekly-report" in entrance["kinds"]
     assert "epic-growth" in entrance["kinds"]
-    assert len(entrance["kinds"]) == 6
-    assert entrance["text"].startswith("Six kinds of row, and no other")
+    assert "deferred-release" in entrance["kinds"]
+    assert len(entrance["kinds"]) == 7
+    assert entrance["text"].startswith("Seven kinds of row, and no other")
 
 
 def test_the_weekly_report_has_no_arrival_record_in_this_repository():

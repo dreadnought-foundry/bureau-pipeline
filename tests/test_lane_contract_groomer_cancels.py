@@ -64,12 +64,15 @@ class TestTheGroomerMayWriteCanceled:
         # under its parent, is canceled by the planner that split it.
         # `hygiene.py` is the one DRE-5368 named: a childless card under a
         # Canceled or Duplicate parent, canceled with the parent's state named.
+        # `model-adoption.yml` is the one DRE-6943 named: the record card of a
+        # daily adoption run that wrote nothing into the home.
         assert lane_contract.lane_writers("Canceled") == (
             "operator",
             "reconcile.py",
             GROOMER,
             "plan.yml",
             "hygiene.py",
+            "model-adoption.yml",
         )
 
     def test_the_writer_key_resolves_in_the_contracts_own_glossary(self):

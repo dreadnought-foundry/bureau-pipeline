@@ -358,6 +358,10 @@ HOLD = ("🔬 proof-waiting: needs the CEO's press: Approve the release — "
         "needs the CEO's press: Approve the release")
 PARK = ("🙋 The proof run met a press only the CEO can make, and asks:\n\n"
         "Approve the release in the console, or drop the criterion?")
+#: The decision park's question (DRE-6840): a decision the run met that names
+#: no press, parked in Green Light the way the press is.
+DECISION_PARK = ("🙋 The proof run asks a decision only the CEO can make:\n\n"
+                 "Keep the weekly report on Saturdays, or move it to Monday?")
 
 
 def _answer(*nodes, card=CARD, viewer=FLEET):
@@ -413,6 +417,20 @@ def test_answer_marks_the_park_by_its_question_when_the_hold_was_refused():
     code, out = _answer(node(HOLD), node(V.ANSWER_COMMENT))
     assert code == 0
     assert out.startswith("2026-09-13 09:52 PT\t")
+
+
+def test_answer_marks_a_decision_park_by_its_question_when_the_hold_was_refused():
+    assert spoken_thread.PROOF_PARK_MARKS[2] == (
+        "🙋 The proof run asks a decision only the CEO can make:")
+    code, out = _answer(node(DECISION_PARK), node(V.ANSWER_COMMENT))
+    assert code == 0
+    assert out == ("2026-09-13 09:52 PT\tGo with option B — keep the old "
+                   "export for one more month.\n")
+
+
+def test_answer_reads_none_when_the_decision_park_follows_his_answer():
+    code, out = _answer(node(V.ANSWER_COMMENT), node(DECISION_PARK))
+    assert (code, out) == (1, "")
 
 
 def test_answer_on_a_thread_with_no_park_exits_one():

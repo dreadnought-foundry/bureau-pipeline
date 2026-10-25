@@ -67,11 +67,17 @@ REQUIRED_ENV_EXPR = "${{ secrets.LINEAR_API_KEY }}"
 _PLANNER_FIRST = "${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}"
 _OPTED_IN_PLANNER = ("${{ vars.LINEAR_AGENT_BUCKET == 'planner' && "
                      "secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}")
+# DRE-7194: the verifier's agent holds that key in a LIVE verification only. A
+# shadow replay posts nothing and its agent holds no Linear key at all
+# (tests/test_verify_shadow.py), so the same expression sits inside a gate on
+# `inputs.shadow` — a live run still gets exactly the key above.
+_LIVE_ONLY_OPTED_IN_PLANNER = (
+    "${{ !inputs.shadow && (" + _OPTED_IN_PLANNER[len("${{ "):-len(" }}")] + ") || '' }}")
 REQUIRED_ENV_EXPR_BY_WORKFLOW = {
     "plan.yml": _PLANNER_FIRST,
     "agent-task.yml": _OPTED_IN_PLANNER,
     "agent-fix.yml": _OPTED_IN_PLANNER,
-    "verify.yml": _OPTED_IN_PLANNER,
+    "verify.yml": _LIVE_ONLY_OPTED_IN_PLANNER,
     # DRE-5924: the proof run, copied from agent-task.yml.
     "proof-task.yml": _OPTED_IN_PLANNER,
 }
@@ -116,7 +122,7 @@ DOCUMENTED_EXCEPTIONS = {
         "\"Read,Glob,Grep,Write\" with no Bash, so there is no way for it to "
         "run linear_ops.py at all — the premise of the rule above. It posts "
         "no heartbeat and reads no card: the task is a FIXED string (read "
-        "config/models.yaml, count the ladders, write one line), identical "
+        "config/model-prices.yaml, count the prices, write one line), identical "
         "for every candidate, which is what makes two trials comparable and "
         "what leaves no untrusted text for an injection to ride in on. The "
         "workflow declares exactly two workflow_call secrets, both Anthropic "
@@ -154,6 +160,24 @@ DOCUMENTED_EXCEPTIONS = {
         "the agent is handed claims the key is in its env: the medic has no "
         "brief (briefPath: null) and its prompt names no tracker command, "
         "pinned by tests/test_medic_diagnosis_snapshot.py."
+    ),
+    (
+        "triage-repair.yml",
+        "Repair the card",
+    ): (
+        "The Triage Repair planner is denied Linear ON PURPOSE (DRE-7179 + "
+        "DRE-2696). It runs a model over untrusted card text, and every "
+        "Linear read and write of the run is made by the `select`, `claim` "
+        "and `apply` steps of scripts/triage_repair.py and the planner "
+        "context steps, each holding the key on its own step's env. Its tool "
+        "set is \"Read,Glob,Grep,Write\" with no Bash, and it posts no "
+        "heartbeat: it writes four files to one directory, which `apply` "
+        "reads. Its Write still reaches the workspace, so no step holding "
+        "the key runs a script from there: each runs from a read-only copy "
+        "of bureau-pipeline taken before any model runs, outside the "
+        "workspace and outside the agent's `--add-dir` — groomer.yml keeps "
+        "its card writes in a separate job for the same reason. Pinned by "
+        "tests/test_triage_repair_workflow.py."
     ),
 }
 

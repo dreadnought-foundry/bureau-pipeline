@@ -203,6 +203,15 @@ def test_a_renamed_lane_is_resolved_before_it_is_compared():
             current.lower(), retired) is False
 
 
+def test_a_lane_being_replaced_is_the_same_lane_as_its_replacement():
+    """Backlog is still a live lane while Queued replaces it (DRE-4125), and
+    the contract aliases one to the other (DRE-6741). The alias wins over the
+    live name, so a card the board shows under either is in the same queue."""
+    assert dedupe_dispatch.lane_left_behind("backlog", "Queued") is False
+    assert dedupe_dispatch.lane_left_behind("queued", "Backlog") is False
+    assert dedupe_dispatch.lane_left_behind("backlog", "Todo") is True
+
+
 def test_an_unreadable_lane_proceeds():
     """Fail-open on both sides: no trigger lane in the payload, or no lane
     read back from Linear, means nothing to compare."""

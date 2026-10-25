@@ -324,7 +324,7 @@ class RateLimitedDecisionTest(unittest.TestCase):
             d = dead_run.decide(prior, pre_agent=True, rate_limited=True)
             self.assertEqual(d.action, "infra")
             self.assertNotIn(dead_run.HOLD_LABEL, d.comments[0])
-            self.assertNotIn("Backlog", d.comments[0])
+            self.assertNotIn(dead_run.QUEUE_LANE, d.comments[0])
 
     def test_it_does_not_blame_the_card_or_ask_for_a_split(self):
         body = self.decide().comments[0]
@@ -627,13 +627,13 @@ class AtomicParkTest(unittest.TestCase):
         # destination statically: the undo is a LABEL write, never a lane one.
         source = open(os.path.join(SCRIPTS, "dead_run.py")).read()
         self.assertIn("PARK_STATE", source)
-        self.assertEqual(dead_run.PARK_STATE, "Backlog")
+        self.assertEqual(dead_run.PARK_STATE, "Queued")
         self.assertNotIn("cmd_state(identifier, name", source)
 
     def test_the_unlanded_note_says_the_park_did_not_happen(self):
         note = dead_run.park_unlanded_comment(run_url="https://runs/9")
         self.assertIn("not", note.lower())
-        self.assertIn("Backlog", note)
+        self.assertIn("Queued", note)
         self.assertIn(dead_run.HOLD_LABEL, note)
         self.assertIn("https://runs/9", note)
 

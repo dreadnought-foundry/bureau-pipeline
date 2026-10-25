@@ -152,7 +152,7 @@ class FakeLinear:
         if "issues(" in q and "$numbers" in q and "history(first: 50)" in q:
             return {"issues": {"nodes": self.epics,
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
-        if "issues(" in q and "Backlog" in q:
+        if "issues(" in q and reconcile.QUEUE_STATE_FILTER in q:
             return {"issues": {"nodes": self.cards,
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         raise AssertionError(f"unexpected query: {q[:160]}")

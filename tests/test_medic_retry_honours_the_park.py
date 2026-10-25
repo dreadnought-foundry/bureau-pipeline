@@ -25,7 +25,8 @@ parameters cannot succeed — the rule DRE-1921 wrote for a rate-limited critic
 What this file pins:
 
   * a failed run whose card is PARKED is not retried, and one receipt names the
-    park (the `needs-human` label, or Backlog plus a `held-for-human` receipt
+    park (the `needs-human` label, or the queue lane — `Queued` or the lane it
+    replaces, `lane_contract.QUEUE_LANES` — plus a `held-for-human` receipt
     newer than the run);
   * a TURN-EXHAUSTION death is never retried, whatever the card's state — the
     death class is read from the run's own execution record, through the
@@ -58,6 +59,7 @@ os.environ.setdefault("GH_TOKEN", "test")
 import check_act_receipts  # noqa: E402
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
+import lane_contract  # noqa: E402
 import medic_retry  # noqa: E402
 import pipeline_act  # noqa: E402
 
@@ -134,13 +136,58 @@ class ParkedCardIsNotRetriedTest(unittest.TestCase):
 
     def test_backlog_plus_a_hold_receipt_newer_than_the_run_parks_the_card(self):
         reason = medic_retry.park_reason(
-            state=dead_run.PARK_STATE,
+            state=lane_contract.QUEUE_LANE,
             labels=[],
             receipts=_dre2937_receipts(),
             run_started_at=RUN_STARTED_AT,
         )
         self.assertTrue(reason, "a park landed after the run started and was missed")
         self.assertIn(PARKED_AT, reason)
+
+    def test_a_park_under_either_queue_name_parks_the_card(self):
+        """DRE-6745: the park lands in `QUEUE_LANE`, `Backlog` until DRE-6742
+        and `Queued` after, so the medic reads the park lane by membership in
+        `QUEUE_LANES` — a card parked under either name is parked, and the
+        receipt names the lane the card is actually in."""
+        self.assertEqual({"Queued", "Backlog"}, set(lane_contract.QUEUE_LANES))
+        for lane in lane_contract.QUEUE_LANES:
+            with self.subTest(lane=lane):
+                reason = medic_retry.park_reason(
+                    state=lane,
+                    labels=[],
+                    receipts=_dre2937_receipts(),
+                    run_started_at=RUN_STARTED_AT,
+                )
+                self.assertTrue(reason, f"a park in {lane} was missed")
+                self.assertIn(f"moved to {lane} at {PARKED_AT}", reason)
+
+    def test_the_park_read_follows_the_contract_not_a_name(self):
+        """A lane outside `QUEUE_LANES` is not the park lane, whatever a
+        receipt says — and a name the contract adds is read with no edit.
+        A start lane, `START_LANES` (DRE-7111), is where a build runs: a card
+        there was started, never parked."""
+        self.assertTrue(lane_contract.START_LANES)
+        for lane in lane_contract.START_LANES:
+            with self.subTest(lane=lane):
+                self.assertEqual(
+                    "",
+                    medic_retry.park_reason(
+                        state=lane,
+                        labels=[],
+                        receipts=_dre2937_receipts(),
+                        run_started_at=RUN_STARTED_AT,
+                    ),
+                )
+        with mock.patch.object(medic_retry, "QUEUE_LANES", ("Queued",)):
+            self.assertEqual(
+                "",
+                medic_retry.park_reason(
+                    state="Backlog",
+                    labels=[],
+                    receipts=_dre2937_receipts(),
+                    run_started_at=RUN_STARTED_AT,
+                ),
+            )
 
     def test_a_hold_receipt_older_than_the_run_is_not_this_runs_park(self):
         """A park from a previous life of the card says nothing about this run.
@@ -153,7 +200,7 @@ class ParkedCardIsNotRetriedTest(unittest.TestCase):
         self.assertEqual(
             "",
             medic_retry.park_reason(
-                state=dead_run.PARK_STATE,
+                state=lane_contract.QUEUE_LANE,
                 labels=[],
                 receipts=stale,
                 run_started_at=RUN_STARTED_AT,
@@ -182,14 +229,14 @@ class ParkedCardIsNotRetriedTest(unittest.TestCase):
     def test_one_receipt_names_the_park_and_the_rule_applied(self):
         decision = medic_retry.decide(
             parked_because=(
-                f"it was parked in {dead_run.PARK_STATE} at {PARKED_AT} by the "
+                f"it was parked in {lane_contract.QUEUE_LANE} at {PARKED_AT} by the "
                 f"turn cap"
             )
         )
         body = medic_retry.declined_comment(decision, run_url=RUN_URL)
         self.assertIn("not retried", body)
         self.assertIn(PARKED_AT, body)
-        self.assertIn(dead_run.PARK_STATE, body)
+        self.assertIn(lane_contract.QUEUE_LANE, body)
         self.assertIn(medic_retry.DECLINED_TAG, body)
         self.assertIn(RUN_URL, body)
 
@@ -395,15 +442,23 @@ class TransientFailureIsStillRetriedTest(unittest.TestCase):
     def test_the_workflow_still_reruns_at_most_once(self):
         """ONCE, still keyed off GitHub's own `run_attempt` — the vendor's
         counter, not a marker we could double-post. This card narrows WHEN the
-        one retry fires; it must not change how many there are."""
+        one retry fires; it must not change how many there are.
+
+        DRE-7526 added the diagnosis's one resume, keyed off the same counter:
+        `diagnose` reruns only from its resume step and only on attempt 2, so
+        attempt 3 is the last there can ever be."""
         jobs = _medic()["jobs"]
         rerunners = [
             name for name, job in jobs.items()
             if "gh run rerun" in yaml.safe_dump(job)
         ]
-        self.assertEqual(["retry"], rerunners)
+        self.assertEqual(["retry", "diagnose"], rerunners)
         self.assertIn("run_attempt == 1", jobs["retry"]["if"])
         self.assertIn("run_attempt >= 2", jobs["diagnose"]["if"])
+        resumers = [s for s in jobs["diagnose"]["steps"]
+                    if "gh run rerun" in yaml.safe_dump(s)]
+        self.assertEqual(["resume"], [s.get("id") for s in resumers])
+        self.assertIn("run_attempt == 2", resumers[0]["if"])
 
     def test_no_card_at_all_still_retries(self):
         """Most watched workflows carry no card — the scheduled sweep, the test
@@ -439,7 +494,7 @@ class Dre2937TrioTest(unittest.TestCase):
 
     def test_the_medic_declines_the_third_run(self):
         reason = medic_retry.park_reason(
-            state=dead_run.PARK_STATE,
+            state=lane_contract.QUEUE_LANE,
             labels=[dead_run.HOLD_LABEL],
             receipts=self.receipts,
             run_started_at=RUN_STARTED_AT,
@@ -450,7 +505,7 @@ class Dre2937TrioTest(unittest.TestCase):
 
     def test_the_cli_prints_the_decision_the_workflow_gates_on(self):
         facts = {
-            "state": dead_run.PARK_STATE,
+            "state": lane_contract.QUEUE_LANE,
             "labels": [dead_run.HOLD_LABEL],
             "comments": self.receipts,
         }
@@ -589,13 +644,17 @@ class MedicWiringTest(unittest.TestCase):
         self.assertIn("::warning::", step["run"])
 
     def test_no_job_reruns_without_honouring_the_decision(self):
+        """The gate may sit on the job or on the step that reruns — the
+        diagnosis's resume (DRE-7526) is one step of a job that also delivers
+        a hold, so its gate is on the step."""
         for name, job in self.jobs.items():
-            if "gh run rerun" in yaml.safe_dump(job):
-                self.assertIn(
-                    "needs.classify.outputs.retry != 'false'",
-                    job.get("if", ""),
-                    f"{name} reruns without asking whether the card is parked",
-                )
+            for step in job.get("steps", []):
+                if "gh run rerun" in yaml.safe_dump(step):
+                    self.assertIn(
+                        "needs.classify.outputs.retry != 'false'",
+                        job.get("if", "") + " " + step.get("if", ""),
+                        f"{name} reruns without asking whether the card is parked",
+                    )
 
     def test_the_declined_job_posts_one_receipt_and_stops(self):
         job = self.jobs["retry_declined"]

@@ -18,6 +18,27 @@ updated from `main` so CI runs again on a fresh merge ref, where the repo's
 own gate refuses the second head before it can land. Nothing else pays a CI
 run.
 
+A second rule (DRE-6871) refreshes for a different clash: `main` gained a test
+since the pull request's last test run began, and that test names a source
+file the pull request changes (or the mirror — the pull request adds a test
+naming a source file `main` changed). Each side passed its own CI and the pair
+had never run together: agent-bureau #3604 (`RiverRow.fold.test.ts` naming
+`greenLightGrid`) and bureau-pipeline #871
+(`tests/test_planning_escalation_prior_answer.py` naming
+`planning_escalation`) are two of the three recorded clashes, and this rule
+would have caught both. Measured over five days it fires on 12% of
+agent-bureau merges and 15% of bureau-pipeline merges, so a repo switches it
+on for itself. It never holds a pull request with no test run, and currency
+alone is still not a gate.
+
+"The pull request's last test run" is the anchor run: the newest run of the
+head by `created_at` whose event is `pull_request` and whose path is not in
+`merge_gate.DEFAULT_REVIEW_WORKFLOWS`. Never a `push` run, never a review run.
+That is condition 1's filter for "CI of the commit", so a review run created
+later on `edited` or `ready_for_review` never moves it: in bureau-pipeline it
+is `tests.yml`'s `pull_request` run and in agent-bureau `ci.yml`'s. The wiring
+reads the listing; this module only decides over the payload it built.
+
 This module is the decision and nothing else: pure functions over GitHub
 payloads, no I/O in `decide()`, and a CLI for the workflow, in the shape of
 `stale_merge_ref.py` (DRE-3138). The merge-gate wiring and the declaration a
@@ -25,16 +46,21 @@ product repo writes are their own cards.
 
 The declaration is `.github/bureau/merge-recheck.json` in the product checkout:
 
-    {"$schema_note": "…", "order_sensitive_paths": ["console/backend/alembic/versions/"]}
+    {"$schema_note": "…", "order_sensitive_paths": ["console/backend/alembic/versions/"],
+     "recheck_new_tests": true}
 
-each entry a repo-relative directory prefix ending in `/`, matched with
-`filename.startswith(prefix)`.
+each `order_sensitive_paths` entry a repo-relative directory prefix ending in
+`/`, matched with `filename.startswith(prefix)`. `"recheck_new_tests": true`
+switches rule 6 on, and then `order_sensitive_paths` may be absent (read as
+`[]`). The key absent or `false`: rule 6 is off and rules 1 to 5 decide
+exactly as before it existed.
 
 The rule, in order:
 
   1. No declaration file → `proceed` (the repo opted out). A declaration that
-     does not parse, or whose `order_sensitive_paths` is not a list of
-     `/`-terminated strings → `wait`, naming the file (fail closed).
+     does not parse, whose `order_sensitive_paths` is not a list of
+     `/`-terminated strings, or whose `recheck_new_tests` is anything but a
+     JSON boolean → `wait`, naming the file (fail closed).
   2. `behind_by` 0 or missing → `proceed`; the base-advance payload is not
      consulted. The merge gate writes `{}` when its compare read blips, and
      that has always merged.
@@ -51,23 +77,70 @@ The rule, in order:
      renumbered migration arrives as a rename). `refresh` when some declared
      prefix — the first, in declaration order — has a counting file in the
      pull request's `files[]` AND in the base-advance `files[]`. Otherwise
-     `proceed`.
+     `proceed` — or, with the switch on, rule 6. This rule is evaluated first
+     and wins when it fires.
+  6. New tests (DRE-6871), only with `"recheck_new_tests": true`, in order:
+     a. A receipt `Merge gate: refreshed for new tests onto <tip>` for ANY
+        tip → `proceed`, whatever the since-run payload holds: one refresh
+        per pull request, for its whole life. The migrations rule's receipt
+        and its one-per-tip rule are untouched.
+     b. The since-run payload is the compare `<main's tip when the anchor run
+        was created>...<main>`, and it has exactly three shapes. An object
+        with `files[]` is evaluated. `{"no_test_run": true}` → `proceed`: no
+        test run of this head exists, so there is nothing a refresh would
+        re-test against. Anything else, `{}` included, is a read that failed
+        → `wait`, as rule 4 answers a blipped base advance. It is read only
+        here: never with the switch off, never when the branch is not behind.
+     c. A test file has a directory segment `tests`, `test` or `__tests__`,
+        or a basename matching `test_*.py`, `*_test.py`, `*.test.<ext>` or
+        `*.spec.<ext>`; every other file is a source file. A test is new
+        when its `status` is `added` or `renamed`; a source file is changed
+        at any status.
+     d. A source file's name is its basename up to the first `.`, and names
+        shorter than six characters are ignored. A test names it when the
+        test's `patch` (for an added file, the whole file) holds the name as
+        a whole word, case-sensitive. A new test whose entry carries no
+        `patch` — GitHub omits it for large files — names nothing, and the
+        reason says which file could not be read.
+     e. `refresh` when a new test in the since-run payload names a source
+        file the pull request changes, or a new test in the pull request
+        names a source file the since-run payload changed. Otherwise step f.
+     f. A new test polices other tests (DRE-6967) when the lines its `patch`
+        adds name at least `POLICING_MIN_NAMED` (3) other test files. A name
+        is a maximal run of letters, digits, `_`, `.` and `-`, trailing dots
+        dropped, that is a test-shaped basename in full; each distinct name
+        counts once, and the test's own basename does not count. A new test
+        with no `patch` polices nothing and is named in the reason, as in d.
+        `refresh` when the pull request adds a policing test and the
+        since-run payload has a new test file, or the since-run payload has a
+        policing test and the pull request adds a new test file. Otherwise
+        `proceed`. This is the clash e cannot see, because neither side's
+        test names a source file: bureau-pipeline #1030 added a guard that
+        reads the whole `tests/` folder, its allow-list naming 28 test
+        files, while #1031 landed `tests/test_model_caution.py`, which the
+        guard refused once the two met on `main`.
 
 Known limit, stated rather than hidden: GitHub's compare API lists at most 300
 files per side. A `main` that gained more than that since the merge base can
 hide a same-prefix addition; the repo's own head gate on `main` is still the
-backstop there.
+backstop there. The same limit applies to the since-run payload.
 
 CLI:
 
     python3 order_sensitive_refresh.py decide --compare-file <compare json> \\
         --base-advance-file <compare json> --declaration-file <path> \\
-        [--receipts-file <json list of comment bodies>]
+        [--receipts-file <json list of comment bodies>] \\
+        [--since-run-file <compare json>]
 
-stdout line 1 is `decision=refresh|proceed|wait`, line 2 `reason=<one line>`,
-and on `refresh` line 3 `prefix=<the matched prefix>`. Exit 0 on every
-decision; exit 2 ONLY when `--compare-file` cannot be read as an object — the
-head is the subject, and a silent answer there would steer the gate on a
+stdout line 1 is `decision=refresh|proceed|wait`, line 2 `reason=<one line>`.
+On `refresh`, line 3 `prefix=<matched prefix>` (order-sensitive) or `prefix=`
+with an empty value (new-tests), line 4 `rule=order-sensitive` or
+`rule=new-tests`. Two lines on `proceed` and `wait`. A reader takes `rule=` by
+its key, never by its line number. With the switch off the output is the three
+lines it was before rule 6 existed, so a refresh with no `rule=` line is an
+order-sensitive one. An absent `--since-run-file` reads as `{}`. Exit 0 on
+every decision; exit 2 ONLY when `--compare-file` cannot be read as an object
+— the head is the subject, and a silent answer there would steer the gate on a
 guess.
 """
 
@@ -75,6 +148,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import posixpath
+import re
 import sys
 from dataclasses import dataclass
 
@@ -84,6 +159,12 @@ WAIT = "wait"
 
 DECLARATION_PATH = ".github/bureau/merge-recheck.json"
 DECLARATION_KEY = "order_sensitive_paths"
+# Rule 6's switch, a JSON boolean beside `order_sensitive_paths` (DRE-6871).
+RECHECK_KEY = "recheck_new_tests"
+
+# Which rule a `refresh` came from; the wiring picks its receipt by it.
+RULE_ORDER_SENSITIVE = "order-sensitive"
+RULE_NEW_TESTS = "new-tests"
 
 # The statuses GitHub's compare API gives a file that is new at its path. A
 # renumbered migration is a rename, and it lands a new head just as surely.
@@ -99,6 +180,33 @@ def receipt_marker(tip_sha: str) -> str:
     """Binds a refresh request to the `main` tip it was requested at. The full
     sha, never an abbreviation: this is an idempotency key read with `in`."""
     return f"{_RECEIPT_PREFIX} {tip_sha}"
+
+
+# Rule 6's receipt. It carries the tip for the reader, but rule 6 reads only
+# the prefix: one refresh per pull request, whatever `main` did since.
+_NEW_TESTS_RECEIPT_PREFIX = "Merge gate: refreshed for new tests onto"
+
+
+def new_tests_receipt_marker(tip_sha: str) -> str:
+    """The receipt the wiring writes when rule 6 asked for a refresh."""
+    return f"{_NEW_TESTS_RECEIPT_PREFIX} {tip_sha}"
+
+
+# Rule 6's test files: a directory segment, or a basename shape.
+_TEST_DIRS = frozenset({"tests", "test", "__tests__"})
+_TEST_BASENAME = re.compile(
+    r"test_.*\.py|.*_test\.py|.+\.(?:test|spec)\.[^.]+")
+# Shorter names match too much ordinary text to mean the file.
+MIN_NAME_LENGTH = 6
+# Rule 6f (DRE-6967): a new test whose added lines name at least this many
+# other test files polices other tests. #1030's guard named 28; a third of
+# the day's new tests named three or more.
+POLICING_MIN_NAMED = 3
+# A name in an added line: a maximal run of these, trailing dots dropped.
+_NAME_RUN = re.compile(r"[A-Za-z0-9_.-]+")
+
+NO_TEST_RUN_REASON = ("no test run of this head exists, so there is nothing "
+                      "a refresh would re-test against — merging as today")
 
 
 class _Sentinel:
@@ -119,11 +227,12 @@ UNREADABLE = _Sentinel("UNREADABLE")
 @dataclass(frozen=True)
 class Decision:
     """One decision, the one-line reason, and on `refresh` the prefix both
-    sides added under."""
+    sides added under (empty for rule 6) and the rule that fired."""
 
     decision: str
     reason: str
     prefix: str = ""
+    rule: str = ""
 
 
 def _one_line(text: str) -> str:
@@ -132,10 +241,23 @@ def _one_line(text: str) -> str:
     return " ".join(str(text).split())
 
 
-def _read_declaration(declaration):
-    """The declared prefixes, or None if the declaration is malformed."""
+def _read_switch(declaration):
+    """Rule 6's switch: True or False, or None when the key holds anything but
+    a JSON boolean. A declaration that is not an object is rule 1's to
+    refuse, and reads here as off."""
+    if not isinstance(declaration, dict):
+        return False
+    switch = declaration.get(RECHECK_KEY, False)
+    return switch if isinstance(switch, bool) else None
+
+
+def _read_declaration(declaration, switch=False):
+    """The declared prefixes, or None if the declaration is malformed. With
+    the switch on, absent prefixes are an empty list."""
     if not isinstance(declaration, dict):
         return None
+    if switch and DECLARATION_KEY not in declaration:
+        return []
     paths = declaration.get(DECLARATION_KEY)
     if not isinstance(paths, list):
         return None
@@ -201,20 +323,163 @@ def _read_receipts(receipts):
     return bodies
 
 
+def is_test_file(path: str) -> bool:
+    """Rule 6's test file: a `tests`, `test` or `__tests__` directory segment,
+    or a test-shaped basename. Every other file is a source file."""
+    *dirs, base = path.split("/")
+    return bool(_TEST_DIRS.intersection(dirs)) or bool(
+        _TEST_BASENAME.fullmatch(base))
+
+
+def _entries(files):
+    """`(filename, entry)` for each readable entry, in payload order."""
+    for entry in files:
+        if isinstance(entry, dict) and isinstance(entry.get("filename"), str):
+            yield entry["filename"], entry
+
+
+def _new_tests(files) -> list:
+    return [(name, entry) for name, entry in _entries(files)
+            if entry.get("status") in COUNTING_STATUSES and is_test_file(name)]
+
+
+def _named_sources(files) -> list:
+    """`(source file, name)` for each changed source file whose name is long
+    enough to mean it."""
+    sources = []
+    for name, _entry in _entries(files):
+        if is_test_file(name):
+            continue
+        stem = posixpath.basename(name).split(".", 1)[0]
+        if len(stem) >= MIN_NAME_LENGTH:
+            sources.append((name, stem))
+    return sources
+
+
+def _first_naming(tests, sources, unread):
+    """The first `(test, source)` where the test's text names the source, in
+    payload order. A test with no `patch` names nothing and is recorded in
+    `unread`."""
+    for test, entry in tests:
+        patch = entry.get("patch")
+        if not isinstance(patch, str):
+            if test not in unread:
+                unread.append(test)
+            continue
+        for source, stem in sources:
+            if re.search(rf"\b{re.escape(stem)}\b", patch):
+                return test, source
+    return None
+
+
+def _named_tests(test, patch) -> set:
+    """The other test files the lines `patch` adds name, each once, by
+    basename. The test's own basename is not one of them."""
+    own = posixpath.basename(test)
+    named = set()
+    for line in patch.splitlines():
+        if not line.startswith("+"):
+            continue
+        for run in _NAME_RUN.findall(line[1:]):
+            name = run.rstrip(".")
+            if name != own and _TEST_BASENAME.fullmatch(name):
+                named.add(name)
+    return named
+
+
+def _first_policing(tests, unread):
+    """The first `(test, count)` among new tests whose added lines name at
+    least `POLICING_MIN_NAMED` other test files, in payload order. A test
+    with no `patch` polices nothing and is recorded in `unread`."""
+    for test, entry in tests:
+        patch = entry.get("patch")
+        if not isinstance(patch, str):
+            if test not in unread:
+                unread.append(test)
+            continue
+        count = len(_named_tests(test, patch))
+        if count >= POLICING_MIN_NAMED:
+            return test, count
+    return None
+
+
+def _new_tests_rule(*, compare, since_run, bodies, behind_by,
+                    no_fork) -> Decision:
+    """Rule 6, reached only with the switch on, the branch behind, and the
+    migrations rule quiet."""
+    # 6a — one refresh per pull request, whatever the tip.
+    if any(_NEW_TESTS_RECEIPT_PREFIX in body for body in bodies):
+        return Decision(PROCEED, f"{no_fork}, and this pull request was "
+                                 f"already refreshed once for new tests — "
+                                 f"never a second time")
+
+    # 6b — the since-run payload's three shapes.
+    theirs = _read_files(since_run)
+    if theirs is None:
+        if isinstance(since_run, dict) and since_run.get("no_test_run") is True:
+            return Decision(PROCEED, NO_TEST_RUN_REASON)
+        return Decision(WAIT, f"behind `main` by {behind_by} and the "
+                              f"since-run payload (what `main` gained since "
+                              f"this head's last test run began) could not be "
+                              f"read")
+
+    # 6c to 6e — a new test on one side naming a file the other side changed.
+    ours = _read_files(compare) or []
+    unread = []
+    hit = _first_naming(_new_tests(theirs), _named_sources(ours), unread)
+    if hit:
+        return Decision(REFRESH, _one_line(
+            f"main added {hit[0]}, which names {hit[1]}, changed by this pull "
+            f"request"), rule=RULE_NEW_TESTS)
+    hit = _first_naming(_new_tests(ours), _named_sources(theirs), unread)
+    if hit:
+        return Decision(REFRESH, _one_line(
+            f"this pull request adds {hit[0]}, which names {hit[1]}, changed "
+            f"on main"), rule=RULE_NEW_TESTS)
+
+    # 6f — a new test that polices other tests meets a new test file from the
+    # other side (DRE-6967).
+    ours_new, theirs_new = _new_tests(ours), _new_tests(theirs)
+    hit = _first_policing(ours_new, unread)
+    if hit and theirs_new:
+        return Decision(REFRESH, _one_line(
+            f"this pull request adds {hit[0]}, which polices other tests (it "
+            f"names {hit[1]} of them), and main added {theirs_new[0][0]} "
+            f"since this head's last test run"), rule=RULE_NEW_TESTS)
+    hit = _first_policing(theirs_new, unread)
+    if hit and ours_new:
+        return Decision(REFRESH, _one_line(
+            f"main added {hit[0]}, which polices other tests (it names "
+            f"{hit[1]} of them), and this pull request adds {ours_new[0][0]}"),
+            rule=RULE_NEW_TESTS)
+    reason = f"{no_fork}, and no new test names a file the other side changed"
+    if unread:
+        reason += (f" — could not read {', '.join(unread)}: the compare "
+                   f"entry carries no patch")
+    return Decision(PROCEED, _one_line(reason))
+
+
 def decide(*, compare, base_advance, declaration, receipts=None,
-           declaration_path: str = DECLARATION_PATH) -> Decision:
+           since_run={}, declaration_path: str = DECLARATION_PATH
+           ) -> Decision:
     """Refresh, proceed or wait — over payloads the caller has already read.
 
     `declaration` is the parsed declaration, `NO_DECLARATION` when the file
-    does not exist, or `UNREADABLE` when it would not parse. `base_advance`
-    and `receipts` may be `UNREADABLE` too. Nothing here reads a file or the
-    network.
+    does not exist, or `UNREADABLE` when it would not parse. `base_advance`,
+    `receipts` and `since_run` may be `UNREADABLE` too; `since_run` is read
+    only by rule 6, and never mutated, so its `{}` default is safe. Nothing
+    here reads a file or the network.
     """
     # Rule 1 — the repo's own opt-in.
     if declaration is NO_DECLARATION:
         return Decision(PROCEED, f"no {_one_line(declaration_path)} — this "
                                  f"repo declares no order-sensitive paths")
-    prefixes = _read_declaration(declaration)
+    switch = _read_switch(declaration)
+    if switch is None:
+        return Decision(WAIT, f"{_one_line(declaration_path)} sets "
+                              f"`{RECHECK_KEY}` to something other than "
+                              f"`true` or `false` — failing closed")
+    prefixes = _read_declaration(declaration, switch)
     if prefixes is None:
         return Decision(WAIT, f"{_one_line(declaration_path)} does not parse "
                               f"as a list of `/`-terminated "
@@ -265,9 +530,18 @@ def decide(*, compare, base_advance, declaration, receipts=None,
                     f"refresh so CI re-checks the order on a fresh merge "
                     f"ref"),
                 prefix,
+                RULE_ORDER_SENSITIVE,
             )
-    return Decision(PROCEED, f"behind `main` by {behind_by}, but no declared "
-                             f"prefix was added to on both sides")
+    no_fork = (f"behind `main` by {behind_by}, but no declared prefix was "
+               f"added to on both sides")
+    if not switch:
+        return Decision(PROCEED, no_fork)
+
+    # Rule 6 — a new test naming a file the other side changed (DRE-6871).
+    return _new_tests_rule(compare=compare,
+                           since_run=since_run,
+                           bodies=bodies, behind_by=behind_by,
+                           no_fork=no_fork)
 
 
 # --------------------------------------------------------------------------- #
@@ -300,7 +574,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Decide whether the merge gate refreshes a branch before "
                     "merging, because both it and `main` added a file under "
-                    "an order-sensitive path"
+                    "an order-sensitive path, or because one side added a "
+                    "test naming a file the other changed"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
     d = sub.add_parser("decide")
@@ -314,6 +589,10 @@ def main(argv=None) -> int:
     d.add_argument("--receipts-file",
                    help="JSON list of the comment bodies already on the pull "
                         "request")
+    d.add_argument("--since-run-file",
+                   help="JSON from `gh api repos/{repo}/compare/{main's tip "
+                        "when the anchor run was created}...{base}`, or "
+                        "`{\"no_test_run\": true}`; absent reads as `{}`")
     args = parser.parse_args(argv)
 
     try:
@@ -329,18 +608,25 @@ def main(argv=None) -> int:
               f"{_one_line(problem)}", file=sys.stderr)
         return 2
 
+    declaration = _declaration(args.declaration_file)
     decision = decide(
         compare=compare,
         base_advance=_or_unreadable(args.base_advance_file),
-        declaration=_declaration(args.declaration_file),
+        declaration=declaration,
         receipts=(_or_unreadable(args.receipts_file)
                   if args.receipts_file else None),
+        since_run=(_or_unreadable(args.since_run_file)
+                   if args.since_run_file else {}),
         declaration_path=args.declaration_file,
     )
     print(f"decision={decision.decision}")
     print(f"reason={decision.reason}")
     if decision.decision == REFRESH:
         print(f"prefix={decision.prefix}")
+        # With the switch off the output stays the three lines it always
+        # was: a refresh with no `rule=` line can only be order-sensitive.
+        if _read_switch(declaration):
+            print(f"rule={decision.rule}")
     return 0
 
 

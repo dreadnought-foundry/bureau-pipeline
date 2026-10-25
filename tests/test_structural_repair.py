@@ -24,14 +24,19 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_structural_repair.py -v
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
+import lane_contract  # noqa: E402
 import structural_repair  # noqa: E402
 
 
@@ -325,3 +330,57 @@ def test_fetch_backlog_follows_pagination_to_exhaustion():
         cards = structural_repair.fetch_backlog()
     assert len(cards) == 150
     assert "pageInfo" in seen[0] and "$after" in seen[0]
+
+
+# --------------------------------------------------------------------------
+# The queue, under either of its names (DRE-6746)
+# --------------------------------------------------------------------------
+def _serve_by_state_filter(board: list[dict]):
+    """A `gql_paged` that answers the way Linear does: only the cards whose
+    lane the query's `state` filter names, read off the filter itself."""
+    def fake_paged(query, variables=None, **kw):
+        match = re.search(r"state:\s*\{name:\s*\{(eq|in):\s*(\"[^\"]*\"|\[[^\]]*\])\}\}",
+                          query)
+        assert match, f"the read carries no state filter: {query}"
+        named = json.loads(match.group(2))
+        lanes = [named] if match.group(1) == "eq" else named
+        return [c for c in board if c["state"]["name"] in lanes]
+    return fake_paged
+
+
+def test_the_read_asks_for_every_name_the_queue_carries():
+    seen: list[str] = []
+
+    def fake_paged(query, variables=None, **kw):
+        seen.append(query)
+        return []
+
+    with patch.object(structural_repair.linear_ops, "gql_paged", fake_paged):
+        structural_repair.fetch_backlog()
+    for lane in lane_contract.QUEUE_LANES:
+        assert f'"{lane}"' in seen[0], (lane, seen[0])
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_a_child_in_either_queue_name_is_read_and_repaired_alike(lane):
+    """The same child, filed under `Queued` or under the name it replaces, is
+    read by the census and given the same repair."""
+    parent = _parent("DRE-2459", ["initiative:bureau"])
+    board = [_card("DRE-101", [], parent=parent, state=lane),
+             _card("DRE-102", ["initiative:bureau"], parent=None, state="Todo")]
+    with patch.object(structural_repair.linear_ops, "gql_paged",
+                      _serve_by_state_filter(board)):
+        cards = structural_repair.fetch_backlog()
+    assert [c["identifier"] for c in cards] == ["DRE-101"]
+    repairs, gaps = structural_repair.plan_repairs(cards)
+    assert [(r["identifier"], r["label"], r["source"]) for r in repairs] == [
+        ("DRE-101", "initiative:bureau", "DRE-2459")]
+    assert gaps == []
+
+
+def test_the_report_names_the_queue_it_read():
+    cards = [_card("DRE-1", ["initiative:bureau"])]
+    report = structural_repair.format_report(cards, [], [])
+    first = report.splitlines()[0]
+    for lane in lane_contract.QUEUE_LANES:
+        assert lane in first, first

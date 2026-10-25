@@ -25,7 +25,7 @@ question — *how is this work structured, and what gate does it owe*.
 
 | Shape | What it produces | Destination | Who acts there |
 | -- | -- | -- | -- |
-| **one-off** | One card, one pull request. No plan artifact, no green light — it leaves carrying its routing verdict, and that verdict IS its approval | `Backlog` | the sweep (`reconcile.py`) promotes it |
+| **one-off** | One card, one pull request. No plan artifact, no green light — it leaves carrying its routing verdict, and that verdict IS its approval | `Queued` | the sweep (`reconcile.py`) promotes it |
 | **epic** | A set of children that ship separately, plus ONE plan artifact the CEO approves before any of them run | `Green Light` | the CEO |
 | **roll-up** | A plan too big for one epic. It is split into child epics under this card — each a native sub-issue titled [EPIC], planned and green-lit on its own — and this card is the parent that rolls them up: never approved for building, never built, closed when every child is Done. A plan cut at an observation-gated seam is one too: two child epics, the second blocked on the first | `Planning` | `plan.yml` hands it to you to split |
 
@@ -34,7 +34,7 @@ whose later cards depend on OBSERVING its earlier cards live is not one epic but
 two, however well it holds together as a subject: it is split into child epics
 under the card — the first ends at the observation, the second is filed at the
 same gate, blocked on the first, and planned in detail only when the first is
-Done. The tells and the worked example are in `standards/card-quality.md`,
+Done, or built out with only its proof left open (DRE-7831). The tells and the worked example are in `standards/card-quality.md`,
 `When a plan is two epics — the observation-gated seam` — read them there, not
 from this paragraph. DRE-3164 is the example: thirteen build cards and one
 proof naming every one, which cost a critic that could not finish reading it
@@ -121,7 +121,8 @@ Four rules decide it, in this order:
    one of them tripping means this is a `roll-up`, not an `epic` — the plan is
    cut at an observation-gated seam, so it is split into child epics under this
    card: the first ending at the observation, the second blocked on it and
-   planned only when it is Done. The `seam` answer names the observation and
+   planned only when it is Done, or built out with only its proof left open
+   (DRE-7831). The `seam` answer names the observation and
    what waits on it. This rule runs AFTER rule 3 on purpose: it does not make a
    small card bigger, it says a card already sized as an epic is really two.
 
@@ -170,7 +171,7 @@ brief. The two writes you make today are these:
 
 | Command | What it creates | Lands in | Why |
 | -- | -- | -- | -- |
-| **subissue** | a child of the epic you are planning | `Backlog` | its approval is its epic's, so it owes no classification of its own — and `reconcile.promote_ready` reads `backlog_children()`, so a child created anywhere else is a child nothing ever promotes (DRE-2858) |
+| **subissue** | a child of the epic you are planning | `Queued` | its approval is its epic's, so it owes no classification of its own — and `reconcile.promote_ready` reads `backlog_children()`, so a child created anywhere else is a child nothing ever promotes (DRE-2858) |
 | **oneoff** | a parentless card the plan concludes stands alone | `Planning` | it has been through nobody's planning run — no shape, no verdict — and the sweep refuses a parentless card without one, so `Planning` is where the classification it is missing gets made (DRE-2858) |
 
 A brief that tells a planner its output lands somewhere the write layer does not
@@ -403,14 +404,15 @@ the plan afterwards needs to know.
 
 ## The lanes, and the verdict you owe every card (DRE-2724 / DRE-2824)
 
-The board is `Intake` → `Planning` → `Green Light` → `Backlog` → `Todo` →
+The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `In Progress` → `In Review` → `Done`, with `Triage` off to the side. Three
 things you must not get from memory:
 
 - **`Green Light`** is the CEO's "needs you" queue — a plan waiting for
   approval, and an agent's escalation waiting for a decision, sit in the same
   lane. Your plan reaches the CEO there, and only after both critics have
-  passed it.
+  passed it. On an escalated card the CEO answers and moves the card back to
+  `In Progress` to proceed, or to `Queued` to drop it.
 - **`Triage`** is the BROKEN-CARD lane and only that: an unroutable `repo:`
   label, an archived repo, a card the readiness guard returned three times. It
   also holds a plan that would not converge (parked at either critic's bound)
@@ -421,7 +423,7 @@ things you must not get from memory:
   (`config/lane-contract.json`, rendered to `docs/lane-contract.md`) — read a
   lane there rather than describing one from memory.
 
-**An epic activates at `In Progress`, not `Todo`.** The CEO moves ONLY the epic
+**An epic activates at `In Progress`.** The CEO moves ONLY the epic
 to `In Progress` and stops; the dependency gate promotes the unblocked children
 in order. Never tell them to move a child by hand — that double-dispatches and
 reverts in-progress work. Your plan comment must end with that instruction.
@@ -438,13 +440,13 @@ it. Read the file, not this table, when the two ever disagree.
 
 | Verdict | Means | Destination | Who acts there |
 | -- | -- | -- | -- |
-| **FLEET** | Buildable unattended in one PR | `Todo` | the build run — the ONLY verdict that is dispatched |
+| **FLEET** | Buildable unattended in one PR | `In Progress` | the build run, dispatched by the sweep's promotion — the ONLY verdict that is dispatched |
 | **WORKBENCH** | A person works it against live system state — never produced by the acceptance criteria (DRE-6227) | `Hand-work`, no mark | the operator, at an interactive session — kept for historical demo cards and the pipeline's own record cards; you never route a card here |
 | **OPERATOR** | Not code — a deploy, a migration run, a secret | `Hand-work`, marked `operator-step` + `no-code` | the operator |
-| **PARKED** | Well-formed and deliberately not to be built | `Backlog` | the planning-exit writer lands it; nobody picks it up |
+| **PARKED** | Well-formed and deliberately not to be built | `Queued` | the planning-exit writer lands it; nobody picks it up |
 | **NEEDS WORK** | Not buildable as written | `Planning` | you, with the specific missing thing named |
 
-**PARKED is landed by the process, not by a person (DRE-2824).** `Backlog` is
+**PARKED is landed by the process, not by a person (DRE-2824).** `Queued` is
 process-controlled and no human writes it, so the actor on a PARKED card is the
 planning-exit writer that stamps the verdict and lands the card there — not
 somebody waiting to pick it up, because for PARKED nobody is. Reviving a PARKED
@@ -503,6 +505,9 @@ markdown, and refuses to create that broken card. It also:
     and since DRE-2874 the create seam does not refuse a child without one
     either. It is inherited because repo inference uses it as its one route to a
     repo for a card carrying no `repo:` label (DRE-2681);
+  - files the child in this epic's Linear project, so the console's Initiatives
+    page counts it there (DRE-7675). An epic in no project gives children in
+    none — nothing guesses a project;
   - turns any `**Blocked by:** DRE-N, DRE-M` body line into real Linear
     `blockedBy` relations;
   - validates the child through the same `validate_card` gate the build uses,
@@ -546,10 +551,9 @@ merges, so the card produces a written artifact rather than a claim. An epic
 that produces no proof has no way of being wrong in public.
 
 **File ONE closing card, never two.** The CEO decided on 2026-09-12 that there
-are no demo sittings: he reads the proof record and closes the proof card
-himself, so the record IS how he sees it. Epics planned before that date carry
-a second closing child and the check reads past it — that is history, not a
-shape to copy.
+are no demo sittings, so there is no demo card. Epics planned before that date
+carry a second closing child and the check reads past it — that is history, not
+a shape to copy.
 
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The operator runs a
 proof as soon as its build cards finish, so never write a step that needs the
@@ -576,11 +580,57 @@ The record path on the `**Files:**` line is where the proof run writes — it is
 already the card's footprint, and the run opens it as a pull request on
 `agent/DRE-<n>-proof-record`. Live facts name the scripted identity they are
 read as ("as the proof-reader identity"), because that is the identity the run
-holds. A step only the CEO's login can make is written as its own criterion
-opening `needs the CEO's press:` and naming the press, so the run can name it
-back; everything else in the card is written so a run with read access can
-observe it. The card closes on the approved merge of the record (DRE-5919, the
-hygiene agent), and the closing line the check reads stays verbatim.
+holds. A press is the CEO's only when it is a business decision of his — what it
+changes is a choice about the business he has not made: which model a real
+project runs on, whether a real proposal is approved, whether a real card is
+removed from a proposal. Such a step is written as its own criterion opening
+`needs the CEO's press:` and naming the press, so the run can name it back and
+park the card once in `Green Light`.
+
+A press on the standard's list, on a PROOF labeled `repo:agent-bureau`, is the
+run's own step and never an operator's row. The list and the rule live once in
+`standards/card-quality.md`, under
+`The sandbox presses, the one list (DRE-7772):` — read them there. Write such a
+press as a criterion opening `Sandbox press:`, which names the press, the ids
+the record lists, and the read that shows the result, as a step the run does:
+the run makes it as the console proof-reader on the sandbox project
+`agent-bureau-demo`.
+
+    - [ ] Sandbox press: on `agent-bureau-demo`, the run makes one task titled
+          `SANDBOX FIXTURE (proof DRE-<n>)` (`createTask`); the record quotes
+          the command's JSON object, its `outcome` `ok` and the task's id in
+          `ids`, reads the task back in the project's task list, and the run
+          marks it done (`markTaskDone`).
+
+The record quotes the command's JSON object, never a tagged line, because the
+command's printer lives in agent-bureau and `config/proof-reach.json` keeps
+only lines printed in this repo. DRE-7711's six sandbox tasks, which waited on
+the operator from 2026-10-19, are a press the run now makes. Once the epic's
+reach card, DRE-7779, lands its check, the plan critic refuses a PROOF card
+labeled `repo:agent-bureau` that writes a press on the list, on the sandbox, as
+`waiting for the operator's press:` or `needs the CEO's press:`.
+
+Every other press the operator can make is the operator's row and never his: a
+press outside the sandbox, a press from the operator's signed-in session under
+the operator's standing permission of 2026-10-07, a press on the sandbox that
+is not on the list, a press on the sandbox on a PROOF labeled for any other
+repo, or the recording of a removal or decision the CEO has already made. A
+plan that wants the run to make a sandbox press not on the list adds the two
+cards the standard names, blocked in front of the PROOF, and until then the
+press is the operator's row.
+Write it as an event row, the criterion's own words opening
+`waiting for the operator's press:` and naming the press, so the run records
+`Not observed. waiting for the operator's press: <the press>` and the dispatcher
+holds the card for the operator under a `🔬 proof-waiting` hold naming the press
+(DRE-6814); the operator makes the press and records `🔬 proof-observed`, and the
+next pass re-runs the proof to observe the result. No escalation is written for
+it, so it never reaches `Green Light`. DRE-6638 (one project's Builders set to
+Sonnet 5.5, on the sandbox project) and DRE-6663 (Not doing pressed on one groom
+card) reached the CEO's list on 2026-10-10 worded as his press, and both were
+the operator's. DRE-6638 still is: a model setting is not on the list.
+Everything else in the card is written so a run with read access
+can observe it. The card closes on the approved merge of the record (DRE-5919,
+the hygiene agent).
 
 **A log read the card prescribes is a quoted phrase (DRE-6778).** A CloudWatch
 Logs filter pattern for a literal phrase is written as a quoted phrase,
@@ -595,7 +645,8 @@ when the plan is written. DRE-6597's card prescribed
 `--filter-pattern system-alert`, and on 2026-10-10 that read 0 events where the
 quoted form read 2 (`briefs/proof.md` has the measurement).
 
-Five conditions, all checked on the cards you create:
+Five conditions on the cards you create — the first four checked, the fifth
+yours to keep:
 
 1. **Last.** It is the epic's last child.
 2. **Blocked by every other child** — a real Linear `blockedBy` relation, so
@@ -620,19 +671,17 @@ Five conditions, all checked on the cards you create:
    The check refuses a proof card carrying `agent:engineer`,
    `agent:frontend`, `agent:devops` or `agent:database-architect`, and names the
    label it should have instead.
-5. **Its body carries the closing line, verbatim**, on its own line above the
-   acceptance criteria:
-
-       The CEO reads this record and closes this card; there is no demo sitting.
-
-   The check refuses a proof card without it. Its acceptance criteria say the
-   CEO closes it after reading the record — never that he has said so at a
-   sitting, because there is not one.
+5. **It closes on its approved all-met record** (DRE-5919, DRE-7773). It names
+   no person to close it and carries no criterion about merging, reading or
+   closing the record, so you do not write one — nor one about a sitting,
+   because there is not one. The CEO decided on 2026-10-22 that he does not
+   close every card; a criterion about the record's own merge or its reader is
+   one no observation can meet.
 
 **You never stamp this card yourself.** The check writes the
 `🧭 routing-verdict` comment it computed onto it — the same comment
 every other verdict uses — so the promotion gate reads it and leaves the card
-in Backlog until a person picks it up. One writer, the one that already knows
+in Queued until a person picks it up. One writer, the one that already knows
 the answer: before DRE-3039 the check computed the verdict, printed it and
 stamped nothing, and the sweep promoted the card to an engineer agent the
 moment its siblings reached Done.
@@ -674,7 +723,8 @@ as a reading the run can make:
 
 A row the run still cannot observe as worded comes back with one of four
 causes — `out-of-reach`, `state-gone`, `misdescribed` or
-`operator-step-unblocked` — and is put to the CEO as a question in Green Light.
+`operator-step-unblocked` — and is put to the operator once, in In Review,
+under a hold (DRE-6837).
 Every one of them is a criterion written wrong when the plan was written.
 
 ## The plan artifact (what the CEO green-lights) — and the roll-up split
@@ -720,7 +770,9 @@ of the child can split it again (DRE-5800).
 is exactly two children: the first ending at the observation, and the second
 `**Blocked by:**` the first. The second is planned only when its turn comes —
 which is when the first is Done and the thing its cards describe actually
-exists. So the split itself is short: what the observation is, and what waits
+exists. A first child built out, with only its proof left open, no longer
+holds the second (DRE-7831): the sweep returns it to `Planning` then, and you
+read the proof's record as it stands. So the split itself is short: what the observation is, and what waits
 on it. The detail belongs in the first child's own artifact, written when ITS
 turn comes.
 
@@ -738,6 +790,45 @@ Two things planners get wrong:
 Plain English: what gets built, in what order, what could go wrong, rough
 size (hours-of-agent-work scale). No jargon, no file paths. End with the
 approval instruction the workflow prompt gives you.
+
+## A held repo: lifting the hold is a step that needs the CEO (DRE-7752)
+On 2026-10-19 the CEO approved DRE-7600, a plan for a repo whose reconcile stub
+had held `max_wip` at `0` since 2026-09-08. The plan named one hand step and
+not the hold, so it sat with nothing built and nobody told. Lifting a hold is a
+step only he takes, so it goes in the question he answers before the work
+starts (`standards/card-quality.md`, DRE-7521).
+
+Your assembled context carries a `REPO HOLDS:` block, written by
+`python3 .bureau-pipeline/scripts/plan_held_repo.py context`. When it says
+`none`, there is nothing to write. When the repo is held, it quotes each hold
+and gives you the paragraph to write. Put that paragraph under
+`## Risk assessment` in the plan artifact, and repeat it in the plan comment:
+
+    Step that needs the CEO: lifting this repo's hold — …
+
+The opener may follow a list marker or sit in bold. The paragraph runs to the
+next blank line, and it must say:
+- for a `max_wip` hold, `max_wip` and the stub's own hold comment, quoted as
+  the block gives it — or `max_wip` and `0` when the stub has no comment;
+- for an Intake hold, `INTAKE_HOLD`;
+- whether the CEO lifts it for this plan's cards only or in general.
+
+**What is checked.** A plan for a held repo without that paragraph is sent
+back at the first critic, whatever the critic wrote — the check appends a
+`held-repo:` line to the structural file the seam gate reads. So is a plan
+whose child needs the CEO and is not named by its identifier in a `Step that
+needs the CEO:` paragraph (DRE-7523): an open child that is an operator card,
+or that carries a criterion on a person's row (`needs the CEO's press:` or
+`waiting for the operator's press:`). The check appends a `ceo-step:` line
+naming the card and the step. Write one paragraph per such child, opening with
+the opener and naming its identifier, for example `Step that needs the CEO:
+DRE-1234 — the CEO republishes the document from his own session`. **What is
+still guidance.** A step on a card that is neither an operator card nor
+carries a person's row, and a one-off card's own question: you list it in the
+same question, and nothing checks it. **Only the plan's own repo is read** for
+its holds — the repo this plan run has checked out. A card you file in another
+repo that you know is held is not caught, so name its hold the same way. The epic's note says `— read for this plan's own repo only` on
+every reading, so nobody reads a pass as covering every repo.
 
 ## Your plan is read twice before anyone builds it (DRE-2721, DRE-5268)
 Both readings happen **before the CEO reads it**. The first critic asks one

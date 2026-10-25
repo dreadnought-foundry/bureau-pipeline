@@ -40,8 +40,9 @@ until a run goes quiet.
 ## What it leaves behind
 
 ONE line in the run log, on stderr — never stdout, which is the JSON stream
-the vendor parses — naming the three facts the next reader needs: the step
-that went quiet, the time of the last event, and how long the silence ran. It
+the vendor parses — naming the facts the next reader needs: the step that
+went quiet, the time of the last event, how long the silence ran, and how long
+the run streamed after `system/init` before it (DRE-6995). It
 also says what this is NOT, in the log itself, because the whole cost of the
 2026-09-15 incident was an operator sent to a credential that was working.
 
@@ -69,7 +70,8 @@ CLI (the launcher):
 CLI (the medic's card record):
 
     stream_watchdog.py record --card DRE-N --log <file> --run-id N \\
-        --run-attempt N [--run-url URL]
+        --run-attempt N [--run-url URL] [--retrying true|false] \\
+        [--limit true|false]
 """
 
 from __future__ import annotations
@@ -118,13 +120,22 @@ EOF = object()
 
 
 class Stall(NamedTuple):
-    """A stopped run's three facts. `silence_seconds` is whole seconds: it is
-    read back off a log line and compared, and a float would not survive the
-    round trip."""
+    """A stopped run's facts. `silence_seconds` is whole seconds: it is read
+    back off a log line and compared, and a float would not survive the round
+    trip.
+
+    `streamed_seconds` is how long the run went on emitting events after
+    `system/init` before the silence began (DRE-6995): 0 when nothing arrived
+    after `system/init` at all, at least 1 when anything did, and None when it
+    was not recorded — every log line written before it was measured. Without
+    it "said nothing" and "worked for 13 minutes, then went quiet" read the
+    same, and the card was told the first about run 38170959772, which was
+    the second."""
 
     step: str
     last_event: str
     silence_seconds: int
+    streamed_seconds: int | None = None
 
 
 # --------------------------------------------------------------------------- #
@@ -184,16 +195,26 @@ def pump(
     `silence_seconds` of 0 or less disarms the watchdog entirely — the escape
     hatch a fleet-wide safety net needs, and it is provably inert rather than
     merely long.
+
+    The `Stall` also says how long the run streamed, from the moment it armed
+    to the last event: 0 only when nothing arrived after `system/init`, and
+    never less than 1 when something did, so a reader of 0 may say "it never
+    started work" and mean it.
     """
     wall = wall or (lambda: _dt.datetime.now(_dt.timezone.utc))
     armed = False
+    armed_at = None
+    heard_since_init = False
     last = clock()
     last_wall = wall()
     while True:
         if armed:
             waited = clock() - last
             if waited >= silence_seconds:
-                return Stall(step, _iso(last_wall), int(round(waited)))
+                streamed = (max(1, int(round(last - armed_at)))
+                            if heard_since_init else 0)
+                return Stall(step, _iso(last_wall), int(round(waited)),
+                             streamed)
             timeout = silence_seconds - waited
         else:
             timeout = None
@@ -206,8 +227,11 @@ def pump(
             relay(event)
         last = clock()
         last_wall = wall()
-        if not armed and silence_seconds > 0 and is_init(event):
+        if armed:
+            heard_since_init = True
+        elif silence_seconds > 0 and is_init(event):
             armed = True
+            armed_at = last
 
 
 # --------------------------------------------------------------------------- #
@@ -223,12 +247,28 @@ def stall_line(stall: Stall) -> str:
     `key=value` so the reader below is an anchor rather than a guess, and it
     rules out the three wrong causes in the log itself — that sentence is what
     the 2026-09-15 operator did not have.
+
+    `streamed=<n>s` follows `silence=` whenever the stall carries it, and the
+    sentence after it says which stall this was (DRE-6995): one that said
+    nothing after `system/init`, or one that streamed and then went quiet. A
+    stall that does not carry it writes no `streamed=`, so it reads back as
+    not recorded rather than as 0.
     """
+    streamed = stall.streamed_seconds
+    if streamed is None:
+        measured, what = "", "the stream went quiet after system/init"
+    elif streamed == 0:
+        measured, what = (" streamed=0s",
+                          "no stream event arrived after system/init")
+    else:
+        measured, what = (f" streamed={streamed}s",
+                          f"the run streamed for {streamed}s after "
+                          f"system/init and then went quiet")
     return (
         f"::error title=Claude run stalled::{STALL_SLUG} "
         f'step="{stall.step}" last-event={stall.last_event} '
-        f"silence={stall.silence_seconds}s — no stream event arrived after "
-        f"system/init, so the run was stopped. This is a stall: not a code "
+        f"silence={stall.silence_seconds}s{measured} — {what}, so the run "
+        f"was stopped. This is a stall: not a code "
         f"failure (nothing was reviewed or rejected), not a credential "
         f"failure (the run authenticated and started), and not a usage "
         f"limit (no wall was hit)."
@@ -255,6 +295,9 @@ _STALL = re.compile(
     r"(?<!`)" + re.escape(STALL_SLUG)
     + r'\s+step="(?P<step>[^"]*)"\s+last-event=(?P<last>\S+)\s+'
     r"silence=(?P<silence>\d+)s"
+    # DRE-6995. Optional: every line printed before it was measured lacks it,
+    # and that line must still read, as not recorded.
+    r"(?:\s+streamed=(?P<streamed>\d+)s)?"
 )
 
 
@@ -273,10 +316,12 @@ def stall_from_log(log_text: str | None) -> Stall | None:
             continue
         match = _STALL.search(line)
         if match:
+            streamed = match.group("streamed")
             found = Stall(
                 match.group("step"),
                 match.group("last"),
                 int(match.group("silence")),
+                None if streamed is None else int(streamed),
             )
     return found
 
@@ -311,7 +356,8 @@ def report_lines(stall: Stall | None) -> list:
 
 
 def stall_record(stall: Stall, *, run_id: str, attempt: str,
-                 run_url: str = "") -> str:
+                 run_url: str = "", retrying: bool = False,
+                 limit: bool = False) -> str:
     """What the medic leaves on the card after a run is stopped.
 
     `run=<id> attempt=<n>` is load-bearing twice over: the medic's own step
@@ -319,21 +365,62 @@ def stall_record(stall: Stall, *, run_id: str, attempt: str,
     stall, and `prior_stalls` below reads it to tell THIS run's record from
     the last one's. Keying on the run alone would miss every repeat the medic
     itself caused, because `gh run rerun --failed` reuses the run id.
+
+    The note says only what was measured (DRE-6995): how long the run worked
+    before the silence when the stall carries it, "never got as far as
+    reading the code" only when nothing arrived after `system/init`, and that
+    the time was not recorded when it was not. And it promises a retry only
+    when the caller says one is starting — `retrying` is the `retry` job's own
+    condition, passed in by medic.yml, because this note is posted in cases
+    that job declines. `limit` names the Linear request limit that stood the
+    retry down.
     """
     minutes = stall.silence_seconds / 60.0
+    silence = (f"{stall.silence_seconds} seconds ({minutes:.1f} minutes)")
+    streamed = stall.streamed_seconds
+    if streamed is None:
+        went = (
+            f"went silent — no activity for {silence}, the last sign of life "
+            f"being {stall.last_event}. How long it had worked before that "
+            f"was not recorded."
+        )
+    elif streamed > 0:
+        went = (
+            f"had been working for {streamed / 60.0:.1f} minutes and then "
+            f"went silent — no activity at all for {silence}, the last sign "
+            f"of life being {stall.last_event}."
+        )
+    else:
+        went = (
+            f"went silent — no activity at all for {silence} after it "
+            f"started up, the last sign of life being {stall.last_event}."
+        )
+    stopped = "The pipeline stopped it rather than let it hold the machine"
+    if retrying:
+        stopped += ", and is trying once more."
+    else:
+        stopped += ". No automatic retry was started for this run."
+    if limit:
+        stopped += (
+            " The run also hit Linear's request limit; the limit note on "
+            "this card says when it comes back."
+        )
+    if streamed == 0:
+        work = ("Nothing is wrong with the work: the agent never got as far "
+                "as reading the code, so nothing was reviewed and nothing was "
+                "rejected.")
+    else:
+        work = ("Nothing is wrong with the work: the run was stopped, not "
+                "refused, so nothing was reviewed and nothing was rejected.")
+    wall = ("the silence itself was not a usage limit" if limit
+            else "it is not a usage limit")
     run = f" Run: {run_url}" if (run_url or "").strip() else ""
     return (
         f"\U0001f573 {RECORD_MARKER} run={run_id} attempt={attempt}: the agent "
-        f"step “{stall.step}” went silent — no activity at all for "
-        f"{stall.silence_seconds} seconds ({minutes:.1f} minutes) after it "
-        f"started up, the last sign of life being {stall.last_event}. The "
-        f"pipeline stopped it rather than let it hold the machine, and is "
-        f"trying once more."
+        f"step “{stall.step}” {went} {stopped}"
         "\n\n"
-        "Nothing is wrong with the work: the agent never got as far as "
-        "reading the code, so nothing was reviewed and nothing was rejected. "
-        "This is not a password problem — it started up fine — and it is not "
-        f"a usage limit.{run}"
+        f"{work} This is not a password problem — it started up fine — and "
+        f"{wall}.{run}"
     )
 
 
@@ -481,6 +568,13 @@ def _read(path: str) -> str:
         return ""
 
 
+def _flag(value) -> bool:
+    """`true`, in any case, is true; anything else — `false`, empty, an
+    expression GitHub left unevaluated — is false, so a note never promises a
+    retry nobody confirmed."""
+    return str(value or "").strip().lower() == "true"
+
+
 def _cmd_record(args) -> int:
     """Post the stall record on the card. Exit 3 when the log names no stall —
     the caller gated on the classifier's answer and the two disagreeing is
@@ -492,7 +586,8 @@ def _cmd_record(args) -> int:
         return 3
     body = stall_record(
         stall, run_id=args.run_id, attempt=args.run_attempt,
-        run_url=args.run_url,
+        run_url=args.run_url, retrying=_flag(args.retrying),
+        limit=_flag(args.limit),
     )
     _linear_ops().cmd_comment(args.card, body)
     print(f"stream-watchdog: stall recorded on {args.card} "
@@ -510,6 +605,10 @@ def main(argv=None) -> int:
         parser.add_argument("--run-id", required=True)
         parser.add_argument("--run-attempt", required=True)
         parser.add_argument("--run-url", default="")
+        parser.add_argument("--retrying", default="false",
+                            help="true when the medic is retrying this run")
+        parser.add_argument("--limit", default="false",
+                            help="true when the run also hit a request limit")
         return _cmd_record(parser.parse_args(argv[1:]))
 
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])

@@ -45,8 +45,11 @@ Each candidate is scoped with `hygiene.in_scope` like every other lane's.
    card in Triage (DRE-6179) go to In Review, the lane their open pull
    request says they are in; a `no-route` card in Triage (DRE-6177, left
    there by the Triage lane, DRE-6190) goes to Planning, whose exit routes it
-   afresh. A card in any other lane is two writes and no move. The label is
-   off before the move, so the run the move fires is not refused for it.
+   afresh. A card in any other lane is two writes and no move. A
+   `review-cap-spent` proof record the sweep held In Review for the operator
+   (DRE-6841) is that case, and needs no `RETURNS` pairing: it is already in
+   the lane a new head resumes. The label is off before the move, so the run
+   the move fires is not refused for it.
 4. **A `manual` hold** — `epic-rereview-twice`, `plan-critic-bound`, `manual`,
    or the label with no stamp — is a person's, and nothing here lifts it
    outside Done or Canceled. A label over a SPENT stamp (one a newer lift

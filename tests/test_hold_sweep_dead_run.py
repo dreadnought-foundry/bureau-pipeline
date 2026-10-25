@@ -11,7 +11,8 @@ asks those two and acts on the answer:
   * `replan` — the decision's body (it opens `hold.DEAD_SPLIT_MARK`) is posted
     and the card advances to Planning from the lane it is in. No label.
   * `hold` — `hold.apply(…, "dead-run-cap", "none", "reconcile.py")`, the
-    `--park` move to Backlog, and the lane's `🚨 held-for-human` receipt with
+    `--park` move to the queue lane (`QUEUE_LANE`, DRE-6745), and the lane's
+    `🚨 held-for-human` receipt with
     its anchor phrase unchanged.
 
 The death the sweep sees is always the silent class, so `decide` is asked with
@@ -40,6 +41,8 @@ os.environ.setdefault("GH_TOKEN", "x")
 import dead_run  # noqa: E402
 import hold  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 
 CAP_STAMP = "🔒 hold: reason=dead-run-cap at=none lifts=unpark-marker by=reconcile.py"
 FILES = "scripts/reconcile.py, config/holds.json"
@@ -178,11 +181,24 @@ class TestTheSecondStrikeHolds:
         assert linear.kinds() == ["label", "comment", "state", "comment"]
         assert linear.writes[0] == ("label", "DRE-7100", reconcile.HOLD_LABEL)
         assert linear.writes[1][2] == CAP_STAMP
-        assert linear.writes[2] == ("state", "DRE-7100", "Backlog", "--park")
+        assert linear.writes[2] == ("state", "DRE-7100", reconcile.QUEUE_LANE, "--park")
         receipt = linear.writes[3][2]
         assert receipt.startswith("🚨 held-for-human:")
         assert ANCHORS[lane] in receipt
         assert not any(c.startswith(hold.DEAD_SPLIT_MARK) for c in linear.comments())
+
+    @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
+    def test_the_park_follows_the_planning_exit(self, monkeypatch, lane):
+        """DRE-6745: the hold's state is `QUEUE_LANE` — `Queued` under the
+        shipped contract since DRE-6742 moved the exit, `Backlog` before it."""
+        assert reconcile.QUEUE_LANE == "Queued"
+        monkeypatch.setattr(reconcile, "QUEUE_LANE", "Backlog")
+        linear = _Linear(_at_cap())
+        linear.run(_card(lane), reconcile.REQUEUE_CAP,
+                   extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
+        assert [w for w in linear.writes if w[0] == "state"] == [
+            ("state", "DRE-7100", "Backlog", "--park")]
+        assert ("label", "DRE-7100", reconcile.HOLD_LABEL) in linear.writes
 
     @pytest.mark.parametrize("lane", ["In Progress", reconcile.REVIEW_LANE])
     @pytest.mark.parametrize("recorded", [False, True], ids=["hung", "recorded"])
@@ -237,7 +253,7 @@ class TestTheReadDoorRunsFirst:
         linear = _Linear(_at_cap())
         linear.run(card, reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "split_tried", return_value=True)])
-        assert ("state", "DRE-7100", "Backlog", "--park") in linear.writes
+        assert ("state", "DRE-7100", reconcile.QUEUE_LANE, "--park") in linear.writes
         assert linear.state_guards == [{"expect": ("In Progress",), "labels_absent": ()}]
 
 
@@ -301,7 +317,7 @@ class TestTheDecisionIsDeadRuns:
         held = dead_run.Decision("hold", ["🚨 held-for-human (decided elsewhere)"])
         linear.run(_card(), reconcile.REQUEUE_CAP,
                    extra=[patch.object(reconcile.dead_run, "decide", return_value=held)])
-        assert ("state", "DRE-7100", "Backlog", "--park") in linear.writes
+        assert ("state", "DRE-7100", reconcile.QUEUE_LANE, "--park") in linear.writes
         assert "advance" not in linear.kinds()
 
     def test_a_replan_answer_advances(self):
@@ -365,6 +381,7 @@ class TestTheHandOffSpendsNoBudget:
 
 
 def _sweep(card, dead):
+    build_started.started(card)  # a build that started and died (DRE-7108)
     mocks = {
         "unstick_conflicts": MagicMock(),
         "retrigger_dead_heads": MagicMock(),
@@ -381,7 +398,7 @@ def _sweep(card, dead):
         "redeliver_rescued_work": MagicMock(return_value=False),
         "hand_dead_run_to_planner": MagicMock(),
     }
-    with patch.multiple(reconcile, **mocks), patch.object(
+    with build_started.entered(), patch.multiple(reconcile, **mocks), patch.object(
         reconcile.linear_ops, "count_comments", return_value=dead
     ), patch.object(reconcile.linear_ops, "add_label") as add_label, patch.object(
         reconcile.linear_ops, "cmd_state"
@@ -405,7 +422,8 @@ class TestBothCapsReachTheHelper:
     def test_below_the_cap_the_branch_requeues_and_never_calls_it(self, lane, dead):
         helper, _, cmd_state = _sweep(_card(lane), dead)
         helper.assert_not_called()
-        cmd_state.assert_called_once_with("DRE-7100", "Todo")
+        # To the queue since DRE-7108, deliberately: `promote_ready` brings it back.
+        cmd_state.assert_called_once_with("DRE-7100", reconcile.QUEUE_LANE, "--park")
 
 
 # --------------------------------------------------------------------------- #

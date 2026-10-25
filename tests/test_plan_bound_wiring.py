@@ -249,6 +249,136 @@ class TheWiringAsWritten(unittest.TestCase):
         self.assertNotEqual(context_problems(bare), [])
 
 
+# --------------------------------------------------------------------------- #
+# every bound exit can dispatch the rewrite it grants (DRE-7177)               #
+# --------------------------------------------------------------------------- #
+
+# `plan_bound.py exit` starts the planner's rewrite through
+# `review_rerun._cmd_dispatch`, which shells out to `gh`. On 2026-10-12 run
+# 38329761597 (DRE-7066) granted the rewrite and then died on `set the
+# GH_TOKEN environment variable`, so the card parked anyway — and five of the
+# seven steps that call the exit carried no token. The steps are discovered
+# from their shell, never listed, so an eighth park step is held too.
+MINT_ACTION = "actions/create-github-app-token"
+MODEL_ACTION = "anthropics/claude-code-action"
+_TOKEN_REF = re.compile(r"\$\{\{\s*steps\.([A-Za-z0-9_-]+)\.outputs\.token\s*\}\}")
+
+
+def _plan_job_steps() -> list[dict]:
+    doc = yaml.safe_load(open(WF, encoding="utf-8").read())
+    return doc["jobs"]["plan"]["steps"]
+
+
+def _action(s: dict) -> str:
+    return str(s.get("uses") or "").split("@")[0]
+
+
+def _top_level_or(text: str) -> bool:
+    """Whether an `if:` remainder has an `||` outside every parenthesis — one
+    that would let the step run where the leading conjunct does not."""
+    depth = 0
+    for i, ch in enumerate(text):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and text.startswith("||", i):
+            return True
+    return False
+
+
+def _covers(mint_gate: str, step_gate: str) -> bool:
+    """Whether a mint gated `mint_gate` runs on every path a step gated
+    `step_gate` runs on: no gate, the same gate, or a leading conjunct of it."""
+    mint_gate, step_gate = mint_gate.strip(), step_gate.strip()
+    if not mint_gate or mint_gate == step_gate:
+        return True
+    head = mint_gate + " && "
+    return step_gate.startswith(head) and not _top_level_or(step_gate[len(head):])
+
+
+def bound_exit_steps(steps: list[dict]) -> list[int]:
+    """Every step whose shell runs the bound exit, by index."""
+    return [i for i, s in enumerate(steps) if RECEIPT in str(s.get("run") or "")]
+
+
+def token_problems(steps: list[dict], i: int) -> list[str]:
+    """Everything that keeps step `i`'s bound exit from dispatching a rewrite."""
+    s = steps[i]
+    token = str((s.get("env") or {}).get("GH_TOKEN") or "").strip()
+    ref = _TOKEN_REF.fullmatch(token)
+    if not ref:
+        return [f"GH_TOKEN is {token!r}, not a token step's output"]
+    mint_id = ref.group(1)
+    at = [j for j, t in enumerate(steps) if t.get("id") == mint_id]
+    if len(at) != 1:
+        return [f"{len(at)} steps with id {mint_id!r}"]
+    j = at[0]
+    mint = steps[j]
+    found: list[str] = []
+    if _action(mint) != MINT_ACTION:
+        found.append(f"`{mint_id}` is not a {MINT_ACTION} step")
+    if j >= i:
+        found.append(f"`{mint_id}` runs after the step that reads it")
+    if mint.get("continue-on-error"):
+        found.append(f"`{mint_id}` may fail silently")
+    between = [str(t.get("name")) for t in steps[j + 1:i] if _action(t) == MODEL_ACTION]
+    if between:
+        found.append(f"`{mint_id}` is minted before the model run(s) {between}, "
+                     "so the token can be an hour old")
+    if not _covers(str(mint.get("if") or ""), str(s.get("if") or "")):
+        found.append(f"`{mint_id}` is gated {mint.get('if')!r}, which is skipped "
+                     f"on paths the step runs on ({s.get('if')!r})")
+    return found
+
+
+class EveryBoundExitCanStartTheRewrite(unittest.TestCase):
+    maxDiff = None  # a failure names every step it found, never a truncation
+
+    def test_every_step_that_calls_the_exit_is_found(self):
+        steps = _plan_job_steps()
+        names = [str(steps[i].get("name")) for i in bound_exit_steps(steps)]
+        # Not a list of the sites — a floor, so a discovery that found nothing
+        # cannot pass the check below.
+        self.assertTrue(set(SITE_NAMES) <= set(names), names)
+        self.assertIn("One-off critic — park in Triage", names)
+
+    def test_every_bound_exit_carries_a_fresh_token(self):
+        steps = _plan_job_steps()
+        offenders = {}
+        for i in bound_exit_steps(steps):
+            problems = token_problems(steps, i)
+            if problems:
+                offenders[str(steps[i].get("name"))] = problems
+        self.assertEqual(offenders, {}, "these bound exits cannot dispatch the rewrite")
+
+    def test_a_token_that_cannot_reach_the_step_is_caught(self):
+        """The checker is not vacuous: each shape it refuses, it refuses."""
+        gate = "steps.route.outputs.mode == 'review' && steps.post1.outputs.bound == 'true'"
+        mint = {"id": "app_x", "uses": MINT_ACTION + "@abc", "if": gate}
+        model = {"name": "a model run", "uses": MODEL_ACTION + "@abc"}
+        bound = {"name": "the bound", "if": gate, "env": {"GH_TOKEN": "${{ steps.app_x.outputs.token }}"},
+                 "run": "python3 .bureau-pipeline/scripts/plan_bound.py exit x"}
+        self.assertEqual(token_problems([mint, bound], 1), [])
+        wider = dict(mint, **{"if": "steps.route.outputs.mode == 'review'"})
+        self.assertEqual(token_problems([wider, bound], 1), [])
+        mutants = {
+            "no token": [mint, dict(bound, env={})],
+            "a narrower gate": [dict(mint, **{"if": gate + " && steps.x.outputs.y == 'z'"}), bound],
+            "a different gate": [dict(mint, **{"if": "steps.route.outputs.mode == 'plan'"}), bound],
+            "a conjunct undone by an or": [
+                wider, dict(bound, **{"if": "steps.route.outputs.mode == 'review' && a || b"})],
+            "a model run between": [mint, model, bound],
+            "minted after": [bound, mint],
+            "not a mint": [dict(mint, uses="actions/checkout@abc"), bound],
+            "a mint that may fail": [dict(mint, **{"continue-on-error": True}), bound],
+        }
+        for what, steps in mutants.items():
+            with self.subTest(mutant=what):
+                at = steps.index(next(s for s in steps if s.get("name") == "the bound"))
+                self.assertNotEqual(token_problems(steps, at), [], what)
+
+
 class TheRegistryRows(unittest.TestCase):
     def test_each_row_names_the_exit_as_what_runs_first(self):
         doc = json.load(open(os.path.join(ROOT, "config", "holds.json"),

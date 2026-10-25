@@ -295,3 +295,11 @@ def test_an_epic_card_in_the_lane_moves_with_its_own_children():
     assert rows["DRE-900"]["unit"] == "DRE-900"
     assert {r["epic"] for r in rows.values()} == {"DRE-900"}
     assert len({r["cycle"] for r in rows.values()}) == 1
+
+
+def test_no_string_constant_in_the_groomer_names_the_old_lane():
+    """A lane name in a string does not follow the switch (DRE-6749)."""
+    import lane_contract
+
+    path = str(Path(__file__).resolve().parent.parent / "scripts" / "groomer.py")
+    assert lane_contract._scan_python(path, ["Backlog"]) == set()

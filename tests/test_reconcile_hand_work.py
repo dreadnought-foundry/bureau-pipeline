@@ -12,8 +12,8 @@ WHAT IS UNDER TEST:
     WORKBENCH card to Hand-work, marks first, one advance, the receipt
     `🧹 Auto-promoted Backlog → Hand-work: …`, no WIP slot; OPERATOR marked
     `operator-step` and `no-code`, WORKBENCH marked nothing, and neither ever
-    `hand-built`, the CEO's own mark (DRE-6227); FLEET still to Todo,
-    spending a slot.
+    `hand-built`, the CEO's own mark (DRE-6227); FLEET to In Progress since
+    the flip (DRE-7120), spending a slot.
   * Hand-work is watched, never nudged: in `WATCHDOG_LANES` and
     `HAND_BUILT_REVIEW_LANES`, not in `SWEEP_STATES`. A hand-built card there
     with no pull request is left alone by the nudge loop and by
@@ -112,7 +112,7 @@ class TestThePromoterReadsTheDestination:
                 mock.patch.object(reconcile.linear_ops, "cmd_comment"), \
                 mock.patch.object(reconcile.linear_ops, "count_comments", return_value=0):
             assert reconcile.promote_ready(active_count=0) == 1
-        assert calls == [("DRE-3385", HAND_WORK, "Backlog")]
+        assert calls == [("DRE-3385", HAND_WORK, reconcile.QUEUE_FROM)]
 
     def test_a_workbench_card_is_stamped_nothing_and_moved(self):
         """WORKBENCH declares no marks since DRE-6227: `hand-built` is the
@@ -134,7 +134,7 @@ class TestThePromoterReadsTheDestination:
         board = promo._Board(promo._card(comments=[promo.WORKBENCH]))
         board.promote()
         receipt = board.receipt_for("DRE-3385")
-        assert receipt.startswith(f"🧹 Auto-promoted Backlog → {HAND_WORK}: ")
+        assert receipt.startswith(f"🧹 Auto-promoted Queued → {HAND_WORK}: ")
         assert "→ Todo" not in receipt
 
     def test_a_persons_card_spends_no_wip_slot(self, capsys):
@@ -145,16 +145,17 @@ class TestThePromoterReadsTheDestination:
         assert board.lane_of("DRE-3385") == HAND_WORK
         assert "budget spent" not in capsys.readouterr().out
 
-    def test_fleet_still_goes_to_todo_and_spends_a_slot(self):
+    def test_fleet_goes_to_in_progress_and_spends_a_slot(self):
         with mock.patch.object(reconcile, "MAX_WIP", 1):
             board = promo._Board(
                 promo._card(identifier="DRE-1", comments=[promo.FLEET]),
                 promo._card(identifier="DRE-2", comments=[promo.FLEET]),
             )
             assert board.promote(active_count=0) == 1
-        assert board.lane_of("DRE-1") == "Todo"
+        assert board.lane_of("DRE-1") == "In Progress"
         assert board.lane_of("DRE-2") == "Backlog"
-        assert board.receipt_for("DRE-1").startswith("🧹 Auto-promoted Backlog → Todo: ")
+        assert board.receipt_for("DRE-1").startswith(
+            "🧹 Auto-promoted Queued → In Progress: ")
 
     def test_the_lane_is_never_spelled_in_the_promoter(self):
         import inspect
@@ -162,6 +163,28 @@ class TestThePromoterReadsTheDestination:
         assert 'cmd_advance(card["identifier"], "Todo"' not in source
         assert "Auto-promoted Backlog → Todo" not in source
         assert "routing_verdict.destination(verdict)" in source
+
+
+    @pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+    def test_the_age_clock_reads_the_entry_receipt_under_either_queue_name(self, queue):
+        """The Hand-work age reads the card's entry off the newest promotion
+        receipt in its window (DRE-6409). That receipt names `QUEUE_LANE`, so
+        it read `Backlog` until DRE-6742 and `Queued` after — and a card
+        promoted on either side of the flip is dated, never left unknown."""
+        entered = "2026-10-12T01:00:00.000Z"
+        card = {
+            "identifier": "DRE-6820",
+            "state": {"name": HAND_WORK},
+            "labels": {"nodes": [{"name": HAND_BUILT}]},
+            "comments": {"nodes": [{
+                "body": f"🧹 Auto-promoted {queue} → {HAND_WORK}: routed **WORKBENCH**",
+                "createdAt": entered,
+            }]},
+        }
+        with mock.patch.object(reconcile, "age_minutes",
+                               side_effect=lambda at: 30 * 60 if at == entered else None):
+            tail = reconcile._hand_work_age(card, "")
+        assert tail.startswith("; in Hand-work 30h — never alarms"), tail
 
 
 # --------------------------------------------------------------------------
@@ -173,7 +196,8 @@ class TestTheLaneSets:
         assert HAND_WORK not in reconcile.SWEEP_STATES
 
     def test_the_watchdog_lanes(self):
-        assert reconcile.WATCHDOG_LANES == ("Todo", HAND_WORK, "In Progress")
+        # Todo left it when it began retiring (DRE-7129): the drain empties it.
+        assert reconcile.WATCHDOG_LANES == (HAND_WORK, "In Progress")
 
     def test_the_review_move_reads_hand_work(self):
         assert HAND_WORK in reconcile.HAND_BUILT_REVIEW_LANES
@@ -242,11 +266,11 @@ class TestAnUnmarkedPersonsCard:
             [_unmarked_workbench_card(verdict=promo.FLEET)], bodies=[])
         assert flagged == {"DRE-2499"}
 
-    def test_a_workbench_card_moved_to_todo_is_still_dispatched(self):
-        """Narrow on the lane too: a person who moved the card to Todo has
+    def test_a_workbench_card_moved_to_in_progress_is_still_dispatched(self):
+        """Narrow on the lane too: a person who moved the card to a start lane has
         handed it to the fleet, so the old verdict does not hold it back
         (DRE-6143 and DRE-5952 were moved, not reworded)."""
-        card = _unmarked_workbench_card(state="Todo")
+        card = _unmarked_workbench_card(state="In Progress")
         assert not reconcile.hand_built(card)
         s = stranded._run_sweep([card])
         s.redispatch.assert_called_once()
@@ -317,7 +341,7 @@ class TestTheRegistries:
         assert pipeline_act.main(["check"]) == 0
 
     def test_reconcile_may_write_both_lanes_it_promotes_into(self):
-        for lane in ("Todo", HAND_WORK):
+        for lane in ("In Progress", HAND_WORK):
             assert "reconcile.py" in lane_contract.lane_writers(lane)
 
     def test_the_ready_lane_writer_check_passes(self):
@@ -331,4 +355,4 @@ class TestTheRegistries:
         assert problems == [], "\n".join(problems)
         promoted = {w.lane for w in ready_lane_writers.writes()
                     if w.writer == "reconcile.py" and "destination" in w.expression}
-        assert {"Todo", HAND_WORK} <= promoted, promoted
+        assert {"In Progress", HAND_WORK} <= promoted, promoted

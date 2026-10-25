@@ -10,6 +10,10 @@ by AST and reports `epic-can-enter-todo`, naming the function, for any that can
 write Todo and neither calls `epic_todo_gate.refusal` nor delegates its write to
 one that does. It is fed copies of the real write layer here, each with one
 call taken out, and a new seam nobody remembered.
+
+Since DRE-7660 the contract names no retiring start lane, so no seam can write
+it and the check finds nothing; these tests exercise it against a stand-in
+"Todo" (`setUpModule`), and `OnTheShippedContract` pins the no-op.
 """
 
 import ast
@@ -27,6 +31,24 @@ import ready_lane_writers as rlw  # noqa: E402
 
 SEAM = os.path.join(ROOT, "scripts", rlw.SEAM_MODULE)
 TAG = "epic-can-enter-todo"
+
+#: The lane the shipped contract gives the check, read before any stand-in.
+SHIPPED_TODO = rlw.epic_todo_gate.TODO
+_stand_in = []
+
+
+def setUpModule():
+    # The contract names no retiring start lane since DRE-7660, so the check is
+    # exercised against a stand-in.
+    from unittest import mock
+
+    _stand_in.append(mock.patch.object(rlw.epic_todo_gate, "TODO", "Todo"))
+    _stand_in[-1].start()
+
+
+def tearDownModule():
+    while _stand_in:
+        _stand_in.pop().stop()
 
 
 def _source() -> str:
@@ -87,6 +109,46 @@ class TheRealWriteLayer(unittest.TestCase):
             {"guarded_state_write", "cmd_state", "cmd_advance", "_create_card",
              "create_card", "_held_state_move"},
         )
+
+
+class TheRefusalStaysOnTodoThroughTheFlip(unittest.TestCase):
+    """DRE-7109: the restarts write `lane_contract.START_LANE`, and the flip
+    sets it to `In Progress`. The refusal is NOT moved with it — an epic
+    entering `In Progress` is the CEO's approval and must stay writable — so
+    the finding reads the retiring start lane, never the start lane. DRE-7660
+    deleted that lane; the stand-in keeps the rule exercised."""
+
+    def _flipped(self):
+        import copy
+        import json
+        from unittest import mock
+
+        import lane_contract
+
+        doc = copy.deepcopy(lane_contract.load())
+        doc["build_start"]["lane"] = "In Progress"
+        tmp = tempfile.mkdtemp(prefix="rlw-flip-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        path = os.path.join(tmp, "lane-contract.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh)
+        patcher = mock.patch.object(lane_contract, "CONTRACT_PATH", path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.assertEqual(lane_contract.start_lane(), "In Progress")
+
+    def test_the_finding_still_names_todo(self):
+        self.assertEqual(rlw.epic_todo_gate.TODO, "Todo")
+        with _Copy(_without_refusal(_source(), "guarded_state_write")) as root:
+            self._flipped()
+            problems = rlw.epic_gate_problems(root)
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("can put a card in 'Todo'", problems[0])
+
+    def test_the_real_write_layer_is_clean_under_the_flip(self):
+        self._flipped()
+        self.assertEqual(rlw.epic_gate_problems(), [])
+        self.assertIn("guarded_state_write", rlw.todo_seams())
 
 
 class AGuardedSeamWithoutItsCallIsNamed(unittest.TestCase):
@@ -164,6 +226,26 @@ class ASeamNobodyRememberedIsNamed(unittest.TestCase):
             problems = rlw.epic_gate_problems(root)
         self.assertEqual(len(problems), 1, problems)
         self.assertIn(TAG, problems[0])
+
+
+class OnTheShippedContract(unittest.TestCase):
+    """No lane is the old start lane, so no seam can write it: a new seam that
+    writes the deleted lane's name without the refusal is not a finding."""
+
+    def test_a_seam_writing_the_deleted_lane_is_not_named(self):
+        from unittest import mock
+
+        self.assertIsNone(SHIPPED_TODO)
+        extra = (
+            "\n\ndef requeue_fast(identifier: str) -> None:\n"
+            "    issue = get_issue(identifier)\n"
+            "    _set_state(identifier, issue['id'],\n"
+            "               state_id(issue['team']['id'], 'Todo'))\n"
+        )
+        with mock.patch.object(rlw.epic_todo_gate, "TODO", SHIPPED_TODO), \
+                _Copy(_source() + extra) as root:
+            self.assertEqual(rlw.epic_gate_problems(root), [])
+            self.assertNotIn("requeue_fast", rlw.todo_seams(root))
 
 
 if __name__ == "__main__":

@@ -11,8 +11,9 @@ identities. With the writers stopped, this script takes each of those off once.
 The operator decided on 2026-10-08 that no pipeline-applied `hand-built`
 survives it, so there is no switch that keeps an automatic card out.
 
-This file held DRE-5323's one-time move of person cards out of Todo; it is
-rewritten for this migration rather than a second script written beside it.
+This file held DRE-5323's one-time move of person cards out of the start
+lane; it is rewritten for this migration rather than a second script written
+beside it.
 `docs/hand-work-migration.md` is the record of that first run.
 
 ## Origin first
@@ -40,14 +41,16 @@ in it, could still hold one, so it is not read as "set at creation".
      OPERATOR by `routing_verdict.title_verdict`, or opens `[OPERATOR]` /
      `OPERATOR:`, or it is named by `--operator-step DRE-N` — loses
      `hand-built`, gains `operator-step`.
-  4. **code** — loses `hand-built`, then by lane. In Hand-work or Backlog with
-     a critic pass on record it is not re-planned: every live verdict is retired
-     with a `🪦 verdict-retired` note naming this migration as the retirer, the
-     `operator-step` a retired verdict put on comes off first (the planning
-     exit's `lifted_marks` rule), it is stamped FLEET, and a Hand-work
-     card moves to Backlog, where the sweep's promotion carries it to Todo. In
-     Hand-work or Backlog with no pass it moves to Planning, whose exit writes it
-     a fresh verdict. Anywhere else it only loses the label.
+  4. **code** — loses `hand-built`, then by lane. In Hand-work or Queued —
+     read under every name the queue carries, `lane_contract.QUEUE_LANES`
+     (DRE-6748) — with a critic pass on record it is not re-planned: every live
+     verdict is retired with a `🪦 verdict-retired` note naming this migration
+     as the retirer, the `operator-step` a retired verdict put on comes off
+     first (the planning exit's `lifted_marks` rule), it is stamped FLEET, and a
+     Hand-work card moves to the queue, `lane_contract.QUEUE_LANE`, where the
+     sweep's promotion carries it to the start lane. In Hand-work or Queued
+     with no pass it moves to Planning, whose exit writes it a fresh verdict.
+     Anywhere else it only loses the label.
 
 A critic pass is read with `plan_critic`'s own record reader over the fleet's
 own comments: for a parentless card, the newest one-off round on the card is a
@@ -55,23 +58,25 @@ PASS; for a child, the parent epic's second critic released the plan
 (`plan_critic.post_release`).
 
 Every card changed carries one `🧳 hand-built-migration:` comment saying what
-changed and the rule it followed. This script never writes Todo.
+changed and the rule it followed. This script never writes a start lane.
 
 It refuses to run, before any write, when Linear (or the identity declaration)
 cannot be read. No card id appears in its code: selection is by rule.
 
 ## The operator-backlog pass (DRE-6429)
 
-Operator cards filed before DRE-6428 sit in Backlog wearing `needs-human` +
+Operator cards filed before DRE-6428 sit in Queued wearing `needs-human` +
 `no-code` with no hold stamp, so `hold.reason_of` reads them `manual` and the
 sweep (DRE-6427) leaves them alone by design. `operator-backlog` converts them
-once. It reads every Backlog card wearing both labels that is not an epic and
+once. It reads every Queued card wearing both labels that is not an epic and
 not a proof, whose hold is `manual` or already `operator-step`, and lists each
-under one of four headings, with its repo, title and reason:
+under one of four headings, with its repo, title and reason. The queue is read
+under every name it carries (`lane_contract.QUEUE_LANES`, DRE-6748), so an
+operator step waiting under either name of the cutover is one:
 
   * **unblocked** — `manual`, every blocker terminal, no parent or one In
     Progress: marked `operator-step`, stamped, stamped OPERATOR when it carries
-    no live verdict, lifted (`blockers-terminal`) and moved Backlog → Hand-work.
+    no live verdict, lifted (`blockers-terminal`) and moved Queued → Hand-work.
   * **waiting** — `manual`, with an open blocker or a parent not In Progress:
     marked `operator-step` and stamped, nothing else. The sweep lifts it later.
   * **due** — already `operator-step` and nothing left to wait on: lifted and
@@ -80,8 +85,8 @@ under one of four headings, with its repo, title and reason:
     that routes anywhere but Hand-work (a FLEET card is a person's to read).
 
 Dry run by default; `--apply` writes. A card moved since the read is refused
-untouched, and the move itself is conditional on Backlog. A second run finds
-nothing new to write: the moved cards have left Backlog and the waiting ones
+untouched, and the move itself is conditional on the queue. A second run finds
+nothing new to write: the moved cards have left Queued and the waiting ones
 read `operator-step`.
 
 CLI:
@@ -109,11 +114,13 @@ import check_linear_identities  # noqa: E402 — the declared non-human identiti
 import dead_run  # noqa: E402 — `HOLD_LABEL`, the needs-human label
 import epic_todo_gate  # noqa: E402 — the one epic test (DRE-5316)
 import hold  # noqa: E402 — the hold's stamp, lift and reason (DRE-6173)
+import lane_contract  # noqa: E402 — the queue: read as QUEUE_LANES, written as QUEUE_LANE
 import linear_ops  # noqa: E402
 import plan_critic  # noqa: E402 — the critic's own record reader
 import proof_and_demo  # noqa: E402 — the one proof test
 import prose_blockers  # noqa: E402 — the sweep's own blocker gate
 import routing_verdict  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue's names (DRE-6741)
 
 HAND_BUILT = routing_verdict.HAND_BUILT_LABEL
 OPERATOR_STEP = routing_verdict.OPERATOR_STEP_LABEL
@@ -121,11 +128,13 @@ NO_CODE = linear_ops.NO_CODE_LABEL
 NEEDS_HUMAN = dead_run.HOLD_LABEL
 
 HAND_WORK = "Hand-work"
-BACKLOG = "Backlog"
 PLANNING = "Planning"
 CLOSED = ("Done", "Canceled", "Duplicate")
 #: The lanes a code card is moved out of; anywhere else it only loses the label.
-RETURNABLE = (HAND_WORK, BACKLOG)
+#: The queue is read under every name it carries (DRE-6748); a card is returned
+#: to it as `lane_contract.QUEUE_LANE`, read at the write, which follows the
+#: planning exit — Backlog until DRE-6742 flips it to Queued.
+RETURNABLE = (HAND_WORK, *QUEUE_LANES)
 
 FLEET = "FLEET"
 OPERATOR_VERDICT = "OPERATOR"
@@ -463,11 +472,11 @@ def census(cards: list[dict], ops, *, include=(), include_actors=(),
             row["passed"] = critic_pass(card, nodes, parents.get(parent), fleet)
             if row["passed"]:
                 row["action"] = RESTAMP
-                row["move_to"] = BACKLOG if lane == HAND_WORK else None
+                row["move_to"] = lane_contract.QUEUE_LANE if lane == HAND_WORK else None
                 row["summary"] = (
                     f"a code card with a critic pass ({row['passed']}): loses "
                     f"{HAND_BUILT}, its live verdicts retired, stamped {FLEET}"
-                    + (f", {HAND_WORK} → {BACKLOG}" if row["move_to"] else
+                    + (f", {HAND_WORK} → {row['move_to']}" if row["move_to"] else
                        f", stays in {lane}"))
             else:
                 row["action"] = REPLAN
@@ -482,29 +491,34 @@ def census(cards: list[dict], ops, *, include=(), include_actors=(),
 # the run                                                                      #
 # --------------------------------------------------------------------------- #
 
-_RULES = {
-    EPIC: (f"an epic is never built from a lane, so it carries the operator's "
-           f"marker, `{OPERATOR_STEP}`, in place of the CEO's — the operator's "
-           "decision of 2026-10-08. It stays in its lane."),
-    PROOF: ("a proof keeps `no-code` and its lane; the proof dispatch takes it "
-            f"from {HAND_WORK}, and nothing about it needs the CEO's mark."),
-    OPERATOR: (f"an operator step carries the operator's marker, `{OPERATOR_STEP}`, "
-               "in place of the CEO's, and stays in its lane."),
-    REMOVE: ("a code card in this lane only loses the mark: Intake classifies it, "
-             "and a card with a pull request is already underway."),
-    RESTAMP: ("a code card with a critic pass on record is not re-planned: its old "
-              f"verdict is retired on the record and it is stamped {FLEET}, so the "
-              f"sweep's promotion carries it from {BACKLOG} to the fleet on the "
-              f"gates every {FLEET} card passes."),
-    REPLAN: (f"a code card with no critic pass goes back to {PLANNING}, whose exit "
-             "writes it a fresh routing verdict."),
-}
+def _rules() -> dict:
+    """The rule each class or action followed, as its comment says it. Read
+    when the comment is written, so the queue it names is `QUEUE_LANE` as it
+    stands (DRE-6748)."""
+    return {
+        EPIC: (f"an epic is never built from a lane, so it carries the operator's "
+               f"marker, `{OPERATOR_STEP}`, in place of the CEO's — the operator's "
+               "decision of 2026-10-08. It stays in its lane."),
+        PROOF: ("a proof keeps `no-code` and its lane; the proof dispatch takes it "
+                f"from {HAND_WORK}, and nothing about it needs the CEO's mark."),
+        OPERATOR: (f"an operator step carries the operator's marker, `{OPERATOR_STEP}`, "
+                   "in place of the CEO's, and stays in its lane."),
+        REMOVE: ("a code card in this lane only loses the mark: Intake classifies it, "
+                 "and a card with a pull request is already underway."),
+        RESTAMP: ("a code card with a critic pass on record is not re-planned: its old "
+                  f"verdict is retired on the record and it is stamped {FLEET}, so the "
+                  f"sweep's promotion carries it from {lane_contract.QUEUE_LANE} to the "
+                  f"fleet on the gates every {FLEET} card passes."),
+        REPLAN: (f"a code card with no critic pass goes back to {PLANNING}, whose exit "
+                 "writes it a fresh routing verdict."),
+    }
 
 
 def _rule(row: dict) -> str:
+    rules = _rules()
     if row["class"] == CODE:
-        return _RULES[row["action"]]
-    return _RULES[row["class"]]
+        return rules[row["action"]]
+    return rules[row["class"]]
 
 
 def fleet_why(row: dict) -> str:
@@ -604,10 +618,10 @@ def _apply_one(ops, row: dict, now: datetime, done: list[str]) -> bool:
         names = ", ".join(dict.fromkeys(n for n, _ in routing_verdict.retired_pairs(retired)))
         done.append(f"verdict restamped ({FLEET}"
                     + (f", after retiring {names}" if names else "") + ")")
-    if row["move_to"] == BACKLOG:
-        if ops.cmd_state(ident, BACKLOG, expect=(HAND_WORK,)) is False:
+    if row["move_to"] == lane_contract.QUEUE_LANE:
+        if ops.cmd_state(ident, lane_contract.QUEUE_LANE, expect=(HAND_WORK,)) is False:
             return True
-        done.append(f"moved to {BACKLOG}")
+        done.append(f"moved to {lane_contract.QUEUE_LANE}")
     elif row["move_to"] == PLANNING:
         if ops.cmd_state(ident, PLANNING, expect=(row["lane"],)) is False:
             return True
@@ -675,13 +689,14 @@ DUE = "due"
 UNTOUCHED = "not touched"
 SECTIONS = (UNBLOCKED, WAITING, DUE, UNTOUCHED)
 
-#: Every Backlog card wearing the hold, with what the rules read. The relations
-#: carry `pageInfo` so a card with more blockers than one page is read to the end.
+#: Every Queued card wearing the hold, under every name the queue carries, with
+#: what the rules read. The relations carry `pageInfo` so a card with more
+#: blockers than one page is read to the end.
 OPERATOR_BACKLOG_QUERY = """query($label: String!, $after: String) {
   issues(first: 10, after: $after, filter: {
     team: {key: {eq: "DRE"}},
     labels: {name: {eqIgnoreCase: $label}},
-    state: {name: {eq: "%s"}}
+    state: {name: {in: %s}}
   }) {
     nodes {
       id identifier title
@@ -700,7 +715,7 @@ OPERATOR_BACKLOG_QUERY = """query($label: String!, $after: String) {
     }
     pageInfo { hasNextPage endCursor }
   }
-}""" % (BACKLOG, linear_ops.COMMENT_WINDOW)
+}""" % (json.dumps(list(QUEUE_LANES)), linear_ops.COMMENT_WINDOW)
 
 #: The rest of one card's relations, a hundred at a time.
 RELATIONS_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
@@ -709,13 +724,13 @@ RELATIONS_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
 
 
 def read_operator_backlog(ops) -> list[dict]:
-    """Every Backlog card carrying the hold, or `Unreadable`."""
+    """Every Queued card carrying the hold, under either name, or `Unreadable`."""
     try:
         cards = ops.gql_paged(OPERATOR_BACKLOG_QUERY, {"label": NEEDS_HUMAN})
     except Exception as e:  # noqa: BLE001 — LinearError, a network error, anything
-        raise Unreadable(f"could not read the {BACKLOG} cards carrying {NEEDS_HUMAN} "
-                         f"({e})") from e
-    return [c for c in cards if _lane(c) == BACKLOG]
+        raise Unreadable(f"could not read the {', '.join(QUEUE_LANES)} cards carrying "
+                         f"{NEEDS_HUMAN} ({e})") from e
+    return [c for c in cards if _lane(c) in QUEUE_LANES]
 
 
 def read_relations(ops, card: dict) -> dict:
@@ -788,6 +803,7 @@ def operator_census(cards: list[dict], ops) -> list[dict]:
         row = {
             "identifier": card.get("identifier"),
             "title": title,
+            "lane": _lane(card),
             "repo": _repo(labels),
             "labels": labels,
             "stamped": reason == hold.OPERATOR_STEP_REASON,
@@ -816,7 +832,7 @@ def operator_census(cards: list[dict], ops) -> list[dict]:
         elif row["stamped"]:
             row["section"] = DUE
             row["summary"] = (f"held {hold.OPERATOR_STEP_REASON} and nothing left to wait "
-                              f"on: lifted{restamp}, {BACKLOG} → {HAND_WORK}")
+                              f"on: lifted{restamp}, {row['lane']} → {HAND_WORK}")
         elif waits:
             row["section"] = WAITING
             row["summary"] = (f"held {MANUAL}, waiting — {'; '.join(waits)}: marked "
@@ -825,7 +841,7 @@ def operator_census(cards: list[dict], ops) -> list[dict]:
             row["section"] = UNBLOCKED
             row["summary"] = (f"held {MANUAL}, nothing left to wait on: marked "
                               f"{OPERATOR_STEP}, stamped{restamp}, lifted, "
-                              f"{BACKLOG} → {HAND_WORK}")
+                              f"{row['lane']} → {HAND_WORK}")
     return rows
 
 
@@ -860,7 +876,7 @@ def _convert_one(ops, row: dict, done: list[str]) -> bool:
         done.append(f"verdict stamped ({OPERATOR_VERDICT})")
     hold.lift(ident, hold.BLOCKERS_TERMINAL, WRITER, reason=hold.OPERATOR_STEP_REASON)
     done.append(f"hold lifted ({hold.BLOCKERS_TERMINAL})")
-    if ops.cmd_state(ident, HAND_WORK, expect=(BACKLOG,)) is False:
+    if ops.cmd_state(ident, HAND_WORK, expect=QUEUE_LANES) is False:
         return True
     done.append(f"moved to {HAND_WORK}")
     return False
@@ -869,7 +885,8 @@ def _convert_one(ops, row: dict, done: list[str]) -> bool:
 def convert(ops, rows: list[dict], *, apply: bool = False) -> dict:
     """Make every listed card's writes. Writes nothing unless `apply`; never
     writes a card under `not touched`. Each card's lane is re-read first, and
-    one that left Backlog since the read is refused untouched."""
+    one that left the queue since the read is refused untouched — a move
+    between its two names is not leaving it."""
     changed, refused, failed = [], [], []
     for row in rows:
         if row["section"] == UNTOUCHED or not apply:
@@ -878,8 +895,8 @@ def convert(ops, rows: list[dict], *, apply: bool = False) -> dict:
         done: list[str] = []
         try:
             lane = current_lane(ops, ident)
-            if lane != BACKLOG:
-                print(f"refused {ident}: it was in {BACKLOG} when read and is in "
+            if lane not in QUEUE_LANES:
+                print(f"refused {ident}: it was in {row['lane']} when read and is in "
                       f"{lane or 'an unreadable lane'} now — left untouched")
                 refused.append(ident)
                 continue
@@ -979,7 +996,7 @@ def main(argv=None) -> int:
                            help="make the writes (needs --apply to write)")
     p_run.add_argument("--apply", action="store_true")
     p_ops = sub.add_parser("operator-backlog",
-                           help="convert the manual operator holds in Backlog")
+                           help="convert the manual operator holds in the queue")
     p_ops.add_argument("--apply", action="store_true",
                        help="make the writes; without it, a dry run")
     args = parser.parse_args(argv)

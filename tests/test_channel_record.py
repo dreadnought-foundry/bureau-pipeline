@@ -231,6 +231,28 @@ def test_a_failed_main_run_with_no_channel_read_still_records(env, monkeypatch):
     assert record["act"] == "held"
 
 
+def _unit_suite_decision(outcome):
+    return channel_record.decide(
+        promoted=False, outcome=outcome, reason=f"not promoting {TO}",
+        ancestry="ahead", candidate=TO, from_sha=FROM, gating_run=GATE,
+        scenarios="none")
+
+
+def test_a_unit_suite_still_running_is_a_wait_not_a_block():
+    """DRE-6993: the commit's own `Pipeline Tests` run has not finished, and
+    `stable` waits for it — the merge train's code, not a stuck channel."""
+    decided = _unit_suite_decision("unit-suite-not-finished")
+    assert decided.act == "held"
+    assert decided.code == "channel-advancing"
+
+
+@pytest.mark.parametrize("outcome", ["unit-suite-red", "unit-suite-unproven"])
+def test_a_red_or_unproven_unit_suite_is_a_block(outcome):
+    decided = _unit_suite_decision(outcome)
+    assert decided.act == "held"
+    assert decided.code == "channel-blocked"
+
+
 # --------------------------------------------------------------------------
 # 3. The `release` deployment, field for field.
 # --------------------------------------------------------------------------

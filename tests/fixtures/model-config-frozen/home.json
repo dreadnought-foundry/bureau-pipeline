@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "written_at": "2026-10-11T00:00:00Z",
+  "written_by": "operator",
+  "groups": {
+    "workhorse": {
+      "label": "Builders",
+      "purpose": "Do the work on every card.",
+      "models": [
+        "claude-opus-5-5",
+        "claude-opus-5",
+        "claude-sonnet-5-5",
+        "claude-sonnet-5"
+      ]
+    },
+    "advisory": {
+      "label": "Reviewers",
+      "purpose": "Judge a pull request, a plan or a failed run.",
+      "models": [
+        "claude-sonnet-5-5",
+        "claude-sonnet-5",
+        "claude-opus-5-5"
+      ]
+    },
+    "judgement": {
+      "label": "Planners",
+      "purpose": "Turn an epic into the cards the fleet builds.",
+      "models": [
+        "claude-fable-5-1",
+        "claude-opus-5-5",
+        "claude-sonnet-4-6"
+      ]
+    }
+  },
+  "agents": {
+    "engineer": "workhorse",
+    "frontend": "workhorse",
+    "database-architect": "workhorse",
+    "devops": "workhorse",
+    "fixer": "workhorse",
+    "repairer": "workhorse",
+    "proof": "workhorse",
+    "planner": "judgement",
+    "critic": "advisory",
+    "verifier": "advisory",
+    "medic": "advisory",
+    "plan-critic-pre": "advisory",
+    "plan-critic-post": "advisory"
+  },
+  "added_agents": {},
+  "projects": {
+    "agent-bureau-demo": {
+      "workhorse": "claude-sonnet-5-5"
+    }
+  }
+}

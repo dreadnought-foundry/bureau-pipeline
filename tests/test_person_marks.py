@@ -495,7 +495,7 @@ class TestNoCodeAloneIsNotAPersonsCard:
     def test_the_nudge_loop_still_redispatches_it(self, vocabulary):
         import test_hand_built_not_stranded as harness
 
-        s = harness._run_sweep([_card(_RUNBOOK, state="Todo")])
+        s = harness._run_sweep([_card(_RUNBOOK, state="In Progress")])
         s.redispatch.assert_called_once()
         assert any(reconcile._TODO_REDISPATCH_NOTE in c.args[1]
                    for c in s.cmd_comment.call_args_list)
@@ -503,8 +503,11 @@ class TestNoCodeAloneIsNotAPersonsCard:
     def test_the_nudge_loop_still_requeues_its_dead_run(self, vocabulary):
         import test_hand_built_not_stranded as harness
 
-        s = harness._run_sweep([_card(_RUNBOOK, state="In Progress")])
-        s.cmd_state.assert_called_once_with("DRE-6301", "Todo")
+        import build_started
+
+        # A build that started and died (DRE-7108); its requeue goes to the queue.
+        s = harness._run_sweep([build_started.started(_card(_RUNBOOK, state="In Progress"))])
+        s.cmd_state.assert_called_once_with("DRE-6301", reconcile.QUEUE_LANE, "--park")
 
 
 # --------------------------------------------------------------------------

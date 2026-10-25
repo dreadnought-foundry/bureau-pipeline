@@ -62,6 +62,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import lane_contract  # noqa: E402
 import split_ledger  # noqa: E402
 import step_shell  # noqa: E402
 
@@ -369,6 +370,29 @@ def test_successors_of_a_live_card_are_not_a_split():
     live = {"identifier": "DRE-5", "state_type": "started",
             "successors": [{"identifier": "DRE-6"}]}
     assert split_ledger.REASON_SPLIT not in split_ledger.reasons(live)
+
+
+# The type Linear files each queue name under: `Backlog` is a `backlog` lane,
+# and `Queued` an `unstarted` one, because Linear draws a `backlog` column
+# first whatever its position (standards/architecture.md, DRE-4125).
+QUEUE_TYPES = {"Backlog": "backlog", "Queued": "unstarted"}
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_a_split_original_parked_in_either_queue_name_is_a_split(lane):
+    """The turn-cap hold parks a card in the queue lane, a person splits it,
+    and the original waits there (DRE-6746). Under `Queued` its state type is
+    `unstarted`, so the lane is read by name through `QUEUE_LANES` as well as
+    by type — the same card is a split under either name."""
+    parked = {"identifier": "DRE-5", "state": lane, "state_type": QUEUE_TYPES[lane],
+              "successors": [{"identifier": "DRE-6"}]}
+    assert split_ledger.REASON_SPLIT in split_ledger.reasons(parked)
+
+
+def test_an_unstarted_card_outside_the_queue_is_not_a_split():
+    todo = {"identifier": "DRE-5", "state": "Todo", "state_type": "unstarted",
+            "successors": [{"identifier": "DRE-6"}]}
+    assert split_ledger.REASON_SPLIT not in split_ledger.reasons(todo)
 
 
 # --------------------------------------------------------------------------- #

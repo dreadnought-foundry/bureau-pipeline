@@ -375,7 +375,7 @@ class _Linear:
     def sweep(self):
         """The next reconcile, over the card as the exit left it. Comments go
         in as Linear returns them — newest first."""
-        assert self.lane == "Backlog"
+        assert self.lane == "Queued"
         backlog = _card(identifier=CARD, parent_state=None, labels=self.labels,
                         blocked_by=BLOCKER)
         backlog["title"] = DRE_4724["title"]
@@ -418,7 +418,7 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
         assert len(notes) == 1
         assert "**WORKBENCH**" in notes[0] and "re-entered Planning" in notes[0]
         assert "2026-09-23 13:41 PT" in notes[0]
-        assert card.lane == "Backlog"
+        assert card.lane == "Queued"
 
     def test_the_retirement_is_written_before_the_new_verdict(self):
         card = _dre_4724_sent_back()
@@ -428,9 +428,10 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
                   else "other") for b in card.posted]
         assert kinds.index("retired") < kinds.index("verdict")
 
-    def test_the_next_sweep_promotes_it_to_todo_without_hand_built(self):
+    def test_the_next_sweep_promotes_it_to_in_progress_without_hand_built(self):
         """The acceptance criterion end to end: before → WORKBENCH, after →
-        FLEET, and the sweep at 09:45 PT carries it to Todo, unmarked."""
+        FLEET, and the sweep at 09:45 PT carries it to In Progress (Todo until
+        the flip, DRE-7120), unmarked."""
         card = _dre_4724_sent_back(labels=[*DRE_4724["labels"], HAND_BUILT])
         card.exit()
         assert HAND_BUILT in card.removed
@@ -438,8 +439,8 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
 
         card.now = SWEEP_AT
         board = card.sweep()
-        assert board.advanced == [(CARD, "Todo", "Backlog")]
-        assert card.lane == "Todo"
+        assert board.advanced == [(CARD, "In Progress", reconcile.QUEUE_FROM)]
+        assert card.lane == "In Progress"
         assert board.labelled == [], "the sweep put a mark back on"
         assert HAND_BUILT not in card.labels
 
@@ -457,7 +458,7 @@ class TestDre4724LeavesPlanningWithAFreshVerdict:
         with patch.object(reconcile.routing_verdict, "lane_moves",
                           side_effect=lambda i: list(moves)):
             board.promote()
-        assert board.advanced == [(CARD, "Hand-work", "Backlog")]
+        assert board.advanced == [(CARD, "Hand-work", reconcile.QUEUE_FROM)]
         assert (CARD, HAND_BUILT) in board.labelled
 
     def test_re_running_the_exit_writes_nothing_twice(self):
@@ -487,7 +488,7 @@ class TestAReplanThatRoutesWorkbenchAgain:
 
         card.now = SWEEP_AT
         board = card.sweep()
-        assert board.advanced == [(CARD, "Hand-work", "Backlog")]
+        assert board.advanced == [(CARD, "Hand-work", reconcile.QUEUE_FROM)]
 
 
 class TestAPersonsHandBuiltIsLeftAlone:

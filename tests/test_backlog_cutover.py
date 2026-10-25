@@ -33,6 +33,8 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_backlog_cutover.py -v
 """
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
 import os
 import re
@@ -51,6 +53,7 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import backlog_cutover as cutover  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
@@ -582,6 +585,54 @@ def test_the_cutover_never_writes_a_terminal_lane():
     Intake and nowhere else."""
     assert cutover.CUTOVER_TO == "Intake"
     assert cutover.CUTOVER_FROM == "Backlog"
+
+
+# --------------------------------------------------------------------------
+# DRE-6748: the legacy lane is read through the contract's alias
+# --------------------------------------------------------------------------
+SOURCE_PATH = ROOT / "scripts" / "backlog_cutover.py"
+
+
+def _module_assignment(name):
+    tree = ast.parse(SOURCE_PATH.read_text(encoding="utf-8"))
+    found = [node.value for node in tree.body if isinstance(node, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == name for t in node.targets)]
+    assert len(found) == 1, name
+    return found[0]
+
+
+def test_the_from_lane_is_the_name_the_contract_aliases_to_the_queue():
+    aliased = [old for old, new in lane_contract.aliases().items()
+               if new in lane_contract.QUEUE_LANES]
+    assert aliased == [cutover.CUTOVER_FROM]
+    assert cutover.CUTOVER_FROM in lane_contract.QUEUE_LANES
+
+
+def test_the_from_lane_follows_the_alias_rather_than_a_literal(monkeypatch):
+    """Load the file afresh against a contract whose alias names another lane:
+    the cutover's from-lane follows it, so nothing in the file spells it."""
+    monkeypatch.setattr(lane_contract, "aliases",
+                        lambda contract=None: {"Old Approval": "Green Light",
+                                               "Old Queue": "Queued"})
+    monkeypatch.setattr(lane_contract, "QUEUE_LANES", ("Queued", "Old Queue"))
+    spec = importlib.util.spec_from_file_location("backlog_cutover_probe", SOURCE_PATH)
+    probe = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(probe)
+    assert probe.CUTOVER_FROM == "Old Queue"
+    assert probe.CUTOVER_TO == "Intake"
+
+
+def test_the_phase_prover_reads_both_names_off_the_file():
+    """agent-bureau's phase prover reads `CUTOVER_FROM` and `CUTOVER_TO` by
+    name off this file (DRE-7053): the from-lane is a module-level assignment
+    built from the alias, and the to-lane stays the literal it reads."""
+    assert not isinstance(_module_assignment("CUTOVER_FROM"), ast.Constant)
+    to = _module_assignment("CUTOVER_TO")
+    assert isinstance(to, ast.Constant) and to.value == "Intake"
+
+
+def test_no_string_in_the_cutover_names_the_retired_queue():
+    assert lane_contract._scan_python(str(SOURCE_PATH), ["Backlog"]) == set()
 
 
 def test_occupancy_counts_the_lanes_the_cutover_touches():

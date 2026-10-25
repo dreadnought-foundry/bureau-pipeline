@@ -48,13 +48,13 @@ PORTICO = "dreadnought-foundry/portico"
 ATLAS = "EveryBite/atlas"
 SUMMARY_CARD = "DRE-900"
 
-#: The five lanes the board read covers, spelled out here rather than imported:
+#: The four lanes the board read covers, spelled out here rather than imported:
 #: a test that reads the writer's own constant proves the writer agrees with
-#: itself.
-FIVE = ["Green Light", "Todo", "Triage", "In Progress", "In Review"]
-# What the board read covers once Hand-work is live (DRE-5320): the five, plus
+#: itself. Todo left with its contract entry (DRE-7660).
+FOUR = ["Green Light", "Triage", "In Progress", "In Review"]
+# What the board read covers once Hand-work is live (DRE-5320): the four, plus
 # the lane `board_lanes()` adds when the contract declares it.
-SIX = FIVE + ["Hand-work"]
+FIVE = FOUR + ["Hand-work"]
 
 #: The twelve act names and their tags, exactly as the card writes them.
 ACTS = {
@@ -234,6 +234,33 @@ class FakePaged:
         return list(self.cards)
 
 
+class FlakyPaged(FakePaged):
+    """A board read that answers with each outcome in turn: an exception is
+    raised, anything else is the cards that attempt returns."""
+
+    def __init__(self, *outcomes, remaining=None):
+        super().__init__(remaining=remaining)
+        self.outcomes = list(outcomes)
+
+    def __call__(self, query, variables=None, **_kwargs):
+        outcome = self.outcomes[len(self.calls)]
+        self.calls.append((query, variables))
+        if isinstance(outcome, BaseException):
+            raise outcome
+        if self.remaining is not None:
+            linear_ops._budget["last"] = self.remaining
+            linear_ops._budget["first"] = self.remaining
+        return list(outcome)
+
+
+@pytest.fixture
+def sleeps(monkeypatch):
+    """Every wait the read asks for, recorded instead of slept."""
+    waited: list = []
+    monkeypatch.setattr(hygiene.time, "sleep", waited.append)
+    return waited
+
+
 @pytest.fixture
 def no_gql(monkeypatch):
     calls: list = []
@@ -262,13 +289,13 @@ def _read(tmp_path, monkeypatch, paged, floor=None):
 
 class TestRead:
     def test_one_paged_read_over_exactly_the_board_lanes(self, tmp_path, monkeypatch, no_gql):
-        paged = FakePaged([card("DRE-1", "Todo"), card("DRE-2", "Triage")], remaining=2000)
+        paged = FakePaged([card("DRE-1", "In Progress"), card("DRE-2", "Triage")], remaining=2000)
         code, out, _ = _read(tmp_path, monkeypatch, paged)
         assert code == 0
         assert len(paged.calls) == 1
         query, variables = paged.calls[0]
-        assert sorted(variables["states"]) == sorted(SIX)
-        assert len(variables["states"]) == 6
+        assert sorted(variables["states"]) == sorted(FIVE)
+        assert len(variables["states"]) == 5
         assert no_gql == []
 
     def test_the_read_is_the_board_snapshot_query(self, tmp_path, monkeypatch, no_gql):
@@ -279,30 +306,30 @@ class TestRead:
         assert paged.calls[0][0] == board_snapshot.CARD_QUERY
 
     def test_the_board_file_is_keyed_by_lane(self, tmp_path, monkeypatch, no_gql):
-        paged = FakePaged([card("DRE-1", "Todo"), card("DRE-2", "Triage")], remaining=2000)
+        paged = FakePaged([card("DRE-1", "In Progress"), card("DRE-2", "Triage")], remaining=2000)
         _, out, _ = _read(tmp_path, monkeypatch, paged)
         doc = json.loads(out.read_text())
         assert doc["taken_at"].endswith("Z")
-        assert [c["identifier"] for c in doc["lanes"]["Todo"]] == ["DRE-1"]
+        assert [c["identifier"] for c in doc["lanes"]["In Progress"]] == ["DRE-1"]
         assert [c["identifier"] for c in doc["lanes"]["Triage"]] == ["DRE-2"]
-        assert set(doc["lanes"]) == set(SIX)
+        assert set(doc["lanes"]) == set(FIVE)
 
     def test_hand_work_is_read_once_the_contract_declares_it_live(self):
         # DRE-5315 declared it `arriving`, and no live reader reads an arriving
         # lane. DRE-5320 flipped it to live, and the read took it with nothing
         # here edited; an arriving Hand-work is still left out.
         assert "Hand-work" in lane_contract.lane_names()
-        assert sorted(hygiene.board_lanes()) == sorted(SIX)
+        assert sorted(hygiene.board_lanes()) == sorted(FIVE)
         contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
         hand_work = next(entry for entry in contract["lanes"] if entry["name"] == "Hand-work")
         assert hand_work["status"] == "live"
         hand_work["status"] = "arriving"
-        assert sorted(hygiene.board_lanes(contract)) == sorted(FIVE)
+        assert sorted(hygiene.board_lanes(contract)) == sorted(FOUR)
 
     def test_below_the_floor_it_stands_down_and_asks_nothing_more(
         self, tmp_path, monkeypatch, capsys, no_gql
     ):
-        paged = FakePaged([card("DRE-1", "Todo")], remaining=42)
+        paged = FakePaged([card("DRE-1", "In Progress")], remaining=42)
         code, _, output = _read(tmp_path, monkeypatch, paged, floor=100)
         assert code == 0
         assert "go=false" in output.splitlines()
@@ -345,6 +372,84 @@ class TestRead:
         assert code == 1
         assert "go=false" in output.splitlines()
         assert not out.exists()
+
+    # DRE-7271: run 38574111175 went red on one slow Linear answer. The whole
+    # board read is tried three times, 30 s then 60 s apart, on a transient
+    # fault only; anything else is answered exactly as before, on one attempt.
+
+    def test_the_waits_between_board_reads_are_thirty_then_sixty_seconds(self):
+        assert hygiene.BOARD_READ_WAITS_SECONDS == (30, 60)
+
+    def test_a_timeout_then_a_board_is_read_on_the_second_attempt(
+        self, tmp_path, monkeypatch, capsys, sleeps, no_gql
+    ):
+        paged = FlakyPaged(TimeoutError("The read operation timed out"),
+                           [card("DRE-1", "In Progress")], remaining=2000)
+        code, out, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 0
+        assert "go=true" in output.splitlines()
+        assert [c["identifier"] for c in json.loads(out.read_text())["lanes"]["In Progress"]] == ["DRE-1"]
+        assert len(paged.calls) == 2
+        assert sleeps == [30]
+        err = capsys.readouterr().err
+        assert "The read operation timed out" in err
+        assert "30" in err and "attempt 2 of 3" in err
+
+    def test_a_board_that_times_out_every_time_ends_the_documented_way(
+        self, tmp_path, monkeypatch, capsys, sleeps, no_gql
+    ):
+        paged = FlakyPaged(*[TimeoutError("The read operation timed out")] * 3)
+        code, out, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 1
+        assert "go=false" in output.splitlines()
+        why = [line for line in output.splitlines() if line.startswith("why=")]
+        assert len(why) == 1
+        assert why[0].startswith("why=hygiene: the board could not be read")
+        assert "The read operation timed out" in why[0]
+        assert not out.exists()
+        assert len(paged.calls) == 3
+        assert sleeps == [30, 60]
+        err = capsys.readouterr().err
+        assert "attempt 2 of 3" in err and "attempt 3 of 3" in err
+        assert "hygiene: the board could not be read — The read operation timed out" in err
+
+    def test_a_wrapped_connection_reset_is_retried_too(self, tmp_path, monkeypatch, sleeps, no_gql):
+        import urllib.error
+
+        paged = FlakyPaged(urllib.error.URLError(ConnectionResetError("reset by peer")), [])
+        code, _, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 0
+        assert "go=true" in output.splitlines()
+        assert len(paged.calls) == 2
+        assert sleeps == [30]
+
+    @pytest.mark.parametrize("error", [
+        linear_ops.LinearError("linear error from api.linear.app: 500"),
+        linear_ops.LinearRateLimited("linear rate limit reached"),
+    ], ids=["linear-error", "rate-limited"])
+    def test_a_linear_error_is_answered_on_one_attempt(
+        self, tmp_path, monkeypatch, sleeps, no_gql, error
+    ):
+        paged = FlakyPaged(error)
+        code, out, output = _read(tmp_path, monkeypatch, paged)
+        assert code == 1
+        assert "go=false" in output.splitlines()
+        why = [line for line in output.splitlines() if line.startswith("why=")]
+        assert len(why) == 1 and why[0].startswith("why=hygiene: the board could not be read")
+        assert not out.exists()
+        assert len(paged.calls) == 1
+        assert sleeps == []
+
+    def test_an_error_that_is_not_transient_propagates_on_one_attempt(
+        self, tmp_path, monkeypatch, sleeps, no_gql
+    ):
+        error = ValueError("not a network fault")
+        assert not linear_ops.is_transient(error)
+        paged = FlakyPaged(error)
+        with pytest.raises(ValueError, match="not a network fault"):
+            _read(tmp_path, monkeypatch, paged)
+        assert len(paged.calls) == 1
+        assert sleeps == []
 
     def test_without_github_output_it_still_reads_and_exits_zero(self, tmp_path, monkeypatch, no_gql):
         monkeypatch.setattr(linear_ops, "gql_paged", FakePaged([], remaining=10))
@@ -709,15 +814,43 @@ class TestIdempotency:
 # --------------------------------------------------------------------------- #
 
 
+class TestTheStartLanes:
+    """DRE-7112. The board read and the guard's refusal name the start lanes
+    through `lane_contract.START_LANES` (DRE-7105), so deleting Todo's entry
+    (DRE-7660) narrowed both with no edit to the writer."""
+
+    def test_the_board_read_covers_every_start_lane(self):
+        assert hygiene.LANES == ("Green Light", *lane_contract.START_LANES, "Triage",
+                                 "In Review")
+        assert sorted(hygiene.LANES) == sorted(FOUR)
+
+    def test_the_guard_names_every_start_lane_it_refuses(self):
+        assert hygiene.REFUSED_LANES == (*lane_contract.START_LANES, "Green Light",
+                                         "Triage", "Intake")
+        for lane in lane_contract.START_LANES:
+            assert lane not in hygiene.destinations()
+
+
 class TestGuard:
     @pytest.mark.parametrize("lane", ["In Progress", "Todo", "Green Light", "Triage", "Intake"])
     def test_a_state_write_into_a_lane_the_agent_may_not_write_is_refused(self, lane):
         with pytest.raises(hygiene.Forbidden):
             hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), lane), context())
 
-    @pytest.mark.parametrize("lane", ["Planning", "Backlog", "In Review", "Done", "Canceled"])
+    @pytest.mark.parametrize("lane", ["Planning", lane_contract.QUEUE_LANE, "In Review", "Done",
+                                      "Canceled"])
     def test_the_five_lanes_the_contract_admits_it_to_pass(self, lane):
         hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), lane), context())
+
+    def test_the_queue_it_admits_follows_the_planning_exit(self, monkeypatch):
+        # DRE-6748: the queue is `QUEUE_LANE`, read when the guard runs — Backlog
+        # under the shipped contract, Queued once DRE-6742 flips the exit.
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), "Queued"),
+                      context())
+        with pytest.raises(hygiene.Forbidden):
+            hygiene.guard(hygiene.linear_state(card("DRE-1", "Triage", "portico"), "Backlog"),
+                          context())
 
     @pytest.mark.parametrize("lane", ["Done", "Canceled"])
     def test_closing_a_card_with_children_is_refused(self, lane):
@@ -1487,9 +1620,10 @@ class TestTheActRegistry:
 #: The twelve clauses this card amends, and the sentence each gains.
 AMENDED = (
     ("Done", "entrance"), ("Done", "writers"), ("Canceled", "entrance"),
-    ("Canceled", "writers"), ("Planning", "writers"), ("Backlog", "writers"),
+    ("Canceled", "writers"), ("Planning", "writers"), ("Queued", "writers"),
     ("In Review", "writers"), ("Green Light", "exit"), ("Triage", "exit"),
-    ("Todo", "exit"), ("In Progress", "exit"), ("In Review", "exit"),
+    # Todo's exit went with its clauses when it began retiring (DRE-7129).
+    ("In Progress", "exit"), ("In Review", "exit"),
     # The card's one contract point with DRE-5240: whichever of the two lands
     # second gives the Hand-work exit the sentence the Todo exit carries, or
     # the agent could never close a proof that sits there. DRE-5315 landed
@@ -1509,7 +1643,6 @@ class TestTheLaneContract:
     def test_the_hand_work_exit_carries_the_todo_exits_sentence(self):
         sentence = ("Or the hygiene agent closes a card whose pull request merged "
                     "while it sat here (DRE-5365).")
-        assert self._lane("Todo")["clauses"]["exit"]["text"].endswith(sentence)
         assert self._lane("Hand-work")["clauses"]["exit"]["text"].endswith(sentence)
 
     def test_the_writer_glossary_carries_the_agent(self):
@@ -1520,15 +1653,30 @@ class TestTheLaneContract:
             "move under a 🧹 receipt naming the evidence it read")
 
     def test_exactly_five_lanes_permit_it(self):
+        # Live lanes only. Queued (live since DRE-6740) took its writers from
+        # the lane it replaced, which is retiring and carries no clauses
+        # (DRE-6753) — so six became five.
         permitting = {entry["name"] for entry in contract_doc()["lanes"]
-                      if "hygiene.py" in entry["clauses"]["writers"].get("who", [])}
-        assert permitting == {"Planning", "Backlog", "In Review", "Done", "Canceled"}
+                      if entry["status"] == "live"
+                      and "hygiene.py" in entry["clauses"]["writers"].get("who", [])}
+        assert permitting == {"Planning", "Queued", "In Review", "Done", "Canceled"}
 
     def test_the_guard_admits_exactly_the_lanes_the_contract_permits(self):
-        assert set(hygiene.destinations()) == {"Planning", "Backlog", "In Review",
+        # The queue under the one name it is written as, `QUEUE_LANE` (DRE-6748):
+        # Backlog until DRE-6742 flips the planning exit to Queued.
+        assert set(hygiene.destinations()) == {"Planning", lane_contract.QUEUE_LANE,
+                                               "In Review", "Done", "Canceled"}
+
+    def test_the_published_destinations_follow_the_planning_exit(self, monkeypatch):
+        monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
+        assert set(hygiene.destinations()) == {"Planning", "Queued", "In Review",
                                                "Done", "Canceled"}
 
-    @pytest.mark.parametrize("lane", ["Planning", "Backlog", "In Review", "Done", "Canceled"])
+    def test_no_string_in_the_core_names_the_retired_queue(self):
+        path = str(ROOT / "scripts" / "hygiene.py")
+        assert lane_contract._scan_python(path, ["Backlog"]) == set()
+
+    @pytest.mark.parametrize("lane", ["Planning", "Queued", "In Review", "Done", "Canceled"])
     def test_the_writers_clause_still_holds_with_the_agent_in_it(self, lane):
         report = lane_contract.check(vocabulary=lane_contract.pipeline_vocabulary())
         found = [f for f in report.findings if f.clause_id == f"{lane}.writers"]

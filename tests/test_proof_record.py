@@ -25,9 +25,11 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess  # nosec B404 — fixed argv, our own script
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -39,6 +41,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import hygiene_done  # noqa: E402
+import linear_ops  # noqa: E402
 import proof_dispatch  # noqa: E402
 import proof_reach  # noqa: E402
 import proof_record  # noqa: E402
@@ -241,6 +244,83 @@ class TestShortfall:
 
 
 # --------------------------------------------------------------------------
+# An older card's closing or merge criterion is not judged (DRE-7773)
+# --------------------------------------------------------------------------
+#: bureau-pipeline #1149 row 10 (DRE-7243), read 2026-10-22 at about 10:00 PM PT.
+BP_1149_ROW_10 = ("The record is merged on `agent/DRE-<n>-proof-record`, with every "
+                  "judged row read by the critic.")
+#: agent-bureau #3381 row 1, the first acceptance criterion of DRE-6008.
+AB_3381_ROW_1 = (
+    "The record exists at the path above, merged on `main` from the branch "
+    "`agent/DRE-6008-proof-record`, opened by the operator by hand, and each of "
+    "the six observations is recorded against the live system with its command, "
+    "its PT time and the quoted output, or an explicit `Not observed.` statement "
+    "naming why and the offline test that pins the same behavior.")
+
+
+class TestTheClosingRow:
+    """A proof card closes on its approved, all-met record (DRE-5919), so a
+    criterion an older card carries about merging, reading or closing the
+    record is not a criterion the record can meet — and a row worded any way
+    but `_OWN_MERGE` or `_CLOSING_STEP` held the record open."""
+
+    @pytest.mark.parametrize("criterion", [BP_1149_ROW_10, AB_3381_ROW_1])
+    def test_the_two_wordings_it_missed_are_closing_rows(self, criterion):
+        assert proof_record.is_closing_row(criterion) is True
+
+    @pytest.mark.parametrize("criterion", [
+        "Merged to `main` through an operator-opened PR",
+        "The record is on `main`",
+        "The CEO closes this card after reading the record",
+        "The CEO has read the merged record",
+        "the operator closes the card",
+    ])
+    def test_the_existing_shapes_still_are(self, criterion):
+        assert proof_record.is_closing_row(criterion) is True
+
+    @pytest.mark.parametrize("criterion", [BP_1149_ROW_10, AB_3381_ROW_1])
+    def test_such_a_row_does_not_hold_the_record_open(self, criterion):
+        text = ("| Criterion | Result |\n|---|---|\n| it ran | Met. |\n"
+                f"| {criterion} | Not observed. the record is this pull request |\n")
+        reading = proof_record.reading(text)
+        assert reading.unmet == [] and len(reading.met) == 1
+        assert proof_record.shortfall(proof_record.Record(RECORD_PATH, text, None)) is None
+
+    @pytest.mark.parametrize("criterion", [
+        "The record shows the pull request merged on `main`",
+        "The record shows the nightly runs on `main`",
+        "The record ends with `What the CEO sees`",
+        "A card whose pull request merged is closed by the agent",
+    ])
+    def test_a_record_that_only_reports_a_merge_is_still_judged(self, criterion):
+        assert proof_record.is_closing_row(criterion) is False
+
+    @pytest.mark.parametrize("criterion", [
+        "The record exists in the repo and the nightly job merged the duplicate "
+        "rows on `main`, which the log shows",
+        "The record exists, and the fleet's merge gate refuses a pull request "
+        "merged without APPROVE in production",
+        "The record is merged and the sweep closes the card within 15 minutes of "
+        "the merge",
+        "The record merged on `main` shows the gate held a stale PR",
+        "The record exists at docs/x.md, merged on `main`, and the gate refuses "
+        "unapproved merges",
+        "The record exists at docs/x.md, merged on `main`, showing the gate held a stale PR",
+        "The record is merged on `main`, with the gate holding a stale PR",
+        "The record is merged on `main`, with the sweep closing the card within 15 minutes",
+        "The record is merged on `main`, with every judged row read by the critic and "
+        "the gate refusing unapproved merges",
+        "The record exists at docs/x.md, merged on `main`; the sweep closes the card "
+        "within 15 minutes",
+        "The record exists at docs/x.md, merged on `main`, opened by the gate, which "
+        "refuses unapproved merges",
+        AB_3381_ROW_1.removesuffix(".") + ", and the gate refuses unapproved merges",
+    ])
+    def test_a_claim_after_the_records_merge_is_still_judged(self, criterion):
+        assert proof_record.is_closing_row(criterion) is False
+
+
+# --------------------------------------------------------------------------
 # A criterion the operator accepted as overtaken (DRE-6244)
 # --------------------------------------------------------------------------
 LINEAR_DECISION = "https://linear.app/dreadnoughtfoundry/issue/DRE-1/x#comment-abc"
@@ -403,6 +483,69 @@ class TestARowWaitingOnAnEvent:
         assert "Not observed. waiting for <the event>" in record
         at = record.index("A row you could not observe says `Not observed.`")
         assert record.index("Not observed. waiting for <the event>") > at
+
+
+# --------------------------------------------------------------------------
+# A waiting row stamped with the time its event can be read (DRE-7316)
+# --------------------------------------------------------------------------
+#: DRE-6673's row, stamped as the brief now writes it — pinned as text.
+STAMPED = ("Not observed. waiting for the window that closes 2026-10-17 18:59 PT "
+           "[not-before=2026-10-17T19:30-07:00]: seven days of arrivals in Green Light")
+PROSE = ("Not observed. waiting for the window that closes 2026-10-17 18:59 PT: "
+         "seven days of arrivals in Green Light")
+
+
+class TestAStampedWaitingRow:
+    def test_a_stamped_row_gives_its_event_and_its_time(self):
+        assert proof_record.row_waiting(STAMPED) == (
+            "the window that closes 2026-10-17 18:59 PT: seven days of arrivals in Green Light")
+        assert proof_record.row_not_before(STAMPED) == datetime(
+            2026, 10, 18, 2, 30, tzinfo=timezone.utc)
+
+    def test_the_stamp_is_no_part_of_the_event(self):
+        """The same row with and without its stamp waits on the same event."""
+        assert proof_record.row_waiting(STAMPED) == proof_record.row_waiting(PROSE)
+
+    def test_markup_around_the_opening_is_read_as_before(self):
+        cell = STAMPED.replace("Not observed.", "**Not observed.**")
+        assert proof_record.row_not_before(cell) == datetime(
+            2026, 10, 18, 2, 30, tzinfo=timezone.utc)
+
+    @pytest.mark.parametrize("result", [
+        PROSE,
+        STAMPED.replace("2026-10-17T19:30-07:00", "2026-10-17T19:30"),
+        STAMPED.replace("2026-10-17T19:30-07:00", "tomorrow at 19:30 PT"),
+        STAMPED.replace("2026-10-17T19:30-07:00", "2026-13-45T19:30-07:00"),
+        STAMPED.replace("[not-before=2026-10-17T19:30-07:00]", "[not-before=]"),
+    ], ids=["prose", "no-offset", "does-not-parse", "not-a-date", "empty"])
+    def test_prose_and_a_time_that_cannot_be_read_give_no_time(self, result):
+        assert proof_record.row_not_before(result) is None
+        # …and the row is still a waiting row, read as prose.
+        assert proof_record.row_waiting(result) is not None
+
+    def test_a_row_that_is_not_waiting_gives_no_time(self):
+        for result in ("Met. [not-before=2026-10-17T19:30-07:00]: seen",
+                       "Not met. waiting for X [not-before=2026-10-17T19:30-07:00]: Y",
+                       "", None):
+            assert proof_record.row_not_before(result) is None
+
+    def test_the_clause_is_linear_ops_one(self):
+        assert linear_ops.NOT_BEFORE == "not-before="
+        assert f"[{linear_ops.NOT_BEFORE}2026-10-17T19:30-07:00]" in STAMPED
+
+    def test_the_brief_shows_the_stamped_form_with_one_example(self):
+        brief = (ROOT / "briefs" / "proof.md").read_text(encoding="utf-8")
+        record = brief.split("## The record", 1)[1].split("\n## ", 1)[0]
+        form = ("Not observed. waiting for <the event> [not-before=<ISO 8601 time "
+                "with UTC offset>]: <what it would show>")
+        assert form in record
+        examples = [line for line in record.splitlines()
+                    if "Not observed. waiting for" in line and "[not-before=20" in line]
+        assert len(examples) == 1, examples
+        stamp = re.search(r"\[not-before=([^\]]+)\]", examples[0]).group(1)
+        assert datetime.fromisoformat(stamp).tzinfo is not None
+        # When to stamp, and when a row stays prose.
+        assert "stays prose" in record
 
 
 # --------------------------------------------------------------------------
@@ -571,6 +714,133 @@ class TestOpenHolds:
 
 
 # --------------------------------------------------------------------------
+# A note that opens the mark without its colon (DRE-7743)
+# --------------------------------------------------------------------------
+#: DRE-5407's note of 2026-10-18 07:00 PT, pinned as typed: a dash, no colon.
+DASHED = "🔬 proof-observed — two planners overlapped at 09:02 PT"
+
+
+class TestUnreadNotes:
+    def test_a_dashed_note_still_discharges_nothing(self):
+        assert proof_record.open_holds([voice(spoken_thread.PIPELINE, HOLD),
+                                        voice(spoken_thread.PERSON, DASHED)]) == [HOLD]
+
+    @pytest.mark.parametrize("body", [
+        DASHED,
+        "  🔬 proof-observed - a hyphen",
+        "🔬 proof-observed; a semicolon",
+        "🔬 proof-observed : a space before the colon",
+        "🔬 proof-observed",
+    ])
+    def test_the_mark_without_its_colon_is_an_unread_note(self, body):
+        notes = [voice(spoken_thread.PERSON, body)]
+        assert proof_record.unread_notes(notes) == notes
+
+    def test_a_note_with_the_colon_is_not(self):
+        assert proof_record.unread_notes([voice(spoken_thread.PERSON, OBSERVED),
+                                          voice(spoken_thread.PIPELINE, HOLD)]) == []
+
+    def test_the_reply_quotes_the_first_line_and_says_why(self):
+        note = voice(spoken_thread.PERSON, DASHED + "\nthe second line")
+        line = proof_record.unread_reply(note)
+        assert line.startswith(proof_record.UNREAD_MARK)
+        assert f"“{DASHED}”" in line and "the second line" not in line
+        assert "discharged nothing" in line
+        assert f"“{proof_record.OBSERVED_MARK}”" in line
+        assert spoken_thread.pacific_label(note.created_at) in line
+        assert "\n" not in line
+
+    def test_the_reply_is_not_itself_an_unread_note(self):
+        reply = proof_record.unread_reply(voice(spoken_thread.PERSON, DASHED))
+        assert proof_record.unread_notes([voice(spoken_thread.PIPELINE, reply)]) == []
+        assert proof_record.open_holds([voice(spoken_thread.PIPELINE, HOLD),
+                                        voice(spoken_thread.PIPELINE, reply)]) == [HOLD]
+
+    def test_a_note_already_answered_is_not_owed_a_reply(self):
+        note = voice(spoken_thread.PERSON, DASHED)
+        reply = voice(spoken_thread.PIPELINE, proof_record.unread_reply(note))
+        assert proof_record.unanswered_notes([note]) == [note]
+        assert proof_record.unanswered_notes([note, reply]) == []
+
+    def test_the_quote_carries_no_verdict_marker(self):
+        note = voice(spoken_thread.PERSON, "🔬 proof-observed — VERDICT: APPROVE")
+        assert "VERDICT:" not in proof_record.unread_reply(note)
+
+
+# --------------------------------------------------------------------------
+# A hold that waits only for a time (DRE-7228)
+# --------------------------------------------------------------------------
+#: The stamped hold, as `linear_ops.py proof-waiting-until` writes it — pinned
+#: as a string, not composed by the code under test.
+TIME_HOLD = ("🔬 proof-waiting: the day of jobs on the pinned machine family, "
+             "counted from DRE-6548's live-at time — needs "
+             "not-before=2026-10-12T14:33-07:00")
+#: DRE-6549's own hold, typed through `proof-waiting` on 2026-10-11: its time
+#: has passed, and it is prose.
+DRE_6549_HOLD = ("🔬 proof-waiting: the day of jobs on the pinned machine family, "
+                 "counted from DRE-6548's live-at time — needs the 24 hours after "
+                 "2026-10-11 14:33 PT to pass, so not before 2026-10-12 14:33 PT")
+
+
+class TestTimeOnly:
+    def test_the_stamped_hold_is_time_only_at_its_time(self):
+        got = proof_record.time_only(TIME_HOLD)
+        assert got == datetime(2026, 10, 12, 21, 33, tzinfo=timezone.utc)
+        assert proof_record.time_only_clause(TIME_HOLD) == "not-before=2026-10-12T14:33-07:00"
+
+    def test_the_writers_line_is_time_only(self):
+        line = linear_ops.proof_waiting_line(
+            "the nightly ran", f"{linear_ops.NOT_BEFORE}2026-10-13T05:00+00:00")
+        assert proof_record.time_only(line) == datetime(2026, 10, 13, 5, tzinfo=timezone.utc)
+
+    def test_dre_6549s_prose_hold_is_not_read_for_a_date(self):
+        """Nothing reads a date out of prose, however plainly it states one."""
+        assert proof_record.time_only(DRE_6549_HOLD) is None
+        assert proof_record.time_only_clause(DRE_6549_HOLD) is None
+
+    @pytest.mark.parametrize("needs", [
+        "not-before=2026-10-12T14:33-07:00 and DRE-6548 live",
+        "DRE-6548 live and not-before=2026-10-12T14:33-07:00",
+        "not-before=2026-10-12T14:33-07:00; the operator's press",
+        "the operator's press",
+        "the operator's decision on not-before=2026-10-12T14:33-07:00",
+        "not-before=2026-10-12T14:33",           # no UTC offset
+        "not-before=tomorrow at 14:33 PT",       # does not parse
+        "not-before=2026-13-45T14:33-07:00",     # not a time
+        "not-before=",
+        "not-before 2026-10-12T14:33-07:00",
+    ], ids=["clause-then-event", "event-then-clause", "clause-then-press",
+            "operators-press", "cause-hold", "no-offset", "prose-time",
+            "bad-date", "empty", "no-equals"])
+    def test_any_needs_half_but_the_one_clause_is_not_time_only(self, needs):
+        line = f"{proof_record.HOLD_MARK} the nightly ran — needs {needs}"
+        assert proof_record.time_only(line) is None
+        assert proof_record.time_only_clause(line) is None
+
+    def test_a_hold_naming_the_ceos_press_is_never_time_only(self):
+        line = (f"{proof_record.HOLD_MARK} {proof_record.CEO_PRESS} on Approve — "
+                "needs not-before=2026-10-12T14:33-07:00")
+        assert proof_record.time_only(line) is None
+
+    def test_the_needs_half_is_the_text_after_the_last_needs(self):
+        line = (f"{proof_record.HOLD_MARK} a run — needs not-before=2026-10-12T14:33-07:00 "
+                "— needs the operator")
+        assert proof_record.time_only(line) is None
+        line = (f"{proof_record.HOLD_MARK} what a run — needs the operator — said — needs "
+                "not-before=2026-10-12T14:33-07:00")
+        assert proof_record.time_only(line) is not None
+
+    @pytest.mark.parametrize("line", [
+        "🔬 proof-observed: not-before=2026-10-12T14:33-07:00 has passed",
+        "a comment — needs not-before=2026-10-12T14:33-07:00",
+        "",
+        None,
+    ])
+    def test_a_line_that_is_not_a_hold_is_not_time_only(self, line):
+        assert proof_record.time_only(line) is None
+
+
+# --------------------------------------------------------------------------
 # `proof_record.py gather` — the merge gate's feed
 # --------------------------------------------------------------------------
 GH_STUB = r'''#!/usr/bin/env python3
@@ -697,3 +967,78 @@ def test_it_imports_and_judges_without_repo_in_the_environment():
     )
     assert proc.returncode == 0, proc.stderr
     assert "leaf ok" in proc.stdout
+
+
+# --------------------------------------------------------------------------
+# A row that reads history, and a row naming its fix (DRE-7740)
+# --------------------------------------------------------------------------
+class TestARowThatReadsHistory:
+    def test_the_opening_is_spelled_once(self):
+        assert proof_record.HISTORY_OPENING == "Not met. history:"
+
+    @pytest.mark.parametrize("result, said", [
+        ("Not met. history: the 09:00–10:00 PT window of 2026-10-12 — it filled at 09:52",
+         "the 09:00–10:00 PT window of 2026-10-12 — it filled at 09:52"),
+        ("NOT MET. History: the merge's run 38104845223 at 14:02 PT — it failed",
+         "the merge's run 38104845223 at 14:02 PT — it failed"),
+        ("**Not met.** history: `docs/x.md` at 08:10 PT — unchanged",
+         "docs/x.md at 08:10 PT — unchanged"),
+        ("Not met.  history:\tthe run of 07:00 PT — red", "the run of 07:00 PT — red"),
+    ])
+    def test_the_closed_window_or_finished_run_is_read(self, result, said):
+        assert proof_record.row_history(result) == said
+
+    @pytest.mark.parametrize("result", [
+        "Not met. history:",
+        "Not met. history:   ",
+        "Not met. the window filled — history: the 09:00 PT window",
+        "Not observed. history: the 09:00 PT window — it filled",
+        "Not met.",
+        "Not met. the tag still names v41",
+        "Met. history: the run of 07:00 PT — green",
+        "history: the run of 07:00 PT — red",
+        "",
+    ])
+    def test_nothing_else_is_a_history_row(self, result):
+        assert proof_record.row_history(result) is None
+
+    def test_a_history_row_is_unmet_and_carries_no_cause(self):
+        result = "Not met. history: the run of 07:00 PT — it failed"
+        assert proof_record.row_met(result) is False
+        assert proof_record.row_cause(result) is None
+        assert proof_record.row_waiting(result) is None
+        text = with_row(CAUSED, "The merge's run is green", result)
+        read = proof_record.reading(text)
+        assert ("The merge's run is green", result) in read.unmet
+        assert not proof_record.all_unmet_caused(read)
+
+
+class TestARowNamingItsFix:
+    @pytest.mark.parametrize("result, fixes", [
+        ("Not met. the Desk took 9 s to load. fix: DRE-7639", ["DRE-7639"]),
+        ("Not met. 9 s. fix: DRE-7639, DRE-7640", ["DRE-7639", "DRE-7640"]),
+        ("Not met. 9 s. fix: DRE-7639,DRE-7640.", ["DRE-7639", "DRE-7640"]),
+        ("Not met. 9 s — FIX: dre-7639", ["DRE-7639"]),
+        ("Not met. 9 s. fix: `DRE-7639`", ["DRE-7639"]),
+        ("Not met. 9 s. **fix: DRE-7639**", ["DRE-7639"]),
+        ("Not met. 9 s. fix: DRE-7639, DRE-7639", ["DRE-7639"]),
+        ("Not observed. the page timed out. fix: DRE-7639 ", ["DRE-7639"]),
+    ])
+    def test_the_named_cards_are_read_off_the_cells_end(self, result, fixes):
+        assert proof_record.row_fixes(result) == fixes
+
+    @pytest.mark.parametrize("result", [
+        "Not met. the Desk took 9 s, as DRE-7639 describes",
+        "Not met. DRE-7639 ships the fix",
+        "Not met. fix: DRE-7639 is the card that ships it",
+        "Not met. fix: DRE-7639 and DRE-7640",
+        "Not met. the prefix: DRE-7639",
+        "Not met. hotfix: DRE-7639",
+        "Not met. fix:",
+        "Not met. fix: the Desk speed card",
+        "Not met. history: the run of 07:00 PT — red. fix: DRE-7639",
+        "Not met.",
+        "",
+    ])
+    def test_nothing_else_names_a_fix(self, result):
+        assert proof_record.row_fixes(result) == []

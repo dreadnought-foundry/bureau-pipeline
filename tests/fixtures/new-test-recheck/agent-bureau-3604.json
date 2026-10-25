@@ -1,0 +1,55 @@
+{
+  "$note": "agent-bureau #3604 (DRE-6820). The file names are the pull request's: main had gained console/web/src/components/oneriver/RiverRow.fold.test.ts (added by #3598, DRE-6703, +234 −0) and the pull request changed greenLightGrid.ts beside it, where its line 113 moved ACTIONS_UNDER_ON_PHONE from row-start-2 to row-start-3. The patch is the real hunk header and the first nine added lines of that test as it stood on agent-bureau main at 0e0479c73, the commit #3604 merged onto, which hold its naming line `import { ACTIONS_UNDER_ON_PHONE, PHONE_LINE_PX, SHOWS_FLEX, WRAPS_ON_PHONE } from './greenLightGrid'`. The remaining 225 added lines are left out on purpose: agent-bureau is private and this repository is public, so only an excerpt belongs here (operator decision on bureau-pipeline #1008, 2026-10-11). The assertion that broke is at lines 174-175, verbatim: expect(fold.ACTION_UNDER_ON_PHONE).toBe(`${ACTIONS_UNDER_ON_PHONE} ${WRAPS_ON_PHONE}`) and expect(ACTIONS_UNDER_ON_PHONE.split(' ')).toEqual([ . The shas and counts are synthetic.",
+  "declaration": {
+    "recheck_new_tests": true,
+    "order_sensitive_paths": [
+      "console/backend/alembic/versions/"
+    ]
+  },
+  "compare": {
+    "status": "diverged",
+    "ahead_by": 3,
+    "behind_by": 5,
+    "merge_base_commit": {
+      "sha": "3333333333333333333333333333333333333333"
+    },
+    "base_commit": {
+      "sha": "4444444444444444444444444444444444444444"
+    },
+    "files": [
+      {
+        "filename": "console/web/src/components/oneriver/greenLightGrid.ts",
+        "status": "modified"
+      },
+      {
+        "filename": "console/web/src/components/oneriver/RiverRow.tsx",
+        "status": "modified"
+      }
+    ]
+  },
+  "base_advance": {
+    "files": [
+      {
+        "filename": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
+        "status": "added",
+        "patch": "@@ -0,0 +1,234 @@\n+import { readFileSync } from 'node:fs'\n+import { dirname, join } from 'node:path'\n+import { fileURLToPath } from 'node:url'\n+\n+import { describe, expect, it } from 'vitest'\n+\n+import { FOLD_LINE_PX, FOLDS_UNDER_FOLD_LINE } from '../molecules/PanelHeader'\n+import { ACTIONS_UNDER_ON_PHONE, PHONE_LINE_PX, SHOWS_FLEX, WRAPS_ON_PHONE } from './greenLightGrid'\n+import * as row from './RiverRow'"
+      }
+    ]
+  },
+  "since_run": {
+    "files": [
+      {
+        "filename": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
+        "status": "added",
+        "patch": "@@ -0,0 +1,234 @@\n+import { readFileSync } from 'node:fs'\n+import { dirname, join } from 'node:path'\n+import { fileURLToPath } from 'node:url'\n+\n+import { describe, expect, it } from 'vitest'\n+\n+import { FOLD_LINE_PX, FOLDS_UNDER_FOLD_LINE } from '../molecules/PanelHeader'\n+import { ACTIONS_UNDER_ON_PHONE, PHONE_LINE_PX, SHOWS_FLEX, WRAPS_ON_PHONE } from './greenLightGrid'\n+import * as row from './RiverRow'"
+      }
+    ]
+  },
+  "receipts": [],
+  "expect": {
+    "decision": "refresh",
+    "rule": "new-tests",
+    "test_file": "console/web/src/components/oneriver/RiverRow.fold.test.ts",
+    "source_file": "console/web/src/components/oneriver/greenLightGrid.ts"
+  }
+}

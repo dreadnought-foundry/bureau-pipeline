@@ -58,7 +58,7 @@ class Board(FakeLinear):
         self.comments: list[str] = []
         self.label_writes: list[str] = []
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         q = " ".join(query.split())
         if "teams(filter:" in q:
             return {"teams": {"nodes": [{"id": "team-1"}]}}

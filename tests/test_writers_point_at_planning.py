@@ -5,7 +5,7 @@ Three writers put a card straight into a lane the pipeline treats as ready work
 
   * `linear_ops._create_card`  — the one-off route's creator, `Backlog`
   * `linear_ops.cmd_create`    — the medic / red-main-repair seam, `Triage`
-  * `validate_card._bounce`    — the Todo gate's refusal, `Backlog`
+  * `validate_card._bounce`    — the start gate's refusal, `Backlog`
 
 One test per writer, and each NAMES the writer it pins, so reverting any single
 one of the three goes red on its own and the failure says which.
@@ -71,7 +71,7 @@ class FakeBoard:
     def __init__(self):
         self.created = None
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         v = variables or {}
         q = " ".join(query.split())
         if "teams(filter:" in q:
@@ -168,7 +168,7 @@ class FakeLinear:
     def get_issue(self, identifier):
         return {"id": "x", "identifier": identifier, "state": {"name": self._state}}
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         return {
             "issue": {
                 "title": self._title,
@@ -200,7 +200,7 @@ def _gate(fake) -> bool:
     return emitted["bounced"]
 
 
-class TheTodoGateRefusesToPlanning(unittest.TestCase):
+class TheStartGateRefusesToPlanning(unittest.TestCase):
     """WRITER 3 — `validate_card._bounce`, the one writer that knows for
     certain a card is invalid."""
 
@@ -208,7 +208,7 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
         # No repo line, no repo:/initiative: label, no project — the ONE case
         # the fix-first gate still refuses, because a repair would be a
         # wrong-repo guess.
-        return FakeLinear("Todo", "no repo line", ["agent:engineer"], project=None)
+        return FakeLinear("In Progress", "no repo line", ["agent:engineer"], project=None)
 
     def test_validate_card_bounce_puts_a_card_in_planning(self):
         fake = self._uninferable()
@@ -230,24 +230,24 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
                 "🚧 Not ready for build — missing: repo: label (or legacy "
                 "**Repo:** line). Returned to Planning; fix what is missing "
                 "and Planning routes it on from there — do not move it "
-                "straight to Todo.",
+                "straight to In Progress.",
             )],
         )
 
 
-class TheTodoGateStillRepairsWhatItCanInfer(unittest.TestCase):
+class TheStartGateStillRepairsWhatItCanInfer(unittest.TestCase):
     """Operator decision D1 (2026-08-23), unchanged by this card: the gate
     infers and repairs what it can, and refuses only what it cannot. Bouncing
     what a lookup could fix trains people to route around the gate."""
 
     def test_a_missing_role_label_is_repaired_and_the_card_does_not_move(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="Fix it")
+        fake = FakeLinear("In Progress", "**Repo:** atlas", [], title="Fix it")
         self.assertFalse(_gate(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])
 
     def test_a_repo_inferred_from_the_initiative_label_is_repaired_not_refused(self):
-        fake = FakeLinear("Todo", "no repo line", ["agent:engineer", "initiative:bureau"])
+        fake = FakeLinear("In Progress", "no repo line", ["agent:engineer", "initiative:bureau"])
         self.assertFalse(_gate(fake))
         self.assertEqual(fake.states, [])
         self.assertTrue(
@@ -276,43 +276,49 @@ class AnEpicsChildrenStayWhereTheSweepLooksForThem(unittest.TestCase):
 class TheRedMainAlertStillLandsInTriage(unittest.TestCase):
     """The one CALL SITE that must not follow `cmd_create` to Planning.
 
-    `red-main-repair.yml` mints two cards, and both are broken-build alerts
-    that its own prose routes to Triage: "budget exhausted" (the repair robot
-    gave up, main stays red, the fleet's top blocker) and "needs a decision"
-    (the repair agent paused for a human). The second already sets `Triage`
-    itself after `create`; the first rode `cmd_create`'s old unconditional
-    `Triage` and so had no step of its own. Nothing pinned that, so pointing
-    the seam at Planning demoted the loudest alert we have into the ordinary
-    classification queue with no test going red.
+    `red-main-repair.yml` raised two broken-build alerts as cards that its own
+    prose routes to Triage: "budget exhausted" (the repair robot gave up, main
+    stays red, the fleet's top blocker) and "needs a decision" (the repair
+    agent paused for a human). Since DRE-7454 both are console alerts raised
+    through `pipeline_notice.py`, and the card survives only as the client's
+    fallback for a door it cannot reach. That fallback must still land in
+    Triage: pointing it at Planning would demote the loudest alert we have
+    into the ordinary classification queue the one time the console is down.
 
-    Written over the FILE rather than one named step: a third `create` added
-    to this workflow inherits the guard instead of rediscovering the bug.
+    Written over the FILE rather than one named step: a third raise added to
+    this workflow inherits the guard instead of rediscovering the bug, and a
+    `linear_ops.py create` coming back fails it outright.
     """
 
     WORKFLOW = ROOT / ".github" / "workflows" / "red-main-repair.yml"
 
-    def _run_blocks_that_create_a_card(self):
+    def _scripts(self):
         doc = yaml.safe_load(self.WORKFLOW.read_text(encoding="utf-8"))
-        blocks = []
-        for job in doc["jobs"].values():
-            for step in job.get("steps", []):
-                script = step.get("run") or ""
-                if re.search(r"linear_ops\.py create\b", script):
-                    blocks.append((step.get("name", "<unnamed>"), script))
-        return blocks
+        return [(step.get("name", "<unnamed>"), step.get("run") or "")
+                for job in doc["jobs"].values()
+                for step in job.get("steps", [])]
+
+    def _raises(self):
+        return [(name, script) for name, script in self._scripts()
+                if "pipeline_notice.py raise" in script]
 
     def test_both_alert_steps_are_found(self):
         # Guards the guard: if the grep stops matching, the assertions below
         # pass over an empty list and prove nothing.
-        self.assertEqual(len(self._run_blocks_that_create_a_card()), 2)
+        self.assertEqual(len(self._raises()), 2)
 
-    def test_every_card_this_workflow_mints_is_pinned_to_triage(self):
-        for name, script in self._run_blocks_that_create_a_card():
+    def test_no_step_creates_a_card_itself(self):
+        for name, script in self._scripts():
+            self.assertNotRegex(script, r"linear_ops\.py create\b",
+                                f"{name!r} files a card again")
+
+    def test_every_fallback_card_is_pinned_to_triage(self):
+        for name, script in self._raises():
             self.assertRegex(
                 script,
-                r'linear_ops\.py state "\$\w+" "Triage"',
-                f"{name!r} creates a card without setting Triage — it lands "
-                f"in {PLANNING!r}, the lane cmd_create now writes",
+                r'--fallback-lane "Triage"',
+                f"{name!r} raises an alert whose fallback card lands in "
+                f"{PLANNING!r}, the lane cmd_create now writes",
             )
 
 

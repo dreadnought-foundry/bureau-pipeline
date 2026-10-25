@@ -94,6 +94,17 @@ class RepoMapSnapshotTest(unittest.TestCase):
         self.assertEqual(slug, "portico")
         self.assertIn(slug, validate_card.VALID_SLUGS)
 
+    def test_initiative_foundry_alone_still_bounces(self):
+        # DRE-7075: `initiative:foundry` is the whole Dreadnought Foundry
+        # initiative, not the studio's build repo of the same name. A card
+        # carrying it and no `repo:` label
+        # must still owe its repo, never infer the `foundry` slug.
+        self.assertEqual(
+            validate_card.missing("", ["initiative:foundry", "agent:engineer"]),
+            [validate_card.WANT_REPO])
+        slug, _ = validate_card.infer_repo(["initiative:foundry"])
+        self.assertIsNone(slug)
+
     def test_docs_platform_is_not_a_valid_slug(self):
         # DRE-2086: the OLD slug must stay invalid — no alias. A stale
         # `docs-platform` card must fail loudly (NO ROUTE / bounce), never

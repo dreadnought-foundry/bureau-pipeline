@@ -72,6 +72,14 @@ CARRIED = ("identical", "behind")
 #: the run, and the channel advances to the head the harness does finish.
 MERGE_TRAIN = "harness-cancelled-by-newer-push"
 
+#: The `promote_channel` outcome for a commit whose own unit suite has not
+#: finished (DRE-6993): `stable` waits for it, and the suite's end starts the
+#: promotion again — a wait, recorded as the merge train's is.
+UNIT_SUITE_WAIT = "unit-suite-not-finished"
+
+#: The outcomes recorded as `channel-advancing` rather than `channel-blocked`.
+WAITS = (MERGE_TRAIN, UNIT_SUITE_WAIT)
+
 
 class ChannelDecision(NamedTuple):
     """The attributes `release_decision.record` reads off a train Decision."""
@@ -108,7 +116,7 @@ def decide(*, promoted: bool, outcome: str, reason: str, ancestry: str,
             tag=version(candidate))
     if ancestry in CARRIED:
         return ChannelDecision("no-op", "channel-current", reason)
-    code = "channel-advancing" if outcome == MERGE_TRAIN else "channel-blocked"
+    code = "channel-advancing" if outcome in WAITS else "channel-blocked"
     run = gating_run or "none — this was a by-hand dispatch"
     return ChannelDecision(
         "held", code,

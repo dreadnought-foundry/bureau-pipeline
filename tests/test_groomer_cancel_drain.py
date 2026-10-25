@@ -219,9 +219,11 @@ def test_the_cancel_table_is_read_back_from_the_two_lists_fixture():
         "DRE-4103", "DRE-4101", "DRE-4104"]
     assert record["cancel"] == [
         {"identifier": "DRE-4102", "position": 1, "repo": "portico",
-         "reason": "superseded by DRE-4250"},
+         "reason": "superseded by DRE-4250; the card's Superseded by line "
+                   "— Superseded by: DRE-4250"},
         {"identifier": "DRE-4105", "position": 2, "repo": "agent-bureau",
-         "reason": "the cutover ran on 2026-09-07 | the probe is the proof"},
+         "reason": "the ranked read — the cutover ran on 2026-09-07 | the "
+                   "probe is the proof"},
     ]
 
 

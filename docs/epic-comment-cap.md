@@ -89,7 +89,7 @@ mechanical:
 - `mid_epic.refresh_epic_growth` counts children as the epic's scope. A
   bookkeeping card in that roster reads as work that was added to an approved
   plan — the exact silent accretion the growth KPI exists to make visible.
-- `reconcile.promote_ready` treats Backlog children of an active epic as
+- `reconcile.promote_ready` treats Queued children of an active epic as
   promotable. A receipts card is not work and must never dispatch an agent.
 - The epic's description writes fine at the cap, so a pointer in the plan is a
   more reliable link than the sub-issue list anyway.

@@ -54,8 +54,13 @@ merely RUN on the default branch is watched by something — the repair rail for
 a red commit, the medic for a crashed run. `scripts/check_workflow_watchers.py`
 derives both populations from the workflow files and fails Pipeline Tests when
 one is unwatched, so adding a workflow with no watcher cannot pass quietly. The
-single exemption is declared with its reason: nothing watches the medic,
-because a medic that watched itself is the crash-loop guardrail 2 forbids.
+exemptions are declared with their reasons: nothing watches the medic,
+because a medic that watched itself is the crash-loop guardrail 2 forbids; and
+Shadow Replay (DRE-7197) is in `NOT_WATCHED`, because its red run is read by
+the operator from its report and a retry would spend another batch of reviewer
+runs. So is the notice door's smoke (DRE-7451): the operator dispatches it and
+reads its log, and it files no card on any path, which a medic watching it
+would undo.
 
 ## Decision — fix flow
 
@@ -82,10 +87,13 @@ because a medic that watched itself is the crash-loop guardrail 2 forbids.
    DRE-6525) — same author, same critic, same gate.
 4. **Escalate when unsure.** If the agent cannot confidently produce a fix
    (ambiguous cause, a product-behavior choice, a destructive-looking
-   remedy), it opens no PR and posts a plain-English question to Linear —
-   the card parks in **Triage**, the lane for a card that went wrong
-   (renamed/split by DRE-2722 — the queue it used to share with epic plan
-   approval is now `Green Light` and holds only that). A
+   remedy), it opens no PR and writes a plain-English question, which the
+   workflow raises as the CRITICAL console alert
+   `red_main:<repo>:needs_decision` (DRE-7454). It used to file the
+   question as a card parked in **Triage**, the lane for a card that went
+   wrong (DRE-2722); every one of those filed in the 30 days to 2026-10-16
+   ended Canceled. The card is now only the notice client's fallback, filed
+   when the console door cannot be reached. A
    confused repair agent asking beats a confident one guessing on `main`.
 
 ## Guardrail 1 — no test-gutting
@@ -152,7 +160,7 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
     fails writes a marker the decision reads as "no history", never as
     "repeated". A repeat dispatches, and the decision carries the job, the
     step, the limit and the commits it timed out on into the agent's prompt
-    and into the budget-exhausted card. Portico's `main` failed
+    and into the budget-exhausted alert. Portico's `main` failed
     `infra — typecheck & test` on four commits in a row from 2026-09-22 19:40
     PT, each retried once, every time on *The action 'Test' has timed out
     after 12 minutes*; the loop read all eight runs as infrastructure, started
@@ -182,11 +190,39 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
   and two repair runs (36197298146 at 15:33 PT, 36202241737 at 16:45 PT)
   were spent on it — `already-repaired` only knew a merged `repair/*` PR as
   the fix.
+
+  The rule is asked twice (DRE-5700): once by the decide step, before the
+  agent, and again at the Report step when the agent says the fault is gone.
+  A fix that merges while the agent works is invisible to the first asking,
+  so the agent has a third ending beside the PR and the escalation — one line
+  naming the fix in `/tmp/repair-superseded.txt`, no PR, nothing pushed. The
+  Report step does not believe that line: it re-gathers the run listing with
+  `repair_history.py gather` and asks the same `superseding_run` through
+  `red_main_repair.py superseded`. A later green run on another commit ends
+  the job green with no card and no comment (the repair card is `settle`'s to
+  close, DRE-4411); no such run, or a listing that could not be read, fails
+  the run for the medic exactly as a dead agent does. The claim is verified
+  rather than believed because the file is the only thing telling a finished
+  agent from a dead one, and an agent that is wrong about main — or a run
+  whose agent wrote the file and then misjudged — must not turn a red main
+  green in the record. On 2026-10-03 repair run 37092915226 decided before
+  any later run was green; its agent rightly found the red already fixed by
+  DRE-5680 and opened nothing, and the Report step failed the run 41 seconds
+  after main went green on 44eb259 — a medic retry, a failure card and a
+  death receipt for a run that had done its job.
 - **Bounded attempts, keyed by the failing SHA.** At most **2** repair
   attempts per distinct failing head SHA on `main`, tracked mechanically
   (the repair branch and its PR are the attempt record — no external state;
-  both branch shapes count as the same repair). Budget exhausted → stop and raise a plain-English Linear
-  triage card for a human; never a third swing at the same wall.
+  both branch shapes count as the same repair). Budget exhausted → stop and raise the plain-English
+  CRITICAL console alert `red_main:<repo>:budget_exhausted` for a human
+  (DRE-7454; a Triage card before, and still the fallback when the console
+  door cannot be reached); never a third swing at the same wall. The
+  console's one row per key is the duplicate suppression while the alert is
+  open. The workflow's `clear-notices` job closes both red-main alerts, with
+  the all-clear copy, when a watched workflow's run on the default branch
+  concludes `success` on the commit that is still its tip and no other run
+  on that commit is red or unfinished (`scripts/red_main_clear.py`). A late
+  or re-run green run on an older commit closes nothing.
 - **Repair never watches itself.** The trigger is the product repo's CI on
   the default branch only — a repair run's own failure routes through the
   existing medic, and a repair PR's review rejections route through the
@@ -209,6 +245,35 @@ two agents converging on the same target destroy each other's work):
   failure event is a **no-op** — the in-flight repair's merge will re-run
   CI on `main` and either clear the newer failure or produce a fresh event
   to handle next.
+- **Repair beside a repair this failure holds up (DRE-7726):** the one
+  exception to the liveness check. Its reason fails exactly when the
+  in-flight repair cannot merge *because of* the newer failure. On
+  2026-10-19 Integration Harness went red at `e46fd777ef31` (run
+  39302814695) at 11:28 AM PT and DRE-7673's repair opened #1184; Pipeline
+  Tests went red at `cc78ed494e02` (run 39315663679) at 1:00 PM PT. Red-Main
+  Repair runs 39324487919 (2:03 PM PT) and 39327650023 (2:27 PM PT) both
+  answered `repair-in-flight`, while #1184's own Pipeline Tests run at its
+  head (39321679250) concluded its part 4 job `failure` at 2:07 PM PT on the
+  same durations floor — the run itself went on until 2:46 PM PT. The open
+  repair waited on the red check whose repair it held back, and the channel
+  stalled until a person stepped in (DRE-7725). So the lock gives way when
+  **every** open `repair/*` pull request targets another workflow (the run
+  its body's `Failed run:` line names) and has at least one job of this
+  workflow's newest `pull_request` run at its head concluded `failure` —
+  jobs, not the run's conclusion, which at 2:27 PM did not exist yet. The
+  match is by workflow id, never by check name: a part's name moves with
+  the partition. The repair dispatched is an ordinary one, on its own branch
+  and its own pull request, beside the in-flight one — never folded into it,
+  which would be a second agent on a branch someone else owns (the DRE-1803
+  clobber this lock exists to prevent). The harness does not run on pull
+  requests (DRE-4149), so the beside-repair goes green and merges on its
+  own, and the stale-merge-ref refresh (DRE-3138) brings the in-flight one
+  up to date with the fixed `main`. The concurrency group still runs one
+  repair job at a time, the two-attempt budget per failing commit is
+  unchanged, every rule after the lock still applies, and no workflow ever
+  has two open repairs aimed at it. Anything unreadable — a body with no
+  `Failed run:` line, a read that never comes back, a missing or malformed
+  file — keeps the lock.
 - **Debounce by SHA:** multiple failing `workflow_run` events off the same
   failing head SHA (matrix jobs, re-runs) collapse into one repair — a
   repair branch for that SHA already existing makes the duplicate event

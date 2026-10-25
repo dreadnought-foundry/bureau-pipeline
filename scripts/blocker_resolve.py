@@ -19,7 +19,7 @@ marker is what resolves the marker for every later sweep.
 
 It prints exactly two lines of its own, each opening
 `promotion: <card> agent-blocker class=<class>`, and both leave the card in
-Backlog with its marker open: `— not resolved this pass: <why>` when a module
+Queued with its marker open: `— not resolved this pass: <why>` when a module
 raises `blocker_class.NotNow`, and `— action module <name> is not on this
 checkout — skipping` while a sibling card's module has not landed. Every other
 exception, a `ModuleNotFoundError` naming any other module included,

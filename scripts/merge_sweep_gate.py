@@ -8,7 +8,7 @@
 `linear-sync.yml` ran TWO board-wide reconcile passes on every merge —
 `reconcile.py --promote-only` and `reconcile.py --close-epics` — whether or
 not the merge changed anything either pass acts on. `--promote-only` walks the
-whole Backlog (226 cards on the 2026-08-31 census) and every refusal costs a
+whole queue (226 cards on the 2026-08-31 census) and every refusal costs a
 Linear read; `--close-epics` reads the active board and then every active
 epic's children.
 
@@ -28,7 +28,7 @@ of the event hook. The waste was that it reacted whether or not anything was
 unblocked. So: one read of the just-merged card, and both sweeps become
 conditional on something this merge actually made true.
 
-* **`--promote-only`** — the dependency gate promotes a Backlog card when its
+* **`--promote-only`** — the dependency gate promotes a Queued card when its
   `blockedBy` relations are all terminal (`prose_blockers.relation_blockers`
   is the gate, and relations are the only dependency since DRE-2676). This
   merge can only have cleared a blocker if the merged card itself reached a
@@ -53,7 +53,7 @@ every other thing the gate declines.
 
 The gate is also deliberately coarse in one direction: it asks whether the
 merge cleared *a* blocker, not whether the unblocked card is now fully
-promotable (its epic active, its other blockers met, its lane Backlog). Those
+promotable (its epic active, its other blockers met, its lane Queued). Those
 answers cost a read per dependent and belong to the sweep, which is about to
 compute them anyway. Coarse here means an occasional pass that promotes
 nothing — never a promotion that never happens.
@@ -75,7 +75,7 @@ merge path stays in `reconcile.py`, which owns them.
 
 With `BUREAU_READ=on` the one read above comes from the console's read door
 instead of Linear: `/cards?ids=<merged>` for its parent and
-`/cards/<merged>/dependents?lanes=Backlog` for the cards it blocks, rebuilt
+`/cards/<merged>/dependents?lanes=<the queue>` for the cards it blocks, rebuilt
 into `QUERY`'s shape by `door_card` — the same rebuild Reconcile's merge path
 scopes its passes with (`reconcile.merged_card_scope`), so the gate and the
 pass it starts read one answer. Two facts in it are deliberately not facts:
@@ -84,7 +84,7 @@ pass it starts read one answer. Two facts in it are deliberately not facts:
   runs, and the door's copy can predate that write (`door-older`). Read as a
   fact, a stale `In Review` would make every merge in `on` promote nothing —
   silently, because the door answered FRESH. So in `on` the gate asks only
-  whether the door lists a Backlog dependent; a card `card-done` refused (the
+  whether the door lists a Queued dependent; a card `card-done` refused (the
   no-code / `DEMO:` / epic guard) costs one promotion pass that promotes
   nothing, because every promotion re-reads its whole predicate live first
   (Stage 2 item 45).
@@ -92,9 +92,11 @@ pass it starts read one answer. Two facts in it are deliberately not facts:
   merge finished the epic is unknown — and unknown runs the pass, which reads
   the epic's children live before it closes anything.
 
-Only a Backlog dependent counts in `on`: the promotion moves cards out of
-Backlog and nowhere else, so a dependent in another lane is a pass that could
-not have promoted it. A door that cannot answer whole — unknown, closed,
+Only a Queued dependent counts in `on`: the promotion moves cards out of the
+queue and nowhere else, so a dependent in another lane is a pass that could
+not have promoted it. The queue is read under every name it carries,
+`lane_contract.QUEUE_LANES` (DRE-6748), so a dependent waiting under either
+name of the cutover is one. A door that cannot answer whole — unknown, closed,
 throttled, a card it does not hold — falls back to the Linear read above; a
 door that says Linear is held (`linear-hold`) runs no pass and makes no Linear
 call, the same fall-closed as a rate-limited read. In `shadow` both are read,
@@ -113,6 +115,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bureau_read  # noqa: E402 — the read door (Stage 2 #5/#15)
 import linear_ops  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue's names (DRE-6741)
 import prose_blockers  # noqa: E402 — ONE definition of "terminal" (DRE-2676)
 
 #: The two merge-triggered sweeps, in the order linear-sync.yml ran them.
@@ -125,9 +128,8 @@ ALL_SWEEPS = (PROMOTE, CLOSE_EPICS)
 #: place that defines it rather than restated here.
 TERMINAL = prose_blockers.TERMINAL
 
-#: The one lane the promotion moves cards out of — the only lane the door is
-#: asked for dependents in.
-BACKLOG = "Backlog"
+#: The one lane the promotion moves cards out of, under every name it carries
+#: (`QUEUE_LANES`, DRE-6748) — the only lane the door is asked for dependents in.
 
 #: How deep the two pages are read. A card that FILLS either page is reported
 #: as unknown (and sweeps) rather than counted clean — the same rule
@@ -230,9 +232,10 @@ def door_card(merged: str) -> dict | None:
     (`e.skip`) in `on`: the caller runs no Linear fallback for it (item 34).
 
     Two door reads, no Linear request: `/cards?ids=<merged>` for its lane and
-    its parent, and `/cards/<merged>/dependents?lanes=Backlog` for the cards it
-    blocks. Only Backlog's: the promotion moves a card out of Backlog alone
-    (`backlog_children(only=…)` keeps exactly those). The parent's children are
+    its parent, and `/cards/<merged>/dependents?lanes=<every name in
+    QUEUE_LANES>` for the cards it blocks. Only the queue's: the promotion
+    moves a card out of Queued alone (`backlog_children(only=…)` keeps exactly
+    those). The parent's children are
     not read, and say so (`hasNextPage`): the door serves no child states.
 
     ONE rebuild for the merge path (Stage 2 #15): this gate and
@@ -245,7 +248,7 @@ def door_card(merged: str) -> dict | None:
         card = bureau_read.cards([merged], max_age=bureau_read.BOARD_MAX_AGE,
                                  relations=False).nodes[0]
         deps = bureau_read.dependents(merged, max_age=bureau_read.BOARD_MAX_AGE,
-                                      lanes=[BACKLOG]).nodes
+                                      lanes=list(QUEUE_LANES)).nodes
     except bureau_read.ReadUnknown as e:
         if e.skip and bureau_read.mode() == "on":
             raise
@@ -274,8 +277,9 @@ def door_card(merged: str) -> dict | None:
 
 
 def shadow_compare(merged: str, door: dict, linear: dict) -> None:
-    """Backlog dependents and the parent's lane, door vs Linear. The door is
-    asked for Backlog's dependents only, so Linear's are cut to Backlog too.
+    """Queued dependents and the parent's lane, door vs Linear. The door is
+    asked for the queue's dependents only, so Linear's are cut to the queue
+    too, under every name it carries.
     Relations ride the console's poll, so a difference here is `door-older` by
     construction: the shadow cannot prove relation freshness (review R10) — the
     live re-check before every promotion is what guards it. To stderr."""
@@ -284,7 +288,7 @@ def shadow_compare(merged: str, door: dict, linear: dict) -> None:
         return {
             "dependents": sorted(
                 d.get("identifier") for d in dependents(card)
-                if ((d.get("state") or {}).get("name")) == BACKLOG),
+                if ((d.get("state") or {}).get("name")) in QUEUE_LANES),
             "parent": (parent.get("identifier"), (parent.get("state") or {}).get("name")),
         }
     d, l_ = facts(door), facts(linear)
@@ -299,7 +303,7 @@ def door_sweeps(card: dict) -> list[str]:
 
     The merged card's own lane is NOT read (see the module docstring): the
     door's copy can predate the Done `card-done` just wrote. Every dependent
-    the rebuild carries is in Backlog, so any of them justifies the promotion
+    the rebuild carries is in Queued, so any of them justifies the promotion
     pass; the epic half is `finished_an_epic` unchanged, which reads the
     rebuild's unknown children as unknown.
     """

@@ -36,8 +36,10 @@ from __future__ import annotations
 
 import copy
 import functools
+import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -58,6 +60,7 @@ import console_escalation  # noqa: E402
 import epic_growth  # noqa: E402
 import green_light_rows  # noqa: E402
 import lane_contract  # noqa: E402
+import medic_next_step  # noqa: E402
 import planning_escalation  # noqa: E402
 import review_cap_question  # noqa: E402
 import step_shell  # noqa: E402
@@ -78,6 +81,9 @@ EXCLUDED_KINDS = {
                    "the row shows where his approved work is in the line",
     "weekly-report": "a report to read and close is not a question — and its "
                      "writer lives in agent-bureau, with no arrivals record here",
+    "deferred-release": "a notice the release train files and closes itself, "
+                        "which asks the CEO nothing — he reads it, and the train "
+                        "closes it when the surface next cuts a verified tag",
 }
 
 
@@ -333,6 +339,39 @@ def _workflow_case(unit: str):
     return case
 
 
+def _medic_question() -> None:
+    """`medic.yml#Ask a person about the diagnosis` (DRE-7794): between the
+    comment's 🙋 receipt and the `linear_ops.py comment` that precedes the
+    lane write, its step runs `medic_next_step.py question`, which renders the
+    lines itself. What that prints — for an agent's free-prose question file,
+    for no file and no report — is held to the lines too."""
+    unit = "medic.yml#Ask a person about the diagnosis"
+    receipt = green_light_rows.AGENT_ESCALATION_STEPS[unit]
+    writes = [w for w, u in _discovered() if u == unit]
+    assert writes, f"{unit} no longer writes the lane"
+    for write in writes:
+        lines = _step_lines(write)
+        at_receipt = next((i for i, args in enumerate(lines)
+                           if any(a.startswith(receipt) for a in args)), None)
+        at_question = next((i for i, args in enumerate(lines)
+                            if _runs(args, "medic_next_step.py", "question")), None)
+        at_comment = max((i for i, args in enumerate(lines)
+                          if _runs(args, "linear_ops.py", "comment")), default=None)
+        assert None not in (at_receipt, at_question, at_comment), (
+            write.where, at_receipt, at_question, at_comment)
+        assert at_receipt < at_question < at_comment, write.where
+    with tempfile.TemporaryDirectory() as td:
+        path = Path(td) / "medic-question.json"
+        path.write_text(json.dumps({"finding": FREE_PROSE, "question": FREE_PROSE}),
+                        encoding="utf-8")
+        esc = assert_declares_the_lines(
+            medic_next_step.question(str(path), report_path=None))
+        assert esc.recommendation is None
+        esc = assert_declares_the_lines(
+            medic_next_step.question(None, report_path=None))
+        assert esc.finding == medic_next_step.NO_REPORT_FINDING
+
+
 #: One case per decision-kind writer, keyed by the discovery's unit name. A
 #: writer added later adds one entry under its own unit name.
 CASES = {
@@ -345,6 +384,7 @@ CASES = {
         _workflow_case("agent-task.yml#Report result to Linear"),
     "proof-task.yml#Report proof result to Linear":
         _workflow_case("proof-task.yml#Report proof result to Linear"),
+    "medic.yml#Ask a person about the diagnosis": _medic_question,
 }
 
 

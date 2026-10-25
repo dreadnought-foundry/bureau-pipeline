@@ -188,17 +188,295 @@ jobs:
           overwrite: true
           retention-days: 7
 
+  # THE NIGHTLY RE-MEASURES THE DURATIONS RECORD BEFORE ITS FLOOR (DRE-7577).
+  # `tests/test_unit_test_parts.py` fails when the record carries seconds for
+  # fewer than 90% of the test files, and every pull request that adds a test
+  # file moves the tree toward that floor; on 2026-10-18 main sat exactly at
+  # it (693 of 770) and #1168, a docs-only change, failed on files other pull
+  # requests had added. The four parts above run every non-walk test file
+  # with `pytest -v`, so a green nightly's logs are a whole measurement.
+  #
+  # Schedule runs only, once every part FINISHED (DRE-7726): `always()` lets
+  # the job run past a failed part, and the `unit` result keeps out a
+  # canceled or skipped one. It used to need every part green, and that
+  # locked it shut: under the floor, the part that runs
+  # `tests/test_unit_test_parts.py` fails on the floor itself (part 4 of run
+  # 39315663679 on 2026-10-19, `5 failed, 6725 passed`), so the refresh that
+  # would lift the record could never run again. Now the fetch step keeps
+  # each part that succeeded or failed, still needs all four, and measures a
+  # failed one only when `unit_test_parts.py coverage-only` says it finished
+  # and failed on the durations-coverage tests and nothing else; any other
+  # answer ends the job there, with an error naming the test, before
+  # anything is measured, pushed or opened. `unit_test_parts.py due` decides
+  # — under 95%, re-measure (`REMEASURE_MARGIN`, about four days of new test
+  # files above the floor) — and every later step waits on its answer. On
+  # `hold` nothing is opened and the coverage read goes to the job summary.
+  # On `refresh` the record is rebuilt from this run's own four part logs,
+  # keeping every walk's seconds and provenance, and the record and no other
+  # path is pushed to the one literal branch `bot/test-durations`, whose pull
+  # request is opened once and updated after, never a second.
+  #
+  # The App token pushes and opens, never `GITHUB_TOKEN`: a pull request
+  # pushed with the workflow's own token starts no workflow, so its checks
+  # would never run and the merge gate would never wake for it. The gate
+  # admits the branch as a literal in its three places (merge-gate.yml,
+  # evaluate_and_merge.sh, reconcile.PIPELINE_BRANCH_PREFIXES), and a pull
+  # request that changes only `config/` is ops-only to the TDD check.
+  # `tests/test_tests_workflow_durations_refresh.py` holds all of it.
+  durations-refresh:
+    name: unit test durations refresh
+    needs: unit
+    if: >-
+      always() && github.event_name == 'schedule' &&
+      (needs.unit.result == 'success' || needs.unit.result == 'failure')
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # This run's own part logs, read with the job's token — the App
+      # deliberately lacks actions:read (DRE-1346).
+      actions: read
+    env:
+      BRANCH: bot/test-durations
+    steps:
+      # Minted FIRST, as model-config-change.yml does: the checkout's push
+      # credential and the pull request both need it.
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app.outputs.token }}
+      # The script reads only the standard library, so the runner's python3.
+      - name: Is the durations record due a re-measure?
+        id: due
+        run: |
+          python3 scripts/unit_test_parts.py due > "$RUNNER_TEMP/durations-due.txt"
+          cat "$RUNNER_TEMP/durations-due.txt"
+          decision=$(sed -n 1p "$RUNNER_TEMP/durations-due.txt")
+          coverage=$(sed -n 2p "$RUNNER_TEMP/durations-due.txt")
+          echo "decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "coverage=$coverage" >> "$GITHUB_OUTPUT"
+          if [ "$decision" = refresh ]; then
+            printf '### Unit test durations: re-measuring\n\n%s.\n' "$coverage" >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '### Unit test durations: nothing to do\n\n%s, so no pull request is opened.\n' "$coverage" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      # This attempt's four part jobs, each one that succeeded or failed, and
+      # each one's log as the jobs API serves it: one runner timestamp per
+      # line, which is what `measure` reads. PARTS is `unit`'s matrix size;
+      # fewer finished parts than that is not a whole measurement, and the
+      # job stops here. A failed part is measured only when `coverage-only`
+      # says it finished and failed on the durations-coverage tests alone
+      # (DRE-7726) — otherwise the job stops here too, naming the test.
+      # `gh api` refuses a body holding terminal escape sequences unless told
+      # to allow them, and every Actions log holds them in its step headers.
+      - name: Fetch the four parts' logs
+        id: logs
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.run_id }}
+          PARTS: 4
+        run: |
+          mkdir -p "$RUNNER_TEMP/part-logs"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
+            --jq '.jobs[] | select(.name | startswith("scripts unit tests (part ")) | select(.conclusion == "success" or .conclusion == "failure") | "\(.id) \(.conclusion)"' \
+            > "$RUNNER_TEMP/part-jobs.txt"
+          found=$(grep -c . "$RUNNER_TEMP/part-jobs.txt" || true)
+          if [ "$found" != "$PARTS" ]; then
+            echo "::error::found $found finished unit test part job(s) in run $RUN_ID (each succeeded or failed), not $PARTS — not a whole measurement"
+            exit 1
+          fi
+          jobs=()
+          failed=()
+          failed_logs=()
+          while read -r job conclusion; do
+            gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$job/logs" > "$RUNNER_TEMP/part-logs/job-$job.log"
+            jobs+=("$job")
+            if [ "$conclusion" = failure ]; then
+              failed+=("$job")
+              failed_logs+=("$RUNNER_TEMP/part-logs/job-$job.log")
+            fi
+          done < "$RUNNER_TEMP/part-jobs.txt"
+          if [ "${#failed[@]}" -gt 0 ]; then
+            if ! why=$(python3 scripts/unit_test_parts.py coverage-only "${failed_logs[@]}"); then
+              echo "::error::unit test part job(s) ${failed[*]} failed on more than the durations-coverage tests, so nothing is measured: $why"
+              exit 1
+            fi
+            echo "part job(s) ${failed[*]}: $why"
+          fi
+          echo "jobs=${jobs[*]}" >> "$GITHUB_OUTPUT"
+          echo "failed=${failed[*]}" >> "$GITHUB_OUTPUT"
+      # `refresh` writes nothing that would still be due, so logs that
+      # measured too little fail here rather than open a thinner record.
+      - name: Re-measure the record from those logs
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          RUN_ID: ${{ github.run_id }}
+          JOBS: ${{ steps.logs.outputs.jobs }}
+          FAILED: ${{ steps.logs.outputs.failed }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          args=()
+          for job in $JOBS; do
+            args+=("$RUNNER_TEMP/part-logs/job-$job.log" --job "$job")
+          done
+          # The parts `coverage-only` let through red: the record's `method`
+          # names them instead of saying every part was green (DRE-7726).
+          for job in $FAILED; do
+            args+=(--coverage-failed-job "$job")
+          done
+          python3 scripts/unit_test_parts.py refresh "${args[@]}" --run "$RUN_ID" --head "$HEAD_SHA"
+          git diff --stat
+      # The record and no other path, proved before the commit, onto this
+      # run's commit of main. Forced, so the branch is always one commit on
+      # the main this run measured, never a stack of nights.
+      - name: Push the record to bot/test-durations
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          git add -- config/unit-test-durations.json
+          STAGED=$(git diff --cached --name-only)
+          if [ "$STAGED" != "config/unit-test-durations.json" ]; then
+            echo "::error::refusing to commit '$STAGED' — the durations refresh pushes config/unit-test-durations.json and nothing else"
+            exit 1
+          fi
+          git -c user.name="agent-bureau-bot[bot]" \
+            -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+            commit --quiet -m "chore: re-measure the unit test durations from nightly run $RUN_ID (DRE-7577)"
+          git push --force origin "HEAD:refs/heads/$BRANCH"
+      # One pull request from the branch: opened when none is open, otherwise
+      # the open one is updated — the push above already moved its head.
+      - name: Open or update the pull request
+        if: steps.due.outputs.decision == 'refresh'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RUN_ID: ${{ github.run_id }}
+          COVERAGE: ${{ steps.due.outputs.coverage }}
+        run: |
+          {
+            echo "The nightly Pipeline Tests run re-measured \`config/unit-test-durations.json\` from its own four part logs (run $RUN_ID), because $COVERAGE."
+            echo
+            echo "Under 90% every pull request that adds a test file fails \`test_the_durations_record_covers_the_live_tree\`, so this is re-measured about four days before that floor. Every walk keeps its seconds and its \`provenance\` line; every other file carries this run's seconds (DRE-7577)."
+            echo
+            echo "This pull request changes \`config/unit-test-durations.json\` and nothing else."
+          } > "$RUNNER_TEMP/durations-pr.md"
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --base main --state open \
+            --json number --jq '.[0].number // ""')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/durations-pr.md"
+            echo "updated the open pull request #$EXISTING — not opening a second"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title "chore: re-measure the unit test durations (nightly run $RUN_ID)" \
+              --body-file "$RUNNER_TEMP/durations-pr.md"
+          fi
+
+  # THE WALKS RUN HERE, ON THEIR OWN CLOCK (DRE-6909). A walk copies the tree,
+  # applies a console save and runs the model tests inside the copy, once per
+  # case (`tests/console_change_walk.py`). On 2026-10-11 part 1 was canceled
+  # at its 30-minute limit with no test failed (run 38142539090): it held the
+  # agent-move walk, whose twenty copies each ran the other walk and itself,
+  # while parts 2 to 4 took 20 to 24 minutes, against 11 to 16 the day
+  # before. So no part collects a walk (`unit_test_parts.py list` leaves them
+  # out), and the jobs below run every one of them, found by their file name
+  # alone — a walk added later needs no edit here — and print how long each
+  # took. A run with no walk is red, never a silent green. `unit-result` waits
+  # on the walks and fails when one did not succeed, so a red walk still fails
+  # the pull request; `tests/test_tests_workflow_parts.py` holds all of it.
+  #
+  # ONE WALK, ONE JOB (DRE-6935). The four walks shared one 45-minute job
+  # until run 38178110152 canceled it twice at that limit: the agent-move walk
+  # took 17m45s, the change walk 0m12s, the every-default walk 20m42s, and
+  # the project walk was cut off 6m25s in. The eight green main runs before it
+  # put the project walk at 8m00s to 14m48s. `walk-list` reads the walks off
+  # the tree (`walks --json`, red with none) and `walks` runs one of them per
+  # job, so the every-default walk, which grows with every model the page
+  # offers, spends no other walk's clock.
+  walk-list:
+    name: scripts unit tests (walk list)
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    outputs:
+      walks: ${{ steps.list.outputs.walks }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: List the walks
+        id: list
+        run: |
+          walks=$(python3 scripts/unit_test_parts.py walks --json)
+          echo "walks=$walks" >> "$GITHUB_OUTPUT"
+          echo "walks: $walks"
+
+  # EACH WALK ON ITS OWN CLOCK, AND THE CLOCK FROM WHAT THE JOB MEASURED
+  # (DRE-7016). The ten finished main runs read at 16:15 PT on 2026-10-11 ran
+  # the three walks of the day in one job in 16m28s (run 38174492643) to 32m26s
+  # (run 38178153419), on nothing but the machine GitHub handed them: the
+  # agent-move walk took 8m40s on the first and 17m31s on the second, the
+  # project-model walk 7m11s and 14m34s. The walks have grown slower since:
+  # on the 14 main runs from 38445404426 to 38603675625 (2026-10-13 18:16 to
+  # 2026-10-14 17:05 UTC) the slowest, the every-default walk's 2,489.79
+  # seconds in run 38603675625, is 4.28 times the 583 it took at a desk on
+  # four cores. The limit was first set from 2.13, the same walk's 20m42s in
+  # job 114591044631, and is raised from 4.28 (DRE-7278). So the limit is a
+  # walk's desk seconds (`config/unit-test-durations.json`), times 4.28,
+  # doubled: 2 x 4.28 x 633.36 for the agent-move walk is 5,422 seconds, 90.4
+  # minutes, and 100 minutes rounds that up to the next ten. `tests/test_walks_time_budget.py`
+  # holds every walk on the tree to it and names the walk that no longer
+  # fits: split it, or raise this from a new measurement.
+  walks:
+    name: scripts unit tests (walk ${{ matrix.walk }})
+    needs: walk-list
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    strategy:
+      # One red walk must not cancel the others, as with the parts.
+      fail-fast: false
+      matrix:
+        walk: ${{ fromJSON(needs.walk-list.outputs.walks) }}
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The parts' full history, so the environment below means the same
+          # thing here as there.
+          fetch-depth: 0
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      # The parts' `Unit tests` environment, exactly: a walk imports the same
+      # modules a part does, and must not pass or fail on which job ran it.
+      # Plus the walk this entry runs, through the environment, never written
+      # into the shell line.
+      - name: Console-change walk
+        env:
+          LINEAR_API_KEY: test-key
+          REPO: test/test
+          GH_TOKEN: test
+          REPO_SLUG: agent-bureau
+          BUREAU_REQUIRE_GIT_HISTORY: "1"
+          WALK: ${{ matrix.walk }}
+        run: python3 scripts/unit_test_parts.py run-walks --only "$WALK"
+
   # The ONE result the merge gate and branch protection read (DRE-5838). Branch
   # protection on `main` requires a check named exactly `scripts unit tests`;
   # the parts report as `scripts unit tests (part N)`, so this job keeps the
   # name, and it passes only when every part passed AND every test file ran in
-  # exactly one of them. `always()` is load-bearing: without it GitHub SKIPS
-  # this job when a part fails, and a skipped required check counts as passing.
+  # exactly one of them AND every walk's job passed (DRE-6909). `always()` is
+  # load-bearing: without it GitHub SKIPS this job when a part or the walks
+  # fail, and a skipped required check counts as passing.
   # The repository checks that used to follow the suite in the single job run
   # here, under the same required name.
   unit-result:
     name: scripts unit tests
-    needs: unit
+    needs: [unit, walks]
     if: always()
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
@@ -252,6 +530,13 @@ jobs:
       # the WIP band the fast path exists for.
       - name: WIP cap single-source check
         run: python3 scripts/check_wip_cap.py
+      # The model home's token (DRE-6940): every step whose process reads the
+      # home holds `BUREAU_MODEL_HOME_TOKEN` from a mint in its own job, and
+      # every script that reaches the home declares `READS_MODEL_HOME`. A
+      # selecting step without it runs on the defaults in the code in every
+      # organization but this one, whatever the console says.
+      - name: Every step that reads the model home holds its token
+        run: python3 scripts/check_model_home_scope.py
       # reconcile.py call sites (DRE-3042): a workflow step that runs the
       # sweep is a call site, and the sweep takes its arguments from the
       # environment. linear-sync's conflict sweep never set REPO_SLUG —
@@ -302,18 +587,119 @@ jobs:
       - name: Every receipt composes through the one writer
         run: python3 scripts/check_act_receipts.py
 
-      # Last, and `always()`, so a red part is reported here even when an
-      # earlier step of this job also failed.
+      # Last, and `always()`, so a red part or a red walk is reported here
+      # even when an earlier step of this job also failed.
       - name: Every part passed
         if: always()
         env:
           PARTS: ${{ needs.unit.result }}
+          WALKS: ${{ needs.walks.result }}
         run: |
+          red=0
           if [ "$PARTS" != "success" ]; then
             echo "::error::the unit test parts finished '$PARTS', not 'success' — see the scripts unit tests (part N) jobs"
+            red=1
+          fi
+          if [ "$WALKS" != "success" ]; then
+            echo "::error::the walks finished '$WALKS', not 'success' — see the scripts unit tests (walk ...) jobs"
+            red=1
+          fi
+          if [ "$red" = 1 ]; then
             exit 1
           fi
-          echo "every unit test part passed"
+          echo "every unit test part and every walk passed"
+
+  # EVERY CONSOLE CHANGE KEEPS THE SUITE GREEN (DRE-6873). The harness
+  # (`tests/test_console_change_keeps_the_suite_green.py`, DRE-6865) derives one
+  # case per change the console can save, applies it to a copy of the tree and
+  # runs every test that can read the model files inside the copy — about ten
+  # minutes of pytest a case. In the unit parts and the walks' job
+  # `BUREAU_SUITE_GREEN_RUN` is unset and those cases skip; here they run, split
+  # over the parts (`BUREAU_SUITE_GREEN_PART` of `_OF`), side by side through
+  # the harness's own thread pool. Those three names are set in this job's
+  # pytest step and nowhere else.
+  #
+  # AS MANY PARTS AS THE CASES NEED (DRE-7511). Two fixed parts ran up to 69
+  # minutes against the 90-minute limit, and a pull request that added cases
+  # was canceled at it. `tests/test_suite_green_time_budget.py` projects each
+  # part's time from the harness's case count and the seconds a case was
+  # measured at on main, and fails unless `matrix.part` is 1..N and `_OF` is
+  # N for the smallest N whose every part stays at or under 75% of this job's
+  # `timeout-minutes` — naming the N that fits when a change adds cases.
+  #
+  # NARROWED PER CHANGE, WHOLE EVERY NIGHT (`standards/engineering.md`). The
+  # reach step asks `scripts/suite_green_reach.py` whether this run's changed
+  # files can reach the model tests — the harness's own rule — and every step
+  # after it is gated on the answer, so a run that cannot reach them concludes
+  # success in under a minute. A script, never an `on: paths:` filter, which
+  # would create no check run at all. No job-level `if:`: a schedule run has no
+  # range to compare, answers `run`, and runs every case.
+  #
+  # Not in `unit-result`'s `needs`: branch protection requires that check for
+  # the unit parts alone, and the merge gate reads this job as a check of its
+  # own. `tests/test_suite_green_job.py` holds all of it.
+  suite-green:
+    name: console change keeps the suite green (part ${{ matrix.part }})
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    strategy:
+      # One red part must not cancel the other: a canceled part hides its own
+      # failures behind somebody else's.
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3, 4]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # FAIL CLOSED, as the act-registry step below: if the changed files
+      # cannot be read the answer is `run`. A rename lists its old name too,
+      # because a `.py` the tree no longer holds reaches. The system python3
+      # reads the list — the cached install is the first gated step — and the
+      # script answers `run` if it cannot read `config/models.yaml`.
+      - name: Can this run reach the model tests?
+        id: reach
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # A schedule run has no `github.event.before`, so BASE is empty and
+          # the answer is `run`: the nightly runs every case.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          changed="$RUNNER_TEMP/suite-green-changed.txt"
+          if [ -n "$BASE" ] && gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" \
+               --jq '.files[] | .filename, (.previous_filename // empty)' > "$changed"; then
+            decision=$(python3 scripts/suite_green_reach.py decide --changed "$changed" --tree . || echo run)
+            echo "$decision"
+            if [ "$(printf '%s\n' "$decision" | head -n1)" = skip ]; then
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              echo "no changed file can reach the model tests — the cases are not run"
+            else
+              echo "run=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "could not read this run's changed files — running every case"
+          fi
+      - name: Install test tooling (cached)
+        if: steps.reach.outputs.run == 'true'
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      # The inner runs inherit this environment: the parts' `Unit tests`
+      # environment, less BUREAU_REQUIRE_GIT_HISTORY — a case's copy of the
+      # tree carries no `.git`, so a test that reads history skips there.
+      - name: Every console change keeps the model tests green
+        if: steps.reach.outputs.run == 'true'
+        env:
+          LINEAR_API_KEY: test-key
+          REPO: test/test
+          GH_TOKEN: test
+          REPO_SLUG: agent-bureau
+          BUREAU_SUITE_GREEN_RUN: "1"
+          BUREAU_SUITE_GREEN_PART: ${{ matrix.part }}
+          BUREAU_SUITE_GREEN_OF: "4"
+        run: python3 -m pytest tests/test_console_change_keeps_the_suite_green.py -v
 
   # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one
   # check here that leaves the repository: it reads the console's `ACTS` out of

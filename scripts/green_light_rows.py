@@ -4,8 +4,9 @@
 Green Light is the CEO's "needs you" queue, and the epic this belongs to fixes
 what may sit in it: a plan BOTH critics passed, the planner's business question
 with a recommendation, a build's escalation to a person, (while the CEO's
-acceptance of kind (c) stands) an approved epic queued under the cap, or the
-sweep's question about an epic grown past the size he approved (DRE-6414). A row
+acceptance of kind (c) stands) an approved epic queued under the cap, the
+sweep's question about an epic grown past the size he approved (DRE-6414), or
+the release train's notice of a release it deferred (DRE-5234). A row
 asking him to look again, re-run something, settle a critic loop or move a
 card nobody has read is the failure. Until DRE-5281 three `plan.yml` sites
 wrote Green Light for a critic outcome, and until DRE-5286 the sweep wrote it
@@ -69,11 +70,19 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      or the sweep's park on a spent review budget,
      `reconcile.py#hand_review_nudge_to_person` (DRE-6181), or the sweep's ask
      for a build agent's blocker it cannot act on, `blocker_ask.py#resolve`
-     (DRE-6459), reached from the resolver alone and reconciled by rule 6.
+     (DRE-6459), reached from the resolver alone and reconciled by rule 6, or
+     `medic.yml#Ask a person about the diagnosis`, the medic's park on a
+     diagnosis only a person can settle (DRE-7794), whose shell echoes its own
+     🙋 question the same way, through `linear_ops.py comment`.
    * `epic-growth`: the unit is `reconcile.py#ask_epic_growth_question` and
      no other (DRE-6414) — the sweep's question about an epic grown past the
      size the CEO approved, created in the lane on a card of its own. Its
      caller, `reconcile.py#report_epic_growth`, is reconciled by rule 6.
+   * `deferred-release`: the unit is `release_deferral.py#file_deferral` and
+     no other (DRE-5234) — the release train's notice of a surface it
+     deferred with no re-arm minute, created in the lane on a card of its own.
+     The kind is declared before its site exists; DRE-5235 lands the site and
+     its record together.
 6. **A borrowed write is attributed to its caller.** The DRE-4124 stall exit
    reached Green Light through `planning_escalation.escalate`, whose own write
    is the planner's declared question site; a discovery reading write sites
@@ -145,15 +154,18 @@ QUEUED_LABEL = "epic-queued"
 
 #: The workflow units an `agent-escalation` row may be written from, each with
 #: the receipt its shell must post before the write: DRE-1655's
-#: escalate-by-exception park, and the proof run's park on a press only the
-#: CEO can make (DRE-5925). The step name is the unit `where` declares. The
-#: proof run's receipt is a literal: no Python module posts it, the workflow
-#: does, and a reworded receipt there fails this rule closed.
+#: escalate-by-exception park, the proof run's park on a press only the CEO
+#: can make (DRE-5925), and the medic's park on a diagnosis only a person can
+#: settle (DRE-7794). The step name is the unit `where` declares. The proof
+#: run's and the medic's receipts are literals: no Python module posts them,
+#: the workflow does, and a reworded receipt there fails this rule closed.
 AGENT_ESCALATION_STEP = "agent-task.yml#Report result to Linear"
 PROOF_PARK_STEP = "proof-task.yml#Report proof result to Linear"
+MEDIC_PARK_STEP = "medic.yml#Ask a person about the diagnosis"
 AGENT_ESCALATION_STEPS = {
     AGENT_ESCALATION_STEP: planner_score.ESCALATION_RECEIPT_PREFIX,
     PROOF_PARK_STEP: "🙋 The proof run met a press only the CEO can make",
+    MEDIC_PARK_STEP: "🙋 The medic diagnosed a failure only a person can settle",
 }
 
 #: What the proof run's park must run before it writes the lane, besides its
@@ -187,6 +199,12 @@ BLOCKER_ASK_SITE = "blocker_ask.py#resolve"
 #: (DRE-6414) — the only unit an `epic-growth` row comes from. A literal, for
 #: the reason REVIEW_CAP_SITE is one.
 EPIC_GROWTH_SITE = "reconcile.py#ask_epic_growth_question"
+
+#: The release train's notice of a surface it deferred with no re-arm minute
+#: (DRE-5234) — the only unit a `deferred-release` row comes from. A literal,
+#: for the reason REVIEW_CAP_SITE is one, and because DRE-5235 lands the
+#: module after the kind.
+DEFERRED_RELEASE_SITE = "release_deferral.py#file_deferral"
 
 
 # --------------------------------------------------------------------------- #
@@ -566,6 +584,14 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
             f"epic-growth site is {EPIC_GROWTH_SITE} — the question about an "
             f"epic grown past its green light reaches {lane} through the sweep's "
             "one asking function and nowhere else; a caller of it belongs on "
+            "that record's `callers`"
+        )
+    elif kind == "deferred-release" and where != DEFERRED_RELEASE_SITE:
+        out.append(
+            f"{where} is declared a 'deferred-release' arrival, and the only "
+            f"deferred-release site is {DEFERRED_RELEASE_SITE} — the release "
+            f"train's notice of a deferred surface reaches {lane} through its "
+            "one filing function and nowhere else; a caller of it belongs on "
             "that record's `callers`"
         )
     elif kind == "agent-escalation":

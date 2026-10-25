@@ -264,9 +264,10 @@ def _incident_log(tmp_path, capsys) -> str:
 
 
 def test_the_incident_log_was_read_as_a_limit_death_without_the_line():
-    """The defect, pinned so the veto below is not vacuous: the echoed
-    "monthly spend limit" comment alone made this log a Claude limit death."""
-    assert dead_run.limit_kind(ROTATION_LOG.read_text(encoding="utf-8")) == "claude"
+    """The echoed "monthly spend limit" comment alone made this log a Claude
+    limit death until DRE-6985: an echoed script line is not the run speaking,
+    and the receipt's `wall revoked` is no usage wall, so it reads None."""
+    assert dead_run.limit_kind(ROTATION_LOG.read_text(encoding="utf-8")) is None
 
 
 def test_the_incident_log_is_not_a_limit_death(tmp_path, capsys):

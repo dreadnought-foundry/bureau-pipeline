@@ -102,6 +102,17 @@ fails the run, after every receipt is written. From 02:26 to 08:45 PT on
 2026-10-10 the check could not run at all, and every run held `stable` behind
 thirteen merges while finishing green — and nothing in this repository alarms
 on a quiet channel, so the red run is the signal.
+
+THE UNIT SUITE STARTS IT TOO (DRE-6993)
+---------------------------------------
+`with_unit_suite` (DRE-6968) refuses a commit whose own `Pipeline Tests` run
+on `main` is red, still running or unreadable, and since DRE-6993 the
+workflow hands it that run on every route and starts again when the suite
+ends. A run started by the suite carries the SUITE's conclusion, so
+`--woken-by` names the workflow that started it: for `UNIT_SUITE` the
+conclusion is not handed to `evaluate` — a red suite read as `harness-failed`
+would name the wrong run — and the harness proof is the commit's own
+`integration-harness` status, as on the by-hand route.
 """
 
 from __future__ import annotations
@@ -196,6 +207,18 @@ OUTCOME_NOT_ON_TRUNK = "by-hand-candidate-not-on-main"
 #: "the check could not run" send a reader to different places.
 OUTCOME_MIRROR_FAILED = "mirror-tests-failed"
 OUTCOME_MIRROR_BLOCKED = "mirror-check-blocked"
+
+#: The candidate's own unit suite's three refusals (DRE-6968). Apart for the
+#: same reason again: a red suite is a break to repair, an unfinished one is a
+#: wait, and an unreadable one proves nothing either way.
+OUTCOME_UNIT_RED = "unit-suite-red"
+OUTCOME_UNIT_NOT_FINISHED = "unit-suite-not-finished"
+OUTCOME_UNIT_UNPROVEN = "unit-suite-unproven"
+
+#: The workflow whose run on `main` is the candidate's own unit suite, and the
+#: conclusions that mean it went red rather than proved nothing.
+UNIT_SUITE = "Pipeline Tests"
+UNIT_RED_CONCLUSIONS = ("failure", "timed_out")
 
 #: The outcomes that move the channel — the only ones the mirror check reads.
 PROMOTING_OUTCOMES = (OUTCOME_PROMOTING, OUTCOME_BY_HAND, OUTCOME_BY_HAND_FORCED)
@@ -683,6 +706,79 @@ def with_mirror(
     ), OUTCOME_MIRROR_BLOCKED)
 
 
+def with_unit_suite(
+    decision: Decision,
+    unit: dict | None,
+    *,
+    sha: str,
+    force: bool = False,
+    actor: str | None = None,
+    reason: str | None = None,
+) -> Decision:
+    """Weigh the candidate's own `Pipeline Tests` run on `main` (DRE-6968).
+
+    On 2026-10-11 `stable` moved three times onto commits whose own unit suite
+    was red on `main`, or still running and about to be: the harness and the
+    mirror tests were green, and nothing asked about the suite. Two pull
+    requests that each passed alone failed together, which is exactly the
+    case where "it merged, so its suite was green" stops being true.
+
+      * `unit` is that run as `{"run_id", "status", "conclusion"}`. Only a
+        decision that would MOVE the channel is weighed, as in `with_mirror`.
+      * `completed` and `success` promotes, unchanged. Not `completed` refuses
+        as `unit-suite-not-finished` — `stable` waits for it. `failure` or
+        `timed_out` refuses as `unit-suite-red`. Anything else — no record,
+        not an object, a cancelled run — refuses as `unit-suite-unproven`.
+      * `force` is the by-hand operator's force, passed only on that route,
+        and it overrides each refusal exactly as it overrides the mirror check.
+    """
+    if not decision.promote or decision.outcome not in PROMOTING_OUTCOMES:
+        return decision
+    record = unit if isinstance(unit, dict) else {}
+    status = record.get("status")
+    conclusion = record.get("conclusion")
+    run = f"{UNIT_SUITE} run {record.get('run_id') or '(no id)'}"
+    if status == "completed" and conclusion == SUCCESS:
+        return decision
+    if status and status != "completed":
+        outcome, refusal = OUTCOME_UNIT_NOT_FINISHED, (
+            f"not promoting {sha}: its own unit suite on {TRUNK}, {run}, has "
+            f"not finished (status={status}). {CHANNEL} waits for it."
+        )
+        seen = f"{run} still {status}"
+    elif status == "completed" and conclusion in UNIT_RED_CONCLUSIONS:
+        outcome, refusal = OUTCOME_UNIT_RED, (
+            f"not promoting {sha}: the commit's own unit suite failed on "
+            f"{TRUNK} — {run} ended {conclusion}. A green harness proves a "
+            f"handful of scenarios; the suite is red, so this commit is not "
+            f"proved."
+        )
+        seen = f"{run} ended {conclusion}"
+    else:
+        outcome, refusal = OUTCOME_UNIT_UNPROVEN, (
+            f"not promoting {sha}: its own unit suite on {TRUNK} proves "
+            f"nothing either way — {run} reads status={status!r}, "
+            f"conclusion={conclusion!r}. Failing closed."
+        )
+        seen = f"{run} reads status={status!r}, conclusion={conclusion!r}"
+    if force:
+        return Decision(True, (
+            f"{decision.reason} FORCED past the commit's own unit suite "
+            f"({outcome}: {seen}). Mover: {actor}. Reason: "
+            f"{(reason or '').strip()}."
+        ), OUTCOME_BY_HAND_FORCED)
+    return Decision(False, refusal, outcome)
+
+
+def _read_unit_suite(path: str) -> dict | None:
+    """The unit-suite record file, or None — a file that is absent or is not
+    JSON is the unproven case, and `with_unit_suite` says so."""
+    try:
+        return json.loads(open(path).read())
+    except (OSError, ValueError):
+        return None
+
+
 def _read_mirror(path: str | None) -> dict | None:
     """The mirror check's result file, or None — absent, unreadable and not a
     result are all "the check did not run"."""
@@ -754,7 +850,29 @@ def main(argv: list[str] | None = None) -> int:
              "the proof alone — the workflow's first pass, which decides "
              "whether the check runs at all.",
     )
+    parser.add_argument(
+        "--unit-suite", default=None,
+        help=f"a file holding the candidate's own {UNIT_SUITE!r} run on "
+             f"{TRUNK} as {{run_id, status, conclusion}} (DRE-6968). Given, "
+             "a promotion waits for that suite to finish green, and a file "
+             "that is absent or not JSON proves nothing. Not given, the unit "
+             "suite is not weighed.",
+    )
+    parser.add_argument(
+        "--woken-by", default=None,
+        help=f"the name of the workflow whose run started this one (DRE-6993). "
+             f"{UNIT_SUITE!r} means --conclusion is the unit suite's, so it is "
+             "not read as the harness's: the harness proof is then the "
+             "commit's own status, as on the by-hand route. Absent, empty or "
+             "the harness's name, --conclusion is the harness run's.",
+    )
     args = parser.parse_args(argv)
+    # A unit-suite start (DRE-6993): the conclusion it carries says nothing
+    # about the harness, and a red suite reported as `harness-failed` would
+    # send a reader to the wrong run. `with_unit_suite` weighs the suite.
+    conclusion = args.conclusion or None
+    if (args.woken_by or "").strip() == UNIT_SUITE:
+        conclusion = None
 
     try:
         combined = json.loads(open(args.statuses_file).read() or "{}")
@@ -767,7 +885,7 @@ def main(argv: list[str] | None = None) -> int:
         args.sha,
         hold=args.hold,
         ancestry=args.ancestry,
-        conclusion=(args.conclusion or None),
+        conclusion=conclusion,
         branch=(args.branch or None),
         manual=args.manual,
         force=args.force,
@@ -776,6 +894,15 @@ def main(argv: list[str] | None = None) -> int:
         trunk=(args.trunk or None),
         channel_head=(args.channel_head or None),
     )
+    # The candidate's own unit suite (DRE-6968), weighed before the mirror
+    # check: a red suite is answered first, and the mirror is never weighed
+    # for a commit the suite already refused.
+    if args.unit_suite is not None:
+        decision = with_unit_suite(
+            decision, _read_unit_suite(args.unit_suite), sha=args.sha,
+            force=args.manual and args.force,
+            actor=(args.actor or None), reason=(args.reason or None),
+        )
     # The mirror check is weighed only where the proof would move the channel
     # — the same runs the workflow ran it for. Anywhere else there is nothing
     # to say about it, so the `mirror` output is left unwritten rather than

@@ -181,6 +181,11 @@ nothing (`tests/test_harness_gate_evidence.py`).
 on `main`, and Red-Main Repair watches the harness on `main`. Products ride
 `stable`, so nothing reaches a product repo without a green harness, exactly
 as before.
+Since DRE-6968 the decision can also weigh the commit's own `Pipeline Tests`
+run on `main` (`--unit-suite`), and refuses a commit whose suite is red or
+still running. Since DRE-6993 that suite is weighed on every run, and the
+suite's end starts the promotion too, so `stable` moves once the later of
+the harness and the suite has ended green.
 
 **Runs on `main` collapse to the newest commit** — by the rule above and
 nothing else: the proof in progress is never cancelled, the newest head waits
@@ -204,15 +209,19 @@ cannot return without someone deciding it should.
 
 ### Reading a channel that did not move
 
-Every completed harness run — on `main`, or by hand against a branch — leaves a
-promote-channel receipt naming one outcome, so "the channel is quiet", "the
-channel is starved" and "that run was never about the channel" are different
-strings instead of the same silence:
+Every completed harness run on `main`, every completed `Pipeline Tests` run on
+`main` (DRE-6993), and every by-hand dispatch leaves a promote-channel receipt
+naming one outcome, so "the channel is quiet", "the channel is starved" and
+"that run was never about the channel" are different strings instead of the
+same silence. A run on any other branch no longer starts the promotion at all.
+A run started by `Pipeline Tests` names that run under "Woken by", never as the
+harness run, and its conclusion is the suite's: a red suite reads
+`unit-suite-red`, not `harness-failed`.
 
 | receipt | what happened | what to do |
 | --- | --- | --- |
 | `harness-passed-promoting` | green run, strictly ahead — `stable` moved | nothing |
-| `harness-run-not-on-main` | a run whose branch is not `main` (before DRE-4149, a PR-head run); it proved a commit that is not on the trunk | nothing — it was never a candidate |
+| `harness-run-not-on-main` | a run whose branch is not `main` (before DRE-4149, a PR-head run); it proved a commit that is not on the trunk. Since DRE-6993 such a run no longer starts the promotion, so this receipt is no longer written | nothing — it was never a candidate |
 | `harness-cancelled-by-newer-push` | displaced by a merge train; never started | nothing — it advances when the trunk quietens |
 | `harness-failed` | the harness went red on this commit | a red trunk; the medic and `red-main-repair.yml` own it |
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
@@ -221,12 +230,15 @@ strings instead of the same silence:
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 | `by-hand-promoting` | a person promoted a commit the harness had already proved | nothing — the run records who, when and why |
-| `by-hand-forced-promoting` | a person promoted PAST the harness or the agent-bureau mirror check (DRE-6496), with a reason on the run; the warning names the mirror result it overrode | read the reason; the commit is on the channel unproven |
+| `by-hand-forced-promoting` | a person promoted PAST the harness, the agent-bureau mirror check (DRE-6496) or the commit's own unit suite (DRE-6968), with a reason on the run; the warning names the mirror or unit-suite result it overrode | read the reason; the commit is on the channel unproven |
 | `by-hand-candidate-not-on-main` | the named sha is not reachable from `main` | name a merged commit; a green PR head is not one |
 | `by-hand-force-needs-reason` | `force` with no reason | dispatch again with the reason that makes it safe |
 | `by-hand-force-not-operator` | `force` asked for by a bot login | forcing is operator-only; a person dispatches it |
 | `mirror-tests-failed` | agent-bureau's mirror tests pass on `stable` and fail on the candidate (DRE-6496); the reason counts the failing tests and names the first few with the file each mirrors; the full list is the run's `mirror-result` artifact (DRE-6683) | agent-bureau's mirror follows first — the run filed one card there (`card owed` if Linear refused it); the next run re-evaluates |
 | `mirror-check-blocked` | the mirror check could not run — a token, clone or install that failed, pytest that would not start, a run past its time limit, or no result at all | nothing proven either way; on a `main` or by-hand run the run fails so the hold is seen (DRE-6622) — read its reason, and `force` is the way past it |
+| `unit-suite-red` | the commit's own `Pipeline Tests` run on `main` ended `failure` or `timed_out` (DRE-6968); the reason names the run | a red trunk; Red-Main Repair owns it — `stable` moves to the next commit whose suite is green |
+| `unit-suite-not-finished` | the commit's own `Pipeline Tests` run on `main` has not finished; `stable` waits for it, and the decision record files it as `channel-advancing` (DRE-6993) | nothing — the suite's end starts the promotion again |
+| `unit-suite-unproven` | no readable record of the commit's own `Pipeline Tests` run, or one that ended without a verdict (a cancelled run) | nothing proven either way; on a `main` or by-hand run the run fails so the hold is seen (DRE-6993) — check the suite's run, run it again, and on the by-hand route `force` is the way past it |
 
 Before this, those runs concluded `skipped` with nothing else on them: on
 2026-09-03 four consecutive PR-head runs each produced one, and learning that

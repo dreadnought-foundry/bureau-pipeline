@@ -27,8 +27,9 @@ line backstop's (DRE-5178) next phase:
   * waiting in the groom queue is never escalated to the CEO: a queued card
     is in Intake, which no Planning watchdog and no planner line reads;
   * a stalled queue — a free slot, nothing released, nothing changed for the
-    planner line's own bound — is ONE `no-code` card created in Triage, never
-    a second while the first is open.
+    planner line's own bound — raises the `groom_stall` console alert at WARN
+    (DRE-7455), and a pass where it no longer holds resolves it. The alert's
+    one row per key is its dedupe; no card is filed by the sweep.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_queue.py -v
 """
@@ -153,6 +154,7 @@ class Queue:
         self.fail_state = set(fail_state)
         self.direct = dict(direct or {})
         self.writes: list[tuple] = []
+        self.notices: list[tuple] = []
         self.thread_reads: list[tuple] = []
         self.direct_reads: list[tuple] = []
 
@@ -190,6 +192,22 @@ class Queue:
                             tuple(labels), lane))
         return {"identifier": "DRE-9999", "url": "https://linear.app/x"}
 
+    # -- the notice client (DRE-7455): never a Linear write ----------------
+    def raise_notice(self, notice, *, severity, title, body, action_url=None,
+                     action_label=None, fallback=None):
+        self.notices.append(("raise", notice, severity, title, body, fallback))
+        return "raised"
+
+    def resolve_notice(self, notice, *, recovery_title=None, recovery_body=None):
+        self.notices.append(("resolve", notice, recovery_title, recovery_body))
+        return "not-open"
+
+    def raised(self) -> list:
+        return [n[1:] for n in self.notices if n[0] == "raise"]
+
+    def resolved(self) -> list:
+        return [n[1:] for n in self.notices if n[0] == "resolve"]
+
     # -- reading back -------------------------------------------------------
     def of(self, kind: str) -> list:
         return [w[1:] for w in self.writes if w[0] == kind]
@@ -219,7 +237,8 @@ def _linear(queue: Queue):
             mock.patch.object(linear_ops, "get_issue",
                               side_effect=queue.get_issue), \
             mock.patch.object(linear_ops, "create_card",
-                              side_effect=queue.create_card):
+                              side_effect=queue.create_card), \
+            mock.patch.object(reconcile, "pipeline_notice", queue):
         yield
     assert not advance.called and not add.called
 
@@ -744,7 +763,7 @@ def test_waiting_in_the_queue_is_never_escalated_and_gets_no_slot_receipt():
 
 
 # --------------------------------------------------------------------------- #
-# a stalled queue is one Triage card                                           #
+# a stalled queue is one console alert (DRE-7455)                              #
 # --------------------------------------------------------------------------- #
 
 
@@ -756,44 +775,52 @@ def _stalled(**kw) -> Queue:
                  fail_state={"DRE-11", "DRE-12"}, **kw)
 
 
-def test_a_stalled_queue_files_one_no_code_card_in_triage():
+def test_a_stalled_queue_raises_the_groom_stall_alert_and_files_no_card():
     queue = _stalled()
     _release(queue, 1)
-    created = queue.of("create")
-    assert len(created) == 1
-    title, body, slug, labels, lane = created[0]
+    assert queue.of("create") == [] and queue.of("find_open") == []
+    (notice, severity, title, body, fallback), = queue.raised()
+    assert (notice, severity) == ("groom_stall", "WARN")
     assert title == reconcile.GROOM_STALL_TITLE
-    assert slug == "bureau-pipeline"
-    assert labels == (linear_ops.NO_CODE_LABEL,)
-    assert lane == reconcile.GROOM_STALL_LANE == "Triage"
-    assert not [lbl for lbl in labels if lbl.startswith("agent:")]
     # The whole notice is in the body: which batch, how many, how long, and
     # what the last release wrote — so no comment is posted.
     assert OLDER in body and "2 cards" in body
     assert "DRE-10" in body
-    assert queue.of("find_open") == [(reconcile.GROOM_STALL_TITLE,)]
+    # The card the door cannot take is filed as before: Triage, its repo
+    # label and `no-code`, no `agent:*` role.
+    assert fallback.title == reconcile.GROOM_STALL_TITLE
+    assert fallback.lane == reconcile.GROOM_STALL_LANE == "Triage"
+    assert tuple(fallback.labels) == ("repo:bureau-pipeline", linear_ops.NO_CODE_LABEL)
+    assert not [lbl for lbl in fallback.labels if lbl.startswith("agent:")]
+    assert queue.resolved() == []
     # Nothing on the standing card. The card the pass tried carries its
     # groom-moved note, written before the lane write that failed (DRE-3326).
     assert [c for c in queue.of("comment") if c[0] == STANDING] == []
 
 
-def test_never_a_second_card_while_the_first_is_open():
+def test_every_stalled_pass_raises_again_and_the_alert_dedupes():
+    """No board read decides whether to file: the one-row-per-key alert is
+    the dedupe, and a second raise while it is open is a repeat."""
     queue = _stalled(open_card="DRE-7777")
     _release(queue, 1)
-    assert queue.of("create") == []
+    _release(queue, 1)
+    assert [n[0] for n in queue.raised()] == ["groom_stall", "groom_stall"]
+    assert queue.of("create") == [] and queue.of("find_open") == []
 
 
-def test_no_card_when_the_queue_changed_inside_the_bound():
+def test_no_alert_and_a_resolve_when_the_queue_changed_inside_the_bound():
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=30)],
                   [_card("DRE-11")], fail_state={"DRE-11"})
     _release(queue, 1)
-    assert queue.of("create") == [] and queue.of("find_open") == []
+    assert queue.raised() == []
+    assert queue.resolved() == [("groom_stall", None, None)]
 
 
-def test_no_card_when_there_was_no_free_slot():
+def test_no_alert_and_a_resolve_when_there_was_no_free_slot():
     queue = _stalled()
     _release(queue, 0)
-    assert queue.of("create") == [] and queue.of("find_open") == []
+    assert queue.raised() == []
+    assert queue.resolved() == [("groom_stall", None, None)]
 
 
 def test_the_bound_is_the_planner_lines_own(monkeypatch):
@@ -801,12 +828,12 @@ def test_the_bound_is_the_planner_lines_own(monkeypatch):
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=90)],
                   [_card("DRE-11")], fail_state={"DRE-11"})
     _release(queue, 1)
-    assert queue.of("create") == []
+    assert queue.raised() == []
     monkeypatch.setattr(planner_queue, "waiting_max", lambda: 60)
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=90)],
                   [_card("DRE-11")], fail_state={"DRE-11"})
     _release(queue, 1)
-    assert len(queue.of("create")) == 1
+    assert len(queue.raised()) == 1
 
 
 # --------------------------------------------------------------------------- #

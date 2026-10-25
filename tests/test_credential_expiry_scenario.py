@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import lane_contract  # noqa: E402
 import push_rescue  # noqa: E402
 
 import test_platform_fault_scenario as platform_fault  # noqa: E402
@@ -185,6 +186,15 @@ class Fixture:
                        check=True)
         subprocess.run([self.real_git, "init", "-q", "-b", "main", str(self.work)],
                        check=True)
+        # Every commit, fetch and push otherwise leaves a detached `git
+        # maintenance run --auto` behind, still writing under `.git` after the
+        # command returns — and racing the temporary directory's cleanup into
+        # `Directory not empty` on a loaded runner (DRE-6873).
+        for repo in (self.bare, self.work):
+            subprocess.run([self.real_git, "-C", str(repo), "config",
+                            "maintenance.auto", "false"], check=True)
+        subprocess.run([self.real_git, "-C", str(self.bare), "config",
+                        "receive.autogc", "false"], check=True)
         self._git("config", "user.email", "bot@example.com")
         self._git("config", "user.name", "agent-bureau-bot")
         (self.work / "README.md").write_text("base\n", encoding="utf-8")
@@ -479,7 +489,9 @@ class TheReportStepSaysCredentialNotDied(unittest.TestCase):
     def test_it_still_requeues_the_card(self):
         _, journal = self.report()
         self.assertEqual(
-            [e["args"][1] for e in platform_fault.ops(journal, "state")], ["Todo"]
+            # The queue lane, where the sweep requeues a dead run (DRE-7111).
+            [e["args"][1] for e in platform_fault.ops(journal, "state")],
+            [lane_contract.QUEUE_LANE]
         )
 
     def test_the_same_run_without_local_work_reads_as_a_silent_death(self):

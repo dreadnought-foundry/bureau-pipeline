@@ -173,13 +173,19 @@ def test_every_cancel_row_carries_a_position_and_a_one_line_reason():
         assert isinstance(row["reason"], str) and row["reason"].strip()
         for key in ("identifier", "title", "repo", "superseded_by", "source"):
             assert key in row
-    assert dead["DRE-3"]["reason"] == "superseded by DRE-900"
+    # Each ends with its row's proof line (DRE-7241).
+    assert dead["DRE-3"]["reason"] == ("superseded by DRE-900; the card's "
+                                       "Superseded by line — Superseded by: "
+                                       "DRE-900")
     assert dead["DRE-3"]["source"] == groomer.DEAD_FROM_LINE
-    assert dead["DRE-5"]["reason"] == "pull request 50 merged it"
+    assert dead["DRE-5"]["reason"] == "the ranked read — pull request 50 merged it"
     assert dead["DRE-5"]["source"] == groomer.DEAD_FROM_JUDGEMENT
 
 
-def test_a_refused_evidence_is_the_withheld_sentence_never_an_empty_reason():
+def test_a_refused_evidence_is_no_cancel_and_still_counted_withheld():
+    """Before DRE-7241 the withheld sentence was the row's reason. No proof,
+    no Cancel: the card keeps its slot, and the pointer is still a reason
+    the guard withheld."""
     cards = [card("DRE-1", days=3), card("DRE-2", days=2)]
     answer = "\n".join([
         "DRE-1 | likely-done | a merge already did it | see scripts/groomer.py",
@@ -187,9 +193,9 @@ def test_a_refused_evidence_is_the_withheld_sentence_never_an_empty_reason():
     ])
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=5, now=NOW,
                                judgement=judged(cards, answer))
-    row = proposal["outcomes"]["dead"][0]
-    assert row["identifier"] == "DRE-1"
-    assert row["reason"] == groomer.WITHHELD_REASON
+    assert proposal["outcomes"]["dead"] == []
+    assert "DRE-1" in [r["identifier"] for r in proposal["outcomes"]["now"]]
+    assert proposal["cancels_refused"][0]["refusal"] == groomer.NO_CANCEL_PROOF
     assert "DRE-1" in proposal["judgement"]["withheld"]
 
 
@@ -266,7 +272,8 @@ def test_a_reason_carrying_a_pipe_is_escaped_whole_and_round_trips():
     text = groomer.render_proposal(proposal)
     assert "pull request 274 \\| the CEO" in text
     [row] = cancel_rows(text)
-    assert row["reason"] == reason, "the reason is never truncated"
+    assert row["reason"] == f"the ranked read — {reason}", (
+        "the reason is never truncated")
 
 
 def test_an_empty_cancel_list_renders_no_cancel_section_at_all():
@@ -398,7 +405,8 @@ def test_the_two_lists_fixture_is_the_render_byte_for_byte():
     rows = cancel_rows(body)
     assert [r["position"] for r in rows] == [1, 2]
     assert body.count("\\|") == 1
-    assert rows[1]["reason"] == "the cutover ran on 2026-09-07 | the probe is the proof"
+    assert rows[1]["reason"] == ("the ranked read — the cutover ran on "
+                                 "2026-09-07 | the probe is the proof")
     assert len(groomer.parse_proposal_comment(body)["batch"]) == 3
 
 

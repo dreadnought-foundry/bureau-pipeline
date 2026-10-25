@@ -158,6 +158,60 @@ class TestTheFiveRoutes:
 # ===========================================================================
 # DRE-2824: Backlog is process-written, so PARKED cannot name a human
 # ===========================================================================
+class TestTheSweepCarriesAPromotableCardIntoTheDispatchLane:
+    """The flip (DRE-7120): FLEET's destination is the dispatch lane, and the
+    sweep's carried lanes stay bounded below it for every verdict that is not
+    promotable — so a one-word vocabulary edit still cannot carry a card to
+    In Review or Done (the critic on #703)."""
+
+    @pytest.mark.parametrize("name", ["FLEET", "WORKBENCH", "OPERATOR"])
+    def test_the_sweep_carries_the_three(self, name):
+        assert routing_verdict.sweep_promotes(name) is True
+
+    @pytest.mark.parametrize("name", ["PARKED", "NEEDS WORK"])
+    def test_the_sweep_leaves_the_two(self, name):
+        assert routing_verdict.sweep_promotes(name) is False
+
+    def test_the_build_lane_is_the_dispatch_lane(self):
+        """Read off the contract, never a literal of its own."""
+        import ast
+
+        assert routing_verdict.BUILD_LANE == lane_contract.DISPATCH_LANE
+        tree = ast.parse(Path(routing_verdict.__file__).read_text(encoding="utf-8"))
+        value = next(
+            node.value for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(getattr(t, "id", None) == "BUILD_LANE" for t in node.targets)
+        )
+        assert ast.unparse(value) == "lane_contract.DISPATCH_LANE"
+
+    def test_fleet_lands_in_the_start_lane(self):
+        assert routing_verdict.destination("FLEET") == lane_contract.START_LANE
+        assert routing_verdict.sweep_lanes() == ("In Progress", "Hand-work")
+
+    @pytest.mark.parametrize("name", ["WORKBENCH", "OPERATOR", "PARKED", "NEEDS WORK"])
+    def test_a_verdict_that_is_not_promotable_is_never_carried_to_in_progress(self, name):
+        doc = json.loads(json.dumps(routing_verdict.load()))
+        routing_verdict.record(name, doc)["destination"] = "In Progress"
+        assert routing_verdict.sweep_promotes(name, doc) is False
+
+    @pytest.mark.parametrize("lane", ["In Review", "Done"])
+    def test_fleet_pointed_past_the_dispatch_lane_is_not_carried(self, lane):
+        doc = json.loads(json.dumps(routing_verdict.load()))
+        routing_verdict.record("FLEET", doc)["destination"] = lane
+        assert routing_verdict.sweep_promotes("FLEET", doc) is False
+
+    def test_fleet_pointed_anywhere_but_the_start_lane_is_a_config_problem(self):
+        doc = json.loads(json.dumps(routing_verdict.load()))
+        routing_verdict.record("FLEET", doc)["destination"] = "Hand-work"
+        problems = routing_verdict.config_problems(doc)
+        assert any("FLEET" in p and "lane_contract.START_LANE" in p for p in problems), problems
+
+    def test_the_shipped_vocabulary_points_fleet_at_the_start_lane(self):
+        assert not [p for p in routing_verdict.config_problems()
+                    if "START_LANE" in p]
+
+
 class TestParkedNamesTheProcessWriter:
     """Two shipped files contradicted each other and the Phase 3 gate caught it.
 
@@ -170,18 +224,43 @@ class TestParkedNamesTheProcessWriter:
     that nobody does. Revival is a separate, later, human act.
     """
 
-    def test_operator_is_not_a_backlog_writer(self):
+    def test_operator_is_not_a_queue_writer(self):
         """The decided change, pinned so a future fix cannot take the easy road
-        of widening the lane instead of correcting the verdict."""
-        assert "operator" not in lane_contract.lane_writers("Backlog"), (
-            "Backlog is process-controlled — re-opening by-hand writes would "
-            "make the lane contract describe the old model"
-        )
+        of widening the lane instead of correcting the verdict. Queued carries
+        Backlog's writers word for word (DRE-6740), and Backlog is retiring and
+        names no writer at all (DRE-6753), so neither name admits one."""
+        for lane in lane_contract.QUEUE_LANES:
+            if lane in lane_contract.lane_names("retiring"):
+                assert "clauses" not in lane_contract.lane(lane, status="retiring")
+                continue
+            assert "operator" not in lane_contract.lane_writers(lane), (
+                f"{lane} is process-controlled — re-opening by-hand writes would "
+                "make the lane contract describe the old model"
+            )
+
+    def test_parked_lands_in_queued(self):
+        """DRE-6742 moved the planning exit to Queued, and PARKED's
+        destination with it: a parked card waits where the exit lands."""
+        assert routing_verdict.destination("PARKED") == "Queued"
+        assert routing_verdict.destination("PARKED") == lane_contract.QUEUE_LANE
+
+    def test_the_vocabulary_names_queued_as_the_lane_the_sweep_reads(self):
+        """The prose moves with the destination (DRE-6742): FLEET is promoted
+        out of Queued, PARKED waits there and nothing takes it back out, and
+        the file's own account of the sweep says it promotes past Queued."""
+        doc = json.loads(CONFIG.read_text(encoding="utf-8"))
+        records = {entry["name"]: entry for entry in doc["verdicts"]}
+        assert "out of Queued" in records["FLEET"]["why"]
+        for field in ("why", "revival"):
+            assert "Queued" in records["PARKED"][field], field
+            assert "Backlog" not in records["PARKED"][field], field
+        readme = " ".join(doc["_readme"])
+        assert "a work lane past Queued" in readme
 
     def test_parked_is_landed_by_a_process_writer(self):
         actor = routing_verdict.actor("PARKED")
         assert actor != "operator"
-        assert actor in lane_contract.lane_writers("Backlog")
+        assert actor in lane_contract.lane_writers(routing_verdict.destination("PARKED"))
 
     def test_parked_names_the_planning_exit_writer_that_really_lands_it(self):
         """Not any permitted writer — the one that actually performs the move.
@@ -229,7 +308,7 @@ class TestParkedNamesTheProcessWriter:
                 entry["actor"] = "operator"
         problems = routing_verdict.config_problems(doc)
         assert any(
-            "PARKED" in p and "operator" in p and "Backlog" in p for p in problems
+            "PARKED" in p and "operator" in p and "Queued" in p for p in problems
         ), f"a forbidden actor passed the check: {problems}"
 
     def test_a_glossary_writer_is_not_enough_on_any_lane(self):
@@ -699,7 +778,7 @@ class TestThePromoterRoutesOnTheVerdict:
     def test_a_fleet_card_promotes(self):
         board = _PromotionBoard([routing_verdict.verdict_comment("FLEET", "unit-testable")])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2799", "In Progress", reconcile.QUEUE_FROM)]
         assert board.labelled == []
 
     @pytest.mark.parametrize("verdict", ["WORKBENCH", "OPERATOR"])
@@ -707,7 +786,7 @@ class TestThePromoterRoutesOnTheVerdict:
         board = _PromotionBoard([routing_verdict.verdict_comment(verdict, "because")])
         assert board.promote() == 1
         # To the verdict's own lane, Hand-work, since DRE-5322.
-        assert board.advanced == [("DRE-2799", routing_verdict.destination(verdict), "Backlog")]
+        assert board.advanced == [("DRE-2799", routing_verdict.destination(verdict), reconcile.QUEUE_FROM)]
         assert board.advanced[0][1] == "Hand-work"
         assert [l for _, l in board.labelled] == list(routing_verdict.marks(verdict))
         receipt = "\n".join(b for _, b in board.posted)
@@ -892,7 +971,7 @@ class TestAStaleVerdictIsNotAnApproval:
     def test_a_planning_exit_promotes_as_today(self):
         board = _StaleBoard("FLEET", [_move(EXIT_AT, "Planning", "Backlog")], parent=None)
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2799", "In Progress", reconcile.QUEUE_FROM)]
         assert board.reads == ["DRE-2799"]
 
     def test_a_build_run_s_park_promotes_once_its_blockers_clear(self):
@@ -907,7 +986,7 @@ class TestAStaleVerdictIsNotAnApproval:
         assert board.advanced == []
         board.card["inverseRelations"]["nodes"][0]["issue"]["state"]["name"] = "Done"
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2799", "Todo", "Backlog")]
+        assert board.advanced == [("DRE-2799", "In Progress", reconcile.QUEUE_FROM)]
         assert not any(routing_verdict.STALE_VERDICT_NEEDLE in b for _, b in board.posted)
 
     def test_the_history_is_read_only_for_a_card_that_passed_every_other_gate(self):
@@ -979,8 +1058,9 @@ class TestAStaleVerdictIsNotAnApproval:
 # The route is written down
 # ===========================================================================
 class TestTheRouteIsWrittenDown:
-    def test_the_backlog_clauses_state_the_stale_verdict_rule(self):
-        backlog = lane_contract.lane("Backlog", contract=lane_contract.load())
+    def test_the_queue_clauses_state_the_stale_verdict_rule(self):
+        # The queue's clauses are Queued's since Backlog began retiring (DRE-6753).
+        backlog = lane_contract.lane("Queued", contract=lane_contract.load())
         assert "`stale-verdict`" in backlog["clauses"]["exit"]["text"]
         assert "Green Light" in backlog["clauses"]["writers"]["text"]
         assert "send" in backlog["clauses"]["writers"]["text"].lower()
@@ -1000,21 +1080,22 @@ class TestTheRouteIsWrittenDown:
         survive is the clause saying it is still owed."""
         stale = ("DRE-2724", "DRE-2724 writes routing verdicts")
         for clause in lane_contract.clauses(lane_contract.load()):
-            if clause.lane in ("Backlog", "Todo"):
+            if clause.lane in ("Queued", "Todo"):
                 assert (clause.pending or "").strip() not in stale, clause.id
 
     def test_the_lane_contract_carries_the_vocabulary_it_used_to_wait_for(self):
         contract = lane_contract.load()
-        backlog = lane_contract.lane("Backlog", contract=contract)
-        todo = lane_contract.lane("Todo", contract=contract)
+        backlog = lane_contract.lane("Queued", contract=contract)
         assert "routing verdict" in backlog["clauses"]["entrance"]["text"]
-        # Todo names all three routes the sweep carries, and says where each
-        # goes: FLEET here, WORKBENCH and OPERATOR to Hand-work (DRE-5322),
-        # whose entrance is the clause that names the person's mark —
-        # `operator-step` since DRE-6227, never `hand-built`.
+        # The queue's exit names all three routes the sweep carries, and says
+        # where each goes: FLEET to In Progress, WORKBENCH and OPERATOR to
+        # Hand-work (DRE-5322) — the old start lane said so too until it began
+        # retiring (DRE-7129) — and Hand-work's entrance is the clause that
+        # names the person's mark: `operator-step` since DRE-6227, never
+        # `hand-built`.
         for name in ("FLEET", "WORKBENCH", "OPERATOR"):
-            assert name in todo["clauses"]["entrance"]["text"]
-        assert "Hand-work" in todo["clauses"]["entrance"]["text"]
+            assert name in backlog["clauses"]["exit"]["text"]
+        assert "Hand-work" in backlog["clauses"]["exit"]["text"]
         hand_work = lane_contract.lane("Hand-work", contract=contract)
         assert (f"`{routing_verdict.OPERATOR_STEP_LABEL}`"
                 in hand_work["clauses"]["entrance"]["text"])

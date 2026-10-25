@@ -30,6 +30,22 @@ gathers the inputs from GitHub's own records and acts on the output:
   * One repair in flight per repo (guardrail 3). Any OPEN repair/* PR makes
     a new failure event a no-op — the in-flight repair's merge re-runs CI
     on main and either clears the newer failure or produces a fresh event.
+  * …except a repair this failure holds up (DRE-7726). That reason fails
+    exactly when the in-flight repair cannot merge BECAUSE of the newer
+    failure. On 2026-10-19 Integration Harness went red at e46fd777ef31 and
+    DRE-7673's repair opened #1184; Pipeline Tests then went red at
+    cc78ed494e02, and Red-Main Repair runs 39324487919 (2:03 PM PT) and
+    39327650023 (2:27 PM PT) both answered repair-in-flight while #1184's own
+    Pipeline Tests part 4 had failed at 2:07 PM PT on the same floor. Nothing
+    broke the cycle until a person did. So the lock gives way when EVERY open
+    repair/* pull request targets another workflow (the `Failed run:` line
+    of its body) and has a job of THIS workflow's newest pull_request run at
+    its head concluded `failure` — jobs, not the run's conclusion, because at
+    2:27 PM the run had none. The repair dispatched is an ordinary one, on its
+    own branch and pull request, beside the in-flight one (never folded into
+    it: that is a second agent on a branch someone else owns, DRE-1803), and
+    every rule below still applies. `--in-flight-file` is what
+    `gather-in-flight` read; anything unreadable keeps the lock.
   * Debounce by SHA (guardrail 3). A repair branch for this SHA already
     existing, with no pull request on it, makes a duplicate event a no-op
     while the agent may still be building it…
@@ -57,10 +73,31 @@ gathers the inputs from GitHub's own records and acts on the output:
     is the record's own order (`created_at`, which a re-run keeps), never a
     comparison of sha strings. A later run still in progress, cancelled or
     failed does not count: the same fault may still stand.
+  * …asked twice (DRE-5700). The rule runs here once, before the agent, and
+    a fix that merges while the agent works is invisible to it. The agent
+    may then say so — one line in `/tmp/repair-superseded.txt`, no pull
+    request — and the Report step re-gathers the listing and asks the same
+    rule through `superseded` before it believes it. On 2026-10-03 repair run
+    37092915226 decided before main went green, its agent rightly opened
+    nothing, and the Report step failed the run as a dead agent 41 seconds
+    after main went green on 44eb259.
   * Fail-closed. Unreadable attempt records mean NO dispatch (a blind
-    dispatch could double-run a repair; the next failure event retries with
-    fresh records), and only a validated full 40-hex SHA ever becomes a
-    branch name.
+    dispatch could double-run a repair), and only a validated full 40-hex
+    SHA ever becomes a branch name.
+  * …and a run that cannot read its records is a FAILED run (DRE-6963). The
+    records are read by `gather-records`, which says why each read failed
+    (which read, the HTTP status, the message's first line — never the
+    token), reads the login's own rate limit and waits until its reset plus
+    ten seconds (two minutes when the rate limit cannot be read or is not
+    spent), and reads again: at most three tries, at most twenty minutes of
+    waiting. A read that never comes back leaves the FETCH-FAILED marker,
+    the decide step still answers `records-unreadable` with no dispatch, and
+    the gather exits 1 with one line — "the repair could not read its
+    attempt records after N tries: <reason>" — so the run ends red for the
+    medic and the alerts. On 2026-10-11 run 38169396180 ran out of calls,
+    said only "unreadable", and ended green; nothing else starts the repair
+    while main is red, because nothing merges onto a red main. The
+    comparisons (`gather-compares`) ride the same retry.
 
 CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
 
@@ -68,9 +105,21 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
         --conclusion <c> --head-branch <b> --default-branch <d> \
         --head-sha <sha> --log-file <f> --refs-file <f> --pulls-file <f> \
         [--workflow-name <name>] [--history-file <f>] \
-        [--compares-file <f>]
+        [--compares-file <f>] [--workflow-id <id>] [--in-flight-file <f>]
 
     red_main_repair.py record-refs --refs-file <f> --head-sha <sha>
+
+    red_main_repair.py gather-records --repo <owner/name> \
+        --refs-out <f> --pulls-out <f>
+
+    red_main_repair.py gather-compares --repo <owner/name> \
+        --default-branch <d> --head-sha <sha> --refs-file <f> \
+        --pulls-file <f> --out <f>
+
+    red_main_repair.py gather-in-flight --repo <owner/name> \
+        --workflow-id <id> --pulls-file <f> --out <f>
+
+    red_main_repair.py superseded --history-file <f>
 
   --refs-file  raw REST payload of GET git/matching-refs/heads/repair/
   --pulls-file raw REST payload of GET pulls?state=all&per_page=100
@@ -87,15 +136,41 @@ CLI (stdout appends verbatim to $GITHUB_OUTPUT; humans read stderr):
                    marker. Optional, and anything unreadable for the one
                    record branch reads as "nothing known about it" —
                    `duplicate-event`, never `finish-unlanded` (DRE-6526).
+  --workflow-id    the red run's `workflow_id` (DRE-7726). Optional.
+  --in-flight-file `{"<head ref>": {number, head_sha, target_workflow_id,
+                   jobs: [{name, conclusion}]} | null}` for each open
+                   repair/* pull request, as `gather-in-flight` writes it.
+                   Optional; absent, missing, malformed or a null entry
+                   keeps the in-flight lock — today's behaviour (DRE-7726).
 
 `record-refs` prints the ref names in a `--refs-file` payload that ARE an
 attempt at `--head-sha` (`_sha_record_re`), one per line, so the workflow's
 comparison gather never restates the rule. A bad sha or an unreadable file
 prints nothing; exit 0 either way.
 
+`gather-records` writes the two record payloads `decide` reads, through
+`gather_reads` (the retry above, its sleeps injected so it is tested without
+waiting); exit 1 when a read never came back. `gather-compares` writes the
+`--compares-file` document the same way, a comparison that never came back
+null for its ref, and makes no call when the records are unreadable; exit 0.
+`gather-in-flight` writes the `--in-flight-file` document from three reads
+per open repair/* pull request — its failed run (named on its body's
+`Failed run:` line), this workflow's runs at its head, and the newest one's
+jobs — on the same retry; a pull request whose reads never come back, or
+whose body names no failed run, is null, and with the records unreadable it
+makes no call; exit 0. Their stdout is the job log, not $GITHUB_OUTPUT.
+
+`superseded` reads a `--history-file` through `superseding_run` — the same
+rule `decide` asks — and prints the green run's id with exit 0, or says why
+not on stderr and exits 1. A missing, marker-filled or malformed file exits 1:
+unreadable is never green. Its stdout is the run id alone, not
+$GITHUB_OUTPUT.
+
 Emits go=, branch=, attempt=, escalate=, reason=, the timeout_* detail
-(job / step / limit / commits) and superseded_by= (the green run's id, empty
-unless the reason is `superseded`) through `github_output`, so a
+(job / step / limit / commits), superseded_by= (the green run's id, empty
+unless the reason is `superseded`) and beside_in_flight= (the in-flight
+repair pull requests a go went past, DRE-7726, empty otherwise) through
+`github_output`, so a
 value that grows a second line rides a heredoc delimiter instead of killing
 the step (DRE-4202); exit 0 on every decision (including the fail-closed
 ones). Anything genuinely unexpected raises and fails the job loudly — the
@@ -106,9 +181,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
+import subprocess
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
 import fix_dead_run
 import github_output
@@ -441,6 +519,35 @@ def superseding_run(history) -> str:
     return ""
 
 
+def superseded(history_file: str, *, say=None) -> tuple[int, str]:
+    """The Report step's check of an agent that says the fault is gone (DRE-5700).
+
+    The decide step asks `superseding_run` once, before the agent; a fix that
+    lands while the agent works is invisible to it. On 2026-10-03 repair run
+    37092915226 decided at 03:21 UTC, main went green on 44eb259 at 04:00:14Z,
+    and the agent correctly opened nothing — which the Report step, 41 seconds
+    later, reported as a dead agent. So the agent may now say the fault is gone
+    (`/tmp/repair-superseded.txt`), and the step asks the SAME rule again on a
+    freshly gathered listing rather than believing it.
+
+    `(0, <green run id>)` when the rule names a run; `(1, "")` otherwise — a
+    history the gather could not read included, because unreadable is never
+    green.
+    """
+    say = say or (lambda line: print(line, file=sys.stderr))
+    history = load_history(history_file)
+    if history is None:
+        say("repair superseded: the run listing could not be read — the "
+            "agent's claim is not verified")
+        return 1, ""
+    green = superseding_run(history)
+    if not green:
+        say("repair superseded: no later green run of this workflow on another "
+            "commit of the default branch — the agent's claim is not verified")
+        return 1, ""
+    return 0, green
+
+
 def load_history(path: str):
     """The gathered history document, or None for "no history".
 
@@ -511,6 +618,8 @@ def decide(
     workflow_name: str = "",
     history=None,
     compares=None,
+    workflow_id=None,
+    in_flight=None,
 ) -> dict:
     """The whole trigger decision. `refs` is an iterable of existing branch
     names (plain, e.g. "repair/<sha>"); `pulls` an iterable of dicts with
@@ -518,8 +627,11 @@ def decide(
     of ANY state; `history` the document `repair_history.py` gathers, or None
     for "nothing is known about earlier runs"; `compares` the comparison of
     each record branch with the default branch keyed by branch name, or None
-    for "nothing is known about the branches". Returns go / branch / attempt /
-    escalate / reason plus the timeout_* detail and superseded_by."""
+    for "nothing is known about the branches"; `workflow_id` the red run's
+    workflow and `in_flight` the `gather-in-flight` document, both None for
+    "nothing known about the open repairs" (DRE-7726). Returns go / branch /
+    attempt / escalate / reason plus the timeout_* detail, superseded_by and
+    beside_in_flight."""
 
     # Every decision answers these, so the workflow can read them without
     # asking which branch it came down: a key the decision omitted would
@@ -527,7 +639,7 @@ def decide(
     detail = {"timeout_job": "", "timeout_step": "", "timeout_limit": "",
               "timeout_commits": "", "superseded_by": "",
               "infra_signature": "", "infra_line": "",
-              "compare_unreadable": ""}
+              "compare_unreadable": "", "beside_in_flight": ""}
 
     def noop(reason: str, escalate: bool = False) -> dict:
         return {"go": False, "branch": "", "attempt": 0,
@@ -578,10 +690,17 @@ def decide(
     if any(p["merged"] for p in pulls if record_re.match(p["head_ref"])):
         # A re-run of the original failed run after the fix merged.
         return noop("already-repaired")
-    if any(p["state"] == "open" and p["head_ref"].startswith("repair/")
-           for p in pulls):
-        # One repair in flight per repo — regardless of which SHA it targets.
-        return noop("repair-in-flight")
+    in_flight_refs = [p["head_ref"] for p in pulls
+                      if p["state"] == "open"
+                      and p["head_ref"].startswith("repair/")]
+    if in_flight_refs:
+        # One repair in flight per repo — regardless of which SHA it targets —
+        # unless every one of them is held up by this workflow (DRE-7726).
+        beside = held_up_by(workflow_id, in_flight, in_flight_refs)
+        if not beside:
+            return noop("repair-in-flight")
+        detail = {**detail,
+                  "beside_in_flight": " ".join(str(n) for n in beside)}
 
     attempts = len(records)
     if attempts >= 2:
@@ -612,6 +731,49 @@ def decide(
         # opened on a comparison nobody could read.
         return noop("duplicate-event")
     return _dispatch(repair_branch(head_sha, 1), 1, repeat, detail)
+
+
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+#: The one job conclusion that says this workflow's failure holds a pull
+#: request up. A job still running, cancelled or skipped says nothing.
+_HELD_UP_CONCLUSION = "failure"
+
+
+def held_up_by(workflow_id, in_flight, refs) -> list[int]:
+    """The numbers of the open repair pull requests on `refs` when EVERY one
+    of them is held up by `workflow_id`'s failure, else [] (DRE-7726).
+
+    Held up means: its `in_flight` entry is readable, targets a workflow
+    other than `workflow_id`, and at least one job of `workflow_id`'s newest
+    pull_request run at its head concluded `failure` — the run itself may
+    not have finished. Anything unreadable (no workflow id, no document, a
+    null or malformed entry) is [], which keeps the lock: the decision this
+    rule found.
+    """
+    if not _is_int(workflow_id) or not isinstance(in_flight, dict):
+        return []
+    numbers = []
+    for ref in refs:
+        entry = in_flight.get(ref)
+        if not isinstance(entry, dict):
+            return []
+        number = entry.get("number")
+        target = entry.get("target_workflow_id")
+        jobs = entry.get("jobs")
+        if not (_is_int(number) and _is_int(target)
+                and isinstance(jobs, list)):
+            return []
+        if target == workflow_id:
+            return []
+        if not any(isinstance(job, dict)
+                   and job.get("conclusion") == _HELD_UP_CONCLUSION
+                   for job in jobs):
+            return []
+        numbers.append(number)
+    return numbers
 
 
 def _ahead(compares, branch: str):
@@ -660,6 +822,10 @@ def _load_records(refs_file: str, pulls_file: str):
             raw_refs = json.load(f)
         with open(pulls_file) as f:
             raw_pulls = json.load(f)
+        # Both payloads are lists. GitHub's error object (the rate-limit
+        # answer of 2026-10-11, DRE-6963) is JSON too, and is not records.
+        if not isinstance(raw_refs, list) or not isinstance(raw_pulls, list):
+            return None
         refs = [
             (r.get("ref") or "").removeprefix("refs/heads/")
             for r in raw_refs
@@ -711,6 +877,366 @@ def record_refs(refs_file: str, head_sha: str) -> list[str]:
     return [name for name in names if rule.match(name)]
 
 
+# --------------------------------------------------------------------------- #
+# The reads, and waiting out the call limit (DRE-6963)                         #
+# --------------------------------------------------------------------------- #
+
+#: How many times a read is made before it is given up.
+GATHER_TRIES = 3
+
+#: The most one gather waits in total, across all its tries.
+GATHER_BUDGET_SECONDS = 20 * 60
+
+#: The wait when the login's own rate limit cannot be read, or does not show
+#: the limit spent (a 502, a secondary limit: the reset is not what failed).
+RATE_LIMIT_FALLBACK_SECONDS = 2 * 60
+
+#: Read again this long after the limit's reset, never on the second itself.
+RESET_MARGIN_SECONDS = 10
+
+#: What a read that never came back leaves in its file. Not JSON, so
+#: `_load_records` and `load_compares` read it as unreadable.
+FETCH_FAILED = "FETCH-FAILED"
+
+#: How much of a read's error message a reason line carries.
+REASON_CHARS = 300
+
+#: The environment values a reason line must never carry.
+_TOKEN_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN")
+
+_HTTP_STATUS = re.compile(r"\s*\(HTTP (\d{3})\)\s*$")
+
+#: How long one `gh api` call may take before it counts as a failed read.
+GH_TIMEOUT_SECONDS = 60
+
+
+def gh_api(path: str):
+    """`gh api <path>` as `(exit code, stdout, stderr)`; never raises."""
+    try:
+        done = subprocess.run(["gh", "api", path], capture_output=True,
+                              text=True, timeout=GH_TIMEOUT_SECONDS,
+                              check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 1, "", f"gh api could not run: {type(exc).__name__}"
+    return done.returncode, done.stdout or "", done.stderr or ""
+
+
+def _redact(text: str) -> str:
+    for name in _TOKEN_ENV:
+        value = os.environ.get(name) or ""
+        if len(value) >= 4:
+            text = text.replace(value, "***")
+    return text
+
+
+def failure_reason(stdout: str, stderr: str) -> str:
+    """`HTTP <status>: <the message's first line>` for a failed read, the
+    status left out when there is none. The message is GitHub's own, off the
+    JSON body `gh api` prints; else the first line `gh` said. Never a token."""
+    lines = [line.strip() for line in (stderr or "").splitlines()
+             if line.strip()]
+    first = lines[0] if lines else ""
+    seen = _HTTP_STATUS.search(first)
+    status = seen.group(1) if seen else ""
+    message = ""
+    try:
+        body = json.loads(stdout or "")
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("message"), str):
+        message = body["message"]
+    if not message.strip():
+        message = _HTTP_STATUS.sub("", first).removeprefix("gh: ")
+    message = (message.strip().splitlines() or ["no error text"])[0]
+    message = _redact(message)[:REASON_CHARS]
+    return f"HTTP {status}: {message}" if status else message
+
+
+def rate_limit_wait(reader, now) -> tuple[int, str]:
+    """How long to wait before the next try, and why.
+
+    The login's own rate limit (`rate_limit`, which costs no call): spent,
+    the wait runs to its reset plus RESET_MARGIN_SECONDS. A read that fails,
+    an answer that cannot be read, or a limit with calls left is
+    RATE_LIMIT_FALLBACK_SECONDS.
+    """
+    fallback = RATE_LIMIT_FALLBACK_SECONDS
+    rc, out, err = reader("rate_limit")
+    if rc != 0:
+        return fallback, ("the rate limit could not be read either ("
+                          f"{failure_reason(out, err)})")
+    try:
+        core = json.loads(out)["resources"]["core"]
+        remaining, reset = int(core["remaining"]), int(core["reset"])
+    except (ValueError, KeyError, TypeError):
+        return fallback, "the rate limit answer could not be read"
+    if remaining > 0:
+        return fallback, f"the call limit is not spent ({remaining} left)"
+    reset_at = datetime.fromtimestamp(reset, timezone.utc)
+    return (max(reset + RESET_MARGIN_SECONDS - int(now()), 0),
+            f"the call limit is spent and resets at "
+            f"{reset_at:%H:%M:%S} UTC")
+
+
+def gather_reads(reads: dict, *, reader, sleep, now, say,
+                 tries: int = GATHER_TRIES,
+                 budget: int = GATHER_BUDGET_SECONDS) -> dict:
+    """Make each read in `reads` (`{name: api path}`), waiting out the call
+    limit between tries.
+
+    Every failed read is said, one line per read per try. After a try with a
+    failure the login's own rate limit says how long to wait
+    (`rate_limit_wait`), then only the reads that failed are made again — at
+    most `tries` tries, and at most `budget` seconds of waiting in all.
+    `reader(path)` answers `(exit code, stdout, stderr)`; `sleep` and `now`
+    are injected so the tests never wait.
+
+    Returns `bodies` (`{name: stdout}`, None for a read that never came
+    back), `failed` (`{name: its last reason}`), `tries` and `waited`.
+    """
+    bodies = {name: None for name in reads}
+    failed = {}
+    pending = list(reads)
+    waited = 0
+    attempt = 0
+    for attempt in range(1, tries + 1):
+        still = []
+        for name in pending:
+            rc, out, err = reader(reads[name])
+            if rc == 0:
+                bodies[name] = out
+                failed.pop(name, None)
+                continue
+            failed[name] = failure_reason(out, err)
+            say(f"repair gather: read {name} failed on try {attempt}/{tries}"
+                f" — {failed[name]}")
+            still.append(name)
+        pending = still
+        if not pending or attempt == tries:
+            break
+        wanted, why = rate_limit_wait(reader, now)
+        wait = max(min(wanted, budget - waited), 0)
+        if wanted > wait:
+            # The reset lies past what is left of the budget, so the next try
+            # comes before it — said, never a "waiting 0s".
+            why += (f" — past the {budget - waited}s left of the {budget}s"
+                    f" wait budget")
+        if not wait:
+            say(f"repair gather: try {attempt + 1}/{tries} now, without "
+                f"waiting — {why}")
+            continue
+        say(f"repair gather: waiting {wait}s before try {attempt + 1}/"
+            f"{tries} — {why}")
+        sleep(wait)
+        waited += wait
+    return {"bodies": bodies, "failed": failed, "tries": attempt,
+            "waited": waited}
+
+
+def _write(path: str, text: str) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+def gather_records(repo: str, refs_out: str, pulls_out: str, *, reader,
+                   sleep, now, say) -> int:
+    """The attempt records — the repair/* refs and the pull requests — into
+    their files. Exit 0 when both were read; otherwise each unread file holds
+    the FETCH-FAILED marker (`records-unreadable` at the decide step), the
+    one-line summary is said as an error annotation, and the exit is 1: a
+    run that could not read its records is a failed run, never a green one
+    that found nothing to do."""
+    files = {"refs": refs_out, "pulls": pulls_out}
+    result = gather_reads(
+        {"refs": f"repos/{repo}/git/matching-refs/heads/repair/",
+         "pulls": f"repos/{repo}/pulls?state=all&per_page=100"},
+        reader=reader, sleep=sleep, now=now, say=say)
+    for name, path in files.items():
+        body = result["bodies"][name]
+        _write(path, body if body is not None else FETCH_FAILED + "\n")
+    if not result["failed"]:
+        return 0
+    name, reason = list(result["failed"].items())[-1]
+    say(f"::error::the repair could not read its attempt records after "
+        f"{result['tries']} tries: {name} — {reason}")
+    return 1
+
+
+def gather_compares(repo: str, default_branch: str, head_sha: str,
+                    refs_file: str, pulls_file: str, out: str, *, reader,
+                    sleep, now, say) -> int:
+    """Each record branch at `head_sha` compared with the default branch, as
+    `{"<ref>": {status, ahead_by} | null}` into `out`. A comparison that
+    never comes back is null for its ref, which `decide` reads as "nothing
+    known" — `duplicate-event`, never `finish-unlanded` (DRE-6526). Exit 0.
+
+    Records that cannot be read (`_load_records` is None — the refs read
+    came back and the pulls read did not, say) make no call and no wait:
+    `decide` answers `records-unreadable` whatever the comparisons hold, and
+    a second twenty minutes of waiting would only spend the job's 45."""
+    refs = record_refs(refs_file, head_sha)
+    if _load_records(refs_file, pulls_file) is None:
+        _write(out, json.dumps({ref: None for ref in refs}) + "\n")
+        say("compared no repair branch: the attempt records are unreadable,"
+            " so the decision is records-unreadable whatever they would say")
+        return 0
+    result = gather_reads(
+        {ref: f"repos/{repo}/compare/{default_branch}...{ref}" for ref in refs},
+        reader=reader, sleep=sleep, now=now, say=say)
+    compares = {}
+    for ref in refs:
+        try:
+            payload = json.loads(result["bodies"][ref] or "")
+        except ValueError:
+            payload = None
+        compares[ref] = ({"status": payload.get("status"),
+                          "ahead_by": payload.get("ahead_by")}
+                         if isinstance(payload, dict) else None)
+    _write(out, json.dumps(compares) + "\n")
+    say(f"compared {len(refs)} repair branch(es) with {default_branch}")
+    return 0
+
+
+#: The line of a repair pull request's body that names the run it repairs —
+#: `repair_finish.py` writes it, and the repair agent's prompt requires it.
+_FAILED_RUN_LINE = re.compile(
+    r"^\s*Failed run:\s*https://github\.com/[^/\s]+/[^/\s]+/actions/runs/"
+    r"([0-9]+)\b", re.M)
+
+
+def failed_run_id(body) -> str:
+    """The run id on a pull request body's first `Failed run:` line, or ""."""
+    seen = _FAILED_RUN_LINE.search(body) if isinstance(body, str) else None
+    return seen.group(1) if seen else ""
+
+
+def _json(body):
+    try:
+        return json.loads(body or "")
+    except ValueError:
+        return None
+
+
+def _newest_run(listing, workflow_id: int):
+    """The newest run of `workflow_id` in a `GET actions/runs` listing: its
+    id, None when the listing holds no run of it, or False when the listing
+    cannot be read."""
+    runs = listing.get("workflow_runs") if isinstance(listing, dict) else None
+    if not isinstance(runs, list):
+        return False
+    ours = [r for r in runs if isinstance(r, dict)
+            and r.get("workflow_id") == workflow_id and _is_int(r.get("id"))]
+    if not ours:
+        return None
+    return max(ours, key=lambda r: (str(r.get("created_at") or ""),
+                                    r["id"]))["id"]
+
+
+def _jobs(payload):
+    """`[{name, conclusion}]` off a `GET actions/runs/<id>/jobs` payload, or
+    None when it cannot be read."""
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
+    if not isinstance(jobs, list) or not all(isinstance(j, dict) for j in jobs):
+        return None
+    return [{"name": j.get("name"), "conclusion": j.get("conclusion")}
+            for j in jobs]
+
+
+def gather_in_flight(repo: str, workflow_id: int, pulls_file: str, out: str,
+                     *, reader, sleep, now, say) -> int:
+    """Each open repair/* pull request's target workflow and the jobs of
+    `workflow_id`'s newest pull_request run at its head, as
+    `{"<head ref>": {number, head_sha, target_workflow_id, jobs} | null}`
+    into `out` (DRE-7726). Exit 0.
+
+    Three reads per pull request, on the same wait-and-retry as the records:
+    the run its body's `Failed run:` line names (its `workflow_id` is the
+    workflow the repair targets), the pull_request runs at its head, and the
+    newest run of `workflow_id`'s latest jobs. A pull request whose reads
+    never come back, whose payloads cannot be read, or whose body names no
+    failed run is null — which `decide` reads as the lock holding. No run of
+    `workflow_id` at the head is no jobs. The waits of both rounds share one
+    GATHER_BUDGET_SECONDS. Records that cannot be read make no call and write
+    `{}`, as `gather-compares` does: the decision is records-unreadable."""
+    try:
+        with open(pulls_file, encoding="utf-8") as f:
+            raw = json.load(f)
+    except (OSError, ValueError):
+        raw = None
+    if not isinstance(raw, list):
+        _write(out, "{}\n")
+        say("read no in-flight repair: the attempt records are unreadable, "
+            "so the decision is records-unreadable whatever they would say")
+        return 0
+    found = {}
+    for p in raw:
+        if not isinstance(p, dict) or p.get("state") != "open":
+            continue
+        head = p.get("head") if isinstance(p.get("head"), dict) else {}
+        ref = head.get("ref") or ""
+        if ref.startswith("repair/"):
+            found[ref] = {"number": p.get("number"), "head_sha": head.get("sha"),
+                          "run": failed_run_id(p.get("body"))}
+    doc = {ref: None for ref in found}
+    readable = {ref: pr for ref, pr in found.items()
+                if pr["run"] and _is_int(pr["number"])
+                and _SHA_RE.match(pr["head_sha"] or "")}
+    for ref in sorted(set(found) - set(readable)):
+        say(f"in-flight repair {ref}: its body names no failed run (or the "
+            f"pull request cannot be read) — null, the lock holds for it")
+
+    first = gather_reads(
+        {**{f"run {ref}": f"repos/{repo}/actions/runs/{pr['run']}"
+            for ref, pr in readable.items()},
+         **{f"head {ref}": (f"repos/{repo}/actions/runs?head_sha="
+                            f"{pr['head_sha']}&event=pull_request&per_page=100")
+            for ref, pr in readable.items()}},
+        reader=reader, sleep=sleep, now=now, say=say)
+    targets, runs = {}, {}
+    for ref in readable:
+        run = _json(first["bodies"][f"run {ref}"])
+        target = run.get("workflow_id") if isinstance(run, dict) else None
+        newest = _newest_run(_json(first["bodies"][f"head {ref}"]), workflow_id)
+        if not _is_int(target) or newest is False:
+            continue
+        targets[ref], runs[ref] = target, newest
+
+    second = gather_reads(
+        {ref: f"repos/{repo}/actions/runs/{run}/jobs?filter=latest&per_page=100"
+         for ref, run in runs.items() if run is not None},
+        reader=reader, sleep=sleep, now=now, say=say,
+        budget=max(GATHER_BUDGET_SECONDS - first["waited"], 0))
+    for ref, target in targets.items():
+        jobs = ([] if runs[ref] is None
+                else _jobs(_json(second["bodies"][ref])))
+        if jobs is None:
+            continue
+        doc[ref] = {"number": readable[ref]["number"],
+                    "head_sha": readable[ref]["head_sha"],
+                    "target_workflow_id": target, "jobs": jobs}
+    _write(out, json.dumps(doc) + "\n")
+    say(f"read {len(found)} in-flight repair pull request(s), "
+        f"{sum(1 for e in doc.values() if e is not None)} readable")
+    return 0
+
+
+def load_in_flight(path: str):
+    """The gathered in-flight document, or None — which keeps the lock."""
+    if not path:
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return doc if isinstance(doc, dict) else None
+
+
+def _workflow_id(value: str):
+    """`--workflow-id` as an int, or None when it is not one."""
+    return int(value) if re.fullmatch(r"[0-9]+", value or "") else None
+
+
 def outputs(decision: dict) -> str:
     """The block the workflow appends to `$GITHUB_OUTPUT` for `decision`.
 
@@ -735,6 +1261,9 @@ def outputs(decision: dict) -> str:
         # DRE-5069: the green run that superseded this failure, so the skip
         # names what proved main green. Empty unless the reason is superseded.
         ("superseded_by", decision.get("superseded_by", "")),
+        # DRE-7726: the in-flight repair pull requests this go was dispatched
+        # beside. Empty on every other decision.
+        ("beside_in_flight", decision.get("beside_in_flight", "")),
     ])
 
 
@@ -759,15 +1288,59 @@ def main(argv: list[str]) -> int:
     # Optional: each record branch compared with the default branch
     # (DRE-6526). Absent or unreadable ⇒ "nothing known" ⇒ duplicate-event.
     d.add_argument("--compares-file", default="")
+    # Optional (DRE-7726): the red run's workflow, and the open repairs'
+    # checks at their heads. Absent or unreadable ⇒ the lock holds.
+    d.add_argument("--workflow-id", default="")
+    d.add_argument("--in-flight-file", default="")
     r = sub.add_parser("record-refs")
     r.add_argument("--refs-file", required=True)
     r.add_argument("--head-sha", required=True)
+    g = sub.add_parser("gather-records")
+    g.add_argument("--repo", required=True)
+    g.add_argument("--refs-out", required=True)
+    g.add_argument("--pulls-out", required=True)
+    c = sub.add_parser("gather-compares")
+    c.add_argument("--repo", required=True)
+    c.add_argument("--default-branch", required=True)
+    c.add_argument("--head-sha", required=True)
+    c.add_argument("--refs-file", required=True)
+    c.add_argument("--pulls-file", required=True)
+    c.add_argument("--out", required=True)
+    i = sub.add_parser("gather-in-flight")
+    i.add_argument("--repo", required=True)
+    i.add_argument("--workflow-id", required=True, type=int)
+    i.add_argument("--pulls-file", required=True)
+    i.add_argument("--out", required=True)
+    # DRE-5700: the Report step's re-ask of the superseded rule. Prints the
+    # green run's id and exits 0, or exits 1.
+    s = sub.add_parser("superseded")
+    s.add_argument("--history-file", required=True)
     args = parser.parse_args(argv)
+
+    if args.cmd == "superseded":
+        code, green = superseded(args.history_file)
+        if green:
+            print(green)
+        return code
 
     if args.cmd == "record-refs":
         for name in record_refs(args.refs_file, args.head_sha):
             print(name)
         return 0
+
+    # DRE-6963: the reads, on the real `gh` and the real clock.
+    live = {"reader": gh_api, "sleep": time.sleep, "now": time.time,
+            "say": lambda line: print(line, flush=True)}
+    if args.cmd == "gather-records":
+        return gather_records(args.repo, args.refs_out, args.pulls_out,
+                              **live)
+    if args.cmd == "gather-compares":
+        return gather_compares(args.repo, args.default_branch, args.head_sha,
+                               args.refs_file, args.pulls_file, args.out,
+                               **live)
+    if args.cmd == "gather-in-flight":
+        return gather_in_flight(args.repo, args.workflow_id, args.pulls_file,
+                                args.out, **live)
 
     # Stdout is the output FILE for this step, so the decision is made with
     # that channel shut: anything this module or anything it imports prints
@@ -780,9 +1353,11 @@ def main(argv: list[str]) -> int:
                         "timeout_job": "", "timeout_step": "",
                         "timeout_limit": "", "timeout_commits": "",
                         "superseded_by": "", "infra_signature": "",
-                        "infra_line": "", "compare_unreadable": ""}
+                        "infra_line": "", "compare_unreadable": "",
+                        "beside_in_flight": ""}
             print("repair decide: attempt records unreadable — fail-closed, no "
-                  "dispatch (the next failure event retries with fresh records)",
+                  "dispatch (the gather step already waited out the call "
+                  "limit, said why each read failed, and fails this run)",
                   file=sys.stderr)
         else:
             refs, pulls = records
@@ -803,6 +1378,8 @@ def main(argv: list[str]) -> int:
                 workflow_name=args.workflow_name,
                 history=history,
                 compares=load_compares(args.compares_file),
+                workflow_id=_workflow_id(args.workflow_id),
+                in_flight=load_in_flight(args.in_flight_file),
             )
             # The branch a go dispatches to, or the one `finish-unlanded`
             # opens; every other decision names none.
@@ -815,6 +1392,13 @@ def main(argv: list[str]) -> int:
                       f"{args.default_branch} could not be read — fail-closed, "
                       f"nothing opened (the next failure event retries with a "
                       f"fresh comparison)", file=sys.stderr)
+            if decision["beside_in_flight"]:
+                numbers = ", ".join(
+                    f"#{n}" for n in decision["beside_in_flight"].split())
+                print(f"repair decide: the open repair pull request(s) "
+                      f"{numbers} target another workflow and are red on "
+                      f"this one — repairing beside them, never folded in "
+                      f"(DRE-7726)", file=sys.stderr)
             if decision["infra_signature"]:
                 # DRE-6522: the 16:07 PT backoff of 2026-10-09 could not be
                 # explained from its own run. This line is the explanation.

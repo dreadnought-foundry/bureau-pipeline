@@ -126,9 +126,13 @@ EFFORT_PENDING = set()
 UPLOAD_CALL = "upload_agent_log.py"
 
 #: The `effort_arg` output a model-selection step writes — `--effort <level>`,
-#: or empty when the model declares no effort (DRE-4836).
+#: or empty when the model declares no effort (DRE-4836). A job with a shadow
+#: mode reads it the way its agent steps do, one step per branch (DRE-7286).
 EFFORT_ARG_EXPR = re.compile(
-    r"^\$\{\{\s*steps\.[A-Za-z0-9_-]+\.outputs\.effort_arg\s*\}\}$")
+    r"^\$\{\{\s*(?:steps\.[A-Za-z0-9_-]+\.outputs\.effort_arg"
+    r"|inputs\.shadow && steps\.[A-Za-z0-9_-]+\.outputs\.effort_arg"
+    r" \|\| !inputs\.shadow && steps\.[A-Za-z0-9_-]+\.outputs\.effort_arg"
+    r" \|\| '')\s*\}\}$")
 
 #: `$EFFORT_ARG` unquoted, so an empty value is no argument at all and
 #: `--effort high` splits into its two words. Quoted, the first is an empty

@@ -109,6 +109,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
 BRIEF_PATH = os.path.join(ROOT, "briefs", "groomer.md")
 
+# Every process that imports this module and judges reads the model home
+# (DRE-6940): `judge` picks its model through `planning_classify._pick_model`.
+READS_MODEL_HOME = ("*",)
+
 #: The heading the ranking prompt lives under in the groomer brief.
 PROMPT_HEADING = "## Ranking the population"
 

@@ -59,7 +59,7 @@ class RecordingLinear:
         self.updated = None
         self.created = None
 
-    def gql(self, query, variables=None):
+    def gql(self, query, variables=None, **_kw):
         q = " ".join(query.split())
         self.requests.append(q)
         v = variables or {}

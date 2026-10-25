@@ -1,0 +1,263 @@
+{
+  "_readme": "Every writer that files a Linear card automatically (DRE-7452). `disposition` is `notice` — repointed to a console alert by the pipeline-notices epic, with its `notice_key` from that epic's contract — or `kept`: it stays a card, and `reason` opens with why, `work`, `decision` or `record`. `site` names the function or workflow step that files the card when the file also holds other writers. `python3 scripts/notice_writers.py check` discovers every card-creating file in this checkout (and, given `--agent-bureau-dir`, in agent-bureau) and fails on one no row declares for its repo; `report` reads each notice row as repointed, still-files-cards or unread. This repository's CI runs `check` without the flag, so agent-bureau is read only when someone names it.",
+  "found": "2026-10-16, an exploration of both repos including a search for raw issueCreate mutations; line numbers drift, files do not",
+  "writers": [
+    {
+      "id": "medic",
+      "repo": "bureau-pipeline",
+      "file": ".github/workflows/medic.yml",
+      "title": "Pipeline failure: <workflow>",
+      "disposition": "notice",
+      "notice_key": "medic:<repo>:<workflow file>",
+      "reason": "repointed by this epic — the title comes from scripts/medic_retry.py failure_card_title; closed by the console's closer monitor"
+    },
+    {
+      "id": "red-main-budget",
+      "repo": "bureau-pipeline",
+      "file": ".github/workflows/red-main-repair.yml",
+      "title": "Red main needs a human — repair budget exhausted (<sha7>)",
+      "disposition": "notice",
+      "notice_key": "red_main:<repo>:budget_exhausted",
+      "reason": "repointed by this epic — closed by red-main repair, with the all-clear copy"
+    },
+    {
+      "id": "red-main-decision",
+      "repo": "bureau-pipeline",
+      "file": ".github/workflows/red-main-repair.yml",
+      "title": "Red main needs a decision — <WF> failing on the default branch",
+      "disposition": "notice",
+      "notice_key": "red_main:<repo>:needs_decision",
+      "reason": "repointed by this epic — closed by red-main repair, with the all-clear copy"
+    },
+    {
+      "id": "nightly-watch",
+      "repo": "bureau-pipeline",
+      "file": ".github/workflows/nightly-watch.yml",
+      "title": [
+        "Nightly full CI run on main did not run — <owner>",
+        "Nightly watcher cannot read a repo's CI — <owner>"
+      ],
+      "disposition": "notice",
+      "notice_key": [
+        "nightly_watch:<owner>:did_not_run",
+        "nightly_watch:<owner>:cannot_read"
+      ],
+      "reason": "repointed by this epic — the titles come from scripts/nightly_watch.py; closed by the writer when the nightly is seen, or the repo reads, again"
+    },
+    {
+      "id": "model-trial",
+      "repo": "bureau-pipeline",
+      "file": ".github/workflows/model-adoption.yml",
+      "title": "Model trial failed: <candidate>",
+      "disposition": "notice",
+      "notice_key": "model_trial:<candidate>",
+      "reason": "repointed by this epic — closed by the writer when a later trial passes, or by the console's closer monitor"
+    },
+    {
+      "id": "switch-alarm",
+      "repo": "bureau-pipeline",
+      "file": "scripts/switch_reason.py",
+      "title": "Switch <NAME> in <slug> is still off after its reason cleared",
+      "disposition": "notice",
+      "notice_key": "switch_off:<repo>:<SWITCH_NAME>",
+      "reason": "repointed by this epic — closed by the writer when the switch is on"
+    },
+    {
+      "id": "groom-stall",
+      "repo": "bureau-pipeline",
+      "file": "scripts/reconcile.py",
+      "site": "_report_groom_stall",
+      "title": "bureau-pipeline: the groom queue has stalled — approved cards are not reaching Planning",
+      "disposition": "notice",
+      "notice_key": "groom_stall",
+      "reason": "repointed by this epic — closed by the writer when the stall no longer holds"
+    },
+    {
+      "id": "reviewer-outage",
+      "repo": "bureau-pipeline",
+      "file": "scripts/reconcile.py",
+      "site": "report_fleet_reviewer_outage",
+      "title": "Reviewer down since <HH:MM PT> — N runs, M repos",
+      "disposition": "notice",
+      "notice_key": "reviewer_outage:fleet",
+      "reason": "repointed by this epic — closed by the writer, with the all-clear copy"
+    },
+    {
+      "id": "standards-sync",
+      "repo": "agent-bureau",
+      "file": ".github/workflows/standards-sync.yml",
+      "title": "agent-bureau: the nightly standards sync could not publish its PR",
+      "disposition": "notice",
+      "notice_key": "standards_sync:publish_failed",
+      "reason": "repointed by this epic — closed by the writer on the next successful run"
+    },
+    {
+      "id": "spending-decision",
+      "repo": "bureau-pipeline",
+      "file": "scripts/model_adoption_actions.py",
+      "title": "Spending decision: <candidate> — <ask>",
+      "disposition": "kept",
+      "reason": "decision: a spending question for the CEO (open_question_card)"
+    },
+    {
+      "id": "model-adoption-record",
+      "repo": "bureau-pipeline",
+      "file": "scripts/model_adoption_actions.py",
+      "title": "Model adoption: <old> → <candidate>",
+      "disposition": "kept",
+      "reason": "record: filed straight into Done (open_record_card)"
+    },
+    {
+      "id": "release-deferral",
+      "repo": "bureau-pipeline",
+      "file": "scripts/release_deferral.py",
+      "title": "<repo>: <surface> release deferred — <reason>",
+      "disposition": "kept",
+      "reason": "decision: a declared Green Light arrival (deferred-release, DRE-7234)"
+    },
+    {
+      "id": "epic-growth",
+      "repo": "bureau-pipeline",
+      "file": "scripts/reconcile.py",
+      "title": "Epic grew past its green light: <epic> approved at <n> cards, running <m>",
+      "disposition": "kept",
+      "reason": "decision: a declared Green Light arrival (ask_epic_growth_question)"
+    },
+    {
+      "id": "mirror-refusal",
+      "repo": "bureau-pipeline",
+      "file": "scripts/mirror_check.py",
+      "title": "agent-bureau: mirrors of <files> must follow bureau-pipeline",
+      "disposition": "kept",
+      "reason": "work: an agent:engineer card asking for a fix"
+    },
+    {
+      "id": "onboarding-stopped",
+      "repo": "agent-bureau",
+      "file": ".github/workflows/onboard.yml",
+      "title": "<the card onboard.yml files when onboarding stops>",
+      "disposition": "kept",
+      "reason": "work: the card DRE-7214 designed onboard.yml to file"
+    },
+    {
+      "id": "weekly-report",
+      "repo": "agent-bureau",
+      "file": "console/backend/weekly_agent_report_card.py",
+      "title": "<the weekly agent report for the CEO>",
+      "disposition": "kept",
+      "reason": "record: the CEO's weekly read in Green Light (raw issueCreate)"
+    },
+    {
+      "id": "sunday-make-card",
+      "repo": "agent-bureau",
+      "file": "console/backend/morning_briefing_sunday_actions.py",
+      "title": "<the fix the CEO asked for on the Sunday briefing>",
+      "disposition": "kept",
+      "reason": "work: the fix card the CEO asks for by pressing \"Make this a card\" on the Sunday briefing — a person asked for it, and it is a fix to build (raw issueCreate)"
+    },
+    {
+      "id": "project-agent-card",
+      "repo": "agent-bureau",
+      "file": "console/backend/agent_tools.py",
+      "title": "<the card a person asked a project agent for>",
+      "disposition": "kept",
+      "reason": "work: a card a person asks a project agent for in the console chat, posted with its receipt in the thread — nothing files it unless a person asks (LinearClient.create_card, raw issueCreate)"
+    },
+    {
+      "id": "demo-seed",
+      "repo": "agent-bureau",
+      "file": "demo/demo_library.py",
+      "title": "<the curated demo epic and its children>",
+      "disposition": "kept",
+      "reason": "work: the curated demo epic and its children, seeded only when the operator runs it (seed, raw issueCreate)"
+    },
+    {
+      "id": "planner-children",
+      "repo": "bureau-pipeline",
+      "file": ".github/workflows/plan.yml",
+      "title": "<each card of an epic's plan>",
+      "disposition": "kept",
+      "reason": "work: the planner's subissue and oneoff calls — the cards an approved plan is built from"
+    },
+    {
+      "id": "mid-epic",
+      "repo": "bureau-pipeline",
+      "file": "scripts/mid_epic.py",
+      "title": "<a card discovered mid-epic>",
+      "disposition": "kept",
+      "reason": "work: a sibling card discovered while an epic is being built"
+    },
+    {
+      "id": "triage-repair",
+      "repo": "bureau-pipeline",
+      "file": "scripts/triage_repair.py",
+      "title": "<a sibling a returned card is cut into>",
+      "disposition": "kept",
+      "reason": "work: the pieces a returned card is cut into"
+    },
+    {
+      "id": "repair-card",
+      "repo": "bureau-pipeline",
+      "file": "scripts/repair_card.py",
+      "title": "Red main repaired — <workflow> failed at <sha7>",
+      "disposition": "kept",
+      "reason": "work: the card a red-main repair runs under"
+    },
+    {
+      "id": "dependabot-card",
+      "repo": "bureau-pipeline",
+      "file": "scripts/reconcile.py",
+      "title": "<repo>: <dependabot pull request title>",
+      "disposition": "kept",
+      "reason": "work: the card a dependabot pull request is reviewed and merged under"
+    },
+    {
+      "id": "stranded-fix",
+      "repo": "bureau-pipeline",
+      "file": "scripts/reconcile.py",
+      "title": "<repo>: a fix stranded on <branch>",
+      "disposition": "kept",
+      "reason": "work: the card that lands a fix whose commits never reached its pull request (_file_stranded_fix_card)"
+    },
+    {
+      "id": "flaky-test",
+      "repo": "bureau-pipeline",
+      "file": "scripts/reconcile.py",
+      "title": "<repo>: flaky test turned main red twice in <window>",
+      "disposition": "kept",
+      "reason": "work: the flaky test's fix card (DRE-6870)"
+    },
+    {
+      "id": "fix-result-stranded",
+      "repo": "bureau-pipeline",
+      "file": "scripts/report_fix_result.sh",
+      "title": "<repo>: a fix stranded on <branch>",
+      "disposition": "kept",
+      "reason": "work: the stranded-fix card a fix run files when its commits never reached the pull request"
+    },
+    {
+      "id": "onboarding-retirement",
+      "repo": "agent-bureau",
+      "file": ".github/workflows/onboard.yml",
+      "title": "<the retirement step's card>",
+      "disposition": "kept",
+      "reason": "work: the card onboard.yml's retirement step files"
+    },
+    {
+      "id": "linear-ops",
+      "repo": "bureau-pipeline",
+      "file": "scripts/linear_ops.py",
+      "title": "<any title its callers pass>",
+      "disposition": "kept",
+      "reason": "work: the create seam itself — every writer above that uses linear_ops files through it"
+    },
+    {
+      "id": "notice-fallback",
+      "repo": "bureau-pipeline",
+      "file": "scripts/pipeline_notice.py",
+      "title": "<the title the repointed writer filed before>",
+      "disposition": "kept",
+      "reason": "record: fallback when the console door is down"
+    }
+  ]
+}

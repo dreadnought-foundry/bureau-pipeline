@@ -20,8 +20,10 @@ DRE-5923 adds the paragraph that follows once DRE-5920's siblings land: the
 pipeline starts the proof run itself, on its own workflow and with scripted
 read-only identities, and the run opens the record as a pull request on
 `agent/DRE-<n>-proof-record`. The card closes on the approved merge of that
-record. A step only the CEO's own login can make is written
-`needs the CEO's press: <the press>`, so the run can name it back.
+record. A press that is a business decision of the CEO's is written
+`needs the CEO's press: <the press>`, so the run can name it back; a press the
+operator can make — on the sandbox project, or under the operator's standing
+permission of 2026-10-07 — is the operator's row and never his (DRE-6842).
 """
 
 from __future__ import annotations
@@ -167,7 +169,7 @@ class PlannerBriefTest(unittest.TestCase):
 
     def test_the_card_closes_on_the_approved_merge_of_the_record(self):
         self.assertSays("closes on the approved merge of the record")
-        self.assertSays("the closing line the check reads stays verbatim")
+        self.assertSays("carries no criterion about merging, reading or closing the record")
 
 
 if __name__ == "__main__":

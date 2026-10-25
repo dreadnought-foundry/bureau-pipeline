@@ -28,8 +28,10 @@ WHAT THESE TESTS PIN.
   * The RECEIPT and the ALARM (DRE-6437): a cleared reason posts one
     `🔀 switch-cleared` receipt per switch per repo on the first named card,
     composed by `pipeline_act.receipt`; a receipt twelve hours old with the
-    switch still off files one deduplicated alarm card. Nothing is read when
-    the reason has not cleared, and a dry pass writes nothing.
+    switch still off raises the `switch_off:<repo>:<SWITCH>` console alert at
+    WARN (DRE-7455), handing the notice client the card it used to file as its
+    fallback, and a switch that reads on resolves it. Nothing is read when the
+    reason has not cleared, and a dry pass writes nothing.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_switch_reason.py -v
 """
@@ -51,6 +53,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import pipeline_act  # noqa: E402
+import pipeline_notice  # noqa: E402
 import prose_blockers  # noqa: E402
 import switch_reason  # noqa: E402
 
@@ -66,6 +69,8 @@ ON_MAIN = {
     "GREEN_LIGHT_REPLY_LIVE": (".github/workflows/reconcile.yml",
                                "Reply to the CEO's Green Light comments"),
     "HYGIENE_LIVE": (".github/workflows/hygiene.yml", "Decide dry run"),
+    # DRE-7179: the Triage Repair run, read the way hygiene.yml reads its own.
+    "TRIAGE_REPAIR_LIVE": (".github/workflows/triage-repair.yml", "Decide dry run"),
 }
 
 
@@ -89,10 +94,10 @@ class TestCatalog:
         assert doc["companion_suffix"] == "_OFF_UNTIL"
         assert doc["alarm_after_hours"] == 12
 
-    def test_it_declares_exactly_the_three_switches_on_main(self):
+    def test_it_declares_exactly_the_four_switches_on_main(self):
         rows = switch_reason.load()["switches"]
         assert {r["name"]: (r["reader"], r["step"]) for r in rows} == ON_MAIN
-        assert len(rows) == 3
+        assert len(rows) == 4
         for row in rows:
             assert set(row) == {"name", "reader", "step", "means"}
             assert row["means"].strip().endswith(".")
@@ -110,7 +115,7 @@ class TestCatalog:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "check"],
             capture_output=True, text=True, cwd=ROOT)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert "6 switch read(s), 3 row(s), 0 problem(s)" in done.stdout
+        assert "8 switch read(s), 4 row(s), 0 problem(s)" in done.stdout
 
     def test_reads_are_discovered_from_the_workflows(self):
         # Each switch is read where it acts, and once more by the sweep's
@@ -486,7 +491,7 @@ class TestMain:
         assert len(gql.calls) == 2
         assert ("switches: HYGIENE_LIVE is off — until DRE-1, DRE-2 land: "
                 "DRE-1 Todo, DRE-2 unread") in lines
-        assert len(_switch_lines(lines)) == 3
+        assert len(_switch_lines(lines)) == 4
 
     def test_the_budget_trailer_is_last(self, capsys):
         _, lines, _ = _main(capsys, {COMPANION: THREE},
@@ -502,7 +507,7 @@ class TestMain:
             capture_output=True, text=True, cwd=ROOT, env=env)
         assert done.returncode == 0, done.stdout + done.stderr
         lines = done.stdout.splitlines()
-        assert len(_switch_lines(lines)) == 3
+        assert len(_switch_lines(lines)) == 4
         assert lines[-1].startswith("linear-budget:")
 
 
@@ -548,7 +553,8 @@ class TestStep:
     def test_every_switch_and_its_companion_is_plumbed(self):
         assert _unplumbed(_read_step(), switch_reason.load()["switches"]) == []
         env = _read_step()["env"]
-        for name in ("PROOF_DISPATCH_LIVE", "GREEN_LIGHT_REPLY_LIVE", "HYGIENE_LIVE"):
+        for name in ("PROOF_DISPATCH_LIVE", "GREEN_LIGHT_REPLY_LIVE", "HYGIENE_LIVE",
+                     "TRIAGE_REPAIR_LIVE"):
             assert env[name] == f"${{{{ vars.{name} }}}}"
             assert env[f"{name}_OFF_UNTIL"] == f"${{{{ vars.{name}_OFF_UNTIL }}}}"
 
@@ -643,6 +649,7 @@ RECEIPT_LINE = (f"{KEY} — its reason cleared at 2026-10-09 05:00 PT: "
                 "DRE-6141 Done, DRE-6142 Done, DRE-6143 Done. It may be turned on: "
                 f"gh variable set {SWITCH} --body true -R {OWNER_REPO}")
 ALARM_TITLE = f"Switch {SWITCH} in agent-bureau is still off after its reason cleared"
+ALARM_KEY = f"switch_off:agent-bureau:{SWITCH}"
 
 
 def _iso(moment: datetime) -> str:
@@ -656,18 +663,17 @@ def _receipt(hours_ago: float, line: str = RECEIPT_LINE) -> dict:
 
 
 class FakeLinear:
-    """The receipt phase's one read and three writes, recorded in order.
+    """The receipt phase's one read and one write, recorded in order. It has
+    no way to create a card: the alarm is a console alert (DRE-7455).
 
     A posted comment joins the thread, stamped NOW, so a second pass against
     the same fake reads the receipt the first one left."""
 
-    def __init__(self, threads=None, open_card=None, thread_error=None):
+    def __init__(self, threads=None, thread_error=None):
         self.threads = {k: list(v) for k, v in (threads or {}).items()}
-        self.open_card = open_card
         self.thread_error = thread_error
         self.calls = []
         self.comments = []
-        self.created = []
 
     def thread(self, identifier):
         self.calls.append(("thread", identifier))
@@ -681,21 +687,40 @@ class FakeLinear:
         self.threads.setdefault(identifier, []).append(
             {"body": body, "createdAt": _iso(NOW)})
 
-    def find_open(self, title):
-        self.calls.append(("find_open", title))
-        return self.open_card
 
-    def create_card(self, title, body, *, repo_slug, labels=()):
-        self.calls.append(("create", title))
-        self.created.append((title, body, repo_slug, labels))
-        return {"identifier": "DRE-9999", "url": "https://linear.app/x/DRE-9999"}
+class FakeNotices:
+    """`pipeline_notice` behind the pass: every raise and resolve, in order."""
+
+    def __init__(self, outcome="raised", error=None):
+        self.outcome = outcome
+        self.error = error
+        self.calls = []
+
+    def raise_notice(self, notice, *, severity, title, body, action_url=None,
+                     action_label=None, fallback=None):
+        self.calls.append(("raise", notice, dict(
+            severity=severity, title=title, body=body, fallback=fallback)))
+        if self.error is not None:
+            raise self.error
+        return self.outcome
+
+    def resolve_notice(self, notice, *, recovery_title=None, recovery_body=None):
+        self.calls.append(("resolve", notice, dict(
+            recovery_title=recovery_title, recovery_body=recovery_body)))
+        return "resolved"
+
+    def of(self, action):
+        return [(notice, kw) for kind, notice, kw in self.calls if kind == action]
 
 
-def _pass(capsys, env=None, linear=None, states=None, argv=(), gql=None):
+def _pass(capsys, env=None, linear=None, states=None, argv=(), gql=None,
+          notices=None):
     linear = linear if linear is not None else FakeLinear()
+    notices = notices if notices is not None else FakeNotices()
     gql = gql if gql is not None else FakeGql(ALL_DONE if states is None else states)
     code = switch_reason.main(list(argv), env=LIVE if env is None else env,
-                              gql=gql, now=NOW, linear=linear)
+                              gql=gql, now=NOW, linear=linear, notices=notices)
+    _pass.notices = notices
     return code, capsys.readouterr().out.splitlines(), linear
 
 
@@ -712,7 +737,7 @@ class TestReceipt:
         assert pipeline_act.read_trailer(body)["tag"] == TAG
         assert linear.calls[0] == ("thread", "DRE-6141")
         assert [c for c in linear.calls if c[0] == "thread"] == [("thread", "DRE-6141")]
-        assert linear.created == []
+        assert _pass.notices.of("raise") == []
         assert any(l.startswith("switches: ") and "DRE-6141" in l and "posted" in l
                    for l in lines), lines
 
@@ -722,7 +747,7 @@ class TestReceipt:
         code, lines, linear = _pass(capsys, linear=linear)
         assert code == 0
         assert len(linear.comments) == 1
-        assert linear.created == []
+        assert _pass.notices.of("raise") == []
         assert any("receipt already stands" in l and "DRE-6141" in l for l in lines), lines
 
     def test_another_repos_receipt_does_not_stop_this_repos(self, capsys):
@@ -774,7 +799,7 @@ class TestReceipt:
         linear = FakeLinear(thread_error=RuntimeError("Linear refused: RATELIMITED"))
         code, lines, linear = _pass(capsys, linear=linear)
         assert code == 0
-        assert linear.comments == [] and linear.created == []
+        assert linear.comments == [] and _pass.notices.of("raise") == []
         assert any("RATELIMITED" in l for l in lines), lines
         assert lines[-1].startswith("linear-budget:")
 
@@ -791,64 +816,110 @@ class TestReceipt:
 
 
 class TestAlarm:
-    def test_thirteen_hours_on_files_one_card_after_find_open(self, capsys):
+    """Twelve hours on, the alarm is the console alert `switch_off:<repo>:
+    <SWITCH>` at WARN — raised through the notice client, never a card filed
+    here (DRE-7455). The one-row-per-key alert is its dedupe: a later pass
+    raises the same key again, which the door counts a repeat."""
+
+    def test_thirteen_hours_on_raises_the_switch_off_alert_at_warn(self, capsys):
         code, lines, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
         assert code == 0
         assert linear.comments == []
-        assert len(linear.created) == 1
-        title, body, slug, _labels = linear.created[0]
-        assert title == ALARM_TITLE
-        assert slug == "agent-bureau"
-        kinds = [c[0] for c in linear.calls]
-        assert kinds.index("find_open") < kinds.index("create")
-        assert ("find_open", ALARM_TITLE) in linear.calls
+        (notice, kw), = _pass.notices.of("raise")
+        assert notice == ALARM_KEY
+        assert kw["severity"] == "WARN"
+        assert kw["title"] == ALARM_TITLE
         for expected in (SWITCH, "agent-bureau", "2026-10-08 16:00 PT", "13 hours",
                          "DRE-6141", "DRE-6142", "DRE-6143",
                          f"gh variable set {SWITCH} --body true -R {OWNER_REPO}"):
-            assert expected in body, expected
-        assert any("DRE-9999" in l for l in lines), lines
+            assert expected in kw["body"], expected
+        assert any(l.startswith(f"switches: {SWITCH}") and "raised" in l
+                   for l in lines), lines
 
-    def test_an_open_alarm_files_nothing(self, capsys):
-        _, lines, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]},
-                                                           open_card="DRE-7000"))
-        assert ("find_open", ALARM_TITLE) in linear.calls
-        assert linear.created == []
-        assert any("DRE-7000" in l for l in lines), lines
+    def test_the_key_is_the_contracts(self):
+        assert switch_reason.notice_key("agent-bureau", SWITCH) == ALARM_KEY
+        assert pipeline_notice.KEY_PATTERN.match(ALARM_KEY)
 
-    def test_two_hours_on_files_nothing(self, capsys):
+    def test_a_second_pass_raises_the_same_key_again(self, capsys):
+        linear = FakeLinear({"DRE-6141": [_receipt(13)]})
+        notices = FakeNotices()
+        _pass(capsys, linear=linear, notices=notices)
+        notices.outcome = "repeat"
+        _, lines, _ = _pass(capsys, linear=linear, notices=notices)
+        assert [n for n, _ in notices.of("raise")] == [ALARM_KEY, ALARM_KEY]
+        assert any("repeat" in l for l in lines), lines
+
+    def test_two_hours_on_raises_nothing(self, capsys):
         _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(2)]}))
-        assert linear.created == []
+        assert _pass.notices.calls == []
         assert linear.comments == []
-        assert not any(c[0] == "find_open" for c in linear.calls)
 
     def test_exactly_twelve_hours_alarms(self, capsys):
-        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(12)]}))
-        assert len(linear.created) == 1
+        _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(12)]}))
+        assert len(_pass.notices.of("raise")) == 1
 
     def test_the_threshold_is_read_from_the_catalog(self, capsys, monkeypatch):
         doc = switch_reason.load()
         doc["alarm_after_hours"] = 24
         monkeypatch.setattr(switch_reason, "load", lambda path=None: doc)
-        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
-        assert linear.created == []
-
-    def test_an_on_switch_alarms_nothing(self, capsys):
-        _, _, linear = _pass(capsys, env={**LIVE, SWITCH: "true"},
-                             linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
-        assert linear.created == [] and linear.calls == []
+        _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert _pass.notices.of("raise") == []
 
     def test_an_unreadable_receipt_time_alarms_nothing(self, capsys):
         receipt = {**_receipt(13), "createdAt": "not a time"}
         _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [receipt]}))
-        assert linear.created == [] and linear.comments == []
+        assert _pass.notices.of("raise") == [] and linear.comments == []
 
-    def test_a_card_that_cannot_be_filed_still_exits_zero(self, capsys):
-        class Refusing(FakeLinear):
-            def create_card(self, title, body, *, repo_slug, labels=()):
-                raise RuntimeError("Linear refused the create")
-        code, lines, _ = _pass(capsys, linear=Refusing({"DRE-6141": [_receipt(13)]}))
+    def test_a_lost_alarm_still_exits_zero_and_says_so(self, capsys):
+        code, lines, _ = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}),
+                               notices=FakeNotices(outcome="lost"))
         assert code == 0
-        assert any("Linear refused the create" in l for l in lines), lines
+        assert any(l.startswith(f"switches: {SWITCH}") and "lost" in l
+                   for l in lines), lines
+
+    def test_a_client_that_raises_still_exits_zero(self, capsys):
+        notices = FakeNotices(error=ValueError("notice key refused"))
+        code, lines, _ = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}),
+                               notices=notices)
+        assert code == 0
+        assert any("notice key refused" in l for l in lines), lines
+
+
+class TestResolve:
+    """The writer closes its own alert: a switch that reads on resolves
+    `switch_off:<repo>:<SWITCH>`, with no all-clear copy — a WARN never
+    leaves the console."""
+
+    def test_an_on_switch_resolves_its_alert_with_no_recovery_copy(self, capsys):
+        _, _, linear = _pass(capsys, env={**LIVE, SWITCH: "true"},
+                             linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        assert linear.calls == []
+        assert _pass.notices.of("raise") == []
+        assert (ALARM_KEY, {"recovery_title": None, "recovery_body": None}) in \
+            _pass.notices.of("resolve")
+
+    def test_every_on_switch_resolves_its_own_key_and_an_off_one_does_not(self, capsys):
+        env = {**LIVE, "HYGIENE_LIVE": "true", "TRIAGE_REPAIR_LIVE": "true"}
+        _pass(capsys, env=env, states={"DRE-6141": "In Review"})
+        assert [n for n, _ in _pass.notices.of("resolve")] == [
+            "switch_off:agent-bureau:HYGIENE_LIVE",
+            "switch_off:agent-bureau:TRIAGE_REPAIR_LIVE",
+        ]
+
+    def test_the_slug_falls_back_to_the_repository(self, capsys):
+        env = {k: v for k, v in LIVE.items() if k != "REPO_SLUG"}
+        _pass(capsys, env={**env, SWITCH: "true"})
+        assert ALARM_KEY in [n for n, _ in _pass.notices.of("resolve")]
+
+    def test_no_repository_named_resolves_nothing(self, capsys):
+        env = {k: v for k, v in LIVE.items() if k not in ("REPO", "REPO_SLUG")}
+        _pass(capsys, env={**env, SWITCH: "true"})
+        assert _pass.notices.calls == []
+
+    def test_a_dry_pass_resolves_nothing(self, capsys):
+        _, lines, _ = _pass(capsys, env={**LIVE, SWITCH: "true"}, argv=["--dry-run"])
+        assert _pass.notices.calls == []
+        assert f"would: resolve {ALARM_KEY}" in lines
 
 
 # --------------------------------------------------------------------------- #
@@ -875,12 +946,17 @@ def _section(body: str, heading: str) -> list:
 
 
 class TestAlarmIsAnOperatorStep:
-    def test_the_alarm_is_filed_with_the_two_labels(self, capsys):
-        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
-        assert len(linear.created) == 1
-        title, _body, slug, labels = linear.created[0]
-        assert (title, slug) == (ALARM_TITLE, "agent-bureau")
-        assert tuple(labels) == ALARM_LABELS
+    def test_the_fallback_is_todays_card_title_lane_and_labels(self, capsys):
+        """The door cannot take the alert: the client files the card this
+        writer filed before — in Planning, `linear_ops.py create`'s default,
+        with its repo label and the two the operator step carries."""
+        _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        (_, kw), = _pass.notices.of("raise")
+        fallback = kw["fallback"]
+        assert isinstance(fallback, pipeline_notice.Fallback)
+        assert fallback.title == ALARM_TITLE
+        assert fallback.lane == "Planning"
+        assert tuple(fallback.labels) == ("repo:agent-bureau", *ALARM_LABELS)
 
     def test_the_labels_are_spelled_as_the_constants_spell_them(self):
         import linear_ops  # noqa: PLC0415
@@ -898,17 +974,13 @@ class TestAlarmIsAnOperatorStep:
                            .read_text(encoding="utf-8"))
         assert vocab["labels"]["map"][linear_ops.NO_CODE_LABEL] == "OPERATOR"
 
-    def test_linear_writes_passes_the_labels_through(self):
-        seen = []
-
-        class Ops:
-            def create_card(self, title, body, *, repo_slug, labels=()):
-                seen.append((title, body, repo_slug, tuple(labels)))
-                return {"identifier": "DRE-1"}
-
-        writes = switch_reason.LinearWrites(Ops())
-        writes.create_card("t", "b", repo_slug="portico", labels=ALARM_LABELS)
-        assert seen == [("t", "b", "portico", ALARM_LABELS)]
+    def test_the_module_creates_no_card(self):
+        """`notice_writers.py report` reads this whole file, so not one
+        card-creating line may stay in it."""
+        import notice_writers  # noqa: PLC0415
+        text = (ROOT / "scripts" / "switch_reason.py").read_text(encoding="utf-8")
+        assert notice_writers.card_forms(text, ".py") == []
+        assert not hasattr(switch_reason.LinearWrites, "create_card")
 
     def test_the_body_keeps_its_facts(self):
         body = _alarm_body()
@@ -952,15 +1024,17 @@ class TestAlarmIsAnOperatorStep:
     def test_the_title_is_unchanged(self):
         assert switch_reason.alarm_title(SWITCH, "agent-bureau") == ALARM_TITLE
 
-    def test_the_filed_body_is_the_one_alarm_body_composes(self, capsys):
-        _, _, linear = _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
-        assert linear.created[0][1] == _alarm_body()
+    def test_the_raised_body_is_the_one_alarm_body_composes(self, capsys):
+        _pass(capsys, linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
+        (_, kw), = _pass.notices.of("raise")
+        assert kw["body"] == _alarm_body()
 
     def test_the_doc_says_where_the_alarm_goes(self):
         text = (ROOT / "docs" / "switches.md").read_text(encoding="utf-8")
         section = text.split("## The receipt and the alarm", 1)[1]
         for expected in ("`agent:devops`", "`no-code`", "operator",
-                         "routing-verdicts.json", "## Acceptance criteria"):
+                         "routing-verdicts.json", "## Acceptance criteria",
+                         "`switch_off:<repo>:<SWITCH>`", "WARN", "fallback"):
             assert expected in section, expected
 
 
@@ -1022,14 +1096,15 @@ class TestDryRun:
         _, lines, linear = _pass(capsys, argv=["--dry-run"],
                                  linear=FakeLinear({"DRE-6141": []}))
         assert linear.comments == []
-        assert not any(c[0] in ("comment", "create") for c in linear.calls)
+        assert not any(c[0] == "comment" for c in linear.calls)
+        assert _pass.notices.calls == []
         assert f"would: post DRE-6141 — {RECEIPT_LINE}" in lines
 
     def test_dry_run_flag_prints_would_alarm_and_files_nothing(self, capsys):
         _, lines, linear = _pass(capsys, argv=["--dry-run"],
                                  linear=FakeLinear({"DRE-6141": [_receipt(13)]}))
-        assert linear.created == []
-        assert not any(c[0] in ("comment", "create") for c in linear.calls)
+        assert _pass.notices.calls == []
+        assert not any(c[0] == "comment" for c in linear.calls)
         assert any(l.startswith(f"would: alarm — {ALARM_TITLE}") for l in lines), lines
         assert f"would: alarm — {ALARM_TITLE}" in lines
 
@@ -1046,7 +1121,7 @@ class TestDryRun:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "--dry-run"],
             capture_output=True, text=True, cwd=ROOT, env=env)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert len(_switch_lines(done.stdout.splitlines())) == 3
+        assert len(_switch_lines(done.stdout.splitlines())) == 4
 
 
 class TestActRow:

@@ -49,6 +49,25 @@ have every commit on that branch that `main` lacks counted as part of the pull
 request. The `.bureau-pipeline/scripts/…` paths your context's engineering
 standard quotes are the BUILD agent's checkout in a product repo, not yours.
 
+## The TDD check's exit code is the TDD verdict (DRE-3009)
+
+That command's exit code is the commit-order verdict: 0 holds, 1 is a
+violation, 2 is cannot evaluate. You do not re-derive the rule from the
+engineering standard's prose and hold the branch to your own reading of it —
+two floors and no arbiter is what cost agent-bureau #2247 22 hours (DRE-3005).
+The rule the check enforces is the one it prints on its `rule:` line, and the
+standard carries that sentence word for word.
+
+The one judgment left to you is each code commit the check prints as
+`claimed: <id>` — a `TDD-Exempt:` trailer the writer added. Read that one
+commit's diff against the entry's `critic_checks` sentence in
+`config/tdd-exemptions.json` (the copy at `$PIPELINE_DIR`, which the pull
+request cannot edit) and block a false claim, naming the commit and the
+sentence it fails. "Does this one commit change behavior" is a narrow question
+the diff answers. A `detected: deletion` line needs nothing from you: the
+check read it from the diff. Whether a test commit is a real test is still
+yours too (no vacuous tests), as it always was.
+
 ## A fixture is a snapshot, never the card (DRE-3084)
 
 A test fixture under `$PIPELINE_DIR/tests/fixtures/` that carries a real

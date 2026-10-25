@@ -43,6 +43,14 @@ def alias_names() -> list[str]:
     return [e["from"] for e in _contract()["aliases"]["entries"]]
 
 
+def retired_alias_names() -> list[str]:
+    # An alias whose name is still a live lane — Backlog while Queued replaces
+    # it (DRE-6741) — is still on the board, so a document may name it. Same
+    # rule as check_workflow_prompts.not_lanes.
+    live = set(live_lanes())
+    return [n for n in alias_names() if n not in live]
+
+
 def lane_writing_briefs() -> list[Path]:
     """Briefs whose agent can actually move a card between lanes.
 
@@ -89,7 +97,7 @@ class TestNoRetiredLaneSurvivesInAnAgentDocument:
         offenders = []
         for doc in AGENT_DOCS:
             body = _text(doc)
-            for name in alias_names():
+            for name in retired_alias_names():
                 if re.search(rf"\b{re.escape(name)}\b", body):
                     offenders.append(f"{doc.relative_to(ROOT)} names alias {name!r}")
         assert not offenders, "; ".join(offenders)

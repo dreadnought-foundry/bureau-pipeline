@@ -91,6 +91,24 @@ say so — the build workflow's call passes neither and is unchanged:
 Whenever `--branch` was given and the push was not made, `rescue-<CARD>.target.json`
 is written beside the patch, naming the branch the patch belongs on.
 
+AND AN EDIT NOBODY COMMITTED IS SAVED TOO (DRE-6959). On 2026-10-11 (run
+38164304144, card DRE-6950) the build agent committed its failing test, made
+the change in its working tree, started the web suite in the background and
+ended its turn — which in a headless run ends the session. This step delivered
+the one commit and opened a pull request holding a failing test and nothing
+else; the change was in no commit, so nothing here looked at it and it died
+with the runner. `--uncommitted <path>` is the opt-in that looks: before any
+early return, the working tree is read against HEAD, and anything git does not
+ignore is written to `<path>` as ONE `git diff --binary` — built on a throwaway
+index, so the agent's own index and tree are left exactly as they were — whose
+first line is `# applies onto <HEAD sha>`. It is never the `--patch` file: that
+one is a `format-patch` series `deliver_rescue.py` replays with `git am`, and
+loose edits would break the replay. Nor does it move any existing output —
+`local_work` still means commits GitHub does not have, because reading it as
+true turns the run into a credential expiry. The file is named in the body of
+a pull request this step opens, or in one comment on the one that exists; with
+no pull request, the workflow's card comment is the only place it is said.
+
 AND A `branch-without-pr` NOTE IS THIS STEP'S JOB, NOT ITS EXIT (DRE-6719).
 Since DRE-6443 the brief tells the agent to write `/tmp/agent-blocker.txt`
 stamped `blocker-class: branch-without-pr` when its work is committed and the
@@ -98,8 +116,8 @@ pull request could not be opened — which is the very case this step exists
 for, and any note used to make it stand aside. On 2026-10-10 five runs did
 exactly that: each pushed its branch, met HTTP 401 on `gh pr create` because
 the run's credential had expired, wrote the note, and this step printed "the
-agent chose a different exit" while holding two fresh tokens. Each card went to
-Backlog and waited for the sweep to open its pull request.
+agent chose a different exit" while holding two fresh tokens. Each card was
+parked in the queue and waited for the sweep to open its pull request.
 
 So a note whose FIRST line stamps that class, written alone, is delivered: the
 branch is pushed if GitHub does not have it and the pull request opened if the
@@ -117,7 +135,8 @@ whole thing can be appended to `$GITHUB_OUTPUT`):
     PUSH_TOKEN=<fresh> PUSH_TOKEN_RETRY=<another fresh> \\
     python3 push_rescue.py rescue \\
         --card DRE-3043 --repo owner/name --base main \\
-        --card-url <url> --card-title <title>
+        --card-url <url> --card-title <title> \\
+        --uncommitted "$RUNNER_TEMP/rescue-DRE-3043.uncommitted.diff"
 
 and the fix run's form:
 
@@ -190,6 +209,10 @@ STOP_NOTES = (
 BLOCKER_NOTE_NAME = "agent-blocker.txt"
 BRANCH_WITHOUT_PR = "branch-without-pr"
 
+# The heading of the paragraph a pull request gets when the build ended with
+# edits that are in no commit (DRE-6959).
+UNCOMMITTED_HEADING = "The build ended with uncommitted work."
+
 # How much of a note is read for its stamp. The stamp is the first line; the
 # rest is the agent's prose and none of this module's business.
 _NOTE_READ_LIMIT = 65536
@@ -253,6 +276,9 @@ class Outcome:
         # sidecar saying which branch the patch belongs on.
         self.target_branch = ""
         self.sidecar = ""
+        # The working tree's edits that are in no commit (DRE-6959): the
+        # file they were saved to, "" when none were or nothing was asked.
+        self.uncommitted = ""
 
     @property
     def rescued(self) -> bool:
@@ -281,9 +307,15 @@ def one_line(text: str, limit: int = 300) -> str:
     return collapsed[:limit]
 
 
-def output_lines(outcome: Outcome) -> list[str]:
-    """The `key=value` lines the workflow appends to `$GITHUB_OUTPUT`."""
-    return [
+def output_lines(outcome: Outcome, *, uncommitted: bool = False) -> list[str]:
+    """The `key=value` lines the workflow appends to `$GITHUB_OUTPUT`.
+
+    `uncommitted` is whether `--uncommitted` was given (DRE-6959): only then
+    is its line printed, so a call without the flag prints exactly the twelve
+    lines it always did. An output that was never written reads as '' in
+    `steps.<id>.outputs`, the same as the empty line.
+    """
+    lines = [
         f"branch={outcome.branch}",
         f"local_work={_flag(outcome.local_work)}",
         f"pushed={_flag(outcome.pushed)}",
@@ -304,6 +336,11 @@ def output_lines(outcome: Outcome) -> list[str]:
         f"target_branch={outcome.target_branch}",
         f"sidecar={outcome.sidecar}",
     ]
+    if uncommitted:
+        # After all twelve (DRE-6959). Empty when the tree was clean or the
+        # capture failed.
+        lines.append(f"uncommitted={outcome.uncommitted}")
+    return lines
 
 
 def http_status(text: str) -> str:
@@ -393,6 +430,69 @@ def write_target_sidecar(card: str, outcome, patch_path: str) -> str:
             fh.write("\n")
     except OSError:
         return ""
+    return path
+
+
+def write_uncommitted(path: str, *, run, workdir: str = ".", log=_log) -> str:
+    """Save the working tree's edits that are in no commit. Returns the path, or "".
+
+    Counted first with `git status`, which honors `.gitignore` and
+    `.git/info/exclude` — where the workflow hides `.bureau-pipeline/` — and
+    runs with `--no-optional-locks`, so even git's own opportunistic index
+    refresh is not written. A clean tree writes nothing.
+
+    The diff is built on a THROWAWAY index (`GIT_INDEX_FILE`): `read-tree
+    HEAD`, `add -A`, `diff --cached --binary HEAD`. That is what lets one
+    diff carry the untracked files beside the modified and deleted ones while
+    the agent's own index — whatever it had staged — is never touched. git
+    writes the diff straight to a file, so a source file that is not UTF-8
+    survives byte for byte; the `# applies onto <sha>` line goes above it,
+    where `git apply` skips it as preamble.
+
+    Any failure is logged and answers "": like everything in this module, a
+    capture that cannot capture must never fail the job.
+    """
+    if not path:
+        return ""
+    try:
+        code, out, err = run(["git", "--no-optional-locks", "-C", workdir,
+                              "status", "--porcelain", "--untracked-files=all"])
+        if code != 0:
+            log(f"push rescue: could not read the working tree for uncommitted "
+                f"work — {one_line(err)}")
+            return ""
+        changed = [line for line in out.splitlines() if line.strip()]
+        if not changed:
+            return ""
+        head = _rev_parse("HEAD", run=run, workdir=workdir)
+        if not head:
+            log("push rescue: the working tree has uncommitted work but HEAD "
+                "is unreadable — not saved")
+            return ""
+        with tempfile.TemporaryDirectory() as scratch:
+            env = dict(os.environ)
+            env["GIT_INDEX_FILE"] = os.path.join(scratch, "index")
+            raw = os.path.join(scratch, "uncommitted.diff")
+            for argv in (["read-tree", "HEAD"], ["add", "-A"],
+                         ["diff", "--cached", "--binary", f"--output={raw}",
+                          "HEAD"]):
+                code, _, err = run(["git", "-C", workdir, *argv], env=env)
+                if code != 0:
+                    log(f"push rescue: could not save the uncommitted work "
+                        f"(git {argv[0]}) — {one_line(err)}")
+                    return ""
+            with open(raw, "rb") as fh:
+                diff = fh.read()
+        if not diff.strip():
+            return ""
+        with open(path, "wb") as fh:
+            fh.write(f"# applies onto {head}\n".encode())
+            fh.write(diff)
+    except Exception as exc:  # never fail the job over a rescue
+        log(f"push rescue: could not save the uncommitted work — {exc}")
+        return ""
+    log(f"push rescue: the working tree held {len(changed)} uncommitted "
+        f"file(s) — saved to {path}, which applies onto {head}")
     return path
 
 
@@ -657,15 +757,34 @@ def delivered_note(written: list[str]) -> str:
     return stamped if stamped == BRANCH_WITHOUT_PR else ""
 
 
-def _pr_body(card: str, card_url: str, note: str = "") -> str:
+def uncommitted_paragraph(path: str) -> str:
+    """What a pull request is told about edits that are in no commit (DRE-6959).
+
+    It names the artifact by the file's base name, which is the name the
+    workflow uploads it under, and says the edits are NOT in the pull request
+    — a reviewer reading the diff must not take it for the whole change.
+    """
+    name = os.path.basename(path)
+    return (
+        f"**{UNCOMMITTED_HEADING}** The agent's working tree held changes that "
+        f"are in no commit, so they are not in this pull request. They are "
+        f"saved as the run artifact `{name}`: `git apply` onto the commit its "
+        f"first line names reproduces them (DRE-6959).\n"
+    )
+
+
+def _pr_body(card: str, card_url: str, note: str = "",
+             uncommitted: str = "") -> str:
     """The body for a PR the AGENT did not open.
 
     It says exactly that, and nothing about whether the work is complete —
     this step knows only that commits existed on the runner and had not
     reached GitHub, or that the agent's own note said the pull request was
     missing. Claiming the card is done would be a claim nothing here can
-    support, and the critic reads this body.
+    support, and the critic reads this body. Edits that never reached a
+    commit are named in a paragraph of their own (DRE-6959).
     """
+    left = f"\n{uncommitted_paragraph(uncommitted)}" if uncommitted else ""
     because = (
         f"The agent's blocker note was stamped `{note}`: it said the work is "
         f"committed on this branch and the pull request could not be opened. "
@@ -684,7 +803,31 @@ def _pr_body(card: str, card_url: str, note: str = "") -> str:
         f"The commits are the agent's; only the push and this pull request are "
         f"not. Nothing here asserts the card is finished: read the diff and the "
         f"checks, and expect no author-written summary.\n"
+        f"{left}"
     )
+
+
+def comment_uncommitted(pr_url: str, repo: str, token: str, path: str, *,
+                        run, workdir: str, log=_log) -> bool:
+    """Name the saved edits in ONE comment on a pull request that exists.
+
+    The token is the one whose lookup just found the pull request. A refusal
+    is logged and answered False — the card comment still says it.
+    """
+    try:
+        code, _, err = run(
+            ["gh", "pr", "comment", pr_url, "--repo", repo,
+             "--body", uncommitted_paragraph(path)],
+            cwd=workdir, env=_gh_env(token),
+        )
+    except Exception as exc:  # never fail the job over a rescue
+        code, err = 1, str(exc)
+    if code != 0:
+        log(f"push rescue: could not comment the uncommitted work on "
+            f"{pr_url} — {one_line(err)}")
+        return False
+    log(f"push rescue: named the uncommitted work on {pr_url}")
+    return True
 
 
 def _credentials(token, retry_token, token_source, retry_token_source):
@@ -721,11 +864,13 @@ def rescue(
     stop_notes=STOP_NOTES,
     branch: str = "",
     existing_pr: str = "",
+    uncommitted_path: str = "",
 ) -> Outcome:
     """Deliver the card's work with a credential that is still alive.
 
     `branch` and `existing_pr` are the fix run's (DRE-6348); with neither,
-    this is the build run's rescue exactly as it was.
+    this is the build run's rescue exactly as it was. `uncommitted_path` is
+    the build run's opt-in (DRE-6959): without it no new git command runs.
     """
     if not _CARD_RE.match(card or ""):
         raise ValueError(f"refusing an unrecognisable card reference: {card!r}")
@@ -738,6 +883,11 @@ def rescue(
     run = run or _subprocess_run
     out = Outcome()
     out.target_branch = branch
+    # BEFORE every early return below (DRE-6959): a stop note, no branch and
+    # no commits all leave the edits on the runner just the same, and the
+    # runner must not be their last copy either.
+    out.uncommitted = write_uncommitted(uncommitted_path, run=run,
+                                        workdir=workdir, log=log)
 
     def preserve():
         # The work that is not being pushed: the patch always, and on the fix
@@ -902,11 +1052,14 @@ def rescue(
             out.pr_url = existing
             out.error = ""
             log(f"push rescue: {out.branch} already has a pull request")
+            if out.uncommitted:
+                comment_uncommitted(existing, repo, candidate, out.uncommitted,
+                                    run=run, workdir=workdir, log=log)
             return out
         code, created, err = run(
             ["gh", "pr", "create", "--repo", repo, "--base", base,
              "--head", out.branch, "--title", title,
-             "--body", _pr_body(card, card_url, note)],
+             "--body", _pr_body(card, card_url, note, out.uncommitted)],
             cwd=workdir, env=_gh_env(candidate),
         )
         if code == 0:
@@ -944,6 +1097,11 @@ def main(argv: list[str]) -> int:
     r.add_argument("--patch", default="",
                    help="where to write the branch's commits when nothing can "
                         "be pushed (default: $RUNNER_TEMP/rescue-<card>.patch)")
+    r.add_argument("--uncommitted", default="",
+                   help="where to save the working tree's edits that are in "
+                        "no commit, as one diff against HEAD; never the "
+                        "--patch file (DRE-6959). Without it the tree is not "
+                        "read")
     r.add_argument("--branch", default="",
                    help="deliver this existing branch instead of the "
                         "agent/<card>-* lookup; the stop notes are not read "
@@ -973,10 +1131,11 @@ def main(argv: list[str]) -> int:
             base=args.base, card_url=args.card_url,
             card_title=args.card_title, workdir=args.workdir,
             branch=args.branch, existing_pr=args.existing_pr,
+            uncommitted_path=args.uncommitted,
         )
     except Exception as exc:  # never fail the job over a rescue
         _log(f"push rescue: skipped — {exc}")
-    for line in output_lines(outcome):
+    for line in output_lines(outcome, uncommitted=bool(args.uncommitted)):
         print(line)
     # ALWAYS 0. A red step here calls the medic to re-run a run that already
     # did the work; the Report step reads `local_work` and says so instead.

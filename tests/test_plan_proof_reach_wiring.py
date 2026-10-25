@@ -134,7 +134,8 @@ class TheStandardQuotesTheSentences(unittest.TestCase):
     def test_both_sentences_are_quoted_as_the_module_writes_them(self):
         with open(STANDARD, encoding="utf-8") as fh:
             text = fh.read()
-        for sentence in (ppr.FINDING_REACH, ppr.FINDING_OPERATOR):
+        for sentence in (ppr.FINDING_REACH, ppr.FINDING_OPERATOR,
+                         ppr.FINDING_SANDBOX_PRESS):
             self.assertIn(sentence, text)
 
     def test_it_sits_beside_the_seam_paragraph(self):
@@ -143,6 +144,10 @@ class TheStandardQuotesTheSentences(unittest.TestCase):
         seam = text.index("scripts/plan_seam_gate.py")
         here = text.index(ppr.FINDING_REACH)
         self.assertLess(abs(here - seam), 4000)
+        # DRE-7779: the third sentence is quoted beside the two.
+        third = text.index(ppr.FINDING_SANDBOX_PRESS)
+        self.assertLess(abs(third - here), 1000)
+        self.assertLess(abs(third - seam), 4000)
         self.assertIn("scripts/plan_proof_reach.py", text)
 
 

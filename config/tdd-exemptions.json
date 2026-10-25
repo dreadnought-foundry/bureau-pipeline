@@ -1,0 +1,29 @@
+{
+  "_readme": "The exemptions to the TDD commit rule (DRE-3009): every code commit needs a test commit since the previous code commit — for the first code commit, since the branch began — and any code commit after the first may instead carry one of the entries below. Read only by scripts/check_tdd_commits.py, which exits 2 (cannot evaluate) on a file it cannot read or on any shape it refuses, so tests/test_tdd_commit_check.py loads this copy on every pull request. Each entry has exactly four keys: `id`, `match`, `reason`, `critic_checks`. `match` is `deletion-only` (the check detects it: every code path in the commit adds zero lines in `git diff-tree --numstat`, and a binary path is never a deletion) or `trailer` (honored only when the commit claims it with a `TDD-Exempt: <id>` git trailer). No entry ever covers the FIRST code commit. `critic_checks` is the one sentence the critic verifies on a claimed commit's diff. A branch cannot exempt itself: in bureau-pipeline's own job the list is read at the merge base, and everywhere else from the copy beside the script, so adding an entry is its own reviewed change. Not entries, because the classifier already handles them and they are never code commits: a test commit (a RED test, or a fix to a broken test), docs (`docs/`, any `.md`, design records, a `.py` change that is docstrings or `#` comments alone), ops (`.github/`, `config/`, `agents.yaml`, `models.json`), and a generated region a proving `--check` covers (`_GENERATED_REGION_PROOFS`). No entry matches on a path, because a path list for another repo's files cannot be verified from here.",
+  "exemptions": [
+    {
+      "id": "deletion",
+      "match": "deletion-only",
+      "reason": "The commit only removes code: every code path in it adds no line, so there is no new behavior for a test to pin.",
+      "critic_checks": "Nothing is left to verify: the check read it from the diff, where every code path in the commit adds zero lines."
+    },
+    {
+      "id": "refactor",
+      "match": "trailer",
+      "reason": "Behavior does not change: a rename, an extraction, collapsed duplication.",
+      "critic_checks": "The commit's diff changes no behavior."
+    },
+    {
+      "id": "config",
+      "match": "trailer",
+      "reason": "Configuration outside the ops paths the classifier knows — a .dockerignore, a Dockerfile, a pyproject.toml — not program source.",
+      "critic_checks": "Every code path in the commit is build or tool configuration, and none of it is program source."
+    },
+    {
+      "id": "generated",
+      "match": "trailer",
+      "reason": "A whole file a generator writes, outside the generated-region proof map — a graphql.ts, a slug mirror — not written by hand.",
+      "critic_checks": "Every code path in the commit is the output of a named generator, and nothing in it was edited by hand."
+    }
+  ]
+}

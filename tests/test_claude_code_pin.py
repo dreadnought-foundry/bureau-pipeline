@@ -54,6 +54,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_action_pins  # noqa: E402
 import claude_code_pin as ccp  # noqa: E402
+import model_fallback as mf  # noqa: E402
+import model_home  # noqa: E402
 
 SONNET_55 = "claude-sonnet-5-5"
 
@@ -651,6 +653,209 @@ def test_apply_puts_a_known_models_row_in_the_minimum_table(tmp_path):
     minimum = support[support.index("MINIMUM_CLAUDE_CODE = {"):]
     assert f'"claude-fable-5-1": "{NEW["claude_code"]}"' in minimum[:minimum.index("}")]
     assert support.count('"claude-fable-5-1": "') == 1
+
+
+# `_known_models` (DRE-6786, DRE-6971): the ids on the ladders and project
+# choices of the defaults in the code, plus `retired` and `excluded` out of
+# the tree's `config/models.yaml` — the set `model_fallback.KNOWN_MODELS` is,
+# which `test_every_row_is_a_model_this_config_knows` holds the minimum table
+# to. It reads no home. The trees are the frozen fixture, a byte copy of the
+# committed `config/models.yaml` of 2026-10-10, with `projects` emptied as it
+# stood then.
+HAIKU_55 = "claude-haiku-5-5"
+#: A model only a home names: priced (the test declares it), on no ladder of
+#: the defaults in the code.
+ONLY_IN_THE_HOME = "claude-sonnet-6"
+_EMPTY_TABLES = "MINIMUM_CLAUDE_CODE = {\n}\n\nAHEAD_OF_ADOPTION = {\n}\n"
+
+
+def _models_tree(tmp_path: Path, edit=None) -> Path:
+    sys.path.insert(0, str(ROOT / "tests"))
+    import model_fixture
+
+    raw = model_fixture.fixture_config()
+    raw["projects"] = {}
+    if edit:
+        edit(raw)
+    (tmp_path / "config").mkdir(parents=True)
+    (tmp_path / "config" / "models.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
+    return tmp_path
+
+
+def _table_of(text: str, model: str) -> str:
+    """The table `model`'s row was written into."""
+    minimum = text[text.index("MINIMUM_CLAUDE_CODE = {"):]
+    ahead = text[text.index("AHEAD_OF_ADOPTION = {"):]
+    if f'"{model}":' in minimum[:minimum.index("}")]:
+        return "MINIMUM_CLAUDE_CODE"
+    assert f'"{model}":' in ahead[:ahead.index("}")], text
+    return "AHEAD_OF_ADOPTION"
+
+
+def _chosen_by_the_defaults() -> set[str]:
+    """Every id on a ladder or a project choice of the defaults in the code."""
+    defaults = mf.code_defaults()
+    return ({m for models in defaults["ladders"].values() for m in models}
+            | {m for entry in defaults["projects"].values() for m in entry.values()})
+
+
+def _home_naming(tmp_path: Path, monkeypatch, model: str) -> None:
+    """A home document, named by `BUREAU_MODEL_HOME_FILE`, whose Builders
+    ladder opens on `model` — read and put in place in this process, so a
+    `_known_models` that read the choices in force would see it."""
+    declared = dict(mf.declared_prices())
+    declared[model] = {"input": 2.0, "output": 10.0}
+    monkeypatch.setattr(mf, "declared_prices", lambda path=None: declared)
+    doc = model_home.render_defaults()
+    doc["groups"]["workhorse"]["models"].insert(0, model)
+    home = tmp_path / "model-home.json"
+    home.write_text(json.dumps(doc))
+    monkeypatch.setenv(model_home.FILE_ENV, str(home))
+    mf.reset_home()
+    assert mf.use_home() == "read"
+    assert mf.LADDERS["workhorse"][0] == model, "not vacuous: the home is in force"
+    assert model not in _chosen_by_the_defaults()
+
+
+def test_known_models_are_ids_on_the_defaults_in_the_code(tmp_path):
+    root = _models_tree(tmp_path)
+    chosen = _chosen_by_the_defaults()
+    assert ccp._known_models(root) == chosen | {
+        "claude-opus-4-8", HAIKU_55, "claude-fable-5"}
+    assert len(ccp._known_models(root)) == len(chosen | {
+        "claude-opus-4-8", HAIKU_55, "claude-fable-5"})
+
+
+def test_known_models_with_no_home_is_model_fallbacks_known_set():
+    assert ccp._known_models(ROOT) == set(mf.KNOWN_MODELS)
+
+
+def test_a_model_only_the_home_names_is_not_known(tmp_path, monkeypatch):
+    _home_naming(tmp_path, monkeypatch, ONLY_IN_THE_HOME)
+    assert ccp._known_models(ROOT) == set(mf.KNOWN_MODELS)
+    assert ONLY_IN_THE_HOME not in ccp._known_models(ROOT)
+
+
+def test_known_models_are_the_defaults_plus_the_trees_retired_and_excluded(tmp_path):
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "models.yaml").write_text(
+        "retired:\n  - model: claude-gone-1\n    reason: rotated out\n"
+        "excluded:\n  - claude-shunned-1\n")
+    assert ccp._known_models(tmp_path) == _chosen_by_the_defaults() | {
+        "claude-gone-1", "claude-shunned-1"}
+
+
+def test_a_ladder_only_the_trees_file_names_is_not_known(tmp_path):
+    def edit(raw):
+        raw["ladders"]["workhorse"].insert(
+            0, {"model": "claude-only-in-the-file-1", "reason": "a hand edit"})
+
+    root = _models_tree(tmp_path, edit)
+    assert "claude-only-in-the-file-1" not in _chosen_by_the_defaults()
+    assert "claude-only-in-the-file-1" not in ccp._known_models(root)
+
+
+def test_known_models_with_no_file_are_the_defaults_choices(tmp_path):
+    assert ccp._known_models(tmp_path) == _chosen_by_the_defaults()
+
+
+def _unreadable():
+    raise RuntimeError("the defaults could not be built")
+
+
+@pytest.mark.parametrize("defaults", [dict, _unreadable])
+def test_known_models_is_empty_when_nothing_can_be_read(tmp_path, monkeypatch, defaults):
+    monkeypatch.setattr(ccp, "code_defaults", defaults)
+    assert ccp._known_models(tmp_path) == set()
+
+
+def test_apply_files_a_model_only_the_home_names_ahead_of_adoption(tmp_path, monkeypatch):
+    _home_naming(tmp_path, monkeypatch, ONLY_IN_THE_HOME)
+    repo = _copy_repo(tmp_path)
+    support = repo / "tests" / "test_model_cli_support.py"
+    before = support.read_text()
+
+    def minimum(text):
+        table = text[text.index("MINIMUM_CLAUDE_CODE = {"):]
+        return table[:table.index("}")]
+
+    pin = {"model": ONLY_IN_THE_HOME, "answer": "found", "why": "",
+           "from": _live_pin(), "to": NEW, "limits": FULL,
+           "listed": {"context_window": 1_000_000, "max_output_tokens": 128_000}}
+    ccp.apply(pin, root=repo, today="2026-10-13")
+    after = support.read_text()
+
+    assert _table_of(after, ONLY_IN_THE_HOME) == "AHEAD_OF_ADOPTION"
+    assert minimum(after) == minimum(before)
+    # The check test_every_row_is_a_model_this_config_knows makes, on the file
+    # apply wrote.
+    rows = [m.group(1) for line in minimum(after).splitlines()
+            if (m := ccp._FLOOR_ROW.match(line))]
+    assert rows
+    assert set(rows) <= set(mf.KNOWN_MODELS)
+
+
+def test_the_pin_reads_no_home_and_needs_no_token():
+    import ast
+
+    source = ast.parse((ROOT / "scripts" / "claude_code_pin.py").read_text())
+    assigned = {target.id for node in source.body if isinstance(node, ast.Assign)
+                for target in node.targets if isinstance(target, ast.Name)}
+    assigned |= {node.target.id for node in source.body
+                 if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)}
+    assert "READS_MODEL_HOME" not in assigned
+    imported = {alias.name for node in ast.walk(source) if isinstance(node, ast.Import)
+                for alias in node.names}
+    imported |= {node.module for node in ast.walk(source) if isinstance(node, ast.ImportFrom)}
+    assert "model_home" not in imported
+    proc = subprocess.run([sys.executable, str(ROOT / "scripts" / "check_model_home_scope.py"),
+                           str(ROOT)], capture_output=True, text=True)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_a_pin_raise_for_an_excluded_model_writes_the_minimum_table(tmp_path):
+    root = _models_tree(tmp_path)
+    pin = {"model": HAIKU_55, "from": {"claude_code": "2.1.284"}, "to": NEW}
+    text = ccp._support_test_text(_EMPTY_TABLES, pin, "2026-10-11",
+                                  ccp._known_models(root))
+    assert _table_of(text, HAIKU_55) == "MINIMUM_CLAUDE_CODE"
+
+
+def _without_haiku(raw):
+    raw["excluded"] = [e for e in raw["excluded"] if e["model"] != HAIKU_55]
+
+
+def test_a_model_only_a_project_of_the_defaults_names_is_known(tmp_path, monkeypatch):
+    defaults = mf.code_defaults()
+    defaults["projects"] = {"atlas": {"workhorse": HAIKU_55}}
+    monkeypatch.setattr(ccp, "code_defaults", lambda: defaults)
+    root = _models_tree(tmp_path, _without_haiku)
+    assert HAIKU_55 not in _chosen_by_the_defaults(), "on no ladder of the defaults"
+    assert HAIKU_55 in ccp._known_models(root)
+    pin = {"model": HAIKU_55, "from": {"claude_code": "2.1.284"}, "to": NEW}
+    text = ccp._support_test_text(_EMPTY_TABLES, pin, "2026-10-11",
+                                  ccp._known_models(root))
+    assert _table_of(text, HAIKU_55) == "MINIMUM_CLAUDE_CODE"
+
+
+def test_a_model_only_a_project_in_the_trees_file_names_is_not_known(tmp_path):
+    # Project choices leave the file with the ladders (DRE-6983): the file's
+    # are not read.
+    def edit(raw):
+        _without_haiku(raw)
+        raw["projects"] = {"atlas": {"workhorse": HAIKU_55}}
+
+    root = _models_tree(tmp_path, edit)
+    assert HAIKU_55 not in ccp._known_models(root)
+
+
+def test_known_models_still_reads_a_bare_string_entry(tmp_path):
+    def edit(raw):
+        raw["retired"] = ["claude-opus-4-8"]
+        raw["excluded"] = [HAIKU_55, {"model": "claude-fable-5", "reason": "x"}]
+
+    assert {"claude-opus-4-8", HAIKU_55, "claude-fable-5"} <= ccp._known_models(
+        _models_tree(tmp_path, edit))
 
 
 def test_apply_updates_an_existing_minimum_row_rather_than_adding_a_second(tmp_path):

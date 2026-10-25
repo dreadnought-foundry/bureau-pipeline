@@ -39,6 +39,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+import lane_contract  # noqa: E402
 import medic_classify  # noqa: E402
 import merge_gate  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -1013,13 +1014,24 @@ BODY_CLOSE_PROMISE = (
     "this card on every sweep for as long as the card is open in Triage or in "
     "another lane the sweep reads, however long ago the crashes were. It "
     "cannot see a verdict on a pull request that has since merged or closed, "
-    "and it does not read Backlog or Green Light; in those cases a person "
-    "closes this card."
+    f"and it does not read {', '.join(lane_contract.QUEUE_LANES)} or Green "
+    "Light; in those cases a person closes this card."
 )
 RECEIPT_CLOSE_PROMISE = (
     "The sweep closes it on the first successful verdict it can see in a "
     "repository it counted, after that repository's last counted crash."
 )
+
+
+class TestTheQueueIsNamedUnderEveryName(unittest.TestCase):
+    """The sweep reads neither name the queue carries (DRE-6749)."""
+
+    def test_the_promise_names_every_queue_name(self):
+        self.assertIn("Queued, Backlog or Green Light", BODY_CLOSE_PROMISE)
+
+    def test_no_string_constant_in_the_module_names_the_old_lane(self):
+        path = str(ROOT / "scripts" / "reviewer_down.py")
+        self.assertEqual(lane_contract._scan_python(path, ["Backlog"]), set())
 
 
 class TestThePromiseMatchesTheBehavior(unittest.TestCase):

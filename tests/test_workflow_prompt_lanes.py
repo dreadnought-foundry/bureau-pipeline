@@ -51,6 +51,8 @@ EXPECTED_PROMPT_FILES = {
     "proof-task.yml": 3,
     "qa-review.yml": 2,
     "red-main-repair.yml": 1,
+    # DRE-7179: the planner's rewrite of a card the plan critic parked.
+    "triage-repair.yml": 1,
     "verify.yml": 2,
 }
 
@@ -103,6 +105,10 @@ class TestNoPromptNamesALaneThatDoesNotExist:
         # the script — the standalone CI step catches it on its own.
         with open(ROOT / "config" / "lane-contract.json", encoding="utf-8") as fh:
             aliases = [e["from"] for e in json.load(fh)["aliases"]["entries"]]
+        # An alias still live while its lane is replaced (Backlog → Queued,
+        # DRE-6741) is on the board, and test_an_alias_readopted_as_a_live_lane_
+        # is_not_a_finding already says a prompt may name it.
+        aliases = [a for a in aliases if a not in cwp.live_lanes()]
         denied = cwp.not_lanes()
         missing = [a for a in aliases if a not in denied]
         assert not missing, f"aliases absent from the denylist: {missing}"
@@ -155,14 +161,18 @@ class TestMedicDuplicateSuppression:
         assert linear_ops.CREATE_LANE in cwp.live_lanes()
         assert linear_ops.CREATE_LANE not in ("Done", "Canceled", "Duplicate")
 
-    def test_the_search_runs_before_any_card_is_created(self):
+    def test_the_search_runs_before_the_diagnosis_is_delivered(self):
+        # DRE-7453: the medic files no card of its own any more. A diagnosis
+        # with no card to go to is raised as a console alert, whose repeat
+        # the console suppresses; the repair-card search still runs first.
         import medic_retry
 
         assert "find_open(" in Path(medic_retry.__file__).read_text(encoding="utf-8")
         text = self._medic_text()
+        assert "linear_ops.py create" not in text
         assert "medic_retry.py diagnosis-target" in text
         assert text.index("medic_retry.py diagnosis-target") < text.index(
-            "linear_ops.py create"
+            "pipeline_notice.py raise"
         )
 
     def test_the_prompt_no_longer_sends_the_agent_searching(self):
@@ -197,3 +207,96 @@ class TestPlanPromptMatchesTheNewModel:
         # inherits it. The prompt demanding the body stamp contradicts both
         # briefs/planner.md and standards/card-quality.md.
         assert "**Repo:**" not in self._planner_prompt()
+
+
+class TestTheWorkflowsSayQueued:
+    """DRE-6750: since DRE-6742 the pipeline writes `Queued`, so what the
+    workflows tell an agent, print in a message and write to a card says it
+    too. Read by the contract's own vocabulary scan — `_scan_yaml` reads every
+    non-comment line — so this goes red on exactly what the retirement card
+    (DRE-6753) will read. `qa-review.yml` is the sweep card's (DRE-6743)."""
+
+    OLD = "Backlog"
+    NOT_HERE = {"qa-review.yml"}
+
+    def _text(self, name: str) -> str:
+        return (WORKFLOWS / name).read_text(encoding="utf-8")
+
+    def test_no_workflow_line_names_the_old_queue(self):
+        import lane_contract
+
+        named = sorted(
+            path.name for path in WORKFLOWS.glob("*.yml")
+            if path.name not in self.NOT_HERE
+            and lane_contract._scan_yaml(str(path), [self.OLD])
+        )
+        assert named == [], f"non-comment lines still say {self.OLD!r}: {named}"
+
+    def test_the_scan_would_see_the_old_name(self, tmp_path):
+        # Not vacuous: the same scan, on one line that says it, finds it.
+        probe = tmp_path / "probe.yml"
+        probe.write_text("  # parks in Backlog\n  run: echo parks in Backlog\n",
+                         encoding="utf-8")
+        import lane_contract
+
+        assert lane_contract._scan_yaml(str(probe), [self.OLD]) == {self.OLD}
+
+    def test_each_build_prompt_parks_a_mechanical_blocker_in_queued(self):
+        bodies = [p.body for p in cwp.prompts(WORKFLOWS) if p.workflow == "agent-task.yml"]
+        assert len(bodies) == 3
+        for body in bodies:
+            assert "A mechanical class (the first three) parks the card in Queued," in body
+            assert self.OLD not in body
+
+    def test_the_rereview_message_keeps_the_children_in_queued(self):
+        text = self._text("plan.yml")
+        assert "the children stay in Queued until then" in text
+        assert "the children stay in Backlog" not in text
+
+
+class TestTheWorkflowsStopNamingTodo:
+    """DRE-7121: since the flip (DRE-7120) no writer puts a card in `Todo`, so
+    the lane lists these six workflows run no longer read it. A card the board
+    still answers `Todo` for is drained to `In Progress` by the retirement
+    card, whose repo-wide test asserts this for every workflow; this reads the
+    same `_scan_yaml` over the six this card owns. `agent-task.yml` is
+    DRE-7110's."""
+
+    OLD = "Todo"
+    OWNED = (
+        "plan.yml",
+        "qa-review.yml",
+        "proof-task.yml",
+        "agent-fix.yml",
+        "deliver-rescue.yml",
+        "linear-sync.yml",
+    )
+
+    def test_no_non_comment_line_names_todo(self):
+        import lane_contract
+
+        named = sorted(
+            name for name in self.OWNED
+            if lane_contract._scan_yaml(str(WORKFLOWS / name), [self.OLD])
+        )
+        assert named == [], f"non-comment lines still say {self.OLD!r}: {named}"
+
+    def test_the_scan_would_see_todo_in_a_lane_list(self, tmp_path):
+        # Not vacuous: the same scan, on the advance this card rewrites, finds it.
+        probe = tmp_path / "probe.yml"
+        probe.write_text(
+            '  # requeued to Todo\n'
+            '            "In Review" "In Progress,Todo" || true\n',
+            encoding="utf-8",
+        )
+        import lane_contract
+
+        assert lane_contract._scan_yaml(str(probe), [self.OLD]) == {self.OLD}
+
+    def test_the_three_advances_read_the_lanes_a_card_is_in_after_the_flip(self):
+        qa = (WORKFLOWS / "qa-review.yml").read_text(encoding="utf-8")
+        assert '"Intake,Triage,Planning,Queued,Hand-work,In Progress"' in qa
+        rescue = (WORKFLOWS / "deliver-rescue.yml").read_text(encoding="utf-8")
+        assert '"In Review" "In Progress" || true' in rescue
+        fix = (WORKFLOWS / "agent-fix.yml").read_text(encoding="utf-8")
+        assert 'advance "$CARD" "Triage" "In Review,In Progress" ||' in fix

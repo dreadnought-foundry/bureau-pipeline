@@ -74,8 +74,12 @@ DELETED = (
 )
 
 #: The trusted list after this card: the branch shapes the gate trusted before
-#: DRE-3879, and nothing else.
-TRUSTED = {"agent/", "repair/", "dependabot/", "bot/standards-sync"}
+#: DRE-3879, and nothing else — plus `bot/onboard`, the onboarding routing
+#: branch DRE-7209 added later as a second literal on the same terms, and
+#: `bot/test-durations`, the nightly's durations branch DRE-7577 added as a
+#: third.
+TRUSTED = {"agent/", "repair/", "dependabot/", "bot/standards-sync",
+           "bot/onboard", "bot/test-durations"}
 
 #: The historical records the card names, never edited. Each one may keep
 #: naming the retired branch and the retired files, and nothing else may.
@@ -200,10 +204,10 @@ def test_the_merge_script_case_is_exactly_the_trusted_list():
     assert prefixes == TRUSTED
 
 
-def test_the_gates_event_filter_names_only_bot_standards_sync():
+def test_the_gates_event_filter_names_only_the_literal_bot_branches():
     condition = _doc("merge-gate.yml")["jobs"]["evaluate"]["if"]
     assert set(re.findall(r"head_branch == '([^']+)'", condition)) == {
-        "bot/standards-sync"}
+        "bot/standards-sync", "bot/onboard", "bot/test-durations"}
 
 
 def test_the_sweeps_trusted_list_is_exactly_the_trusted_list():

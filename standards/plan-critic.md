@@ -81,10 +81,18 @@ sentence each:
 
     {proof}: criterion “{criterion}” asks for a reading the proof run cannot make — {what} ({why}); write it as what the run can observe, or drop it.
     {proof}: criterion “{criterion}” reads the result of operator step {operator} (“{title}”) and is not blocked by it — add the blockedBy relation, or reword the criterion.
+    {proof}: criterion “{criterion}” sends a press on the sandbox project to a person — write it as a `Sandbox press:` step the proof run makes as the console proof-reader, or drop it.
 
 The re-plan answers the first by rewriting the criterion as what the run can
-observe, and the second with the formal `blockedBy` relation. On the review
-route the same check appends to the mechanical note only, as input.
+observe, and the second with the formal `blockedBy` relation. The third
+(DRE-7779) is a `waiting for the operator's press:` or `needs the CEO's press:`
+row for a press on the sandbox list in `standards/card-quality.md`, on a PROOF
+whose repo holds the console proof-reader: since DRE-7772 that press is the
+proof run's own `Sandbox press:` step, so the re-plan writes it as one. Each
+PROOF is read for the reach of its own `repo:` label when it carries exactly
+one the repo map holds, and otherwise for the plan's caller, because a proof
+run runs in the repo its card is labeled for. On the review route the same
+check appends to the mechanical note only, as input.
 
 **The cost of leaving it to judgement was DRE-3164**: fifteen cards, two critics
 reading them across six rounds, and neither ever named the seam. What that
@@ -175,9 +183,11 @@ card before it prints a finding.
   note cannot say "not a collision" and then list one two paragraphs below.
 * **In Progress, In Review.** A run or a pull request is in flight. Judge the
   card on what it will land, not on whether its files are in the tree yet.
-* **Backlog, Todo, Triage — still to build**, and every finding stands,
+* **Queued, Triage — still to build**, and every finding stands,
   "this is already implemented" included. Same card, same files, different
-  answer: the state is the whole of the difference.
+  answer: the state is the whole of the difference. A start lane other than
+  `In Progress` that a card still waits in for its run reads the same way
+  (`plan_critic.child_state_block`, DRE-7113).
 * **No state at all** is UNKNOWN, never "delivered". The note says *no child
   carried a state* rather than reporting none, because a read that failed
   excuses nothing (`standards/console-honesty.md` rule 1).
@@ -225,7 +235,7 @@ is one as soon as the first critic passes it. The text is fixed from that
 moment, and the CEO's click changes none of it. So the second critic reads the
 plan the first critic passed, and it reads it before the CEO does. This is the
 last point at which a gap is free to fix: after it the plan goes to the CEO,
-and once he approves it the cards enter Backlog and agents build them.
+and once he approves it the cards enter Queued and agents build them.
 
 **Superseded: DRE-2721's placement.** DRE-2721 put this critic after the CEO's
 approval, on this reasoning: *"An adversarial pass is only worth much against a
@@ -248,11 +258,12 @@ route itself, writes no lane on the way, and the review run moves the epic to
 Planning; it comes back to Green Light passed, for one Approve. Nothing reads a
 plan after its approval, so nothing can send an approved plan back.
 
-**Cross-epic scope: this epic plus every other epic in flight** (Green Light,
-Todo, In Progress), **and every other epic under review in Planning** —
+**Cross-epic scope: this epic plus every other epic in flight** (Green Light
+and the start lanes, `In Progress` among them), **and every other epic under
+review in Planning** —
 `plan_critic.SIGHT_STATES` (DRE-5276). Two plans read at the same moment must
 see each other. The critic's prompt names those epics one by one and states
-what it cannot see — Backlog, Intake and Done epics, other Linear teams,
+what it cannot see — Queued, Intake and Done epics, other Linear teams,
 unmerged branches. Never "consider other work": a critic that does not know
 what it was shown cannot tell you what it missed. The cost of this decision is
 a vaguer critic, and it was taken deliberately (D3, 2026-08-25) because this is
@@ -278,9 +289,20 @@ done from the card alone.
 
 **It fails CLOSED, and that is the one place this route inverts the epic
 route.** Of the cards it reads, a pass moves the card to the build queue, and
-nothing else does; a
-crash, an unusable result and an unavailable model take the escalation exit to
-`Green Light` with the reason in business terms. That does not contradict "a
+nothing else does. A crash, an unusable result, an unavailable model and a read
+that ran out of turns are a critic that decided nothing, and the first such
+read is re-run once (`rerun`, DRE-7491): the card stays in Planning and a fresh
+planning run reads it again, as it stands, with nothing asked of the CEO. The
+second in a row takes the escalation exit to `Green Light` with the reason in
+business terms — the review failed twice — naming both runs. "In a row" is
+read off the card's own round records, which carry the run that wrote them:
+the newest `stage=one-off` record being a `NO_RESULT` is what spends the
+re-run, so a card the CEO sends back from that escalation and that decides
+nothing again goes straight back to him. One automatic re-run per unbroken run
+of no-results, and the loop ends in a lane only a person leaves. It spends no
+send-back round, as no no-result does. The second critic's own once-more rule,
+below, is the precedent. DRE-2498 went to the CEO on 2026-10-13 from one empty
+result, and the read after his answer passed it. That does not contradict "a
 crash is not a rejection" — it is the same rule read in a different place.
 On the epic route, a first critic that decided nothing must not stop the plan,
 because the second critic reads it next. On the
@@ -380,10 +402,11 @@ is deterministic. So:
 * the death leaves a tombstone on the card, the same one line in the same
   grammar the second critic's review writes on an epic, under `stage=one-off` —
   and the next read of that card takes the next ceiling up, `ceil(ceiling ×
-  1.5)` capped at 135, **once**. The re-read is the CEO's answer coming back
-  round through Planning, and an answer must not be spent on a repeat of the
-  same death. A second death does not raise it again: two reads that could not
-  finish is a card for a person, not a third ceiling.
+  1.5)` capped at 135, **once**. The re-read is the automatic re-run above
+  (DRE-7491) — or the CEO's answer coming back round through Planning — and
+  neither may be spent on a repeat of the same death. A second death does not
+  raise it again: two reads that could not finish is a card for a person, not
+  a third ceiling.
 
 **The one-off route is bounded too.** One call per classification, and
 nothing limited the classifications: DRE-3879 made the round trip through the
@@ -401,8 +424,9 @@ one rewrite can answer all of them. Never in `Green Light`: a loop that does not
 converge is a defect, not a decision, the same rule the lane contract states
 for a plan at either critic's bound. A `QUESTION` read as a revision spends a
 round like a `SEND_BACK`, and one left with the CEO spends nothing — it is a
-decision, not a failed revision. A crash still escalates and still spends
-nothing — a round the critic never decided is not a failed round — and a PASS
+decision, not a failed revision. A crash is still re-run once and then
+escalates, and spends nothing — a round the critic never decided is not a
+failed round — and a PASS
 still moves the card whatever the count is, because a rewritten card that now
 passes has nothing left to answer.
 
@@ -522,8 +546,8 @@ says so through `plan_critic.REAPPROVE_HOW`.
 
 **The relay has two triggers on this rail** (DRE-3292). One is the move
 **INTO In Progress** — the CEO's approval, which reaches only an epic waiting in
-Green Light: an epic already sitting In Progress cannot make that move (DRE-3241;
-never Todo either — an epic in Todo dispatches nothing). The other is a comment
+Green Light: an epic already sitting In Progress cannot make that move
+(DRE-3241). The other is a comment
 whose **whole body** is `▶️ re-run the review` (DRE-3287). It fires only on an
 epic already In Progress, the rule DRE-3287 built it to, and the record
 confirms it: on DRE-5129 the act was ignored while the epic sat in Green Light.
@@ -700,7 +724,7 @@ sweep is the ONE promoter of an epic's children, and it releases a child only
 when the epic carries a `stage=post` round for the current planning attempt
 that let the plan through — a PASS. A send-back holds,
 the bound parks, and a tombstone holds until the review is re-run. Until then
-the child stays in `Backlog` and the sweep says so, naming the epic. Nothing else
+the child stays in `Queued` and the sweep says so, naming the epic. Nothing else
 promotes: the activate route runs that same promoter when the CEO approves,
 rather than promoting on its own.
 
@@ -752,7 +776,7 @@ counted separately, so the tripwire is measurable rather than remembered:
     {"caught_at_review": 1, "found_later": 0}
 
 The first number comes from the critic's own `collisions: <n>` line. The second
-is written by whoever finds a collision after the cards reached Backlog — the
+is written by whoever finds a collision after the cards reached Queued — the
 engineer who hits it, the fixer who resolves the conflict, the operator who
 spots it:
 
@@ -760,5 +784,5 @@ spots it:
       --with <OTHER-EPIC> --detail "both rewrite scripts/reconcile.py" \
       | xargs -0 python3 scripts/linear_ops.py comment <EPIC>
 
-**A collision reaching Backlog is the signal that this check has to split back
+**A collision reaching Queued is the signal that this check has to split back
 out into its own pass** — rather than the critic being asked to do more.

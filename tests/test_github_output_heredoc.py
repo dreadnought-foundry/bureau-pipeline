@@ -274,6 +274,8 @@ class PlainValueTest(unittest.TestCase):
             "timeout_limit=",
             "timeout_commits=",
             "superseded_by=",
+            # DRE-7726: the in-flight repairs a go went past, empty otherwise.
+            "beside_in_flight=",
         ])
 
     def test_render_leaves_a_single_line_value_alone(self):
@@ -415,6 +417,10 @@ STDOUT_WRITERS = {
     # `agent/` branch name and its hex digest — and every refusal goes to
     # stderr; it calls no module that talks (DRE-6624).
     "model_config_change.py": "safe",
+    # `decide` prints `go=true|false` and a reason from a fixed vocabulary;
+    # its one human line goes to stderr, and it imports nothing that talks
+    # (DRE-7454).
+    "red_main_clear.py": "safe",
 }
 
 #: The ones above that render through the safe writer. Named, because "it

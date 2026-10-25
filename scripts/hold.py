@@ -92,16 +92,22 @@ HOLD_LABEL = dead_run.HOLD_LABEL  # "needs-human"
 REASONS = (
     "stranded-no-run", "no-route", "review-cap-spent", "dead-run-cap",
     "turn-cap-park", "epic-rereview-twice", "plan-critic-bound", "fix-dispute",
-    "unfixable-check", "operator-step", "manual",
+    "unfixable-check", "operator-step", "wip-cap-held", "manual",
 )
 LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker",
-              "blockers-terminal", "manual")
+              "blockers-terminal", "cap-restored", "manual")
 READERS = ("sweep", "fix-dispatch", "medic", "limit-recovery")
 
 #: A planner-filed operator step: a person does it once its blockers are
 #: Done (DRE-6426). Lifted when every blockedBy relation is terminal.
 OPERATOR_STEP_REASON = "operator-step"
 BLOCKERS_TERMINAL = "blockers-terminal"
+
+#: A Queued child of an approved epic, held because its repo's WIP cap is 0
+#: (DRE-7754). Lifted when the cap is above 0 again, by the sweep alone:
+#: `scripts/repo_held_epics.py` writes it and lifts it.
+WIP_CAP_HELD_REASON = "wip-cap-held"
+CAP_RESTORED = "cap-restored"
 
 #: The lift kind of each reason, fixed by the contract. A row that names
 #: another fails `check` by name — the file cannot vote itself a looser lift.
@@ -116,6 +122,7 @@ CONTRACT_LIFTS = {
     "epic-rereview-twice": "manual",
     "plan-critic-bound": "manual",
     OPERATOR_STEP_REASON: BLOCKERS_TERMINAL,
+    WIP_CAP_HELD_REASON: CAP_RESTORED,
     "manual": "manual",
 }
 
@@ -130,8 +137,15 @@ LIFTERS = {OPERATOR_STEP_REASON: "sweep"}
 CARD_CLOSED = "card-closed"
 CLOSED_LANES = ("Done", "Canceled")
 
+#: The Triage repair's lift (DRE-7178): `scripts/triage_repair.py` lifts a
+#: `plan-critic-bound` hold once per card, right before it moves the card out
+#: of Triage — to Planning with the card rewritten, or to Green Light with a
+#: question for the CEO. Not a lift kind: no sweep reads a fact and lifts on
+#: it; the repair lifts its own card as it applies its outcome.
+TRIAGE_REPAIR = "triage-repair"
+
 #: What a lift line may say lifted the hold, besides a lift kind.
-LIFT_BECAUSE = LIFT_KINDS + (CARD_CLOSED, "operator")
+LIFT_BECAUSE = LIFT_KINDS + (CARD_CLOSED, "operator", TRIAGE_REPAIR)
 
 STAMP_PREFIX = "🔒 hold:"
 LIFT_PREFIX = "🔓 hold lifted:"
@@ -234,7 +248,8 @@ def stamp_line(reason: str, at: str | None, by: str) -> str:
 def lift_line(reason: str, because: str, by: str) -> str:
     """The line `lift` posts after the label comes off."""
     if because not in LIFT_BECAUSE:
-        raise ValueError(f"because={because!r} is not a lift kind, card-closed or operator")
+        raise ValueError(f"because={because!r} is not a lift kind, card-closed, "
+                         "operator or triage-repair")
     if not reason or re.search(r"\s", reason):
         raise ValueError(f"reason {reason!r} is not one word")
     line = f"{LIFT_PREFIX} reason={reason} because={because} by={_writer(by)}"
@@ -341,7 +356,9 @@ def lift_due(stamp: dict | None, *, lane: str, labels, pr_head: str | None,
     Nor does `blockers-terminal` (`operator-step`): no caller passes the
     card's blockers — the hygiene lane never asks about it — so the sweep's
     promotion gate is its only lifter, reading the blockedBy relations
-    itself and calling `lift` (DRE-6427). It falls through to None."""
+    itself and calling `lift` (DRE-6427). It falls through to None. So does
+    `cap-restored` (`wip-cap-held`): no caller passes the repo's cap, and the
+    sweep's `repo_held_epics.lift_pass` is its only lifter (DRE-7754)."""
     if lane in CLOSED_LANES:
         return CARD_CLOSED
     if not stamp:
@@ -415,7 +432,8 @@ def lift(card: str, because: str, by: str, *, reason: str | None = None) -> None
     import linear_ops  # local: only the Linear commands need the seam
 
     if because not in LIFT_BECAUSE:
-        raise ValueError(f"because={because!r} is not a lift kind, card-closed or operator")
+        raise ValueError(f"because={because!r} is not a lift kind, card-closed, "
+                         "operator or triage-repair")
     if reason is None:
         _, bodies = _read_card(card)
         stamp = read_stamp(bodies)
@@ -817,7 +835,8 @@ def main(argv=None) -> int:
     if args.command == "lift":
         if args.because not in LIFT_BECAUSE:
             print(f"hold lift {args.card}: because={args.because!r} is not a lift "
-                  "kind, card-closed or operator — nothing written", file=sys.stderr)
+                  "kind, card-closed, operator or triage-repair — nothing written",
+                  file=sys.stderr)
             return 2
         try:
             lift(args.card, args.because, args.by)

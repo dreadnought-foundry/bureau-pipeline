@@ -340,8 +340,8 @@ def _blocker_pass(*, live=None, answer=("relabeled", "repo:bureau-pipeline"), **
     ("unreadable live", {"resolve_blockers": True,
                          "live": linear_ops.LinearError("HTTP 502")},
      " — not resolved this pass: it could not be read live (HTTP 502)"),
-    ("no longer in Backlog", {"resolve_blockers": True, "live": []},
-     " — no longer in Backlog since the board was read — skipping"),
+    ("no longer in Queued", {"resolve_blockers": True, "live": []},
+     " — no longer in Queued since the board was read — skipping"),
     ("resolved since", {"resolve_blockers": True, "live": [_card(
         "DRE-2904", comments=["Moved the label myself.", CLASS_MARKER])]},
      " — resolved since the board was read — skipping"),

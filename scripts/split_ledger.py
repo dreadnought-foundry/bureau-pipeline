@@ -3,7 +3,7 @@
 
 Every card that did not fit one run left a record, and until now nobody read
 it. A turn-cap death posts its own receipt on the card with the cap it hit and
-the dollars it burned; a split leaves a Canceled or Backlog card whose
+the dollars it burned; a split leaves a Canceled or Queued card whose
 successors cite it; a hand-back leaves the agent's own note saying "this is an
 epic's worth". Three receipts, all machine-readable, all already on the board.
 
@@ -119,6 +119,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import bureau_read  # noqa: E402
 import check_agent_result  # noqa: E402
 import dead_run  # noqa: E402
+from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under every name (DRE-6746)
 import planner_score  # noqa: E402
 import validate_card  # noqa: E402
 
@@ -200,8 +201,11 @@ _is_turn_exhaustion = check_agent_result.is_turn_exhaustion
 _RECEIPT_COST = re.compile(r"turns?\s+and\s+\$\s*([0-9]+(?:\.[0-9]+)?)")
 
 #: The states a split leaves the original in (standards/card-quality.md: "Cancel
-#: the original, never Done"). Backlog is the second one because that is where
-#: the turn-cap hold parks a card that a human then splits.
+#: the original, never Done"). The queue is the second one because that is where
+#: the turn-cap hold parks a card that a human then splits. These are Linear
+#: state TYPES; the queue's old name is a `backlog` lane, and `Queued` an
+#: `unstarted` one, so `reasons` also reads the lane by name in `QUEUE_LANES`
+#: (DRE-6746).
 SPLIT_STATE_TYPES = ("canceled", "backlog")
 
 #: How a successor cites the card it was cut from, with where each spelling was
@@ -698,7 +702,9 @@ def reasons(record: dict) -> list:
     if comments and turn_cap_deaths(comments):
         out.append(REASON_TURN_CAP)
     successors = record.get("successors")
-    if (record.get("state_type") in SPLIT_STATE_TYPES) and successors:
+    left_by_a_split = (record.get("state_type") in SPLIT_STATE_TYPES
+                       or record.get("state") in QUEUE_LANES)
+    if left_by_a_split and successors:
         out.append(REASON_SPLIT)
     if comments and handed_back(comments):
         out.append(REASON_HANDBACK)

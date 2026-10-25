@@ -690,3 +690,195 @@ def test_the_train_workflow_comment_no_longer_claims_a_channel_surface_reads_not
     text = TRAIN_WORKFLOW.read_text()
     assert "channel" in text.lower()
     assert "git/ref/tags" in text or "harness" in text.lower()
+
+
+# --------------------------------------------------------------------------
+# 8. The receipt weighs the commit's own unit suite (DRE-6993).
+# --------------------------------------------------------------------------
+#
+# Once the promotion refuses a red unit suite, a green harness beside it no
+# longer means promotion is coming. The receipt took its state from the
+# harness alone, so it would print `advancing` and the console's alarm would
+# stay quiet for as long as the suite stayed red.
+
+UNIT_URL = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/38167776550"
+
+
+def _green_past_the_tag():
+    fixture = _fixture()
+    run = dict(fixture["run"], status="completed", conclusion="success")
+    return fixture, run
+
+
+def _read_with(unit=..., **over):
+    fixture, run = _green_past_the_tag()
+    run.update(over)
+    kwargs = dict(head=fixture["head"], ref=fixture["ref"],
+                  compare=fixture["compare"], run=run, log_text=None)
+    if unit is not ...:
+        kwargs["unit"] = unit
+    return release_train.read_channel(**kwargs)
+
+
+def test_the_unit_suite_token_is_one_constant():
+    assert release_train.UNIT_SUITE_SCENARIO == "unit-suite"
+
+
+@pytest.mark.parametrize("status", ["in_progress", "queued"])
+def test_a_green_harness_beside_a_running_suite_is_advancing(status):
+    channel = _read_with(unit={"status": status})
+    assert channel.state == release_train.CHANNEL_ADVANCING
+    assert channel.scenarios == ()
+
+
+def test_a_green_suite_reads_byte_for_byte_as_before():
+    green = _read_with(unit={"status": "completed", "conclusion": "success",
+                             "html_url": UNIT_URL})
+    assert green.receipt() == _read_with().receipt()
+    assert green == _read_with()
+
+
+@pytest.mark.parametrize("conclusion", ["failure", "timed_out"])
+def test_a_red_suite_beside_a_green_harness_is_blocked_on_the_suites_run(conclusion):
+    channel = _read_with(unit={"status": "completed", "conclusion": conclusion,
+                               "html_url": UNIT_URL})
+    assert channel.state == release_train.CHANNEL_BLOCKED
+    assert channel.gate_url == UNIT_URL
+    assert channel.scenarios == ("unit-suite",)
+    line = channel.receipt()
+    assert f"gate={UNIT_URL} " in line
+    assert line.endswith(" scenarios=unit-suite")
+    assert line.startswith("pipeline-channel: state=blocked behind=39 ")
+    assert conclusion in channel.detail
+
+
+@pytest.mark.parametrize("unit", [
+    None,
+    {"status": "completed", "conclusion": "cancelled", "html_url": UNIT_URL},
+    {},
+    "not a record",
+])
+def test_a_missing_or_verdictless_suite_is_blocked(unit):
+    channel = _read_with(unit=unit)
+    assert channel.state == release_train.CHANNEL_BLOCKED
+    assert channel.scenarios == ("unit-suite",)
+    assert channel.receipt().endswith(" scenarios=unit-suite")
+    assert channel.gate_url  # always a run to open — the suite's, or the harness's
+
+
+def test_the_unit_suite_is_never_read_into_any_other_state():
+    """Only `advancing` changes: the suite says nothing about a channel that
+    is current, a harness that is running, red or cancelled, or one that only
+    proved the channel's own commit."""
+    fixture = _fixture()
+    red_unit = {"status": "completed", "conclusion": "failure", "html_url": UNIT_URL}
+    for run in (fixture["run"],
+                dict(fixture["run"], conclusion="cancelled"),
+                dict(fixture["run"], status="in_progress", conclusion=None),
+                dict(fixture["run"], conclusion="success",
+                     head_sha=fixture["ref"]["sha"])):
+        without = release_train.read_channel(
+            head=fixture["head"], ref=fixture["ref"], compare=fixture["compare"],
+            run=run, log_text=fixture["log_failed"])
+        weighed = release_train.read_channel(
+            head=fixture["head"], ref=fixture["ref"], compare=fixture["compare"],
+            run=run, log_text=fixture["log_failed"], unit=red_unit)
+        assert weighed == without, run
+
+
+def test_a_suite_held_receipt_keeps_the_shape_the_console_reads():
+    channel = _read_with(unit={"status": "completed", "conclusion": "failure",
+                               "html_url": UNIT_URL})
+    line = channel.receipt()
+    assert "\n" not in line
+    for token in line.split(" ")[1:]:
+        assert "=" in token, token
+    decision = _decide(channel)
+    assert decision.code == "channel-blocked"
+    assert decision.receipt(REPO, "pipeline-channel").startswith(
+        "release-train: no-op dreadnought-foundry/bureau-pipeline pipeline-channel — ")
+
+
+def _fake_gh_with_unit(tmp_path, monkeypatch, *, run, unit):
+    """`_fake_gh`, answering the harness's newest run with `run` and the
+    commit's own `tests.yml` push run with `unit`."""
+    fixture = _fixture()
+    fixture["run"] = run
+    fixture["unit"] = unit
+    data = tmp_path / "fixture.json"
+    data.write_text(json.dumps(fixture))
+    calls = tmp_path / "calls.log"
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "gh").write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo \"$*\" >> {calls}\n"
+        "case \"$*\" in\n"
+        "  *git/ref/tags/stable*) python3 -c 'import json; "
+        f"print(json.dumps(json.load(open(\"{data}\"))[\"ref\"]))' ;;\n"
+        "  *compare/*) python3 -c 'import json; "
+        f"print(json.dumps(json.load(open(\"{data}\"))[\"compare\"]))' ;;\n"
+        "  *workflows/harness.yml/runs*) python3 -c 'import json; "
+        f"print(json.dumps(json.load(open(\"{data}\"))[\"run\"]))' ;;\n"
+        "  *workflows/tests.yml/runs*) python3 -c 'import json; "
+        f"print(json.dumps(json.load(open(\"{data}\"))[\"unit\"]))' ;;\n"
+        "  *--log-failed*) python3 -c 'import json; "
+        f"print(json.load(open(\"{data}\"))[\"log_failed\"], end=\"\")' ;;\n"
+        "  *) echo unexpected \"$*\" >&2; exit 9 ;;\n"
+        "esac\n"
+    )
+    (fake / "gh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    return calls
+
+
+def _unit_reads(calls):
+    return [line for line in calls.read_text().splitlines()
+            if "workflows/tests.yml/runs" in line]
+
+
+def test_fetch_channel_reads_the_suite_of_a_green_harness_past_the_tag(
+        tmp_path, monkeypatch):
+    fixture, run = _green_past_the_tag()
+    calls = _fake_gh_with_unit(
+        tmp_path, monkeypatch, run=run,
+        unit={"id": 38167776550, "html_url": UNIT_URL,
+              "status": "completed", "conclusion": "failure"})
+    channel = release_train.fetch_channel(REPO, _channel_surface(),
+                                          fixture["head"])
+    [read] = _unit_reads(calls)
+    assert f"head_sha={run['head_sha']}" in read
+    assert "branch=main" in read
+    assert "event=push" in read
+    assert channel.state == release_train.CHANNEL_BLOCKED
+    assert channel.receipt().endswith(f"gate={UNIT_URL} scenarios=unit-suite")
+
+
+def test_fetch_channel_with_no_suite_run_on_record_is_blocked(tmp_path, monkeypatch):
+    fixture, run = _green_past_the_tag()
+    _fake_gh_with_unit(tmp_path, monkeypatch, run=run, unit=None)
+    channel = release_train.fetch_channel(REPO, _channel_surface(),
+                                          fixture["head"])
+    assert channel.state == release_train.CHANNEL_BLOCKED
+    assert channel.scenarios == ("unit-suite",)
+
+
+@pytest.mark.parametrize("over", [
+    {"status": "completed", "conclusion": "failure"},
+    {"status": "in_progress", "conclusion": None},
+    {"status": "completed", "conclusion": "success",
+     "head_sha": "b860c24144b66e918117a09d17e7bcac08cfcf7d"},
+])
+def test_fetch_channel_reads_no_suite_unless_the_harness_is_green_past_the_tag(
+        tmp_path, monkeypatch, over):
+    fixture, run = _green_past_the_tag()
+    run.update(over)
+    calls = _fake_gh_with_unit(tmp_path, monkeypatch, run=run, unit=None)
+    release_train.fetch_channel(REPO, _channel_surface(), fixture["head"])
+    assert _unit_reads(calls) == []
+
+
+def test_the_render_names_the_unit_suite_in_the_blocked_row():
+    rendered = release_train.render_markdown()
+    assert "`unit-suite`" in rendered
+    assert "Pipeline Tests" in rendered

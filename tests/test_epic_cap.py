@@ -32,6 +32,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import epic_cap  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 #: The two reads as the module defines them, kept at import — before
@@ -374,8 +375,25 @@ def test_canceled_and_triage_children_do_not_mean_activated():
     assert not epic_cap.activated_before(_with_children("Backlog", "Canceled", "Triage"))
 
 
+@pytest.mark.parametrize("queue", lane_contract.QUEUE_LANES)
+def test_a_child_under_either_queue_name_has_not_run(queue):
+    """Only the activate route moves a child out of the queue, under either
+    of its names (DRE-6749)."""
+    assert not epic_cap.activated_before(_with_children(queue, queue))
+    assert epic_cap.activated_before(_with_children("Done", queue))
+
+
 def test_the_activated_states_are_the_contract():
-    assert epic_cap.ACTIVATED_STATES == ("Todo", "In Progress", "In Review", "Done")
+    # DRE-7112: the start lanes are the contract's (`lane_contract.START_LANES`),
+    # so a child in In Progress counts exactly where one in Todo did; Todo
+    # left the contract with DRE-7660.
+    assert epic_cap.ACTIVATED_STATES == ("In Progress", "In Review", "Done")
+    assert epic_cap.ACTIVATED_STATES == (*lane_contract.START_LANES, "In Review", "Done")
+
+
+@pytest.mark.parametrize("lane", lane_contract.START_LANES)
+def test_a_child_in_each_start_lane_means_activated(lane):
+    assert epic_cap.activated_before(_with_children(lane, "Backlog"))
 
 
 # --------------------------------------------------------------------------

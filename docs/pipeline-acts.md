@@ -139,10 +139,60 @@ leave the next reader finding a fresh hold exactly where the observation is; it
 is declared `not-an-act` in the registry's `unconverted` block instead, with
 that reason, where the debt is countable.
 
+**The colon is part of the mark** (DRE-7743). A comment opening
+`🔬 proof-observed` with anything else after it — DRE-5407's opened
+`🔬 proof-observed —` on 2026-10-18 and its card was named held for two days —
+discharges nothing, and the proof dispatcher answers it once on the card:
+`🔬 proof-note-unread: the note of <PT> “<its first line>” discharged nothing —`
+and why (`proof_record.unread_reply`). The mark is never loosened to read the
+dash; the reply is found again by its whole first line, so no pass posts it
+twice. It is declared `not-an-act` in the `unconverted` block, for the same
+reason as the discharge record.
+
 Both commands refuse an empty half, and refuse a text containing `budget
 exhausted` or `holding for a human` — the console's `enrich.HOLD_MARKERS` reads
 either phrase as a fix-budget hold, and the card would render as the wrong kind
 of stuck on a surface nobody would think to check.
+
+**A hold that waits only for a time** (DRE-7228) is written with
+`proof-waiting-until`, and that is the form to use for one — a day of jobs
+counted from a live-at time, a morning's scheduled run:
+
+    python3 scripts/linear_ops.py proof-waiting-until DRE-N \
+      "the day of jobs on the pinned machine family" "2026-10-12T14:33-07:00"
+
+It posts the same hold through `proof-waiting`, so the trailer and the
+console's `Waiting for proof — <reason>` are unchanged, with the `needs` half
+written by the command and never by the caller:
+`🔬 proof-waiting: <what is still to be observed> — needs not-before=<ISO time
+with offset>`. It refuses a time that does not parse with
+`datetime.fromisoformat`, a time with no UTC offset, and an observed half naming
+`the CEO's press`, and posts nothing. A hold whose `needs` half is that one
+clause and nothing else is **time-only** (`proof_record.time_only`): once every
+open hold on a `Hand-work` PROOF card is time-only and every time has passed, the
+proof dispatcher posts one `🔬 proof-observed` quoting each time and the card
+goes on to its first run on the same pass. A clause beside other words, a hold
+naming the CEO's press, and a date in prose are held exactly as before — nothing
+reads a date out of prose — and a time hold beside any other open hold is never
+lifted by time, because one `🔬 proof-observed` would lift that hold too.
+
+**The dispatcher writes and lifts the same hold on the re-run branch too**
+(DRE-7316). A record row waiting for an event that happens at or by a known
+time carries the clause in square brackets right after the event — `Not
+observed. waiting for <the event> [not-before=<ISO time with offset>]: <what
+it would show>` (`proof_record.row_not_before`). When every waiting row of a
+record the critic sent back, or the gate declined, is stamped, the hold the
+dispatcher posts for it reads `— needs not-before=<the latest row time>` and
+nothing else, so it is time-only; one prose waiting row among them and the hold
+is written as before, for a person. On the re-run branch the same rule as the
+first run's is read over every open hold, before the cause park's holds are
+dropped: every one time-only and every time passed, and the dispatcher posts
+the one `🔬 proof-observed` and dispatches a **timed re-run** on that pass;
+before its time the refusal adds `— lifts at <PT>`; beside any other open hold
+nothing is lifted and the line names the hold that still holds. A timed re-run's
+count is `timed re-run <n> of 2`, so it never spends the two re-runs counted off
+`re-run`. It has its own two per record pull request; after them, one hold for
+the operator and never a third.
 
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
@@ -160,7 +210,8 @@ thirteen seconds with `Claude Code native binary not found` (DRE-3416).
 **Per-run detection worked** — each pull request got the neutral could-not-run
 receipt — and nothing aggregated it, so seven runs across two repositories
 failed identically and no surface anywhere said the reviewer was down. This act
-is that missing sentence, said once, as one card in a human queue lane.
+is that missing sentence, said once — as one card in a human queue lane until
+DRE-7455, and as one console alert since.
 
 Two things about the row are worth reading before the next one is written.
 
@@ -172,8 +223,9 @@ to a person. That it is the fleet-wide alarm is said in `means` and `why`,
 which is where a reader looks for it.
 
 **`state` is `escalated`, which no other hold here declares.** Every other hold
-leaves the work where it was and lives entirely in its receipt; this one FILES
-A CARD into a human queue lane, and that card is the whole deliverable.
+leaves the work where it was and lives entirely in its receipt; this one handed
+the outage to a person — as a card in a human queue lane until DRE-7455, and as
+a CRITICAL console alert since — and that hand-off is the whole deliverable.
 
 **The threshold is DATA on the row** — `window_s`, `consecutive` and `repos`,
 plus a `threshold_why` saying where each came from — read through
@@ -181,29 +233,36 @@ plus a `threshold_why` saying where each came from — read through
 and putting the numbers here is what lets an operator retune the alarm by
 editing a file they can read instead of a comparison buried in a decision.
 
-**Who posts it (DRE-3435).** The row's `emits` anchor points at the decision
-module, because that is where the body is composed; the WRITER is the reconcile
-sweep's `report_fleet_reviewer_outage()` backstop, on full sweeps only, sitting
-immediately after `recover_crashed_reviews` because the two read the same open
-pull requests — that one re-dispatching per head, this one counting across the
-fleet. It files ONE card, CREATED in `Triage` and marked `no-code` with no
-`agent:*` role, so it never passes through `Planning` and no planner or build
-run is dispatched at it (DRE-5292). Its first crashed run is the head's own
-failed review workflow run, or "no run found" when none can be read — never a
-check run's `details_url`. It appends one comment per newly counted
-run and rewrites the title's counts, and closes the card on the first
-successful verdict it can see in a repository the card counted, posted after
-that repository's last counted crash — whenever that verdict was posted
-(DRE-6576). It finds its open card in the board read it already makes, which
-carries `Triage`, so it reads the card on every sweep for as long as the card
-is open, however long ago the crashes were. Under `BUREAU_READ=on` that lookup
-is one Linear request per sweep. A repository whose newest crash already has a
-later verdict there does not count toward the two-repository rule, so the
-alarm stays quiet when the reviewer is back before it files. Every comment it
-posts composes through this act, so the console's alert per open card is
-unchanged by the trailer. `FLEET_OUTAGE_SWEEP_CAP=0` is the off switch: it stops the sweep
-FILING fleet-wide, and deliberately leaves appends and closes running, so an
-outage card that is already open is never orphaned by the switch.
+**Who posts it (DRE-3435) — nobody, since DRE-7455.** The row's `emits`
+anchor points at the decision module, because that is where the receipt body
+is composed. Its writer was the reconcile sweep's
+`report_fleet_reviewer_outage()` backstop, which filed one `Triage` card,
+appended to it, retitled it and closed it, receipting each write through this
+act. DRE-7455 made the outage a console alert instead, and the receipt is no
+longer posted anywhere — `check_act_receipts.pending_acts()` now reads this
+act as one nothing posts, which lifts by itself if a poster spells it again.
+
+The backstop still runs on full sweeps only, immediately after
+`recover_crashed_reviews`, because the two read the same open pull requests —
+that one re-dispatching per head, this one counting across the fleet. When the
+threshold is met it raises the alert `reviewer_outage:fleet` at CRITICAL
+through `scripts/pipeline_notice.py`, with the title and body
+`reviewer_down.py` composes: the first crashed run (the head's own failed
+review workflow run, or "no run found" when none can be read — never a check
+run's `details_url`), the three suspects and the run list. Every sweep that
+finds the outage raises the key again; the console keeps one alert per key,
+so that is a repeat and nothing is delivered twice. A sweep that sees no
+could-not-run inside the window resolves the key with the all-clear copy —
+`Reviewer back — reviews are running again`, and the sweep's own time in PT —
+so the CEO, emailed when it went down, is emailed when it clears. A sweep that
+still sees a crash in the window but not the threshold does neither, because
+another repository's sweep may still be raising. A repository whose newest
+crash already has a later verdict there does not count toward the
+two-repository rule, so the alarm stays quiet when the reviewer is back before
+it is raised. When the console door cannot take the raise, the client files
+the card the sweep used to file — its title, CREATED in `Triage`, `repo:<slug>`
+and `no-code` with no `agent:*` role, so it never passes through `Planning`
+(DRE-5292) — and a person closes that card.
 
 ## The row that stops a WRITE from shouting — `🛑 fix-agent-absent` (DRE-4378)
 
@@ -260,14 +319,16 @@ epics under itself, and each child is planned and green-lit on its own
 (`standards/card-quality.md`). `python3 scripts/epic_split.py check` refuses a
 split that is not one. `activate` then posts this receipt ONCE on the parent,
 naming every child in `blockedBy` order with its slice's first sentence, what
-blocks it, and whether it is sent to Planning or waits in Backlog. After that
-it sends to Planning each child still in Backlog that no open sibling blocks,
+blocks it, and whether it is sent to Planning or waits in Queued. After that
+it sends to Planning each child still in the queue that no open sibling blocks,
 where the relay starts that child's planner run, and moves the parent to
 In Progress, where the sweep's ordinary epic close finds it. Meanwhile, a
-child blocked by an open sibling waits in Backlog for the sweep's auto-advance
-(DRE-6591): the seam rule plans it only on what that sibling observed, so it
-is carried on to its planner run once every sibling it waits on is Done. A
-sibling already Done, Canceled or Duplicate holds nothing.
+child blocked by an open sibling waits in Queued for the sweep's auto-advance
+(DRE-6591): the seam rule plans it only on what that sibling built, so it is
+carried on to its planner run once no sibling it waits on still holds it. A
+sibling already Done, Canceled or Duplicate holds nothing, and since DRE-7831
+neither does a sibling built out with only its proof left open: its planner
+reads that proof's record as it plans.
 
 **It is a `progress` act whose tag IS a live key**, and that is the one way it
 differs from the heartbeats above. Nothing is held and nothing is repaired: the
@@ -316,9 +377,17 @@ from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
 eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
+`hygiene-triage-alarm` has two bounds. A card a planning exit parked in Triage
+alarms once its wait reaches `HYGIENE_TRIAGE_ALARM_HOURS` (default 8). A card
+whose one automatic repair (`scripts/triage_repair.py`) is spent alarms once it
+reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
+that sees it), held or not: it parked again after the repair, or the repair did
+not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
+repair still running never alarms.
+
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
-block, the way Nightly Watch's report is.
+block.
 
 ## The row that starts a proof — `🔬 proof-run` (DRE-5926)
 
@@ -353,14 +422,34 @@ approved and the merge gate then declined at the same head (`⏸️ Merge gate:
 declined @<head> — proof record not proven: …`) is dispatched again the same
 way, `re-run after the gate's decline at <sha7>`, reading the unmet rows off the
 record at the head and never off the note (DRE-6488). The two triggers share
-one budget of two re-runs per record pull request; after it, or after a re-run
-that finished with the decline still at the head, one `🔬 proof-waiting` hold
-for an operator. A row whose Result reads `Not observed. waiting for <the
+two re-runs per record pull request, then one more per re-arm event, and never
+another without one; after the two with no event, or after a re-run that
+finished with the decline still at the head, one `🔬 proof-waiting` hold for
+an operator. The re-arm events are two, and only two (DRE-7740): every card an
+unmet row names by `fix: DRE-<n>` is Done, labelled for this repo, merged and
+live — the set re-arms once — or the operator posts a new `🔬 proof-observed`
+after the card's newest receipt, never one the pipeline wrote itself. When the
+record read at the head names no fix, the budget's hold ends `— the record at
+<sha7> names no fix`, and while nothing follows that hold and the record stays
+at that head the card is named on its line every pass and never read, so it
+spends none of the pass's candidate reads (DRE-7787). A record
+whose unmet rows are all `Not met. history: …` rows (or cause rows) is held for
+the operator's decision at once and never re-run. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to
-cause: the card is held with `🔬 proof-waiting: <the waiting criteria> — needs
-<their events>` instead of a re-run, and is re-run once the operator posts
-`proof-observed`. It is read after the first runs, under the same one-per-pass
-cap, and moves nothing.
+cause: on either trigger, beside any other unmet row, the card is held with
+`🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
+re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
+for the critic's trigger DRE-6814) — or, when every waiting row is stamped with
+a `[not-before=<T>]`, the hold is `— needs not-before=<T>` and the dispatcher
+lifts it itself once `<T>` passes, with a timed re-run (DRE-7316). A record the gate declined, or the critic
+sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
+at that head, since a re-run would read the same thing: the dispatcher puts it
+to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
+its question, each skipped when the thread already carries it — and leaves the
+card In Review for the operator (DRE-6837); a caused row beside a plain one is
+re-run as before (DRE-6610). The park's own hold never holds the card off the
+record at its head: the operator's amendment discharges it. It is read after
+the first runs, under the same one-per-pass cap, and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
@@ -368,9 +457,13 @@ The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
 The reasons open `first proof run`, `second dispatch — no run started after`,
 `second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
-the critic's findings at` and `re-run after the gate's decline at`; the counts are
-`dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through the same composer) and
-`after the CEO's answer`. **The tag is a live key**: `proof_run_state.reading`
+the critic's findings at`, `re-run after the gate's decline at`, `re-run after
+DRE-<n> shipped`, `re-run after the 🔬 proof-observed of` and `timed
+re-run after not-before <PT> at`; the counts are `dispatch <n> of 2`, `re-run
+<n> of 2` (DRE-5931, through the same composer), `timed re-run <n> of 2`
+(DRE-7316 — its own budget, never counted with `re-run`), `after the CEO's
+answer` and `re-armed` (DRE-7740) — one more run on a spent
+re-run budget, which does not open `re-run` and so spends none of it. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof
 run` or `second dispatch`.
@@ -381,6 +474,15 @@ run` or `second dispatch`.
 each proof a person is already working with `linear_ops.py proof-waiting
 <card> "being observed by hand" "the operator's record pull request"`, and the
 phase leaves it alone by name.
+
+**A proof shadow posts no receipt** (DRE-7287). While the repository variable
+`PROOF_SHADOW_MODEL` names a model, each confirmed dispatch on a live pass is
+followed by a `proof-shadow` dispatch for the same card, answered by `Proof
+Shadow` (`self-proof-shadow.yml`). It writes nothing to Linear, so it never
+spends the first-run budget these receipts count; it prints one
+`proof-shadow: dispatched <card> on <model>` or `proof-shadow: not dispatched
+<card> — <error>` line, and a dry pass prints `would: shadow <card> on
+<model>`.
 
 ## The row that says a switch may come on — `🔀 switch-cleared` (DRE-6437)
 
@@ -431,7 +533,7 @@ writes nothing.
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
 posted once and never read again, so each looked exactly like a card waiting
-its turn. `promote_ready` now records every card it leaves in Backlog for a
+its turn. `promote_ready` now records every card it leaves in the queue for a
 reason that is not a declared wait, dated by the oldest comment carrying that
 refusal's receipt — never by a count of sweeps kept somewhere
 (`scripts/promotion_stall.py`, DRE-4207).
@@ -495,6 +597,105 @@ skipping` instead.
 
 The console learned the act first (DRE-6440): the `act registry consumers`
 job refuses a row the console does not carry.
+
+## The row that records a Triage repair — `🩹 triage-repair` (DRE-7178)
+
+| Field | Value |
+| -- | -- |
+| tag | `triage-repair-receipt` |
+| act name | `triage-repair` |
+| kind · state · next actor | `recovery` · `dispatched` · `plan.yml` |
+| discharges | nothing |
+| cadence | `6900` — plan.yml's plan job, `timeout-minutes: 115`, the run a rewritten card's entry to Planning fires |
+| emitted by | `scripts/triage_repair.py`, at the `pipeline_act.receipt("triage-repair", …)` call in `_post` |
+
+A card the plan critic's bound parks in Triage, held `plan-critic-bound`, gets
+one automatic repair, once per card (epic DRE-7174). `triage_repair.py select`
+reads every finding of the newest park note off the card's whole thread;
+`claim` posts the first receipt before the planner runs; `apply` posts the
+last, after every other write of its outcome:
+
+    🩹 triage-repair: started — … The description as it stood before the repair, so a person can put it back:
+    🩹 triage-repair: rewritten — … The findings, each with its answer:
+    🩹 triage-repair: asked — … the card's description is unchanged.
+    🩹 triage-repair: replanned — … The findings in front of the planner:
+    🩹 triage-repair: split — … The cards filed: … The findings, each with its answer:
+    🩹 triage-repair: unfinished — <what failed or was missing>. Writes already made: <list>.
+
+`replanned` is an epic's (DRE-7181): a card with children that has had no
+bound rewrite, and whose findings are there and name no decision, gets the
+`🔁 bound-rewrite:` receipt — posted through
+`plan_bound.post_receipt`, so that row's text and act are still emitted from
+`plan_bound.py` — with every finding the bound left open, the lift, and the
+move to Planning, where a fresh planning attempt starts. An epic carrying a
+bound-rewrite receipt anywhere on its thread is `spent`; one whose findings
+name a decision is `escalate`, as the bound itself asks it, and one whose park
+left no findings is `skip`. `split` is a card that is more than one job
+(DRE-7182): narrowed to its first piece with each other piece filed beside it
+through the seam its parent decides (`mid_epic.discovery` under an epic being
+built, `linear_ops.cmd_subissue` under any other parent, `linear_ops.cmd_oneoff`
+with none), or stamped `epic` through `planning_shape.stamp` as the planner,
+then lifted and moved to Planning. **The receipt key is live**: a pipeline-authored comment whose
+first line opens `🩹 triage-repair:` anywhere on the card is the card's one
+repair, so `select` answers `spent` and `claim` exits 3. A comment of that
+shape from any other author counts for nothing.
+
+The tag is `triage-repair-receipt`, never the bare act name. The repair lifts
+the hold with the contract's line, `🔓 hold lifted: reason=plan-critic-bound
+because=triage-repair by=triage_repair.py`, and no hold line may carry a
+registry tag (`docs/holds.md`), so a `tag in body` count of this act never
+reads a lift line as one of its receipts.
+
+The console must learn this act before this row merges. The `act registry
+consumers` job refuses a row the console does not carry, and it knows an act
+by its tag or its name.
+
+## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
+
+| Field | Value |
+| -- | -- |
+| tag | `repo-held` |
+| act name | `repo-held-notice` |
+| kind · state · next actor | `hold` · `held` · `operator` |
+| discharges | nothing |
+| cadence | `null` — the hold ends only when someone restores `max_wip` in the repo's reconcile stub, and nothing bounds when that happens |
+| emitted by | `scripts/repo_held_epics.py`, at the `pipeline_act.receipt("repo-held-notice", …)` call in `_post_receipt` |
+
+A repo whose WIP cap is 0 builds and promotes nothing, and its sweep used to
+go idle in one log line that never reached the board. On 2026-10-19 DRE-7600
+sat approved in agent-bureau-demo that way, its children in Queued looking
+like cards waiting their turn (epic DRE-7671). On every full pass of a repo
+held at max_wip 0, `hold_pass` now holds each Queued child of the repo's
+approved epics that waits on the cap, and tells each epic once:
+
+    ⏸️ repo-held: <EPIC> is approved, and <repo> builds nothing — its WIP cap is 0.
+
+The body quotes the reconcile stub's path and its own comment about the cap
+(`sweep_holds.read`, DRE-7750), lists every Queued child that waits on the cap
+with how it is held — `held (wip-cap-held)`, `held (<its own reason>)`, or
+`held (manual — needs-human with no hold stamp; a person lifts it)` — and
+closes with what lifts it: restoring `max_wip` in that stub. A child carrying
+a live PARKED routing verdict does not wait on the cap and is not listed, and
+an epic with no child that waits gets no receipt.
+
+**The receipt key is live.** An epic's receipt stands when a comment whose
+first line opens `⏸️ repo-held:` was created after both its newest green light
+(`mid_epic.green_light_from` over `history(first: 50)`) and the newest
+`🔓 hold lifted: reason=wip-cap-held because=cap-restored` line on any of its
+Queued children. So a re-approved epic is told again, and so is one whose
+children were lifted when the cap was restored and held again when it went
+back to 0. A thread past the fifty-comment window is read whole before it is
+judged, so a receipt that scrolled out of the window still counts. An epic
+whose green light or thread cannot be read gets no receipt and no hold that
+pass.
+
+The tag is `repo-held` and the hold it reports is `wip-cap-held`, lifted on
+`cap-restored` (`docs/holds.md`). They are two words on purpose: no hold line
+may carry a registry tag, so a reason spelled `repo-held` would make every
+stamp read as a receipt.
+
+The console learned the tag first (DRE-7751). The `act registry consumers` job
+refuses a row the console does not carry.
 
 ## Why this exists
 

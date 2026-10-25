@@ -17,7 +17,7 @@ contract and the same shapes, and no real words.
 WHY (DRE-3638). The CI ceiling on the reconcile sweep's Linear spend passes at
 30 while a live pass costs 65 on bureau-pipeline and 92 on agent-bureau. The
 ceiling is not wrong about its own fixture — `tests/test_sweep_request_cuts.py`
-hand-builds 5 epics and 260 Backlog cards and mocks 18 of the sweep's phases
+hand-builds 5 epics and 260 queued cards and mocks 18 of the sweep's phases
 out entirely — so it measures a sweep nobody runs. A hand-built board answers
 only the questions its author thought of; the real one carries the shapes
 nobody would have invented: an epic with thirty children, a card whose comment
@@ -103,6 +103,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 # `reconcile.SWEPT_LANES` is the fact this script must not re-spell: the sweep
@@ -116,12 +117,14 @@ import reconcile  # noqa: E402
 
 TEAM = "DRE"
 
-#: The lanes read: the sweep's own union, plus `Backlog` — where the promotion
-#: gate's candidates live and which `SWEPT_LANES` does not include, because the
-#: sweep buys them in a second query (`reconcile.backlog_children`). `Intake`
-#: and `Planning` are already in `SWEPT_LANES` and named again here because the
+#: The lanes read: the sweep's own union, plus the queue under every name it
+#: carries (`lane_contract.QUEUE_LANES`, DRE-6749) — where the promotion gate's
+#: candidates live and which `SWEPT_LANES` does not include, because the sweep
+#: buys them in a second query (`reconcile.backlog_children`). `Intake` and
+#: `Planning` are already in `SWEPT_LANES` and named again here because the
 #: contract names them; `dict.fromkeys` keeps the order and drops the repeats.
-LANES = tuple(dict.fromkeys(reconcile.SWEPT_LANES + ("Backlog", "Intake", "Planning")))
+LANES = tuple(dict.fromkeys(reconcile.SWEPT_LANES + lane_contract.QUEUE_LANES
+                            + ("Intake", "Planning")))
 
 #: Cards per page. Linear's own maximum for this query and what both of the
 #: sweep's board reads ask for.
@@ -463,20 +466,42 @@ _EPIC_CHILDREN = 12
 #: decisions and its structural checks (nine active epics, the nudge loop's
 #: exhausted comment windows) would change for a reason that has nothing to do
 #: with the sweep. A lane `LANES` gains is given a few cards of its own instead
-#: (`_extra_lane_slots`), and only those cards move.
-_SYNTHETIC_DEAL = ("Todo", "In Progress", "In Review", "Planning", "Intake", "Backlog")
+#: (`_extra_lane_slots`), and only those cards move. The last is the lane the
+#: queue is written to (`QUEUE_LANE`, DRE-6749), so the queue's other name is
+#: the one dealt a few cards: `Queued` until DRE-6742 flips the planning exit.
+#: The first two slots are the start lanes (`synthetic_deal`, DRE-7112).
+def synthetic_deal(contract: dict | None = None) -> tuple:
+    """The deal's six slots under `contract`. The first is the start lane
+    ahead of the dispatch lane — a card there was promoted and waits for its
+    run — and the second the dispatch lane itself. Once no start lane is ahead
+    of it the first slot is the dispatch lane too: the deal keeps its six
+    slots, so a card sits in the dispatch lane exactly where it sat in the
+    retired lane and no other card is re-dealt. A RETIRING start lane is not
+    ahead of it: the sweep drains that lane into the dispatch lane (DRE-7129),
+    so a real board holds nothing there to deal."""
+    dispatch = lane_contract.dispatch_lane(contract)
+    live = set(lane_contract.lane_names("live", contract))
+    waiting = next((lane for lane in lane_contract.start_lanes(contract)
+                    if lane != dispatch and lane in live), dispatch)
+    return (waiting, dispatch, "In Review", "Planning", "Intake",
+            lane_contract.queue_lane(contract))
+
+
+_SYNTHETIC_DEAL = synthetic_deal()
 
 #: The lane a person's work waits in, and the marks a card there carries. A
 #: synthetic Hand-work card is a WORKBENCH card, as the sweep would land it.
 _HAND_WORK = "Hand-work"
 
 
-def _extra_lane_slots(dealt: list[str], cards: int) -> dict[int, str]:
+def _extra_lane_slots(cards: int) -> dict[int, str]:
     """Card index → the lane `LANES` names that `_SYNTHETIC_DEAL` does not.
 
-    One card per epic block, taken from a plain Todo card past the block's
-    children (so no epic, no child, no blocker chain moves), the lanes handed
-    out in turn. Deterministic, like the rest of the board."""
+    One card per epic block, taken from a plain card in the deal's first slot
+    past the block's children (so no epic, no child, no blocker chain moves),
+    the lanes handed out in turn. The slot is read by position, so the cards
+    taken are the same whichever lane the slot deals. Deterministic, like the
+    rest of the board."""
     extra = [name for name in LANES if name not in _SYNTHETIC_DEAL]
     if not extra:
         return {}
@@ -484,7 +509,7 @@ def _extra_lane_slots(dealt: list[str], cards: int) -> dict[int, str]:
     turn = 0
     for start in range(0, cards, _EPIC_EVERY):
         for i in range(start + _EPIC_CHILDREN + 1, min(start + _EPIC_EVERY, cards)):
-            if dealt[i] == "Todo" and i % 5 not in (0, 1):
+            if i % len(_SYNTHETIC_DEAL) == 0 and i % 5 not in (0, 1):
                 out[i] = extra[turn % len(extra)]
                 turn += 1
                 break
@@ -505,7 +530,7 @@ def synthetic(cards: int = SYNTHETIC_CARDS) -> dict:
     """
     ident = [f"DRE-{_SYNTHETIC_BASE + i}" for i in range(cards)]
     lane = [_SYNTHETIC_DEAL[i % len(_SYNTHETIC_DEAL)] for i in range(cards)]
-    extra = _extra_lane_slots(lane, cards)
+    extra = _extra_lane_slots(cards)
     for i, name in extra.items():
         lane[i] = name
 

@@ -16,7 +16,10 @@ Every site passes `--repo "$GITHUB_REPOSITORY"`, because a reusable workflow
 runs in the calling repo's context and the stub lives in the repo whose card it
 serves. The one exception is the groomer's verifier: one groomer run serves
 cards from many repos, so its host repo is the wrong project there, and the
-step reads the card's own repo off the matrix row as `REPOSITORY`.
+step reads the card's own repo off the matrix row as `REPOSITORY`. The
+Triage Repair run (DRE-7179) is the same shape: one run here repairs cards
+from every repo, and its planner selects for the card's own repo, read off the
+matrix row's `repo`.
 
 The scenario at the end runs the selector CLI the way those steps do, on this
 repo's own `owner/name`, with the availability probe stubbed
@@ -51,6 +54,10 @@ AT_LEAST = {"select": 13, "classify": 1, "decide": 4}
 FLEET_FLAG = '--repo "$GITHUB_REPOSITORY"'
 GROOMER_FLAG = '--repo "$REPOSITORY"'
 GROOMER_REPOSITORY = "${{ matrix.repository }}"
+#: The workflows whose one run serves cards from many repos, and the matrix
+#: field each binds REPOSITORY to.
+MANY_REPOS = {"groomer.yml": GROOMER_REPOSITORY,
+              "triage-repair.yml": "${{ matrix.repo }}"}
 
 
 def _join_continuations(script: str) -> str:
@@ -95,7 +102,7 @@ SITES = _sites()
 
 
 def _expected_flag(site: dict) -> str:
-    if site["kind"] == "select" and site["file"] == "groomer.yml":
+    if site["kind"] == "select" and site["file"] in MANY_REPOS:
         return GROOMER_FLAG
     return FLEET_FLAG
 
@@ -181,3 +188,14 @@ def test_select_on_this_repo_names_its_project_in_the_note(tmp_path):
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip(), "select printed no model"
     assert "project bureau-pipeline" in note.read_text(), note.read_text()
+
+
+def test_the_triage_repair_planner_names_the_card_s_repo_not_the_host():
+    """DRE-7179: the run lives here and repairs cards from every repo, so
+    $GITHUB_REPOSITORY is bureau-pipeline, never the card's project."""
+    sites = [s for s in SITES if s["file"] == "triage-repair.yml" and s["kind"] == "select"]
+    assert sites, "triage-repair.yml has no `model_fallback.py select` site"
+    for site in sites:
+        assert GROOMER_FLAG in site["command"]
+        assert FLEET_FLAG not in site["command"]
+        assert site["env"].get("REPOSITORY") == MANY_REPOS["triage-repair.yml"]

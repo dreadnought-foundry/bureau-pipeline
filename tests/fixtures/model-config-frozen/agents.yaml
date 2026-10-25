@@ -1,0 +1,540 @@
+# agents.yaml — the machine-readable agent roster (DRE-1335).
+#
+# THE CONTRACT: this file is the source of truth for "what agents exist and
+# how they run." The console reads it via the GitHub contents API (never by
+# parsing workflow YAML). Any change to an agent's budgets, trigger, or brief
+# in .github/workflows/ MUST update this file in the same PR.
+#
+# EXCEPT the model. `model:` is a GENERATED mirror of config/models.yaml
+# (DRE-2316), which is the ONE file a human edits to change what an agent runs
+# on — and the file the CI path itself reads. Each `model:` line sits inside a
+# marked generated region below; edit the config and then run
+# `python3 scripts/sync_model_config.py`. CI fails red on drift. The
+# ordered fallback LADDERS live in that config only: they used to be
+# copy-pasted five times into this file, where nothing on the CI path read them.
+#
+# WHAT IS ENFORCED, AND BY WHAT (DRE-2729). Before this card only `model:`
+# had a check, so `tools:` was a comment asking people to remember and it had
+# drifted on two of ten entries — including the critic, the agent that gates
+# every unattended merge. Every behavioural field now has an owner:
+#
+#   model       — CI drift check against config/models.yaml (DRE-2316), plus
+#                 tests/test_model_config.py
+#   maxTurns    — tests/test_agents_registry.py::test_turns_match_workflow_text
+#   tools       — tests/test_agents_registry.py::test_tools_match_workflow_text
+#   credentials — tests/test_agents_registry.py::test_credentials_match_the_agent_step
+#   repoScope   — tests/test_agents_registry.py::test_repo_scope_matches_the_agent_workspace
+#   maxBudget   — NOT enforced. Advisory display only; there is nothing in the
+#                 workflow to compare it against.
+#
+# The credential and repo checks read the AGENT STEP, never the workflow file.
+# That distinction is the whole point: LINEAR_API_KEY appears seven times in
+# agent-fix.yml and was missing from exactly one place — the env block of the
+# step that runs the agent (DRE-2696). A file-level answer would have been a
+# confident green over the precise gap it exists to find.
+#
+# Schema (one entry per agent):
+#   name      — stable identifier (lowercase)
+#   role      — human label shown in the console roster
+#   category  — business-function grouping for the console roster:
+#               product | development | operations | marketing | sales
+#               (product = planning/spec; development = building & code review;
+#               operations = devops, fixes, verification, pipeline health;
+#               marketing/sales reserved for future agents — no entries yet)
+#   kind      — GENERATED: the role kind from config/models.yaml (DRE-2317).
+#               `workhorse` = high-volume build work, the hot path, a
+#               cost-appropriate model. `advisory` = bounded consults at
+#               decision points (critic, verifier, medic) — the STRONGEST
+#               model, because the critic gates every unattended merge and a
+#               shallow review is a silent failure. A role is assigned a KIND,
+#               never a ladder, and the advisory model is unreachable from any
+#               build ladder at any availability.
+#   model     — GENERATED: the top of that kind's ladder in config/models.yaml.
+#               Selection walks that ladder at runtime and uses the first
+#               AVAILABLE model (DRE-1490); the probe decides how far DOWN a
+#               ladder to walk, never how far up — a model that is not ON a
+#               ladder is never selected, however available it becomes.
+#               Availability is not permission: that is what put the whole
+#               fleet on Fable on 2026-08-09 with nobody deciding.
+#               EXCEPT a SCRIPTED agent (DRE-5369): its workflow runs a
+#               script and no model, so it carries `kind: scripted` and
+#               `model: null` by hand and no generated region at all.
+#   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
+#   maxTurns  — hard turn budget passed via claude_args
+#   maxBudget — advisory dollars per run (console display; not enforced)
+#   tools     — allowedTools passed to the agent. EVERY entry carries
+#               `WebSearch` and `WebFetch` since DRE-2785 — the operator
+#               authorised web access on 2026-08-26 and DRE-2712 closed
+#               without making the grant, so until this card every agent
+#               reasoned about the outside world from training data alone.
+#               ALL of them, in one change, deliberately: a writer that can
+#               make unverifiable external claims, reviewed by a critic that
+#               cannot check them, is worse than neither. A fetched page is
+#               the least trustworthy input this pipeline has — anyone can
+#               author one, and the agent chose to go there — and
+#               `standards/untrusted-content.md` is what governs reading it.
+#               Each entry below also records what happened to its TURN
+#               BUDGET in the same change, because search costs turns and
+#               every ceiling in this file was measured on an agent that
+#               could not leave the repository.
+#   credentials — the credential NAMES the agent step is handed, from its own
+#               env chain and from the action's inputs. NAMES ONLY — never a
+#               value, and never the expression that resolves to one. This
+#               file is world-readable through the console's contents-API
+#               fetch. An empty list is a real answer (the critic is denied
+#               Linear on purpose); where it is empty, the reason is written
+#               out in tests/test_agent_linear_key.py's DOCUMENTED_EXCEPTIONS
+#               and the roster check requires the entry to be there.
+#   repoScope — the repositories checked out into the agent's workspace, which
+#               is the reach its job actually has. `caller` is the product
+#               repo that dispatched the run — it differs per repo, so it
+#               cannot be named. Every agent also gets this repo read-only at
+#               .bureau-pipeline for scripts, briefs and standards.
+#   briefPath — role brief in this repo (briefs/<role>.md), if any
+#   workflow  — the reusable workflow implementing the agent
+
+agents:
+  - name: engineer
+    role: Engineer
+    category: development
+    # Rides the WORKHORSE ladder (config/models.yaml), shared by every build
+    # agent — no role hardcodes a model. Selection probes availability at
+    # runtime and uses the first AVAILABLE entry.
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "Linear card → Todo → relay repository_dispatch (agent-execute)"
+    # DRE-2785 granted the web and left this budget alone, on the reasoning
+    # that a card whose research makes it expensive can take a rung rather
+    # than every card paying for the few. DRE-4361 answered that with 22 days
+    # of data (CEO's instruction, 2026-09-23): no run died at 400 across 26,
+    # and every one of the 110 turn-cap deaths was at 150. So the default IS
+    # the top rung now — `turns:`/`size:` labels still pick a reviewed rung
+    # from config/turn-budgets.json, and a `turns:` label is the only way to
+    # ask for less. The 120-minute job wall clock is the real ceiling.
+    maxTurns: 400
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/engineer.md
+    workflow: .github/workflows/agent-task.yml
+
+  - name: frontend
+    role: Frontend
+    category: development
+    # Engineer in WEB MODE — same shared ladder as engineer. The brief
+    # (briefs/frontend.md) binds every engineer rule and adds the web specifics
+    # (Vite SPA, the static-asset/MIME proxy trap, esbuild Node-API, same-origin
+    # /graphql, the **Design:** fidelity convention). Routed by an agent:frontend
+    # label; runs on the shared agent-task.yml like the engineer.
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "Linear card (label agent:frontend) → Todo → relay repository_dispatch (agent-execute)"
+    # Web tools since DRE-2785; turn budget moves with the engineer's for the
+    # same reason — it shares agent-task.yml's rung selection
+    # (config/turn-budgets.json), whose default is 400 since DRE-4361.
+    maxTurns: 400
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/frontend.md
+    workflow: .github/workflows/agent-task.yml
+
+  - name: database-architect
+    role: Database Architect
+    category: development
+    # Data-layer specialist — relational schema design, migrations, indexing,
+    # query/performance tuning, plus analytical/warehouse modeling (dimensional,
+    # ELT, dbt). AUTHOR-ONLY: writes schema/migrations/models as code and NEVER
+    # executes against a live database. Shown in the roster now; CI auto-dispatch
+    # is intentionally NOT wired yet (no agent:database label route / no new
+    # workflow). The workflow field points at the shared agent-task.yml only to
+    # satisfy the roster schema — NOTHING routes a Linear label here, so it can
+    # never be auto-dispatched (label routing resolves only planner/devops/
+    # frontend, else engineer; see scripts/model_fallback.py + validate_card.py).
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "Operator-launched (interactive Claude Code / VS Code task); CI auto-dispatch not yet wired"
+    # Web tools since DRE-2785 — it is in the roster and the card grants ALL
+    # ten, dispatched or not; leaving the one entry nobody routes to without
+    # the grant is how a roster ends up with an exception nobody remembers.
+    # Turn budget: it declares agent-task.yml's ceiling, picked per card from
+    # config/turn-budgets.json (DRE-3097), whose default is 400 (DRE-4361).
+    maxTurns: 400
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/database-architect.md
+    workflow: .github/workflows/agent-task.yml
+
+  - name: devops
+    role: DevOps
+    category: operations
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "Linear card (label agent:devops) → Todo → relay repository_dispatch (agent-execute)"
+    # Web tools since DRE-2785 — the role with the most to gain from them,
+    # since a vendor's current behaviour is the whole subject of
+    # standards/vendor-boundaries.md and the answer moves without telling us.
+    # Turn budget: shares agent-task.yml's per-card rung selection
+    # (config/turn-budgets.json, DRE-3097), default 400 since DRE-4361.
+    maxTurns: 400
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/devops.md
+    workflow: .github/workflows/agent-task.yml
+
+  - name: fixer
+    role: Fix agent
+    category: operations
+    # Attempt 3 is a FRESH-EYES escalation, not a MODEL escalation: same
+    # workhorse ladder, new framing (re-derive the fix from scratch rather than
+    # patch the last attempt). It used to hardcode a pricier model here and in
+    # agent-fix.yml; an attempt-gated escalation is still a build path, and the
+    # workflow now selects from config/models.yaml like every other agent.
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "workflow_dispatch — merge-gate DIRTY path, conflict sweep, approved-but-red sweep, critic REQUEST_CHANGES"
+    # Mirrors agent-fix.yml's --max-turns (DRE-2533); the roster is the
+    # console's copy of the fleet's budgets and tests/test_agents_registry.py
+    # fails if it drifts from the ceiling the workflow actually runs with.
+    #
+    # Web tools since DRE-2785; ceiling 400 since DRE-4361, which moved every
+    # build and fix run to the top rung. This agent re-runs the same work the
+    # engineer's budget was sized for, in the same shape, so it tracks the
+    # engineer's number — and tracks it as a FLOOR, since the repair job also
+    # has to comprehend someone else's diff first. A fix round that needs more
+    # turns than a build is still a card the review loop should be handing
+    # back, not a budget to widen past this.
+    maxTurns: 400
+    maxBudget: 9
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/agent-fix.yml
+
+  - name: critic
+    role: QA Critic
+    category: development
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
+    # 80 (DRE-2422), and the retry in qa-review.yml gets 120. 40 was sized
+    # for an older, terser model; Sonnet 5 rides it — portico's critic runs
+    # in one hour came in at 12, 18, 19, 31, 41(success) and 41(dead), and
+    # PR #273 died at the ceiling twice for $4.05 and no verdict. A ceiling
+    # sitting on top of the distribution blocks every large PR.
+    #
+    # This is the STANDARD-review ceiling, which is what a review normally
+    # runs under. Since DRE-2466 qa-review.yml sizes the diff first and a
+    # PR past the file-list threshold runs at 150/200 instead
+    # (scripts/pr_size_strategy.py) — a rare path by design, so the roster
+    # keeps reporting the ordinary one.
+    #
+    # 100 since DRE-2785 (standard strategy 80/120 → 100/140 in
+    # scripts/pr_size_strategy.py), raised in the change that granted
+    # `WebSearch`/`WebFetch`. This is the agent the grant is FOR: a critic
+    # that cannot check an external claim approves a pull request asserting
+    # something false about a vendor, and checking one costs a search and a
+    # fetch per claim on top of reading the entire diff. The 80 was measured
+    # on a critic that could not do it. A crashed critic writes no verdict,
+    # reconcile retries a bounded number of times, and the pull request
+    # simply sits — so the ceiling moves WITH the capability rather than
+    # after the first death. `large` is unchanged at 150/200.
+    maxTurns: 100
+    # Advisory display only. Raised with the ceiling so the console does not
+    # show a $3 run for an agent observed at $2.05 in 41 turns.
+    maxBudget: 7
+    tools: [Bash, Read, Glob, Grep, Write, WebSearch, WebFetch]
+    # No LINEAR_API_KEY, on purpose (DRE-2052 + DRE-2696): card material
+    # reaches the critic through ONE sanitising stage — review_card_context.py —
+    # and a live key would let it fetch card prose around that stage. The
+    # reason is written out in tests/test_agent_linear_key.py, and the roster
+    # check requires this omission to appear there rather than be a blank.
+    # The pool ids reach this step through qa-review.yml's job-level env
+    # mirror (DRE-4282: the critic's reads ride the dispatch pool) — ids only,
+    # never a key, exactly as they reach the engineer and the verifier.
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    # DRE-3084. The brief carries ONLY what the per-PR prompt cannot: the
+    # standing facts about the critic's own position (a fixture carrying a
+    # real card id is a snapshot, never the card; a finding the fix agent
+    # disproves with evidence gets one honest re-read). The charter, the
+    # review strategy and the verdict format stay in qa-review.yml, where they
+    # are built per PR. It names no credential — the Linear omission above is
+    # still the deliberate one, and tests/test_agent_linear_key.py checks it.
+    briefPath: briefs/critic.md
+    workflow: .github/workflows/qa-review.yml
+
+  - name: verifier
+    role: Verifier
+    category: operations
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
+    # The FIRST attempt's ceiling (DRE-2429 set 80, was 60; DRE-2539 raised it
+    # to 120). The crash retry runs at 160 — a retry against the ceiling that
+    # just killed it cannot succeed — but the roster reports the budget a verify
+    # normally runs under.
+    #
+    # 80 sat INSIDE the distribution of real work, not above it. Measured
+    # first-attempt turn counts, agent-bureau 2026-08-19: 7, 61, 65, 81. PR
+    # #2064 needed 81 and died one turn past the line while working normally;
+    # its retry finished the same content in 77, BELOW the ceiling that had
+    # denied it. $3.90 and 14.1 minutes discarded to buy $2.92 of useful work.
+    #
+    # Web tools since DRE-2785; ceiling unchanged at 120/160. The verifier
+    # already sits above the whole measured first-attempt distribution (7,
+    # 61, 65, 81) with 39 turns of headroom, and its job is to drive the
+    # change in front of it rather than to check claims about the outside
+    # world — the least search-hungry of the advisory roles. If that reading
+    # is wrong it shows up as `error_max_turns` on a verify run, which is
+    # loud, and the number moves then.
+    maxTurns: 120
+    maxBudget: 5
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/verifier.md
+    workflow: .github/workflows/verify.yml
+
+  - name: planner
+    role: Planner
+    category: product
+    # The one `judgement` role (DRE-3015, CEO decision 2026-09-03): it runs
+    # once per epic, at a decision point, and every build run downstream is
+    # shaped by the plan it writes — so it gets the strongest model, on a
+    # ladder of its own. It walks that ladder best→worst like every other role
+    # and uses the first AVAILABLE model; falling to Opus is loud (DEGRADED).
+    # No build role can reach the top of this ladder at any availability —
+    # that guard is 2026-08-09's and it is untouched.
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: judgement
+    model: claude-fable-5-1  # top of the `judgement` ladder
+    # END generated model
+    trigger: "Linear epic (label agent:planner) → Todo → relay repository_dispatch (agent-plan)"
+    # 50 → 80 with DRE-2720: the planner now writes the CEO-facing plan
+    # artifact (seven sections, the ```kpis block, a token-built mockup for UI
+    # work) on top of decomposing the epic. Shipping that on the old ceiling
+    # would be knowingly buying turn-exhaustion deaths (DRE-2312).
+    #
+    # 140 with DRE-2785, and the number is TWO corrections at once. DRE-3450
+    # raised plan.yml's `Plan epic` step 80 → 120 on 2026-09-09 — epic
+    # DRE-3419 finished successfully at 85 turns and the action failed the job
+    # for it — and left this line at 80, where it went on matching the wave
+    # route's literal so nothing failed. This entry now reports the ceiling
+    # the epic-planning step actually runs with, and that ceiling goes to 140
+    # with the `WebSearch`/`WebFetch` grant: every downstream build run is
+    # shaped by this plan, so "has this changed" and "what does this vendor
+    # actually do" are worth a search and a fetch here rather than a wrong
+    # assumption written into ten cards. plan.yml's job clock moved with it.
+    maxTurns: 140
+    maxBudget: 8
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    # Unchanged by DRE-2720 on purpose: the plan artifact is published to the
+    # document portal from a SEPARATE job in plan.yml, so the portal checkout
+    # never enters the planner's workspace and stays out of its reach. The
+    # review route (DRE-5299) reads the published source in the plan job, and
+    # the reach is still unchanged: that checkout persists no credentials, one
+    # file is copied out of it, and it is removed before any agent step runs
+    # (tests/test_agents_registry.py, `job_repos`).
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/planner.md
+    workflow: .github/workflows/plan.yml
+
+  # The two plan critics (DRE-2721). ONE workflow, two agents, two questions:
+  # the first reads a plan that is still moving and asks whether it is fit to
+  # take the CEO's time; the second reads the approved text as the
+  # specification agents will build from and asks what is missing. Their
+  # prompts are generated from scripts/plan_critic.py, so the roster cannot
+  # drift into describing one agent twice.
+  #
+  # tools/credentials match the planner entry BY NECESSITY, not by accident:
+  # tests/test_agents_registry.py checks every claude-code-action invocation in
+  # a workflow against every roster entry naming it, so the three agents in
+  # plan.yml share one tool list and one credential set. Neither critic writes
+  # code; `Edit` reaches them because it reaches the planner in the same file.
+  #
+  # WEB SEARCH IS HERE NOW (DRE-2785). It was named a hard prerequisite for
+  # the second critic — a critic that cannot check an external claim will
+  # approve a plan asserting something false about a vendor — and DRE-2712 was
+  # to add it to the planner and both critics in one change. DRE-2712 closed
+  # with no linked pull request and the grant was never made; DRE-2785 made it,
+  # to all ten roster agents at once rather than to these three.
+  - name: plan-critic-pre
+    role: Plan Critic (before approval)
+    category: product
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "Linear epic planned (agent-plan dispatch, plan route) — runs before the epic reaches Green Light"
+    # Structural review of cards that already exist, with the mechanical half
+    # (plan_critic.py mechanical) done for it before the first turn. Two of
+    # these run at most, and the second only after a send-back.
+    #
+    # 40 → 60 with DRE-2785's web grant, on both rounds in plan.yml. The
+    # mechanical half being pre-computed is what made 40 enough; checking
+    # whether a plan's external premise is still true is work nothing can
+    # pre-compute, and it costs a search and a fetch per premise.
+    maxTurns: 60
+    maxBudget: 3
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/plan.yml
+
+  - name: plan-critic-post
+    role: Plan Critic (before Green Light)
+    category: product
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "Review route (agent-plan dispatch) — runs after the first critic passes the plan, before Green Light (the activate route ran it after approval until DRE-5281, which made Approve mean go)"
+    # The FLOOR of a band, not a literal: this review's ceiling is sized per
+    # plan (`plan_critic.post_review_turns` — base + 4/card, floored, capped),
+    # so the roster reports the smallest budget it can run with. DRE-2785
+    # moved the whole band up with the web grant: base 20 → 30, floor 40 → 60,
+    # cap 120 → 140. This is the critic reading the passed plan AS the
+    # specification agents will build from, so "is that true of the vendor" is
+    # the question it most needs to be able to answer rather than recall.
+    maxTurns: 60
+    maxBudget: 3
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/plan.yml
+
+  - name: medic
+    role: Pipeline Medic
+    category: operations
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: advisory
+    model: claude-sonnet-5-5  # top of the `advisory` ladder
+    # END generated model
+    trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
+    # Ceiling 40 → 60 with DRE-2785's web grant. Diagnosis is the work the web helps
+    # most with and the 40 was measured without it: a vendor's status page, a
+    # released action's changelog, an issue someone else already filed. The
+    # whole class this agent exists for — DRE-3416, where a floating action
+    # tag moved and killed every Claude-running job in the fleet — is
+    # answerable in one search and unanswerable from training data.
+    maxTurns: 60
+    maxBudget: 3
+    tools: [Bash, Read, Glob, Grep, Write, WebSearch, WebFetch]
+    # No LINEAR_API_KEY since Stage 2 fix #23: the card arrives as a snapshot
+    # and the report leaves through a step that holds the key (medic.yml).
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/medic.yml
+
+  - name: repairer
+    role: Red-Main Repair
+    category: operations
+    # Engineer ladder (DRE-1490): the repair agent is an engineer-tier fixer.
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "workflow_run — default-branch CI conclusion=failure (event-driven; no polling; ≤2 attempts per failing SHA)"
+    # Web tools since DRE-2785; ceiling unchanged at 100. A red main is
+    # repaired against a failure this repo's own suite reproduces, and the
+    # bound that matters is ≤2 attempts per failing SHA rather than the turn
+    # count. Widening the budget of the agent that runs unattended on the
+    # default branch is the one place to be slowest about it.
+    maxTurns: 100
+    maxBudget: 10
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/red-main-repair.yml
+
+  - name: proof
+    role: Proof runner
+    category: operations
+    # DRE-5924. Observes a PROOF card's criteria and writes the record — it
+    # never builds. Its OWN workflow, never agent-task.yml: the build roles
+    # are derived from the entries running on agent-task.yml
+    # (scripts/proof_and_demo.py), and a role there is one the fleet picks up
+    # for a PROOF card (DRE-3039). The workhorse ladder (config/models.yaml).
+    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
+    kind: workhorse
+    model: claude-opus-5-5  # top of the `workhorse` ladder
+    # END generated model
+    trigger: "PROOF card in Hand-work with every blocker closed and its release live → sweep repository_dispatch (proof-execute)"
+    # Web tools since DRE-2785, held from its first day like every agent's —
+    # a criterion can name a vendor's status page or a released action's
+    # changelog. The turn budget was sized with them: the default ceiling
+    # every build card gets (DRE-4361), with no rung selection, because a
+    # proof card carries no `turns:`/`size:` label to read.
+    maxTurns: 400
+    maxBudget: 12
+    tools: [Bash, Edit, Write, Read, Glob, Grep, WebSearch, WebFetch]
+    # The engineer's credentials plus GH_READ_TOKEN — the read-only App token
+    # the workflow mints (its permissions: `Record the read-only proof identity`)
+    # and every GitHub observation is made as. The worker token reaches the
+    # step as the action's `github_token` input, as it does for every agent.
+    # The caller's AWS proof session, when one is assumed, reaches the agent
+    # as the configure-aws-credentials action's EXPORTED environment, so it is
+    # not an env-block name this roster's check can see; PROOF_ROLE_ARN itself
+    # is held by one probe step and never reaches the agent step.
+    credentials: [ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, LINEAR_API_KEY, LINEAR_PLANNER_KEY,
+                  BUREAU_APP_ID_2, BUREAU_APP_ID_3, BUREAU_APP_ID_4, GH_READ_TOKEN]
+    repoScope: [caller, dreadnought-foundry/bureau-pipeline]
+    briefPath: briefs/proof.md
+    workflow: .github/workflows/proof-task.yml
+
+  # The first SCRIPTED agent (DRE-5369): its workflow runs scripts/hygiene.py
+  # and never a model, so it has no generated model region — `model: null` is
+  # written out, because an entry with no `model` key is drift and an entry
+  # with a null one is a claim tests/test_agents_registry.py checks against
+  # the workflow (no agent step, credentials = the secrets the file names).
+  - name: hygiene
+    role: Hygiene Agent
+    category: operations
+    kind: scripted
+    model: null
+    trigger: "schedule — hourly at :37, over every repo in config/repo-map.json"
+    maxTurns: null
+    maxBudget: 0
+    tools: []
+    credentials: [BUREAU_APP_ID, BUREAU_APP_PRIVATE_KEY, LINEAR_API_KEY]
+    repoScope: [dreadnought-foundry/bureau-pipeline]
+    briefPath: null
+    workflow: .github/workflows/hygiene.yml

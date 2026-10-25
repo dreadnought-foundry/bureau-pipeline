@@ -951,6 +951,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -967,6 +968,7 @@
         "band": 0,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -983,6 +985,7 @@
         "band": 1,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -999,6 +1002,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1015,6 +1019,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1031,6 +1036,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1047,6 +1053,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1063,6 +1070,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 12,
         "cycle_id": "cyc-12",
         "projected": false,
@@ -1079,6 +1087,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1095,6 +1104,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1111,6 +1121,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1127,6 +1138,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1143,6 +1155,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1159,6 +1172,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1175,6 +1189,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1191,6 +1206,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 13,
         "cycle_id": "cyc-13",
         "projected": false,
@@ -1207,6 +1223,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1223,6 +1240,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1239,6 +1257,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1255,6 +1274,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1271,6 +1291,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1287,6 +1308,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1303,6 +1325,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1319,6 +1342,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 14,
         "cycle_id": null,
         "projected": true,
@@ -1335,6 +1359,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1351,6 +1376,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1367,6 +1393,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1383,6 +1410,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1399,6 +1427,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1415,6 +1444,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1431,6 +1461,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1447,6 +1478,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 15,
         "cycle_id": null,
         "projected": true,
@@ -1463,6 +1495,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 16,
         "cycle_id": null,
         "projected": true,
@@ -1479,6 +1512,7 @@
         "band": 2,
         "deferred": false,
         "open_children": 0,
+        "children": 0,
         "cycle": 16,
         "cycle_id": null,
         "projected": true,
@@ -1498,7 +1532,8 @@
           "repo": "portico",
           "projected": false,
           "band": 2,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-101",
@@ -1511,7 +1546,8 @@
           "repo": "portico",
           "projected": false,
           "band": 0,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-102",
@@ -1524,7 +1560,8 @@
           "repo": "agent-bureau",
           "projected": false,
           "band": 1,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-120",
@@ -1537,7 +1574,8 @@
           "repo": "bureau-pipeline",
           "projected": false,
           "band": 2,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-132",
@@ -1550,7 +1588,8 @@
           "repo": "bureau-pipeline",
           "projected": false,
           "band": 2,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-121",
@@ -1563,7 +1602,8 @@
           "repo": "portico",
           "projected": false,
           "band": 2,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-133",
@@ -1576,7 +1616,8 @@
           "repo": "portico",
           "projected": false,
           "band": 2,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-109",
@@ -1589,7 +1630,8 @@
           "repo": "agent-bureau",
           "projected": false,
           "band": 2,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         }
       ],
       "not-now": [
@@ -1600,7 +1642,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-110",
@@ -1609,7 +1652,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-122",
@@ -1618,7 +1662,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-134",
@@ -1627,7 +1672,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-111",
@@ -1636,7 +1682,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-123",
@@ -1645,7 +1692,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-105",
@@ -1654,7 +1702,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-104",
@@ -1663,7 +1712,8 @@
           "reconsidered_in": 13,
           "projected": false,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-112",
@@ -1672,7 +1722,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-124",
@@ -1681,7 +1732,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-107",
@@ -1690,7 +1742,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-113",
@@ -1699,7 +1752,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-125",
@@ -1708,7 +1762,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-114",
@@ -1717,7 +1772,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-126",
@@ -1726,7 +1782,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-115",
@@ -1735,7 +1792,8 @@
           "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-127",
@@ -1744,7 +1802,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-116",
@@ -1753,7 +1812,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-128",
@@ -1762,7 +1822,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-117",
@@ -1771,7 +1832,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-129",
@@ -1780,7 +1842,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-118",
@@ -1789,7 +1852,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-130",
@@ -1798,7 +1862,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-119",
@@ -1807,7 +1872,8 @@
           "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-131",
@@ -1816,7 +1882,8 @@
           "reconsidered_in": 16,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         },
         {
           "identifier": "DRE-106",
@@ -1825,7 +1892,8 @@
           "reconsidered_in": 16,
           "projected": true,
           "older_than_window": false,
-          "open_children": 0
+          "open_children": 0,
+          "children": 0
         }
       ],
       "dead": []

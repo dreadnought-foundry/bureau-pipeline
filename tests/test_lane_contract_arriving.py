@@ -17,10 +17,12 @@ renamed for the direction.
 
 DRE-5320 used that mechanism exactly once: the operator created the `Hand-work`
 state on the board, then flipped the entry to live, deleting the three arriving
-keys and changing nothing else. The shipped contract therefore no longer
-carries an arriving lane, so the tests of the MECHANISM below run against
+keys and changing nothing else. The tests of the MECHANISM below run against
 `arriving_doc()`, the shipped contract with Hand-work put back the way DRE-5315
-declared it. The tests of the SHIPPED entry say it is live.
+declared it. The tests of the SHIPPED entry say it is live. The shipped file
+may carry other arriving lanes — `Queued` was one from DRE-6710 until DRE-6740
+flipped it live, pinned in tests/test_queued_lane.py — so nothing here assumes
+Hand-work is the only one.
 """
 
 import copy
@@ -35,6 +37,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import lane_contract  # noqa: E402
+import routing_verdict  # noqa: E402
 
 HAND_WORK = "Hand-work"
 EPIC = "DRE-5240"
@@ -62,9 +65,11 @@ ARRIVING_KEYS = {
 }
 
 # The sentence DRE-5275 wrote into Backlog's exit. This card rewrites only the
-# verdict-destination sentences around it, so it must survive verbatim.
+# verdict-destination sentences around it, so it must survive verbatim — with
+# the destination the flip (DRE-7120) moved from Todo to In Progress.
 DRE_5275_SENTENCE = (
-    "It promotes a FLEET card to Todo once the dependency gate clears, the WIP "
+    "It promotes a FLEET card to In Progress — the move the relay dispatches "
+    "the build on (DRE-7120) — once the dependency gate clears, the WIP "
     "cap has room and — for a child of an epic — both critics passed the plan "
     "on its current planning attempt before the green light (DRE-3059, DRE-5268)."
 )
@@ -94,7 +99,10 @@ def failed_rules(report):
 
 
 def live_board(doc, *extra):
-    return {name: 0 for name in list(lane_contract.lane_names("live", doc)) + list(extra)}
+    # The board as Linear holds it: every live lane, and every retiring one
+    # still on it, empty — Backlog stays there with nothing in it (DRE-6753).
+    return {name: 0 for name in list(lane_contract.lane_names("live", doc))
+            + list(lane_contract.lane_names("retiring", doc)) + list(extra)}
 
 
 # --------------------------------------------------------------------------- #
@@ -103,8 +111,8 @@ def live_board(doc, *extra):
 
 
 class TestTheHandWorkEntry:
-    def test_it_is_live_and_nothing_is_arriving(self):
-        assert lane_contract.lane_names("arriving", shipped()) == ()
+    def test_it_is_live_and_no_longer_arriving(self):
+        assert HAND_WORK not in lane_contract.lane_names("arriving", shipped())
         assert HAND_WORK in lane_contract.lane_names()
         assert lane_contract.lane(HAND_WORK)["status"] == "live"
 
@@ -116,14 +124,18 @@ class TestTheHandWorkEntry:
     def test_every_live_reader_sees_it_and_it_has_no_stall_window(self):
         doc = shipped()
         flow = lane_contract.flow_lanes()
-        assert flow[flow.index("Todo") + 1] == HAND_WORK
+        # After Queued since Todo, which it once followed, began retiring
+        # (DRE-7129).
+        assert flow[flow.index("Queued") + 1] == HAND_WORK
         assert HAND_WORK not in lane_contract.stale_minutes()
         assert HAND_WORK not in lane_contract.off_flow()
         assert {c.lane for c in lane_contract.clauses(doc)} >= {HAND_WORK}
 
-    def test_it_sits_immediately_after_todo_in_the_work_segment(self):
+    def test_it_sits_immediately_after_queued_in_the_work_segment(self):
+        # It sat after Todo until Todo's entry left the contract (DRE-7660).
         names = [entry["name"] for entry in shipped()["lanes"]]
-        assert names[names.index("Todo") + 1] == HAND_WORK
+        assert "Todo" not in names
+        assert names[names.index("Queued") + 1] == HAND_WORK
         entry = raw_lane(shipped(), HAND_WORK)
         assert entry["segment"] == "work"
         assert "stale_minutes" not in entry
@@ -201,7 +213,7 @@ class TestTheArrivingEntry:
     def test_the_fixture_is_the_arriving_declaration(self):
         doc = arriving_doc()
         lane_contract._validate(doc, "<arriving>")
-        assert lane_contract.lane_names("arriving", doc) == (HAND_WORK,)
+        assert HAND_WORK in lane_contract.lane_names("arriving", doc)
         step = raw_lane(doc, HAND_WORK)["board_action"]
         for phrase in ("`Hand-work`", "`unstarted`", "DRE team", "immediately after `Todo`"):
             assert phrase in step, phrase
@@ -269,7 +281,7 @@ class TestTheHarnessToleratesTheGap:
     def test_a_live_lane_missing_from_the_board_still_fails(self):
         doc = arriving_doc()
         board = live_board(doc, HAND_WORK)
-        board.pop("Todo")
+        board.pop("Queued")
         report = lane_contract.check(
             contract=doc, board=board,
             console=list(lane_contract.lane_names("live", doc)), vocabulary=set(),
@@ -356,16 +368,17 @@ def test_an_unknown_status_is_still_refused():
 
 
 class TestTheRewrittenClauses:
-    def test_todo_entrance_defers_to_the_vocabulary(self):
-        clause = lane_contract.lane("Todo")["clauses"]["entrance"]
-        text = clause["text"]
-        assert "config/routing-verdicts.json" in text
-        assert "never this sentence" in text
-        assert EPIC in text and HAND_WORK in text
-        assert EPIC in clause["pending"]
+    def test_no_verdict_lands_in_todo_and_its_entry_is_gone(self):
+        # Since the flip (DRE-7120) nothing promotes into Todo; DRE-7129 set
+        # its entry retiring, and DRE-7660 deleted it with the board's state.
+        assert "Todo" not in [entry["name"] for entry in shipped()["lanes"]]
+        assert "Todo" not in {routing_verdict.destination(name)
+                              for name in routing_verdict.verdicts()}
 
-    def test_backlog_exit_defers_to_the_vocabulary_and_keeps_dre_5275(self):
-        clause = lane_contract.lane("Backlog")["clauses"]["exit"]
+    def test_the_queue_exit_defers_to_the_vocabulary_and_keeps_dre_5275(self):
+        # Backlog's clauses moved to Queued with the lane (DRE-6740); the
+        # retiring entry carries none (DRE-6753).
+        clause = lane_contract.lane("Queued")["clauses"]["exit"]
         text = clause["text"]
         assert DRE_5275_SENTENCE in text
         assert "config/routing-verdicts.json" in text
@@ -384,12 +397,12 @@ class TestTheDocument:
         flow = text.split("## The flow", 1)[1].split("## Off the flow", 1)[0]
         assert f"| {HAND_WORK} | work |" in flow
         assert f"### {HAND_WORK}\n" in text
-        assert "## Arriving" not in text
+        assert f"### {HAND_WORK} — arriving" not in text
 
     def test_the_rewritten_clauses_are_rendered(self):
         text = self.committed()
-        assert lane_contract.lane("Todo")["clauses"]["entrance"]["text"] in text
-        assert lane_contract.lane("Backlog")["clauses"]["exit"]["text"] in text
+        assert "### Todo" not in text  # its entry left the contract (DRE-7660)
+        assert lane_contract.lane("Queued")["clauses"]["exit"]["text"] in text
 
     def test_an_arriving_lane_renders_its_own_section_and_stays_out_of_the_flow(self):
         text = lane_contract.render_markdown(arriving_doc())
@@ -401,7 +414,9 @@ class TestTheDocument:
         assert HAND_WORK not in flow
 
     def test_the_section_is_absent_when_nothing_is_arriving(self):
-        assert "## Arriving" not in lane_contract.render_markdown(shipped())
+        doc = copy.deepcopy(shipped())
+        doc["lanes"] = [e for e in doc["lanes"] if e["status"] != "arriving"]
+        assert "## Arriving" not in lane_contract.render_markdown(doc)
 
 
 # --------------------------------------------------------------------------- #
@@ -439,8 +454,11 @@ class TestTheProofRunsLaneWrites:
             "writer": PROOF_RUN,
             "where": PROOF_PARK_STEP,
             "evidence": (
-                "the proof run's escalation text, naming the press, posted "
-                "before the move, beside a 🔬 proof-waiting hold"
+                "the proof run's escalation text, naming the press or the "
+                "decision, posted before the move, beside a 🔬 proof-waiting "
+                "hold — reached only for a press or a decision the file names, "
+                "never for cause rows, which the step hands to "
+                "scripts/proof_cause_park.py (not live until DRE-6840)"
             ),
             "card": PROOF_CARD,
         }]

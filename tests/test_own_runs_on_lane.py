@@ -21,7 +21,8 @@ The rule this file pins:
   reusables read, byte for byte (`tests/test_runs_on_switchable.py`): the test
   suites — `tests.yml` and the two `smoke-setup-*-cached` workflows — read the
   build chain, `BUREAU_CI_RUNS_ON` first; the integration harness, which
-  drives real agent runs for up to three hours, reads the long chain; every
+  drives real agent runs for up to three hours, reads the long chain, and so
+  does Triage Repair's `repair` leg, a planner run per card (DRE-7179); every
   other job is a script of seconds to minutes and reads the short chain. A job
   added later without a lane decision lands on the short chain's expectation
   and fails here if it reads anything else.
@@ -62,7 +63,12 @@ OWN_BUILD_FILES = {
 }
 # The jobs on the long chain, by name: the harness drives real agent runs
 # with a 180-minute ceiling, which is the agent lane's shape, not a chore's.
-OWN_LONG_JOBS = {"harness.yml": {"harness"}}
+OWN_LONG_JOBS = {
+    "harness.yml": {"harness"},
+    # DRE-7179: one planner run per card under a 100-minute ceiling — the
+    # agent lane, as red-main-repair.yml's agent job reads it.
+    "triage-repair.yml": {"repair"},
+}
 # Jobs pinned to `ubuntu-latest` with a reason on the line. None today; a pin
 # is named here AND carries its `# github-hosted:` comment.
 OWN_PINNED_JOBS: dict[str, set[str]] = {}

@@ -292,7 +292,8 @@ class Board:
         return [r["body"] for r in self.thread if r["body"].lstrip().startswith(opener)]
 
     def promoted(self) -> list[str]:
-        return sorted(i for i, lane in self.lanes.items() if lane == "Todo")
+        return sorted(i for i, lane in self.lanes.items()
+                      if lane == routing_verdict.destination("FLEET"))
 
 
 def _minutes(iso: str, now: datetime) -> float:

@@ -130,8 +130,12 @@ class TestEveryActDeclaresItsCadence:
         DRE-3072 added the one re-run of a canceled check on an approved pull
         request and the hold a check canceled again is told once under;
         fifty-seven since DRE-6651 added the hold an epic still to be planned
-        waits under while a formal blocker of it is open."""
-        assert len(pipeline_act.acts()) == 57
+        waits under while a formal blocker of it is open; fifty-eight since
+        DRE-7178 added the receipt of the one repair a plan-critic park in
+        Triage gets; fifty-nine since DRE-7754 added the notice an approved
+        epic in a repo held at max_wip 0 is told once; sixty since DRE-7799
+        added the receipt of the step the medic takes on its diagnosis."""
+        assert len(pipeline_act.acts()) == 60
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():

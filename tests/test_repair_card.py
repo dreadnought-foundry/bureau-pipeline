@@ -9,8 +9,9 @@ nothing on the board recorded that the repair happened (PR #340, 2026-09-09).
 What these tests pin, one class per acceptance criterion:
 
   * the loop files the card BEFORE the agent runs, through the existing
-    `linear_ops` create seam, in `In Progress` (never Todo — a card entering
-    Todo is dispatched by the relay, and this work is already being done), with
+    `linear_ops` create seam, created directly in `In Progress` (a card
+    created there has no lane before it, and only a move into it from a
+    waiting lane is a build dispatch — this work is already being done), with
     the routing verdict stamped through `routing_verdict.stamp_card`, the ONE
     writer of that vocabulary;
   * the branch is `repair/DRE-<n>-<sha12>` and every `repair/*` matcher in the
@@ -58,9 +59,13 @@ SLUG = "bureau-pipeline"
 #: merge-gate.yml's branch gate, spelled as the shell spells it. Written once
 #: here and asserted against the workflow below (DRE-3879 added the two
 #: scheduled jobs' own branches; DRE-6049 and DRE-6056 retired both jobs, so
-#: neither is left); two copies of this string in one module is how it comes
-#: to name a gate nobody runs.
-MERGE_GATE_PATTERN = "agent/*|repair/*|dependabot/*|bot/standards-sync"
+#: neither is left; DRE-7209 added the onboarding routing branch as a literal,
+#: and DRE-7577 the nightly's durations branch); two copies of this string in one module is how it comes to name a gate
+#: nobody runs.
+MERGE_GATE_PATTERN = (
+    "agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard"
+    "|bot/test-durations"
+)
 
 
 def wf(name: str) -> str:
@@ -101,6 +106,15 @@ class FakeOps:
             raise RuntimeError("Linear says 500")
         self.stamped.append((identifier, name, why))
         return 0
+
+
+class OnlyCreates(FakeOps):
+    """The seam with no way to move a card: any call beyond the four the
+    module makes — a state write, a move — fails the test that made it."""
+
+    def __getattr__(self, name):
+        raise AssertionError(f"repair_card called ops.{name}: only create_card "
+                             "may place the card in a lane")
 
 
 class CardShapeTest(unittest.TestCase):
@@ -258,12 +272,23 @@ class OpenCardTest(unittest.TestCase):
         self.assertEqual(CARD, result["card"])
         self.assertFalse(result["card_owed"])
 
-    def test_never_todo(self):
-        # A card entering Todo is dispatched by the relay — a SECOND agent on
-        # work an agent is already doing.
-        ops = FakeOps()
+    def test_created_in_its_lane_and_never_moved_into_it(self):
+        # DRE-7113: a MOVE into the dispatch lane from a waiting lane is a
+        # build dispatch — a SECOND agent on work an agent is already doing.
+        # The card is created in its lane, with no lane before it, and nothing
+        # moves it afterwards, so it is never built.
+        import lane_contract
+
+        ops = OnlyCreates()
         self._open(ops)
-        self.assertNotEqual("Todo", ops.created[0]["lane"])
+        (made,) = ops.created
+        self.assertEqual(repair_card.LANE, made["lane"])
+        self.assertFalse(lane_contract.is_build_dispatch(None, made["lane"]))
+        # The lane IS the dispatch lane: only the way the card got there keeps
+        # it from being built.
+        self.assertEqual(lane_contract.DISPATCH_LANE, made["lane"])
+        for waiting in lane_contract.DISPATCH_FROM:
+            self.assertTrue(lane_contract.is_build_dispatch(waiting, made["lane"]))
 
     def test_stamps_the_routing_verdict_through_the_one_writer(self):
         ops = FakeOps()
@@ -369,6 +394,111 @@ class WorkflowWiringTest(unittest.TestCase):
 
     def test_the_workflow_no_longer_claims_repair_prs_are_cardless(self):
         self.assertNotIn("A repair PR is cardless by design", self.body)
+
+
+#: Two failing pytest ids, as `gh run view --log-failed` saves them (DRE-6870).
+FAILING_IDS = ["tests/test_clock.py::test_the_stamp_is_fresh",
+               "tests/test_record.py::test_the_gap_is_named"]
+FAILED_LOG = "\n".join([
+    "unit\tRun tests\t2026-10-10T07:20:59.1000000Z tests/test_clock.py::"
+    "test_the_stamp_is_fresh FAILED [ 40%]",
+    "unit\tRun tests\t2026-10-10T07:21:00.1000000Z FAILED "
+    f"{FAILING_IDS[0]} - AssertionError: 61 > 60",
+    "unit\tRun tests\t2026-10-10T07:21:00.2000000Z FAILED "
+    f"{FAILING_IDS[1]} - RecordGap: the heartbeat has not been seen",
+    "unit\tRun tests\t2026-10-10T07:21:00.3000000Z ==== 2 failed, 98 passed ====",
+])
+NO_FAILING_TEST_LOG = (
+    "unit\tInstall\t2026-10-10T07:21:00.1000000Z npm ERR! code ECONNRESET\n")
+
+
+class FailingTestsSectionTest(unittest.TestCase):
+    """The repair card records the failing test ids — and only when there are
+    some (DRE-6870)."""
+
+    def _main(self, *extra):
+        import contextlib
+        import io
+        from unittest.mock import patch
+
+        ops = FakeOps()
+        with patch.object(repair_card, "_Ops", lambda: ops), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            rc = repair_card.main([
+                "open", "--repo", SLUG, "--head-sha", SHA, "--run-url", RUN_URL,
+                "--workflow-name", WF_NAME, "--attempt", "1",
+                "--fallback-branch", red_main_repair.repair_branch(SHA, 1),
+                *extra,
+            ])
+        self.assertEqual(0, rc)
+        self.assertEqual(1, len(ops.created))
+        return ops.created[0]["description"]
+
+    def _log(self, text):
+        import tempfile
+
+        handle = tempfile.NamedTemporaryFile(
+            "w", suffix=".txt", delete=False, encoding="utf-8")
+        handle.write(text)
+        handle.close()
+        self.addCleanup(os.unlink, handle.name)
+        return handle.name
+
+    def _today(self):
+        return repair_card.card_body(workflow_name=WF_NAME, run_url=RUN_URL,
+                                     head_sha=SHA, repo_slug=SLUG, attempt=1)
+
+    def test_two_failing_ids_are_listed_under_the_heading(self):
+        body = self._main("--log-file", self._log(FAILED_LOG))
+        self.assertIn("\n## Failing tests\n", body)
+        section = body.split("\n## Failing tests\n", 1)[1].split("\n## ", 1)[0]
+        listed = [line for line in section.splitlines() if line.strip()]
+        self.assertEqual(2, len(listed), section)
+        for test_id, line in zip(FAILING_IDS, listed):
+            self.assertIn(test_id, line)
+        self.assertEqual(FAILING_IDS, repair_card.card_failing_tests(body))
+
+    def test_a_log_with_no_failing_test_line_writes_todays_body(self):
+        body = self._main("--log-file", self._log(NO_FAILING_TEST_LOG))
+        self.assertEqual(self._today(), body)
+
+    def test_no_log_file_writes_todays_body(self):
+        self.assertEqual(self._today(), self._main())
+
+    def test_a_log_file_that_is_not_there_writes_todays_body(self):
+        # A log the fetch step never wrote must never cost the repair its card.
+        self.assertEqual(
+            self._today(), self._main("--log-file", "/nonexistent/red-main.txt"))
+
+    def test_the_card_with_its_tests_still_passes_the_live_card_gate(self):
+        body = repair_card.card_body(workflow_name=WF_NAME, run_url=RUN_URL,
+                                     head_sha=SHA, repo_slug=SLUG, attempt=1,
+                                     failing_tests=FAILING_IDS)
+        self.assertEqual([], validate_card.missing(body, repair_card.card_labels(SLUG)))
+        # The section adds no acceptance box and moves no read-back.
+        self.assertEqual(
+            routing_verdict.acceptance_criteria(self._today()),
+            routing_verdict.acceptance_criteria(body))
+        self.assertEqual(SHA, repair_card.card_failing_sha(body))
+        self.assertEqual(RUN_URL, repair_card.card_run_url(body))
+
+    def test_a_body_with_no_section_lists_no_test(self):
+        self.assertEqual([], repair_card.card_failing_tests(self._today()))
+        self.assertEqual([], repair_card.card_failing_tests(""))
+
+    def test_an_id_with_a_backtick_reads_back_whole(self):
+        odd = "src/a.test.ts > renders `code` > the tick"
+        body = repair_card.card_body(workflow_name=WF_NAME, run_url=RUN_URL,
+                                     head_sha=SHA, repo_slug=SLUG, attempt=1,
+                                     failing_tests=[odd])
+        self.assertEqual([odd], repair_card.card_failing_tests(body))
+
+    def test_the_workflow_step_passes_the_saved_log(self):
+        body = wf("red-main-repair.yml")
+        start = body.index("- name: File the repair's card")
+        step = body[start:body.index("- name:", start + 1)]
+        self.assertIn("--log-file /tmp/red-main-log.txt", step)
 
 
 class CriticStillReadsTheFailingLogTest(unittest.TestCase):

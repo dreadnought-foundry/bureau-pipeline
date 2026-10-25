@@ -446,3 +446,147 @@ def test_neither_text_carries_a_counted_phrase(name):
     for text in (rcq.compose(**ALL[name]), rcq.pr_blocker(**ALL[name])):
         for phrase in FORBIDDEN + VERDICT_MARKERS:
             assert phrase not in text
+
+
+# --------------------------------------------------------------------------- #
+# 8. the proof-record variant, for the operator (DRE-6841)                     #
+# --------------------------------------------------------------------------- #
+
+#: The gate's decline of a proof record at the head, as the gate writes it.
+NOT_PROVEN_NOTE = (f"⏸️ Merge gate: declined @{HEAD} — proof record not proven: "
+                   "docs/proof.md has 4 row(s) not met: “Live fact: the first "
+                   "dispatch named the release”")
+#: The two Question lines the card's contract allows, word for word.
+ACCEPT_OR_OBSERVE = ("Accept the unmet rows by operator decision, record the "
+                     "event with proof-observed, or drop the record?")
+START_AGAIN = ("Start the review again by hand, push the record to a new head, "
+               "or drop the record?")
+
+#: Every way a proof record reaches the cap that the sweep still owns.
+RECORDS = {
+    "not-proven-no-verdict": args(critic="none", verifier="none",
+                                  gate_note_line=NOT_PROVEN_NOTE),
+    "not-proven-carried": args(critic="APPROVE from earlier head 1a2b3c4",
+                               verifier="none", gate_note_line=NOT_PROVEN_NOTE),
+    "no-verdict-no-note": args(critic="none", verifier="none"),
+    "review-budget": args(tag=rcq.REVIEW_NUDGE_KEY, critic="none",
+                          verifier="none"),
+    "another-reason": args(critic="APPROVE", verifier="none",
+                           gate_note_line=GATE_NOTE),
+    "not-proven-at-an-earlier-head": args(
+        critic="APPROVE", verifier="none",
+        gate_note_line=NOT_PROVEN_NOTE.replace(HEAD, "b" * 40)),
+    "cap-off": args(cap=0, spent=0, hours=0.0, critic="none", verifier="none",
+                    gate_note_line=NOT_PROVEN_NOTE),
+}
+
+
+def _record_esc(name: str) -> ce.Escalation:
+    return ce.parse(rcq.compose_proof_record(**RECORDS[name]))
+
+
+def test_the_not_proven_text_is_the_dispatchers():
+    import proof_dispatch
+
+    assert rcq.NOT_PROVEN == proof_dispatch.NOT_PROVEN
+
+
+@pytest.mark.parametrize("name", sorted(RECORDS))
+def test_the_record_comment_conforms_and_parses(name):
+    kw = RECORDS[name]
+    for text in (rcq.compose_proof_record(**kw),
+                 rcq.pr_blocker_proof_record(**kw)):
+        assert ce.problems(text) == []
+        esc = ce.parse(text)
+        assert esc is not None and esc.recommendation and esc.why
+        assert esc.choices == ()
+        assert ce.render(esc) in text
+
+
+@pytest.mark.parametrize("name", sorted(RECORDS))
+def test_the_record_texts_keep_the_notice_the_blocker_and_the_key(name):
+    kw = RECORDS[name]
+    card = lines(rcq.compose_proof_record(**kw))
+    assert card[0] == f"🚨 review-nudge-cap PR #{kw['pr_number']} @{HEAD}:"
+    assert card[-1] == f"review-nudge-cap @{HEAD}"
+    pr = lines(rcq.pr_blocker_proof_record(**kw))
+    assert pr[0] == f"🛑 review-nudge-cap PR #{kw['pr_number']} @{HEAD}:"
+    assert pr[0].startswith(fix_context.BLOCKER_PREFIX)
+    assert pr[-1] == f"review-nudge-cap @{HEAD}"
+    assert fix_context.DECISION_EXAMPLE in "\n".join(pr)
+    assert ce.parse("\n".join(pr)) == ce.parse("\n".join(card))
+
+
+@pytest.mark.parametrize("name", ["not-proven-no-verdict", "not-proven-carried",
+                                  "cap-off"])
+def test_a_not_proven_decline_at_the_head_asks_to_accept_or_observe(name):
+    esc = _record_esc(name)
+    assert esc.question == ACCEPT_OR_OBSERVE
+    assert "proof record not proven" in esc.finding
+    assert NOT_PROVEN_NOTE in esc.finding
+    kw = RECORDS[name]
+    assert f"critic {kw['critic']}, verifier {kw['verifier']}" in esc.finding
+
+
+@pytest.mark.parametrize("name", ["no-verdict-no-note", "review-budget",
+                                  "another-reason",
+                                  "not-proven-at-an-earlier-head"])
+def test_every_other_way_to_the_cap_asks_to_start_again(name):
+    assert _record_esc(name).question == START_AGAIN
+
+
+@pytest.mark.parametrize("name", ["no-verdict-no-note", "review-budget"])
+def test_no_verdict_at_the_head_is_named_in_the_finding(name):
+    esc = _record_esc(name)
+    assert f"no critic verdict at {HEAD[:7]}" in esc.finding
+    assert esc.recommendation.startswith("Start the review again by hand")
+
+
+def test_a_decline_for_another_reason_is_quoted_and_the_record_pushed():
+    esc = _record_esc("another-reason")
+    assert GATE_NOTE in esc.finding
+    assert "critic APPROVE, verifier none" in esc.finding
+    assert f"no critic verdict at {HEAD[:7]}" not in esc.finding
+    assert esc.recommendation.startswith("Push the record to a new head")
+
+
+def test_the_three_picks_differ():
+    picks = {_record_esc(name).recommendation for name in
+             ("not-proven-no-verdict", "no-verdict-no-note", "another-reason")}
+    assert len(picks) == 3
+
+
+@pytest.mark.parametrize("name", sorted(RECORDS))
+def test_the_record_texts_ask_the_operator_never_the_ceo(name):
+    kw = RECORDS[name]
+    for text in (rcq.compose_proof_record(**kw),
+                 rcq.pr_blocker_proof_record(**kw)):
+        flat = " ".join(text.split())
+        assert "CEO" not in flat
+        assert "only the CEO can make" not in flat
+        assert "read the pull request" not in flat.lower()
+        assert "diff" not in flat.lower()
+        assert "Green Light" not in flat
+        assert "held In Review for the operator" in flat
+        assert "closing the pull request and canceling the card by hand" in flat
+        for phrase in FORBIDDEN + VERDICT_MARKERS:
+            assert phrase not in text
+
+
+@pytest.mark.parametrize("name", sorted(RECORDS))
+def test_the_record_question_differs_from_the_code_question(name):
+    assert _record_esc(name).question != ce.parse(
+        rcq.compose(**RECORDS[name])).question
+
+
+@pytest.mark.parametrize("with_verdict", [False, True])
+def test_the_fix_loop_reads_the_record_blocker_and_the_answer(with_verdict):
+    blocker = rcq.pr_blocker_proof_record(**RECORDS["not-proven-no-verdict"])
+    comments = thread(blocker, with_verdict=with_verdict)
+    assert fix_context.prior_blockers(comments, WORKER_LOGIN) == [comments[-2]]
+    assert fix_context.operator_decision(comments, WORKER_LOGIN) is comments[-1]
+
+
+def test_the_record_variant_refuses_an_unknown_tag():
+    with pytest.raises(ValueError):
+        rcq.compose_proof_record(**args(tag="gate-nudge-cap"))

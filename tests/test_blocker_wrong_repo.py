@@ -17,7 +17,8 @@ WHAT THESE TESTS PIN.
     blocker names exactly one other rail slug: the label is swapped ADD FIRST,
     then the old one removed, and a half-done swap finishes on the next call.
   * Reading C — every other case is a person's call: `None`, no write.
-  * A card that left Backlog raises `NotNow` naming the lane, no write.
+  * A card that left the queue — under either of its names, `Queued` or the
+    lane it replaces (DRE-6747) — raises `NotNow` naming the lane, no write.
   * A refused write propagates unchanged, and the order of the two writes
     means a card is never left with no `repo:` label.
 
@@ -42,6 +43,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import blocker_class  # noqa: E402
 import blocker_wrong_repo  # noqa: E402
+import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 
 MODULE = ROOT / "scripts" / "blocker_wrong_repo.py"
@@ -377,12 +379,26 @@ def test_c_live_labels_with_no_dispatched_label_and_not_exactly_one_other(linear
 # --------------------------------------------------------------------------- #
 
 
-def test_a_card_that_left_backlog_is_not_now_and_nothing_is_written(linear):
+def test_a_card_that_left_the_queue_is_not_now_and_nothing_is_written(linear):
     stub = linear(labels=("repo:agent-bureau",), lane="Todo")
     with pytest.raises(blocker_class.NotNow) as raised:
         resolve(card(marker(stamped("bureau-pipeline"))))
-    assert str(raised.value) == "the card left Backlog — it is in Todo"
+    assert str(raised.value) == "the card left the queue — it is in Todo"
     assert stub.writes == []
+
+
+@pytest.mark.parametrize("lane", lane_contract.QUEUE_LANES)
+def test_a_card_under_either_queue_name_is_relabeled_the_same_way(linear, lane):
+    """DRE-6747: the lane check reads the queue by membership in
+    `QUEUE_LANES`, so a card parked in `Queued` is relabeled like one in the
+    lane it replaces."""
+    stub = linear(labels=("repo:agent-bureau",), lane=lane)
+    assert resolve(card(marker(stamped("bureau-pipeline")))) == (
+        "relabeled", "repo:agent-bureau → repo:bureau-pipeline, named by the blocker")
+    assert stub.writes == [
+        ("add_label", CARD, "repo:bureau-pipeline"),
+        ("remove_label", CARD, "repo:agent-bureau"),
+    ]
 
 
 # --------------------------------------------------------------------------- #

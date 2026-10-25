@@ -362,12 +362,13 @@ def render_unknown(mode: str, reason: str) -> str:
 
 
 #: Where the proof run's park begins, as proof-task.yml posts it: the hold
-#: (`linear_ops.proof_waiting_line`), then the question. Either one marks it —
-#: the question still parks when the hold is refused. Who posted it is not
-#: read: a copy of one can only move the park later, which hides an answer and
-#: never admits one.
+#: (`linear_ops.proof_waiting_line`), then the question — a press's, or a
+#: decision's (DRE-6840). Any one marks it — the question still parks when the
+#: hold is refused. Who posted it is not read: a copy of one can only move the
+#: park later, which hides an answer and never admits one.
 PROOF_PARK_MARKS = (f"{linear_ops.PROOF_MARK} {linear_ops.PROOF_WAITING_TAG}:",
-                    "🙋 The proof run met a press only the CEO can make")
+                    "🙋 The proof run met a press only the CEO can make",
+                    "🙋 The proof run asks a decision only the CEO can make:")
 
 
 def newest_answer(all_voices: list[Voice]) -> tuple[str, str] | None:

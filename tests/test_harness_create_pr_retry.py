@@ -145,10 +145,106 @@ class CreatePrRetryTest(unittest.TestCase):
             "a refusal that is not about a duplicate must not be read back",
         )
 
-    def test_a_clean_create_is_one_post(self):
+    def test_a_clean_create_is_one_post_and_one_read_back(self):
         sandbox = Sandbox(posts=[OPENED], open_prs=[])
         self.assertEqual(self._create(sandbox)["number"], 2727)
-        self.assertEqual([r.get_method() for r in sandbox.seen], ["POST"])
+        self.assertEqual([r.get_method() for r in sandbox.seen], ["POST", "GET"])
+        self.assertTrue(
+            sandbox.seen[-1].full_url.endswith(f"/repos/{REPO}/pulls/2727"),
+            sandbox.seen[-1].full_url,
+        )
+
+
+class CreatePrReadsBackTest(unittest.TestCase):
+    """Run 38149749969 went red on a commit that touched no harness code.
+    `bot_pr_flow` opened probe PR #4268 as the worker bot at 15:11:52, and
+    the first read of it — `probe_pr`, sent as the dispatch-pool READER
+    (DRE-4282) — answered:
+
+        GitHub API 404: {"message":"Not Found", … "#get-a-pull-request"}
+
+    Cleanup read the same PR two seconds later and closed it. A PR GitHub
+    has just opened is not yet visible to every identity that asks, so
+    `create_pr` returns only once the PR it opened reads back, through the
+    same reader every later read goes out as."""
+
+    def _client(self, opener, naps):
+        return GitHub("tok", opener=opener, sleeper=naps.append, log=lambda _line: None)
+
+    def test_a_pr_that_404s_on_its_first_read_is_waited_for(self):
+        naps = []
+        reads = [_http_error(404, '{"message":"Not Found"}'), OPENED]
+
+        def opener(req):
+            if req.get_method() == "POST":
+                return 201, json.dumps(OPENED).encode(), {}
+            step = reads.pop(0)
+            if isinstance(step, BaseException):
+                raise step
+            return 200, json.dumps(step).encode(), {}
+
+        pr = self._client(opener, naps).create_pr(
+            REPO, head=BRANCH, base="main", title="t", body="b"
+        )
+        self.assertEqual(pr["number"], 2727)
+        self.assertEqual(reads, [], "the PR was never read back after the 404")
+        self.assertEqual(len(naps), 1, naps)
+
+    def test_the_read_back_goes_out_as_the_reader(self):
+        naps, writer_methods, reader_methods = [], [], []
+
+        def writer(req):
+            writer_methods.append(req.get_method())
+            return 201, json.dumps(OPENED).encode(), {}
+
+        lagging = [_http_error(404, '{"message":"Not Found"}')]
+
+        def reader(req):
+            reader_methods.append(req.get_method())
+            if lagging:
+                raise lagging.pop(0)
+            return 200, json.dumps(OPENED).encode(), {}
+
+        gh = GitHub(
+            "worker", opener=writer, sleeper=naps.append, log=lambda _line: None,
+            reader=GitHub("reader", opener=reader, log=lambda _line: None),
+        )
+        self.assertEqual(
+            gh.create_pr(REPO, head=BRANCH, base="main", title="t", body="b")["number"],
+            2727,
+        )
+        self.assertEqual(writer_methods, ["POST"])
+        self.assertEqual(reader_methods, ["GET", "GET"])
+
+    def test_a_pr_that_never_reads_back_raises_its_404(self):
+        naps = []
+
+        def opener(req):
+            if req.get_method() == "POST":
+                return 201, json.dumps(OPENED).encode(), {}
+            raise _http_error(404, '{"message":"Not Found"}')
+
+        with self.assertRaises(GitHubError) as caught:
+            self._client(opener, naps).create_pr(
+                REPO, head=BRANCH, base="main", title="t", body="b"
+            )
+        self.assertEqual(caught.exception.status, 404)
+        self.assertEqual(len(naps), github_api.PR_READBACK_ATTEMPTS - 1)
+
+    def test_any_other_read_back_refusal_raises_at_once(self):
+        naps = []
+
+        def opener(req):
+            if req.get_method() == "POST":
+                return 201, json.dumps(OPENED).encode(), {}
+            raise _http_error(403, '{"message":"Resource not accessible by integration"}')
+
+        with self.assertRaises(GitHubError) as caught:
+            self._client(opener, naps).create_pr(
+                REPO, head=BRANCH, base="main", title="t", body="b"
+            )
+        self.assertEqual(caught.exception.status, 403)
+        self.assertEqual(naps, [])
 
 
 if __name__ == "__main__":

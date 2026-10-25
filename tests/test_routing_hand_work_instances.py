@@ -317,10 +317,10 @@ class TestTheLaneContract:
         ("Hand-work", "entrance", "text"),
         ("Hand-work", "writers", "text"),
         ("Hand-work", "evidence", "text"),
-        ("Backlog", "exit", "text"),
-        ("Todo", "entrance", "pending"),
-        ("Todo", "exit", "text"),
-        ("Todo", "evidence", "text"),
+        ("Queued", "exit", "text"),
+        # Todo's entrance stopped naming the marks at the flip (DRE-7120), and
+        # its exit and evidence went with its clauses when it began retiring
+        # (DRE-7129).
     ])
     def test_the_clauses_that_named_the_marks_name_operator_step(self, lane, kind, key):
         said = lane_contract.lane(lane)["clauses"][kind][key]
@@ -332,13 +332,17 @@ class TestTheLaneContract:
         assert "nothing automatic applies it" in said
 
     def test_the_migration_is_a_writer_of_exactly_three_lanes(self):
+        # Live lanes only. Queued (live since DRE-6740) took its writers from
+        # Backlog, the lane it replaces, word for word; Backlog is retiring and
+        # names no writer (DRE-6753), so four became three.
         writing = [entry["name"] for entry in lane_contract.load()["lanes"]
-                   if MIGRATION in ((entry.get("clauses") or {}).get("writers") or {}).get("who", [])]
-        assert sorted(writing) == ["Backlog", "Hand-work", "Planning"]
+                   if entry["status"] == "live"
+                   and MIGRATION in ((entry.get("clauses") or {}).get("writers") or {}).get("who", [])]
+        assert sorted(writing) == ["Hand-work", "Planning", "Queued"]
 
     @pytest.mark.parametrize("lane,phrase", [
         ("Planning", "no critic pass"),
-        ("Backlog", "fresh FLEET verdict"),
+        ("Queued", "fresh FLEET verdict"),
         ("Hand-work", "OUT of this lane"),
     ])
     def test_each_lane_says_why_the_migration_writes_it(self, lane, phrase):

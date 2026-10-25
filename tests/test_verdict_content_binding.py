@@ -68,9 +68,11 @@ SCRIPT = ROOT / "scripts" / "merge_gate.py"
 SHOULD_REVIEW = ROOT / "scripts" / "should_review_pr.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("REPO", "test/test")
 os.environ.setdefault("REPO_SLUG", "test")
 
+import fixed_tmp  # noqa: E402
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
 import should_review_pr  # noqa: E402
@@ -895,6 +897,11 @@ class ProducerLineTest(unittest.TestCase):
 
     QA_FILES = ("/tmp/qa-verdict.md", "/tmp/qa-comment.md")
     VERIFY_FILES = ("/tmp/verify-verdict.md", "/tmp/verify-comment.md")
+
+    def setUp(self):
+        # Another copy of the suite on this machine uses the same paths
+        # (DRE-7025): take turns with it.
+        fixed_tmp.hold(self)
 
     def tearDown(self):
         for path in self.QA_FILES + self.VERIFY_FILES:

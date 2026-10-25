@@ -39,17 +39,21 @@ ROOT = Path(__file__).resolve().parents[1]
 TRIAL = ROOT / ".github" / "workflows" / "model-trial.yml"
 
 MODEL = "claude-sonnet-5-5"
-CONFIG_FILE = "config/models.yaml"
+# The task's file since DRE-6971: the catalog of prices, a code-side fact that
+# stays in the repository when the choices leave config/models.yaml.
+CONFIG_FILE = "config/model-prices.yaml"
 ANSWER_FILE = "trial-answer.txt"
 
 CONFIG = """\
-ladders:
-  workhorse:
-    - model: a-model
-  advisory:
-    - model: b-model
+prices:
+  a-model:
+    input: 1.00
+    output: 5.00
+  b-model:
+    input: 2.00
+    output: 10.00
 """
-ANSWER = "ladders=2\n"
+ANSWER = "prices=2\n"
 
 # The Models API's numbers for the model (the card: "1M and 128K").
 API_LIMITS = {"model": MODEL, "max_input_tokens": 1_000_000, "max_tokens": 128_000}
@@ -211,9 +215,11 @@ def test_limits_for_a_different_model_are_not_this_models(tmp_path):
 def test_a_wrong_answer_on_a_degraded_run_is_failed_not_degraded(tmp_path):
     # `degraded` means "it worked, below strength". A run that did not work is
     # failed, whatever it ran at.
-    out, _ = _score(tmp_path, DEGRADED_RUN, answer="ladders=9\n")
+    out, _ = _score(tmp_path, DEGRADED_RUN, answer="prices=9\n")
     assert out["outcome"] == "failed"
-    assert "ladders=9" in out["summary"]
+    assert "prices=9" in out["summary"]
+    # The why names the answer the file should have held (DRE-6971).
+    assert "expected 'prices=2'" in out["summary"]
 
 
 def test_a_step_github_reports_failed_is_failed_not_degraded(tmp_path):

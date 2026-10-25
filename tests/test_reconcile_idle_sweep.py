@@ -5,10 +5,12 @@ repo's sweep runs every fifteen minutes whether or not anything is happening,
 so a pass with nothing to do must cost next to nothing. ONE cheap check
 decides, before the board is read:
 
-  * the WIP cap is 0 → idle, no request at all;
-  * no card of this repo is in motion (Todo / In Progress / In Review) and none
-    waits in Backlog → idle, decided by ONE request (`reconcile.IDLE_QUERY`,
-    `first: 1`, ids only) — or none, when the read door answers it;
+  * the WIP cap is 0 → idle, no request at all (the held repo's pass that
+    runs after the check spends its own, DRE-7755);
+  * no card of this repo is in motion (In Progress / In Review / Hand-work)
+    and none waits in Backlog → idle, decided by ONE request
+    (`reconcile.IDLE_QUERY`, `first: 1`, ids only) — or none, when the read
+    door answers it;
   * otherwise → the pass runs exactly as before.
 
 Idle skips promotion and this repo's work-lane phases and says so in ONE
@@ -54,7 +56,8 @@ DEMO = "agent-bureau-demo"
 #: cost, and none of them reads the board before GitHub answers them.
 GITHUB_BACKSTOPS = (
     "unstick_conflicts", "refresh_stale_merge_refs", "retrigger_dead_heads",
-    "flag_no_checks_prs", "flag_unowned_prs", "flag_unlanded_work",
+    "flag_no_checks_prs", "flag_unowned_prs", "name_unmovable_proof_records",
+    "flag_unlanded_work",
     "flag_stranded_fixes", "fix_approved_but_red", "retry_dead_fix_runs",
     "redispatch_standing_verdicts", "rerun_runner_lost_ci", "resync_desynced_heads", "restart_answered_blockers",
     "review_dependabot_prs", "recover_crashed_reviews", "check_dependabot_capacity",
@@ -97,7 +100,7 @@ class TeamBoard:
         if "state: {name: {in: $states}}" in q:
             nodes = [c for c in self.cards if c["state"]["name"] in v["states"]]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
-        if 'state: {name: {eq: "Backlog"}}' in q:
+        if reconcile.QUEUE_STATE_FILTER in q:
             nodes = [c for c in self.cards if c["state"]["name"] == "Backlog"]
             return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
         if "title: {startsWith: $prefix}" in q:
@@ -170,7 +173,7 @@ def test_an_idle_demo_pass_spends_three_requests_and_says_so_once(capsys):
     _pass(board)
     assert board.queries[0] == reconcile.IDLE_QUERY
     assert board.requests == 3  # the check, the one board read, Green Light
-    assert not any('eq: "Backlog"' in q for q in board.queries)  # no promotion read
+    assert not any(reconcile.QUEUE_STATE_FILTER in q for q in board.queries)  # no promotion read
     out = capsys.readouterr().out
     idle = [ln for ln in out.splitlines() if ln.startswith("idle:")]
     assert len(idle) == 1 and DEMO in idle[0]
@@ -209,7 +212,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
              "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
              "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
-             "redeliver_rescued_work")
+             "redeliver_rescued_work", "build_run_refusal", "redispatch")
     with mock.patch.object(reconcile, "rereview_watch_scope",
                            return_value=(set(), lambda e: None)):
         _pass(board, stub=stubs)
@@ -241,17 +244,58 @@ def test_a_demo_card_in_planning_does_not_make_the_pass_busy():
 
 
 def test_a_wip_cap_of_zero_is_idle_and_the_check_asks_nothing(monkeypatch, capsys):
+    """The check itself asks nothing at a cap of 0. The held repo's pass runs
+    after it (DRE-7755) and costs one read when no epic of this repo is In
+    Progress — DRE-90 is a one-off, not an epic — so the pass is the fleet
+    phases' board and Green Light reads plus that one: 2 -> 3. The cap comes
+    in as the live sweep hands it in, the stub's literal as `MAX_WIP`."""
     monkeypatch.setattr(reconcile, "MAX_WIP", 0)
+    monkeypatch.setenv("MAX_WIP", "0")
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.delenv("BUREAU_MAX_WIP", raising=False)
     board = TeamBoard(*_busy_elsewhere(),
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     _pass(board)
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 2  # only the fleet phases' board and Green Light reads
+    assert board.requests == 3  # the fleet phases' two reads, and hold_pass's one
     out = capsys.readouterr().out
     assert "idle: agent-bureau-demo — the WIP cap is 0" in out
     assert "sweep-spend: sweep_idle" not in out
-    assert "sweep-spend: total 2 request(s)" in out
+    assert "sweep-spend: post_repo_held_notice 1 request(s)" in out
+    assert f"repo-held: no approved epic of {DEMO} is In Progress; nothing written" in out
+    assert "sweep-spend: total 3 request(s)" in out
     assert "promotion:" not in out
+
+
+def test_an_idle_pass_at_a_cap_above_zero_spends_nothing_on_the_lift(capsys):
+    """An idle pass has no Queued card of this repo waiting, so none held for
+    the cap to lift (DRE-7755): `lift_pass` is not called and the pass costs
+    what it did, three requests."""
+    board = TeamBoard(*_busy_elsewhere())
+    with mock.patch.object(reconcile.repo_held_epics, "lift_pass") as lift:
+        _pass(board)
+    assert lift.call_count == 0
+    assert board.requests == 3
+    assert "sweep-spend: lift_wip_cap_holds" not in capsys.readouterr().out
+
+
+def test_a_busy_pass_at_a_cap_above_zero_asks_the_lift_once(capsys):
+    """A pass that is not idle reads this repo's held Queued cards once,
+    straight after the idle check and before the board read (DRE-7755)."""
+    board = TeamBoard(*_busy_elsewhere(),
+                      card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
+    stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
+             "settle_repair_cards", "flag_stranded", "report_intake_depth",
+             "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
+             "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
+             "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
+             "redeliver_rescued_work", "build_run_refusal", "redispatch")
+    with mock.patch.object(reconcile, "rereview_watch_scope",
+                           return_value=(set(), lambda e: None)):
+        _pass(board, stub=stubs)
+    assert board.queries[:2] == [reconcile.IDLE_QUERY, reconcile.repo_held_epics.HELD_QUERY]
+    assert board.queries.count(reconcile.repo_held_epics.HELD_QUERY) == 1
+    assert "sweep-spend: lift_wip_cap_holds 1 request(s)" in capsys.readouterr().out
 
 
 def test_an_unreadable_check_runs_the_full_pass():
@@ -270,17 +314,17 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
         door.decline_fleet("lane-not-held")
         _pass(board)
         lanes = door.asked("/board")[0]["query"]["lanes"]
-    assert lanes == "Todo,In Progress,In Review,Hand-work,Backlog"
+    assert lanes == ",".join(reconcile.DOOR_WORK_LANES + reconcile.QUEUE_LANES)
     # The check asked the door, not Linear. Linear answered only the fleet
     # phases' reads: the lanes this door declines at `scope=fleet` — it serves
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
     # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
-    # the NO-ROUTE watchdog's Todo and In Progress, which the door cannot serve
-    # for cards no repo owns (the PR #687 critic's item 2) — and the outage
-    # alarm's one open-card lookup, which the door's board does not hold the
-    # lane for, made on every pass (DRE-6576).
+    # the NO-ROUTE watchdog's start lanes, which the door cannot serve
+    # for cards no repo owns (the PR #687 critic's item 2). The outage alarm's
+    # open-card lookup (DRE-6576) is gone: the outage is a console alert since
+    # DRE-7455, so there is no card to look up.
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 4
+    assert board.requests == 3
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 
@@ -292,6 +336,20 @@ def test_with_the_door_on_a_held_backlog_card_is_not_waiting(monkeypatch):
                                    repository=f"dreadnought-foundry/{DEMO}").items():
             monkeypatch.setenv(key, value)
         assert reconcile.sweep_idle() is not None
+
+
+def test_with_the_door_on_a_card_held_for_the_cap_is_waiting(monkeypatch):
+    """A Queued card held `wip-cap-held` is about to be lifted at a cap above
+    0, so it waits on this pass (DRE-7755). Any other hold is still skipped."""
+    stamp = reconcile.hold.stamp_line("wip-cap-held", None, "scripts/repo_held_epics.py")
+    held = card("DRE-93", "Queued", labels=(f"repo:{DEMO}", "needs-human"),
+                comments=(stamp,))
+    with FakeIssuer() as issuer, FakeDoor({"DRE-93": held},
+                                          repository=f"dreadnought-foundry/{DEMO}") as door:
+        for key, value in door_env(door_url=door.url, issuer=issuer,
+                                   repository=f"dreadnought-foundry/{DEMO}").items():
+            monkeypatch.setenv(key, value)
+        assert reconcile.sweep_idle() is None
 
 
 def test_an_idle_pass_still_files_the_card_a_new_dependabot_pr_needs(monkeypatch):
@@ -330,7 +388,10 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
     assert 1 < reconcile.IDLE_PAGE <= 100
     # Hand-work counts as in motion (DRE-5322): a person's card there is owed
     # the move to review and the idle alarm, which an idle pass skips.
-    assert reconcile.IDLE_LANES == ("Todo", "In Progress", "In Review", "Hand-work", "Backlog")
+    # Todo left it when it began retiring (DRE-7129): the drain and the epic
+    # carry that empty it are fleet-wide and run on an idle pass too.
+    assert reconcile.IDLE_LANES == ("In Progress", "In Review", "Hand-work",
+                                   *reconcile.QUEUE_LANES)
 
 
 # ── The label match is routing's, not an exact string (PR #687 critic, item 1) ──
@@ -342,7 +403,7 @@ def test_the_idle_check_is_one_small_page_that_fails_open():
 
 def test_an_owner_qualified_repo_label_is_not_idle():
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-94", "Todo",
+                      card("DRE-94", "In Progress",
                            labels=(f"repo:dreadnought-foundry/{DEMO}",)))
     assert _busy(board)
 
@@ -358,7 +419,7 @@ def test_a_longer_slug_that_contains_this_one_is_another_repos_work(monkeypatch)
     the demo's card, and the sweep's own repo test turns it away."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     board = TeamBoard(*_busy_elsewhere(),
-                      card("DRE-96", "Todo", labels=(f"repo:{DEMO}",)))
+                      card("DRE-96", "In Progress", labels=(f"repo:{DEMO}",)))
     assert not _busy(board)
 
 
@@ -367,7 +428,7 @@ def test_a_full_page_of_near_misses_is_not_proof_of_idle(monkeypatch):
     more: this repo's card could be on the next page. Unknown is not idle."""
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     page = getattr(reconcile, "IDLE_PAGE", 1)
-    board = TeamBoard(*[card(f"DRE-{200 + n}", "Todo", labels=(f"repo:{DEMO}",))
+    board = TeamBoard(*[card(f"DRE-{200 + n}", "In Progress", labels=(f"repo:{DEMO}",))
                         for n in range(page + 1)])
     assert _busy(board)
     assert len(board.queries) == 1  # still one request: it fails open, it does not page

@@ -76,16 +76,19 @@ class SelfStubsGrantIdTokenTest(unittest.TestCase):
     def test_the_discovery_finds_the_stubs_it_exists_for(self):
         # Guard the guard: a discovery that finds nothing passes everything, and
         # one that silently narrows passes almost everything. The count is a
-        # tripwire, not the source of truth — a seventh caller is meant to trip
-        # it so whoever adds it grants the token too.
+        # tripwire, not the source of truth — an eighth caller is meant to trip
+        # it so whoever adds it grants the token too. The seventh is Shadow
+        # Replay (DRE-7197), which calls both qa-review.yml and verify.yml.
         callers = _callers()
         self.assertIn("self-agent-task.yml", callers)
         self.assertEqual(callers.get("pr-review.yml"), ["qa-review.yml"])
         self.assertEqual(
             callers.get("self-red-main-repair.yml"), ["red-main-repair.yml"])
         self.assertEqual(
-            len(callers), 6,
-            f"discovery found {sorted(callers)}; this repo has six stubs calling "
+            sorted(callers.get("shadow-replay.yml") or []), ["qa-review.yml", "verify.yml"])
+        self.assertEqual(
+            len(callers), 7,
+            f"discovery found {sorted(callers)}; this repo has seven stubs calling "
             f"a trusted reusable. A new one needs `id-token: write` too — update "
             f"this count once it has it.",
         )

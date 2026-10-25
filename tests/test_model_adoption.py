@@ -1,10 +1,10 @@
 """RED-first tests for DRE-3895 — the adoption RULE, and only the rule.
 
 WHAT THIS MODULE IS. `scripts/model_adoption.py` takes the live catalog (the
-`/v1/models` shape `model_catalog.py` already parses), the ladders in
-`config/models.yaml` and the declared prices in `config/model-prices.yaml`, and
-sorts every model id the pipeline has never configured into exactly one of
-three rules the CEO stated on 2026-09-14:
+`/v1/models` shape `model_catalog.py` already parses), the ladders in the
+model home (`model_home.read`, DRE-6943) and the declared prices in
+`config/model-prices.yaml`, and sorts every model id the pipeline has never
+configured into exactly one of three rules the CEO stated on 2026-09-14:
 
   * **adopt**  — a newer version of a family already on a ladder, at the same
                  or a lower declared price;
@@ -15,10 +15,11 @@ three rules the CEO stated on 2026-09-14:
 Its output is one Decision record per candidate, and that record is the
 contract DRE-3903 (`apply`/`render`/`open-*`) and DRE-3898 consume.
 
-WHAT IT DELIBERATELY IS NOT. It edits no config, renders no card or PR text,
-touches Linear never, and its CLI exposes `classify` and nothing else. Adoption
-stays a deliberate human edit of `config/models.yaml` — this module only says
-which of the three buckets a candidate falls in, and why.
+WHAT IT DELIBERATELY IS NOT. It edits no config, renders no card text,
+touches Linear never, and its CLI exposes `classify` and nothing else. It only
+says which of the three buckets a candidate falls in, and why — and against a
+home it could not read it says nothing at all (DRE-6943): an adoption is never
+decided against the defaults in the code.
 
 THE TRAPS THESE TESTS PIN.
 
@@ -55,14 +56,21 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(ROOT / "tests"))
 
 import model_adoption as ma  # noqa: E402
 import model_catalog as mc  # noqa: E402
 import model_fallback as mf  # noqa: E402
+import model_fixture  # noqa: E402
+import model_home as mh  # noqa: E402
 
 MODULE = ROOT / "scripts" / "model_adoption.py"
 CONFIG_PATH = ROOT / "config" / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
+# The ladders the CLI classifies against: the home (DRE-6943), here the frozen
+# fixture's home document (DRE-6859), because a console save can add a rung to
+# a ladder and so change what a candidate replaces (DRE-6866).
+HOME_FILE_ENV = "BUREAU_MODEL_HOME_FILE"
 
 OPUS = "claude-opus-5"
 OPUS55 = "claude-opus-5-5"
@@ -165,6 +173,18 @@ def live_config():
     return yaml.safe_load(CONFIG_PATH.read_text())
 
 
+def home_file(tmp_path, doc=None) -> Path:
+    """`doc` — the frozen fixture's home by default — written where
+    `BUREAU_MODEL_HOME_FILE` can name it."""
+    path = tmp_path / "home.json"
+    path.write_text(json.dumps(doc if doc is not None else model_fixture.fixture_home()))
+    return path
+
+
+def home_env(tmp_path, doc=None) -> dict:
+    return {HOME_FILE_ENV: str(home_file(tmp_path, doc))}
+
+
 def run_cli(*args, env=None):
     proc_env = dict(os.environ)
     proc_env.update(env or {})
@@ -204,10 +224,9 @@ def _classify_fixture(tmp_path):
         "classify",
         "--snapshot",
         str(catalog_file),
-        "--config",
-        str(CONFIG_PATH),
         "--prices",
         str(prices_file),
+        env=home_env(tmp_path),
     )
     assert proc.returncode == 0, f"classify failed: {proc.stdout}\n{proc.stderr}"
     return by_candidate(json.loads(proc.stdout))
@@ -227,18 +246,24 @@ def test_the_newer_same_priced_sonnet_is_adopted_on_every_ladder(tmp_path):
     assert sonnet6["family"] == "sonnet"
     assert sonnet6["display_name"] == "Claude Sonnet 6"
     assert sonnet6["price"] == {"input": 2.0, "output": 10.0}
-    # Every ladder carrying a Sonnet rung, and on each the family's NEWEST one.
-    # Since 2026-09-16 (DRE-3880) Sonnet 5 is the newest on TWO of them — it
-    # tops the advisory ladder and backs the workhorse one — so a same-family
-    # successor takes two rungs at once, which is exactly why the selection
-    # rule that covers that overlap has to travel with it
-    # (tests/test_review_separation.py, CarriedForwardToDre3892Test). The
-    # judgement ladder still ends on Sonnet 4.6.
-    assert {(r["ladder"], r["model"]) for r in sonnet6["replaces"]} == {
-        ("workhorse", SONNET5),
-        ("advisory", SONNET5),
-        ("judgement", SONNET46),
-    }
+    # Every group carrying a Sonnet rung the catalog dates, and on each the
+    # family's NEWEST one — read off the home's groups and the catalog, never
+    # typed (DRE-6935, DRE-6943). A rung can be the newest on two ladders at
+    # once, which is exactly why the selection rule that covers that overlap
+    # has to travel with it (tests/test_review_separation.py,
+    # CarriedForwardToDre3892Test).
+    dated = {entry["id"]: entry["created_at"] for entry in FIXTURE_CATALOG}
+    doc = model_fixture.fixture_home()
+    want = set()
+    for name in doc["groups"]:
+        sonnets = [m for m in model_fixture.ladder(doc, name)
+                   if ma.family(m) == "sonnet" and m in dated]
+        if sonnets:
+            want.add((name, max(sonnets, key=dated.__getitem__)))
+    assert len(want) >= 2, "the fixture puts a dated Sonnet rung on two ladders"
+    assert len({model for _, model in want}) < len(want), (
+        "one Sonnet rung is the newest on two ladders at once")
+    assert {(r["ladder"], r["model"]) for r in sonnet6["replaces"]} == want
     for rung in sonnet6["replaces"]:
         assert rung["created_at"], "a replaced rung carries the date it was ranked on"
         assert set(rung["price"]) == {"input", "output"}
@@ -281,7 +306,8 @@ def test_known_ids_and_their_dated_snapshots_are_never_candidates(tmp_path):
     ]
     catalog_file.write_text(json.dumps(payload(*catalog)))
     proc = run_cli(
-        "classify", "--snapshot", str(catalog_file), "--prices", str(prices_file)
+        "classify", "--snapshot", str(catalog_file), "--prices", str(prices_file),
+        env=home_env(tmp_path),
     )
     assert proc.returncode == 0, proc.stderr
     decided = by_candidate(json.loads(proc.stdout))
@@ -310,7 +336,8 @@ def test_the_record_carries_exactly_the_contract_keys(tmp_path):
 def test_output_is_ordered_newest_first(tmp_path):
     catalog_file, prices_file = _write_fixture(tmp_path)
     proc = run_cli(
-        "classify", "--snapshot", str(catalog_file), "--prices", str(prices_file)
+        "classify", "--snapshot", str(catalog_file), "--prices", str(prices_file),
+        env=home_env(tmp_path),
     )
     ids = [d["candidate"] for d in json.loads(proc.stdout)]
     assert ids[:3] == ["claude-corvid-1", "claude-opus-6", "claude-sonnet-6"]
@@ -604,10 +631,15 @@ def test_load_prices_reads_the_committed_file():
     assert declared[FABLE51]["input"] == 10.0
 
 
-def test_haiku_5_5_is_priced_excluded_and_on_nothing(live_config):
+def test_haiku_5_5_is_priced_excluded_and_on_nothing():
     # DRE-6288, the CEO's signed answer of 2026-10-08: "go ahead and add it but
     # we are not using it currently". Recorded with its base-tier price, held
     # off every ladder by `excluded:`, and so never asked about again.
+    #
+    # The price is read off config/model-prices.yaml, which the console never
+    # writes. Haiku's standing is read off the frozen fixture: a save that
+    # makes Haiku a group's default lifts its exclusion and puts it on a
+    # ladder (DRE-6789), so the committed models.yaml cannot hold it (DRE-6935).
     haiku = "claude-haiku-5-5"
     declared = ma.load_prices(PRICES_PATH)
     assert haiku in declared
@@ -615,26 +647,27 @@ def test_haiku_5_5_is_priced_excluded_and_on_nothing(live_config):
     assert declared[haiku]["output"] == 0.50
     assert str(declared[haiku].get("source", "")).strip()
 
+    cfg = model_fixture.fixture_config()
     excluded = {
         entry["model"] if isinstance(entry, dict) else entry
-        for entry in live_config["excluded"]
+        for entry in cfg["excluded"]
     }
     assert haiku in excluded
 
     ladder_ids = {
         rung["model"] if isinstance(rung, dict) else rung
-        for rungs in live_config["ladders"].values()
+        for rungs in cfg["ladders"].values()
         for rung in rungs
     }
     assert haiku not in ladder_ids
-    assert haiku not in live_config["effort"]
-    for rule in live_config["review_separation"]["rules"]:
+    assert haiku not in cfg["effort"]
+    for rule in cfg["review_separation"]["rules"]:
         assert haiku not in (rule["built_on"], rule["reviewers_use"])
 
     decisions = ma.classify_catalog(
         [model(haiku, "2026-10-07T00:00:00Z", "Claude Haiku 5.5")],
-        live_config,
-        declared,
+        cfg,
+        ma.load_prices(model_fixture.FIXTURE_DIR / "model-prices.yaml"),
     )
     assert decisions == [], "the adoption rule must not ask about it again"
 
@@ -658,7 +691,7 @@ def test_the_module_imports_no_linear_or_verdict_seam():
 def test_an_empty_catalog_is_an_empty_list_at_exit_zero(tmp_path):
     path = tmp_path / "empty.json"
     path.write_text(json.dumps({"data": []}))
-    proc = run_cli("classify", "--snapshot", str(path))
+    proc = run_cli("classify", "--snapshot", str(path), env=home_env(tmp_path))
     assert proc.returncode == 0, proc.stderr
     assert json.loads(proc.stdout) == []
     assert ma.classify_catalog([], {"ladders": {}}, {}) == []
@@ -676,6 +709,7 @@ def test_classify_reads_the_fake_catalog_env_with_no_network(tmp_path):
             "BUREAU_FAKE_CATALOG": json.dumps(payload(*FIXTURE_CATALOG)),
             "ANTHROPIC_API_KEY": "",
             "CLAUDE_CODE_OAUTH_TOKEN": "",
+            **home_env(tmp_path),
         },
     )
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
@@ -684,9 +718,10 @@ def test_classify_reads_the_fake_catalog_env_with_no_network(tmp_path):
     assert decided["claude-corvid-1"]["rule"] == "ask"
 
 
-def test_classify_fetches_the_live_catalog_once(monkeypatch, live_config):
+def test_classify_fetches_the_live_catalog_once(monkeypatch, tmp_path):
     # The library form takes a catalog; the CLI is the ONE place that fetches,
     # and it fetches once.
+    monkeypatch.setenv(HOME_FILE_ENV, str(home_file(tmp_path)))
     calls = []
 
     def _fake_fetch(*, fetch=None, clock=None):
@@ -707,3 +742,131 @@ def test_classify_catalog_is_importable_for_one_id(live_config):
         dict(FIXTURE_PRICES),
     )
     assert [d["candidate"] for d in decisions] == ["claude-opus-6"]
+
+
+# --------------------------------------------------------------------------- #
+# 6. The ladders come from the home, never from a file or the code (DRE-6943)  #
+# --------------------------------------------------------------------------- #
+
+OPUS56 = "claude-opus-5-6"
+SONNET55 = "claude-sonnet-5-5"
+CORVID = "claude-corvid-1"
+#: The Builders' top in the frozen home — the Opus a cheaper Opus 5.6
+#: succeeds. Read off its ladder, never spelled.
+HOME_TOP = model_fixture.ladder(model_fixture.fixture_home(), "workhorse")[0]
+
+# Every rung of the fixture home, dated, so each one ranks.
+HOME_CATALOG = [
+    model(OPUS55, "2026-09-21T16:24:00Z", "Claude Opus 5.5"),
+    model(OPUS, "2026-07-24T00:00:00Z", "Claude Opus 5"),
+    model(SONNET55, "2026-09-28T00:00:00Z", "Claude Sonnet 5.5"),
+    model(SONNET5, "2026-06-29T00:00:00Z", "Claude Sonnet 5"),
+    model(FABLE51, "2026-09-01T00:00:00Z", "Claude Fable 5.1"),
+    model(SONNET46, "2026-05-01T00:00:00Z", "Claude Sonnet 4.6"),
+]
+
+
+def _home_scenario(tmp_path, *extra):
+    """A catalog offering the home's rungs plus `extra`, and the fixture's
+    prices plus a cheaper Opus 5.6 and a priced Corvid."""
+    catalog_file = tmp_path / "catalog.json"
+    catalog_file.write_text(json.dumps(payload(*HOME_CATALOG, *extra)))
+    declared = dict(model_fixture.fixture_prices())
+    rung = declared[HOME_TOP]
+    assert (3.0, 15.0) < (rung["input"], rung["output"])
+    declared[OPUS56] = {"input": 3.0, "output": 15.0,
+                        "source": "https://example.invalid/pricing"}
+    declared[CORVID] = {"input": 3.0, "output": 15.0,
+                        "source": "https://example.invalid/pricing"}
+    prices_file = tmp_path / "prices.yaml"
+    prices_file.write_text(yaml.safe_dump({"prices": declared}))
+    return catalog_file, prices_file
+
+
+def _classify_home(tmp_path, env, *extra):
+    catalog_file, prices_file = _home_scenario(tmp_path, *extra)
+    record = tmp_path / "home-read.json"
+    proc = run_cli("classify", "--snapshot", str(catalog_file),
+                   "--prices", str(prices_file), "--home-out", str(record), env=env)
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    return proc, json.loads(record.read_text())
+
+
+def test_the_module_declares_that_every_command_reads_the_home():
+    assert ma.READS_MODEL_HOME == ("*",)
+
+
+def test_a_cheaper_successor_on_the_home_ladders_is_adopt(tmp_path):
+    doc = model_fixture.fixture_home()
+    # Every rung the home's Builders walk is offered, dated, so each one ranks.
+    assert set(model_fixture.ladder(doc, "workhorse")) <= {m["id"] for m in HOME_CATALOG}
+    proc, record = _classify_home(
+        tmp_path, home_env(tmp_path, doc), model(OPUS56, "2026-10-10T00:00:00Z"))
+    decided = by_candidate(json.loads(proc.stdout))
+    assert decided[OPUS56]["rule"] == "adopt", decided[OPUS56]["reason"]
+    replaced = {(r["ladder"], r["model"]) for r in decided[OPUS56]["replaces"]}
+    # Every group of the home that runs Opus 5.5, its newest Opus — the
+    # Builders and the Reviewers among them.
+    groups = {key for key in doc["groups"] if HOME_TOP in model_fixture.ladder(doc, key)}
+    assert {"workhorse", "advisory"} <= groups
+    assert replaced == {(key, HOME_TOP) for key in groups}
+    # The document it read is recorded, for `apply --expect-written-at`.
+    assert record["state"] == "read"
+    assert record["written_at"] == doc["written_at"]
+    assert "model-home: read" in proc.stderr
+
+
+def test_the_home_ladders_decide_not_the_file_or_the_code(tmp_path):
+    # A home whose Builders lead with a Sonnet only: the Opus 5.6 is ranked
+    # against the home's groups alone, so it replaces no Builders rung.
+    doc = model_fixture.fixture_home()
+    doc["groups"]["workhorse"]["models"] = [SONNET55, SONNET5]
+    proc, _ = _classify_home(
+        tmp_path, home_env(tmp_path, doc), model(OPUS56, "2026-10-10T00:00:00Z"))
+    decided = by_candidate(json.loads(proc.stdout))
+    assert "workhorse" not in {r["ladder"] for r in decided[OPUS56]["replaces"]}
+
+
+def test_a_new_family_against_the_home_is_ask(tmp_path):
+    proc, _ = _classify_home(
+        tmp_path, home_env(tmp_path), model(CORVID, "2026-10-10T00:00:00Z"))
+    decided = by_candidate(json.loads(proc.stdout))
+    assert decided[CORVID]["rule"] == "ask"
+    assert decided[CORVID]["reason"].startswith(ma.ASK_NEW_FAMILY)
+
+
+def test_an_unreadable_home_answers_nothing(tmp_path):
+    bad = tmp_path / "not-a-home.json"
+    bad.write_text(json.dumps({"hello": "world"}))
+    proc, record = _classify_home(
+        tmp_path, {HOME_FILE_ENV: str(bad)}, model(OPUS56, "2026-10-10T00:00:00Z"))
+    assert json.loads(proc.stdout) == []
+    assert "model-home: unreadable" in proc.stderr
+    assert record["state"] == "unreadable"
+    assert record["written_at"] is None
+    assert record["line"].startswith("model-home: unreadable")
+
+
+def test_a_home_that_is_not_set_answers_nothing(tmp_path):
+    # The suite's default (DRE-6939): neither name in the environment.
+    assert not {mh.FILE_ENV, mh.TOKEN_ENV} & set(os.environ)
+    proc, record = _classify_home(tmp_path, {}, model(OPUS56, "2026-10-10T00:00:00Z"))
+    assert json.loads(proc.stdout) == []
+    assert "model-home: not set" in proc.stderr
+    assert record["state"] == "not set"
+    assert record["line"].startswith("model-home: not set")
+
+
+def test_the_config_option_is_gone():
+    # The ladders are the home's; a file of them is no longer an input.
+    proc = run_cli("classify", "--config", str(CONFIG_PATH))
+    assert proc.returncode == 2
+
+
+def test_home_config_is_the_documents_groups_and_projects():
+    doc = model_fixture.with_project(model_fixture.fixture_home(),
+                                     "agent-bureau-demo", "advisory", OPUS55)
+    cfg = ma.home_config(doc)
+    assert cfg["ladders"] == {key: model_fixture.ladder(doc, key) for key in doc["groups"]}
+    assert cfg["projects"] == doc["projects"]
+    assert cfg["discovery"]["on_new_model"] == mf.CONFIG["discovery"]["on_new_model"]

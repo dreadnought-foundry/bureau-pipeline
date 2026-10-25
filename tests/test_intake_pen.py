@@ -270,6 +270,26 @@ KNOBS = {
     "INTAKE_HOLD": "intake_hold",
 }
 
+#: env var → every value a workflow may give it besides its own input: the
+#: caller's own repository variable, the one every groomer stub already passes
+#: (DRE-3285). `plan.yml` hands it to the held-repo check (DRE-7753), which
+#: reads the hold the groomer applies. Still never a literal.
+CALLER_VARIABLES = {
+    "INTAKE_HOLD": "${{ vars.INTAKE_HOLD }}",
+}
+
+
+def _offences(name, doc) -> list[str]:
+    """Every place `doc` gives a knob anything but its input or the caller's
+    own variable, threaded verbatim."""
+    offences = []
+    for variable, input_name in KNOBS.items():
+        allowed = {"${{ inputs.%s }}" % input_name, CALLER_VARIABLES[variable]}
+        for where, value in _assignments(doc, name, variable):
+            if str(value).strip() not in allowed:
+                offences.append(f"{where} = {value!r}")
+    return offences
+
 
 def test_the_groomer_declares_the_switch_as_an_optional_input():
     inputs = _call_inputs(_doc("groomer.yml"))
@@ -311,13 +331,14 @@ def test_the_sweep_threads_no_intake_knob_at_all():
 def test_no_workflow_anywhere_hardcodes_one_of_the_knobs():
     """The acceptance criterion, as a check: the two names appear nowhere as a
     bare env edit any more. A literal here is a per-repo value baked into the
-    shared channel, which is how one repo's cutover window becomes everyone's."""
+    shared channel, which is how one repo's cutover window becomes everyone's.
+
+    Two values pass: the workflow's own input, and the caller's own
+    `${{ vars.INTAKE_HOLD }}` (DRE-7753) — both the per-repo value threaded
+    verbatim, neither a value baked into the channel."""
     offences = []
     for name, doc in _live_docs().items():
-        for variable, input_name in KNOBS.items():
-            for where, value in _assignments(doc, name, variable):
-                if str(value).strip() != "${{ inputs.%s }}" % input_name:
-                    offences.append(f"{where} = {value!r}")
+        offences += _offences(name, doc)
     assert offences == [], "; ".join(offences)
 
 
@@ -335,6 +356,21 @@ def test_the_guard_would_notice_a_hardcoded_knob():
     """)
     found = _assignments(doc, "synthetic.yml", "INTAKE_HOLD")
     assert [value for _w, value in found] == ["2026-09-08"]
+    assert _offences("synthetic.yml", doc) == [
+        "synthetic.yml: jobs.sweep.steps[0].env.INTAKE_HOLD = '2026-09-08'"
+    ]
+
+
+def test_the_guard_passes_the_input_and_the_callers_variable_only():
+    """The widening is exactly one expression: the caller's own variable. A
+    fallback, another variable or a near-miss is still an offence."""
+    for value in ("${{ inputs.intake_hold }}", "${{ vars.INTAKE_HOLD }}"):
+        doc = {"jobs": {"j": {"steps": [{"env": {"INTAKE_HOLD": value}}]}}}
+        assert _offences("synthetic.yml", doc) == [], value
+    for value in ("${{ vars.INTAKE_HOLD || '2026-09-08' }}",
+                  "${{ vars.HOLD }}", "${{ vars.intake_hold }}", ""):
+        doc = {"jobs": {"j": {"steps": [{"env": {"INTAKE_HOLD": value}}]}}}
+        assert _offences("synthetic.yml", doc), value
 
 
 def test_this_repos_own_stub_takes_the_switch_from_the_repository_variable():

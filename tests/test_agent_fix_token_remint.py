@@ -77,13 +77,24 @@ START_MINT_ID = "app"
 # The pool's own mints (DRE-4282, `worker` added by DRE-4412): mints, but not
 # re-mints — the slot is selected once, up front, and the two tokens minted
 # from it are owned by tests/test_readers_on_the_pool.py (the reads) and
-# tests/test_fix_worker_on_the_pool.py (the model step).
-POOL_STEP_IDS = {"reader", "worker", "probe_2", "probe_3", "probe_4"}
+# tests/test_fix_worker_on_the_pool.py (the model step). `callsworker`
+# (DRE-6916) mints that selected slot again after the model step, for the
+# GitHub calls reading's worker meter; its inputs are the worker's, not the
+# boot mint's, and tests/test_github_calls_wiring_agents.py owns it. It is
+# still held to every rule in NoTokenOutlivesAModelRun.
+POOL_STEP_IDS = {"reader", "worker", "callsworker", "probe_2", "probe_3", "probe_4"}
 REPORT_MINT_ID = "reporttoken"
 # The Push rescue's two mints (DRE-6350), agent-task.yml's pair: post-model,
 # `continue-on-error`, and spent with NO fallback (DRE-3098).
 RESCUE_STEP = "Push rescue"
 RESCUE_MINT_IDS = ("pushtoken", "pushtoken2")
+# The GitHub calls reading's boot-App re-mint (DRE-6916): the bot's meter,
+# read after the model step on a token minted after it.
+CALLS_MINT_ID = "callsbot"
+# The model home's read token (DRE-6940): a mint, but not a re-mint — it is
+# minted once, before `Select model`, for the dreadnought-foundry installation
+# and not for this repo, and tests/test_model_home_scope.py owns it.
+MODEL_HOME_MINT_ID = "model_home"
 
 
 def _steps() -> list[dict]:
@@ -272,14 +283,16 @@ class TheReMintIsTheBootMintAgain(unittest.TestCase):
             if _action(s) == MINT_ACTION
             and s.get("id") != START_MINT_ID
             and s.get("id") not in POOL_STEP_IDS
+            and s.get("id") != MODEL_HOME_MINT_ID
         ]
 
     def test_the_re_mints_are_the_reports_and_the_rescues(self):
-        # `Mint fresh report token` (DRE-4320), and the rescue's own pair
-        # (DRE-6350) — named, so a fourth re-mint added later is a decision.
+        # `Mint fresh report token` (DRE-4320), the rescue's own pair
+        # (DRE-6350) and the GitHub calls reading's (DRE-6916) — named, so a
+        # fifth re-mint added later is a decision.
         self.assertEqual(
             sorted(s.get("id") for _i, s in self._re_mints()),
-            sorted([REPORT_MINT_ID, *RESCUE_MINT_IDS]),
+            sorted([REPORT_MINT_ID, *RESCUE_MINT_IDS, CALLS_MINT_ID]),
         )
 
     def test_same_pin_and_same_inputs_as_the_boot_mint(self):

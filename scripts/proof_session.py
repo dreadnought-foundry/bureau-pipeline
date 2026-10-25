@@ -14,16 +14,23 @@ it quotes is the last non-empty line of the command's standard output, on
 success and on refusal alike; standard error is never quoted. Every call is a
 counted hosted sign-in, so a marker beside the login file refuses a second.
 
+Before it writes that marker, `login` checks the screen can be drawn (DRE-6818):
+the declared kind is one of `BROWSER_LOGIN_KINDS`, `PROOF_LOCAL_URL` is set and
+`$PROOF_PYTHON` exists. If not, it runs nothing and says `not run`, so a
+sign-in is never spent on a page `screenshot` would refuse.
+
 `screenshot` re-executes itself under `$PROOF_PYTHON` (the venv's interpreter)
 before it imports Playwright, so the documented command is one command
 wherever it is written. It opens `PROOF_LOCAL_URL` plus the declared page in
 chromium; with `--signed-in` it loads the saved storage state, or signs the
-browser in from the login file once, saves the state, and overwrites and
-deletes the login file. It never signs in on its own account: no state and no
-login file is an exit 1 that opens no page. Each request the page made is
-recorded as `<method> <scheme>://<host>[:<port>]<path> <status>` — no query
-string, fragment, header or body — in `$PROOF_REQUESTS_DIR`, never beside the
-PNG.
+browser in from the login file once — the `form` kind fills the declared form,
+the `session` kind plants the declared `localStorage` entries and cookies on
+the local run's own origin before the page's first request (DRE-6818) — saves
+the state, and overwrites and deletes the login file. It never signs in on its
+own account: no state and no login file is an exit 1 that opens no page. Each
+request the page made is recorded as `<method> <scheme>://<host>[:<port>]<path>
+<status>` — no query string, fragment, header or body — in
+`$PROOF_REQUESTS_DIR`, never beside the PNG.
 
 The module runs on the runner's own `python3` up to the re-execution and
 imports only the standard library and its sibling pipeline modules at module
@@ -63,6 +70,11 @@ SCREENSHOT = "proof-screenshot"
 LOGIN_FILE_KEYS = ("username", "password", "identity", "ration")
 SESSION_FILE_KEYS = ("identity", "ration", "session")
 LOGIN_FILE_MODE = 0o600
+
+#: The kinds of `login` the browser step applies — read by `login`, which
+#: spends no sign-in on any other, and by `screenshot`. Every kind
+#: `proof_local.LOGIN_KINDS` accepts must be here (DRE-6818).
+BROWSER_LOGIN_KINDS = ("form", "session")
 
 #: The browser's interpreter, where `prepare` installs it.
 PROOF_PYTHON_DEFAULT = proof_browser.PROOF_VENV_DEFAULT + "/bin/python"
@@ -122,6 +134,33 @@ def last_line(output: str) -> str:
     return _one_line(lines[-1]) if lines else ""
 
 
+def _kind(login: dict) -> str:
+    """The declared kind of `login` — the one of `proof_local.LOGIN_KINDS` it
+    carries."""
+    return next(kind for kind in proof_local.LOGIN_KINDS if kind in login)
+
+
+def _local_base() -> str:
+    """`PROOF_LOCAL_URL` with no trailing `/`, or `Refused` naming the status
+    `prepare` gave."""
+    base = (os.environ.get("PROOF_LOCAL_URL") or "").rstrip("/")
+    if not base:
+        status = os.environ.get("PROOF_LOCAL_STATUS") or "unset"
+        note = _one_line(os.environ.get("PROOF_LOCAL_NOTE") or "")
+        raise Refused(f"no local run to open — PROOF_LOCAL_URL is empty "
+                      f"(status {status}{', ' + note if note else ''})")
+    return base
+
+
+def _browser_python() -> Path:
+    """`$PROOF_PYTHON`, or `Refused` when there is no interpreter there."""
+    python = proof_python()
+    if not (python.is_file() and os.access(python, os.X_OK)):
+        raise Refused(f"no browser interpreter at {python} — prepare did not "
+                      f"install one")
+    return python
+
+
 def _declaration(path):
     try:
         return proof_local.load(path)
@@ -175,6 +214,18 @@ def login(*, declaration=proof_local.DECLARATION, out=print) -> int:
     if not found.login:
         out(f"{LOGIN}: {declaration} declares no login")
         return 1
+    # Every check `screenshot --signed-in` would refuse on, BEFORE the marker
+    # and the command: a sign-in is never spent on a screen nothing can draw.
+    try:
+        kind = _kind(found.login)
+        if kind not in BROWSER_LOGIN_KINDS:
+            raise Refused(f"{declaration} declares the `{kind}` kind of login, "
+                          f"which screenshot --signed-in does not apply")
+        _local_base()
+        _browser_python()
+    except Refused as exc:
+        out(f"{LOGIN}: not run — {exc}; no hosted sign-in was spent")
+        return 1
 
     path = login_file()
     ran = marker(path)
@@ -221,10 +272,7 @@ def reexec(argv) -> None:
     """Replace this process with `$PROOF_PYTHON` running this module with the
     same arguments, unless this already is that interpreter. Raises `Refused`
     when there is no interpreter there to run."""
-    python = proof_python()
-    if not (python.is_file() and os.access(python, os.X_OK)):
-        raise Refused(f"no browser interpreter at {python} — prepare did not "
-                      f"install one")
+    python = _browser_python()
     here = os.path.normpath(os.path.abspath(sys.executable))
     if here == os.path.normpath(os.path.abspath(python)) or os.environ.get(REEXECUTED):
         return
@@ -270,6 +318,58 @@ def _read_login_file(path: Path) -> dict:
     return data
 
 
+def _read_session(path: Path, planted: dict) -> dict:
+    """The login file's `session` values for every declared entry, or
+    `Refused` naming the entry and the field it is short — never a value."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        raise Refused(f"the login file at {path} is not readable JSON — run "
+                      f"proof_session.py login first") from None
+    session = data.get("session") if isinstance(data, dict) else None
+    if not isinstance(session, dict):
+        raise Refused(f"the login file at {path} has no session object")
+    for name, target in (("local_storage", "key"), ("cookies", "name")):
+        for i, entry in enumerate(planted[name]):
+            field = entry["from"]
+            if not isinstance(session.get(field), str):
+                raise Refused(f"the login file's session has no string "
+                              f"`{field}`, which login.session.{name}[{i}] "
+                              f"({entry[target]}) is filled from — no page "
+                              f"was opened")
+    return session
+
+
+def _origin(url: str) -> tuple:
+    """`(scheme://host[:port], host, scheme)` of `url` — the local run's own
+    origin, which is the only one a session is planted on."""
+    parts = urllib.parse.urlsplit(url)
+    host = parts.hostname or ""
+    netloc = f"[{host}]" if ":" in host else host
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None:
+        netloc += f":{port}"
+    return f"{parts.scheme}://{netloc}", host, parts.scheme
+
+
+def planted_state(url: str, planted: dict, values: dict) -> dict:
+    """A Playwright storage state carrying each declared `local_storage`
+    entry on `url`'s origin and each declared cookie on its host, filled from
+    `values` — handed to the browser as data, never written to a file."""
+    origin, host, scheme = _origin(url)
+    cookies = [{"name": entry["name"], "value": values[entry["from"]],
+                "domain": host, "path": "/", "expires": -1, "httpOnly": False,
+                "secure": scheme == "https", "sameSite": "Lax"}
+               for entry in planted["cookies"]]
+    storage = [{"name": entry["key"], "value": values[entry["from"]]}
+               for entry in planted["local_storage"]]
+    return {"cookies": cookies,
+            "origins": [{"origin": origin, "localStorage": storage}] if storage else []}
+
+
 def _same_page(current: str, target: str) -> bool:
     a, b = urllib.parse.urlsplit(current), urllib.parse.urlsplit(target)
     return (a.scheme, a.netloc, a.path) == (b.scheme, b.netloc, b.path)
@@ -284,9 +384,16 @@ def _settle(page, wait_for) -> None:
         pass
 
 
+def _save_state(context, state: Path) -> None:
+    state.parent.mkdir(parents=True, exist_ok=True)
+    context.storage_state(path=str(state))
+    os.chmod(state, LOGIN_FILE_MODE)
+
+
 def _shoot(*, url, out_png, signed_in, wait_for, form, state, credentials,
-           login_path, sidecar) -> None:
-    """The browser half: Playwright is imported here, after `reexec`."""
+           login_path, sidecar, planted=None) -> None:
+    """The browser half: Playwright is imported here, after `reexec`.
+    `planted` is the storage state a `session` kind plants, or None."""
     from playwright.sync_api import sync_playwright
 
     seen: list = []
@@ -304,8 +411,18 @@ def _shoot(*, url, out_png, signed_in, wait_for, form, state, credentials,
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         try:
-            options = {"storage_state": str(state)} if signed_in and state.exists() else {}
+            planting = planted is not None
+            if planting:
+                # Set before the context's first page exists, so the declared
+                # page's first request already carries the session.
+                options = {"storage_state": planted}
+            elif signed_in and state.exists():
+                options = {"storage_state": str(state)}
+            else:
+                options = {}
             context = browser.new_context(**options)
+            if planting:
+                planted.clear()
             context.on("request", on_request)
             context.on("response", on_response)
             context.on("requestfailed", on_failed)
@@ -319,19 +436,21 @@ def _shoot(*, url, out_png, signed_in, wait_for, form, state, credentials,
                     page.click(form["submit"])
                 credentials.clear()
                 _settle(page, None)
-                state.parent.mkdir(parents=True, exist_ok=True)
-                context.storage_state(path=str(state))
-                os.chmod(state, LOGIN_FILE_MODE)
+                _save_state(context, state)
                 # The password is on disk only between `login` and here.
                 proof_browser._shred(login_path, lambda _line: None)
                 if not _same_page(page.url, url):
                     page.goto(url, wait_until="load")
+            elif planting:
+                _save_state(context, state)
+                # The session is on disk only between `login` and here; from
+                # here on it is in the browser's state file alone.
+                proof_browser._shred(login_path, lambda _line: None)
             _settle(page, wait_for)
             out_png.parent.mkdir(parents=True, exist_ok=True)
             page.screenshot(path=str(out_png), full_page=True)
             if signed_in:
-                context.storage_state(path=str(state))
-                os.chmod(state, LOGIN_FILE_MODE)
+                _save_state(context, state)
             rows = [request_row(r.method, r.url, statuses.get(id(r), "-")) for r in seen]
         finally:
             browser.close()
@@ -349,28 +468,28 @@ def screenshot(argv, *, page_key, out_png, signed_in=False, wait_for=None,
         if page_key not in found.pages:
             raise Refused(f"no page {page_key} in {declaration} — the declared "
                           f"pages are {', '.join(found.pages)}")
-        base = (os.environ.get("PROOF_LOCAL_URL") or "").rstrip("/")
-        if not base:
-            status = os.environ.get("PROOF_LOCAL_STATUS") or "unset"
-            note = _one_line(os.environ.get("PROOF_LOCAL_NOTE") or "")
-            raise Refused(f"no local run to open — PROOF_LOCAL_URL is empty "
-                          f"(status {status}{', ' + note if note else ''})")
-        url = base + found.pages[page_key]
+        url = _local_base() + found.pages[page_key]
 
         state, login_path, credentials, form = browser_state(), login_file(), None, None
+        planted = None
         if signed_in and not state.exists():
             if not login_path.exists():
                 raise Refused(f"no login file at {login_path} — run "
                               f"proof_session.py login first")
             if not found.login:
                 raise Refused(f"{declaration} declares no login form to fill")
-            if "session" in found.login:
-                # The planting step is the follow-up to DRE-6536.
-                raise Refused(f"{declaration} declares the `session` kind of "
-                              f"login, and planting a session in the browser "
-                              f"is not built yet — no page was opened")
-            form = found.login["form"]
-            credentials = _read_login_file(login_path)
+            kind = _kind(found.login)
+            if kind not in BROWSER_LOGIN_KINDS:
+                raise Refused(f"{declaration} declares the `{kind}` kind of "
+                              f"login, which this step does not apply — no "
+                              f"page was opened")
+            if kind == "session":
+                declared = found.login["session"]
+                planted = planted_state(url, declared,
+                                        _read_session(login_path, declared))
+            else:
+                form = found.login["form"]
+                credentials = _read_login_file(login_path)
     except Refused as exc:
         out(f"{SCREENSHOT}: {exc}")
         return 1
@@ -380,7 +499,7 @@ def screenshot(argv, *, page_key, out_png, signed_in=False, wait_for=None,
     try:
         _shoot(url=url, out_png=out_png, signed_in=signed_in,
                wait_for=wait_for, form=form, state=state, credentials=credentials,
-               login_path=login_path, sidecar=sidecar)
+               login_path=login_path, sidecar=sidecar, planted=planted)
     except ImportError as exc:
         out(f"{SCREENSHOT}: Playwright is not importable under {sys.executable} "
             f"({exc}) — prepare did not install the browser")
