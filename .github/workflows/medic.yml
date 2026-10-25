@@ -1372,10 +1372,13 @@ jobs:
       # requests, and both cards were asked of a person). An empty answer on a
       # `pull_request` run on an `agent/*` head warns and passes the flag: a
       # pull-request run always has a pull request, so the lookup missed it
-      # and the card is not put in front of a person on that ground. Any other
-      # run's empty answer still means no open pull request. Pinned by
-      # tests/test_medic_verdict_pr_lookup.py. `--planning-spent` only for
-      # `bad-card`, read off the card's whole thread in Linear (`dump-comments`, then `planning-spent`)
+      # and the card is not put in front of a person on that ground. `find`
+      # drops a pull request closed without merging, so the step first asks
+      # the exact head for one: a closed pull request, or a read that fails,
+      # passes no flag. Any other run's empty answer still means no open pull
+      # request. Pinned by tests/test_medic_verdict_pr_lookup.py.
+      # `--planning-spent` only for `bad-card`, read off the card's whole
+      # thread in Linear (`dump-comments`, then `planning-spent`)
       # — not the snapshot, which sat in the agent's workspace. `true`,
       # `unknown` or a read that fails all pass it, so an unread thread asks a
       # person rather than sending the card round Planning again.
@@ -1446,8 +1449,17 @@ jobs:
             elif [ "${FIRST%%$'\t'*}" = OPEN ]; then
               FLAGS+=(--has-open-pr)
             elif [ -z "$FOUND" ] && [ "$TRIGGER_EVENT" = pull_request ] && [[ "$HEAD_BRANCH" == agent/* ]]; then
-              echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, but the failed run is a pull_request run on ${HEAD_BRANCH}, and a pull-request run always has a pull request, so the medic does not decide that the card has no open pull request."
-              FLAGS+=(--has-open-pr)
+              CLOSED=unread
+              if HEAD_PRS=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state closed --json state); then
+                CLOSED=$(printf '%s' "$HEAD_PRS" | python3 -c 'import json, sys; print(sum(p.get("state") == "CLOSED" for p in json.load(sys.stdin)))') || CLOSED=unread
+              fi
+              echo "gh pr list --head ${HEAD_BRANCH} --state closed counted ${CLOSED} pull request(s) closed without merging"
+              if [ "$CLOSED" = 0 ]; then
+                echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, but the failed run is a pull_request run on ${HEAD_BRANCH}, and a pull-request run always has a pull request, so the medic does not decide that the card has no open pull request."
+                FLAGS+=(--has-open-pr)
+              elif [ "$CLOSED" = unread ]; then
+                echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, and the medic could not read whether the pull request on ${HEAD_BRANCH} was closed, so it decides as if the card has no open pull request."
+              fi
             fi
             if [ "$CLASS" = bad-card ]; then
               THREAD="${RUNNER_TEMP:-/tmp}/medic-card-thread.json"
