@@ -41,6 +41,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 import bureau_read  # noqa: E402
 import groomer  # noqa: E402
 import groom_scorecard  # noqa: E402
+import linear_ops  # noqa: E402
 
 WEEK = json.loads(
     (ROOT / "tests" / "fixtures" / "groom-scorecard-week.json").read_text())
@@ -251,9 +252,10 @@ def test_an_unanswered_proposal_is_listed_and_counted_nowhere_else():
         (pid, False), (other, True)]
     assert result["proposed"] == 2                      # DRE-5 and DRE-6 only
     assert result["removed"] == 1                       # DRE-5
-    # Both Cancel lists have no drain: DRE-3, DRE-4 and DRE-6.
-    assert result["cancel"] == {"rows": 3, "agreed": 0, "kept": 0,
-                                "unanswered": 3}
+    # Neither Cancel list was drained. DRE-3 and DRE-4 are the unanswered
+    # proposal's; DRE-6 is on an answered one that cancelled nothing: kept.
+    assert result["cancel"] == {"rows": 3, "agreed": 0, "kept": 1,
+                                "unanswered": 2}
 
 
 def test_a_proposal_counts_as_answered_by_a_drain_a_decline_or_a_door_row():
@@ -361,6 +363,53 @@ def test_the_cancel_list_removal_rules():
     assert result["removed"] == 2                        # DRE-1 and DRE-2
     assert result["cancel"] == {"rows": 4, "agreed": 2, "kept": 2,
                                 "unanswered": 0}
+
+
+def test_every_cancel_row_of_the_week_lands_in_exactly_one_bucket():
+    """`rows` is every Cancel row of the week, and the three buckets sum to it.
+
+    The drain can read a Cancel row with any of its outcomes, not only
+    `cancelled` and `held back`, and a declined proposal has no drained
+    record at all. Proposal `a2a2a2a2a2a2` was drained:
+      DRE-2 `cancelled`, DRE-3 `already gone` — nothing held either back, so
+      the person agreed (the drain found DRE-3 out of the lane already);
+      DRE-4 `added` (reached for, to Planning), DRE-5 `refused`, DRE-9 on no
+      row of the record — none went to Canceled: kept.
+    Proposal `b5b5b5b5b5b5` was declined: its DRE-6 and DRE-7 stay, kept, and
+    the proposal is answered. `d7d7d7d7d7d7` is answered by a door row on
+    its Planning row and not drained yet: nothing cancelled DRE-12, kept.
+    `c6c6c6c6c6c6` nobody answered: DRE-8 unanswered. Nine rows: 2 agreed,
+    6 kept, 1 unanswered — and `unanswered` is exactly the Cancel rows of the
+    proposals the scorecard itself calls unanswered.
+    """
+    gone, declined, silent = "a2a2a2a2a2a2", "b5b5b5b5b5b5", "c6c6c6c6c6c6"
+    undrained = "d7d7d7d7d7d7"
+    records = [proposal(gone, ["DRE-1"],
+                        ["DRE-2", "DRE-3", "DRE-4", "DRE-5", "DRE-9"]),
+               proposal(declined, ["DRE-10"], ["DRE-6", "DRE-7"]),
+               proposal(silent, ["DRE-11"], ["DRE-8"]),
+               proposal(undrained, ["DRE-13"], ["DRE-12"]),
+               drained(gone, {"DRE-1": "moved", "DRE-2": "cancelled",
+                              "DRE-3": "already gone", "DRE-4": "added",
+                              "DRE-5": "refused"}),
+               said(groomer.DECLINE_TAG, declined, tail="not this week")]
+    result = score(records, removals=door(rows=[
+        row(undrained, "DRE-13", "put-back")]))
+    assert {p["id"]: p["answered"] for p in result["proposals"]} == {
+        gone: True, declined: True, silent: False, undrained: True}
+    c = result["cancel"]
+    assert c == {"rows": 9, "agreed": 2, "kept": 6, "unanswered": 1}
+    assert c["rows"] == sum(p["cancel"] for p in result["proposals"])
+    assert c["unanswered"] == sum(p["cancel"] for p in result["proposals"]
+                                  if not p["answered"])
+    assert c["agreed"] + c["kept"] + c["unanswered"] == c["rows"]
+
+
+def test_the_fixture_weeks_cancel_buckets_sum_to_every_cancel_row():
+    result = score(week_thread())
+    c = result["cancel"]
+    assert c["rows"] == sum(p["cancel"] for p in result["proposals"])
+    assert c["agreed"] + c["kept"] + c["unanswered"] == c["rows"]
 
 
 def test_a_planning_row_cancel_decision_is_a_removal():
@@ -496,6 +545,42 @@ def test_post_writes_one_comment_once_per_week(monkeypatch, capsys):
     assert ops2.posted == []
     assert "groom-scorecard: already posted 2026-10-11..2026-10-17" in out2
     assert len(tagged(err2)) == 1
+
+
+def test_a_full_thread_is_a_failed_run_that_says_so(monkeypatch, capsys):
+    """`cmd_comment` does not raise on Linear's comment cap (DRE-3343): it
+    returns the condition. A scorecard that did not land must not pass for
+    one that did."""
+
+    class Full(Ops):
+        def cmd_comment(self, identifier, body, *flags):
+            self.posted.append((identifier, body))
+            return linear_ops.COMMENT_CAP_CONDITION
+
+    ops = Full({CARD: week_thread()})
+    monkeypatch.setattr(groom_scorecard, "linear_ops", ops)
+    monkeypatch.setattr(bureau_read, "groom_removals", door())
+    code = groom_scorecard.main(["score", "--card", CARD, "--week-ending",
+                                 ENDING, "--post"])
+    out, err = capsys.readouterr()
+    assert code != 0
+    assert len(tagged(err)) == 1
+    [said_so] = [line for line in err.splitlines()
+                 if "not posted" in line]
+    assert CARD in said_so and "2026-10-11..2026-10-17" in said_so
+    assert linear_ops.COMMENT_CAP_CONDITION in said_so
+
+
+def test_a_run_reads_the_thread_once(monkeypatch, capsys):
+    calls = []
+    real = groom_scorecard.read_thread
+
+    def counting(*args, **kwargs):
+        calls.append(args)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(groom_scorecard, "read_thread", counting)
+    run(monkeypatch, capsys, week_thread(), argv=["--post"])
+    assert len(calls) == 1
 
 
 def test_another_weeks_scorecard_does_not_stop_this_one(monkeypatch, capsys):
