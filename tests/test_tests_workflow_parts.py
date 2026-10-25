@@ -585,7 +585,8 @@ def test_the_walk_list_installs_what_walks_json_needs():
     assert install < listing, steps
     walks_install = next(s for s in job["steps"]
                          if "setup-python-cached" in str(s.get("uses", "")))
-    assert steps[install] == walks_install, steps[install]
+    # The same install, less the walks' gate on `walk-list`'s answer (DRE-7908).
+    assert steps[install] == {k: v for k, v in walks_install.items() if k != "if"}, steps[install]
     assert "python3 scripts/unit_test_parts.py walks --json" in steps[listing]["run"]
 
 
@@ -888,7 +889,6 @@ def _stub_bin(tmp_path: Path, runs: str | None, changed: list[str] | None,
         f"[ \"$1 $2 $3\" = \"merge-base --is-ancestor {ancestor}\" ]\n")
     for path in (gh, git):
         path.chmod(0o755)
-    (bin_dir / "python3").symlink_to(sys.executable)
     return bin_dir, log
 
 
