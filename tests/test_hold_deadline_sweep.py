@@ -628,6 +628,20 @@ class TestNeverListedTwice:
         got = self._both(self._proof_in_hand_work(10.0), capsys, order)
         assert got.door.raised == []
 
+    def test_a_proof_card_whose_holds_cannot_be_read_leaves_the_pass_incomplete(
+            self, capsys):
+        """A hold the reading raises on is one unjudged card, as it is in
+        `alarm_held_proofs` — never the end of `flag_stranded`."""
+        card = self._proof_in_hand_work(80.0)
+        with patch.object(reconcile, "_proof_wait_clock",
+                          side_effect=ValueError("a hold with no time")), \
+             patch.object(hold_deadline, "settle", wraps=hold_deadline.settle) as settle:
+            got = self._both(card, capsys, ("flag_stranded",))
+        settle.assert_called_once()
+        assert settle.call_args.kwargs["complete"] is False
+        assert _listed(got, HAND_TAG) == []
+        assert any("DRE-7301" in f for f in reconcile._write_failures)
+
     def test_with_no_hold_the_entry_clock_lists_it(self, capsys):
         card = _hand_card("DRE-7301", entered=90.0, title="PROOF: the board shows the age",
                           labels=("repo:portico", NO_CODE), nodes=[_alarm("DRE-7301", 60.0)])
@@ -644,11 +658,13 @@ class TestTheSweep:
     """A whole pass over a board holding nothing late: both sites settle once
     each; an idle, held or promote-only pass settles nothing."""
 
-    def _pass(self, monkeypatch, *, idle=None, held=False, cards=None, **main_kw):
+    def _pass(self, monkeypatch, *, idle=None, held=False, cards=None, queued=(),
+              queue_held=False, **main_kw):
         import test_sweep_spend_lines as spend
 
         monkeypatch.setattr(reconcile, "sweep_idle", lambda: idle)
-        fake = spend.FakeLinear(cards or [_card(nodes=[_hold(CAUSE_NEEDS, 10.0)])])
+        fake = spend.FakeLinear(cards or [_card(nodes=[_hold(CAUSE_NEEDS, 10.0)])],
+                                backlog=queued)
         settle = mock.Mock(wraps=hold_deadline.settle)
         replace = ()
         if held:
@@ -656,6 +672,11 @@ class TestTheSweep:
                 raise reconcile.BoardHeld("the door says Linear is held")
             active_cards.__name__ = "active_cards"
             replace = (active_cards,)
+        if queue_held:
+            def backlog_children(*a, **kw):
+                raise reconcile.BoardHeld("the door says Linear is held")
+            backlog_children.__name__ = "backlog_children"
+            replace = (backlog_children,)
         with _door(), patch.object(hold_deadline, "settle", settle):
             spend._run_sweep(fake, mocks=("move_hand_built_to_review",), replace=replace,
                              **main_kw)
@@ -679,6 +700,26 @@ class TestTheSweep:
         settle = self._pass(monkeypatch, cards=[card])
         lists = {c.args[0]: [h.ident for h in c.args[2]] for c in settle.call_args_list}
         assert lists == {PROOF_TAG: ["DRE-7301"], HAND_TAG: []}
+
+    def test_a_proof_card_in_queued_is_read_by_the_proof_waiting_list(
+            self, monkeypatch, capsys):
+        """The board read does not carry Queued; promotion reads it later in
+        the same pass, and the late list is judged off that read — a proof's
+        event wait there is listed under `proof-waiting`, at no request of
+        its own."""
+        card = _card("DRE-7401", state="Queued", nodes=[_hold(EVENT_NEEDS, 80.0)])
+        settle = self._pass(monkeypatch, queued=[card])
+        (proof,) = [c for c in settle.call_args_list if c.args[0] == PROOF_TAG]
+        assert [h.ident for h in proof.args[2]] == ["DRE-7401"]
+        assert proof.kwargs["complete"] is True
+
+    def test_a_pass_whose_queued_read_was_skipped_is_not_complete(
+            self, monkeypatch, capsys):
+        """A Queued lane nobody read is not an empty one: the proof-waiting
+        list settles incomplete, so a standing notice is never resolved off it."""
+        settle = self._pass(monkeypatch, queue_held=True)
+        (proof,) = [c for c in settle.call_args_list if c.args[0] == PROOF_TAG]
+        assert proof.kwargs["complete"] is False
 
     def test_the_24_hour_alarm_keeps_todays_lanes(self, monkeypatch, capsys):
         """A CEO's-press hold on a proof card in Hand-work was never in
