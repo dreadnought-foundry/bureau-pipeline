@@ -697,6 +697,44 @@ stamp read as a receipt.
 The console learned the tag first (DRE-7751). The `act registry consumers` job
 refuses a row the console does not carry.
 
+## The row that files a PROOF's gaps — `🩹 proof-gap-card` (DRE-7952)
+
+| Field | Value |
+| -- | -- |
+| tag | `proof-gap-card` |
+| act name | `proof-gap-filed` |
+| kind · state · next actor | `recovery` · `unchanged` · `groomer.py` |
+| discharges | nothing |
+| cadence | `null` — the fix card waits in Intake for the groomer's batch and the CEO's approval, and nothing bounds when that happens |
+| emitted by | `scripts/proof_gap.py`, at the `pipeline_act.receipt(ACT, …)` call in `file_fix_card` |
+
+A proof record whose every unmet row is a gap — a `Not observed. cause:
+<word> — …` row naming one of the four cause words in
+`config/proof-reach.json`, or a `Not met. history: …` row
+(`proof_record.gap_rows`) — passes the merge gate and closes its PROOF card on
+its approved merge (epic DRE-7944). A re-run would read those rows the same
+again, so they go where the real work goes: ONE fix card in Intake,
+parentless, labeled `repo:<the PROOF's repo>`, titled `<slug>: the gaps PROOF
+<DRE-n> closed with — <k> row(s) not observable as worded`, one line per row
+with its criterion, its kind, the record's cell and the kind of fix. The PROOF
+close (`linear_ops.merge_close_ruling`, asked by card-done and the reconcile
+backstop) files it before the card moves, and posts on the PROOF card:
+
+    🩹 proof-gap-card: <DRE-n> — the gaps it closed with are filed in Intake: <url>
+
+**The receipt key is live**: a pipeline-authored comment whose first line opens
+`🩹 proof-gap-card:` on the PROOF card names its one fix card, so a second close
+reads it and files nothing. A comment of that shape from any other author
+counts for nothing. A receipt that failed to post after the create is caught by
+the title: an open card with exactly that title is reused and receipted.
+`proof_gap.file_fix_card(..., kind="defect")` is the same filer for a spent
+re-run budget on a build that fails its rows, and words the card as a defect
+in the build.
+
+The console must learn this act before this row merges. The `act registry
+consumers` job refuses a row the console does not carry, and it knows an act
+by its tag or its name.
+
 ## Why this exists
 
 The console has always checked this. Its
