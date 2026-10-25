@@ -3116,8 +3116,9 @@ def merge_close_ruling(
 
     A PROOF record that closes with gap rows (`proof_record.gap_rows`) has its
     ONE fix card filed here, before `note` is returned and so before either
-    caller moves the card (DRE-7952): a filing Linear refuses raises, and the
-    card stays open for the backstop to ask again. Both callers ask this
+    caller moves the card (DRE-7952): a filing Linear refuses is a
+    `(reason, None)` naming the failure, never a raise, and the card stays
+    open for the backstop to ask again. Both callers ask this
     ruling, and `proof_gap.file_fix_card` reads its own receipt off the
     thread first, so a second ask files nothing.
     """
@@ -3151,9 +3152,19 @@ def merge_close_ruling(
     gaps = proof_gap.gaps_of(
         proof_record.reading(record.text, _bound_verdict(pr), _other_comments(pr)))
     if gaps:
-        fix = proof_gap.file_fix_card(
-            identifier, proof_gap.epic_of(identifier), pr_url, gaps,
-            repo_slug=proof_gap.repo_slug_of(labels, pr_url), voices=voices)
+        try:
+            fix = proof_gap.file_fix_card(
+                identifier, proof_gap.epic_of(identifier), pr_url, gaps,
+                repo_slug=proof_gap.repo_slug_of(labels, pr_url), voices=voices)
+        except Exception as exc:  # noqa: BLE001 — a failed filing is a refusal, never a crash
+            # The reconcile backstop asks this ruling inside its sweep, so a
+            # raise here would end the pass for every other card.
+            import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+            gap = (f"its record closes with {len(gaps)} gap row(s), and their fix card "
+                   f"could not be filed: {' '.join(str(exc).split())[:300]}")
+            print(f"PROOF card {identifier} stays open: {gap}.")
+            return merge_gate.without_verdict_markers(gap), None
         note = proof_close_note(identifier, title, pr_url, pr, record, voices, fix=fix)
     return None, note
 
