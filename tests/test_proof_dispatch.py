@@ -2538,8 +2538,12 @@ def test_gate_a_newer_re_run_still_running_is_not_sent_again(monkeypatch, capsys
     assert h.fired == [] and h.posted == [] and h.holds == []
 
 
-WAITING = (proof_record._cut(WAITING_ROW[0], 70),
-           "the 2026-10-14 release: the tag moves")
+#: The time a hold over rows nobody stamped waits for (DRE-7951): twelve
+#: hours after the pass that posts it, and nothing else.
+RECHECK_AT = f"not-before={(NOW + timedelta(hours=12)).isoformat(timespec='minutes')}"
+WAITING = (proof_record._cut(WAITING_ROW[0], 70), RECHECK_AT)
+#: The prose hold `_waiting` posted for the same row before DRE-7951.
+WAITING_PROSE = (WAITING[0], "the 2026-10-14 release: the tag moves")
 
 
 def test_gate_a_row_waiting_on_an_event_holds_instead_of_a_re_run(monkeypatch, capsys):
@@ -2550,20 +2554,22 @@ def test_gate_a_row_waiting_on_an_event_holds_instead_of_a_re_run(monkeypatch, c
     assert tally.held == 1 and writes.log == []
     line = linear_ops.proof_waiting_line(*WAITING)
     assert line == ("🔬 proof-waiting: The release tag moves to the merged commit "
-                    "— needs the 2026-10-14 release: the tag moves")
+                    "— needs not-before=2026-10-07T05:30+00:00")
+    assert proof_record.time_only(line) == NOW + timedelta(hours=12)
     for half in WAITING:
         assert linear_ops.proof_text_refusal(half, "half") is None
 
-    # The next pass names the hold and posts nothing.
+    # The next pass names the hold and when it lifts, and posts nothing.
     capsys.readouterr()
     held = _sent_back(hold(*WAITING, 60))
     h, tally, _ = _gate_pass(monkeypatch, thread=held, pr=_declined(),
                              text=record_md(MET_ROW, WAITING_ROW))
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.posted == [] and h.holds == []
-    assert any(f"held by {line}" in l for l in lines), lines
+    assert any(f"held by {line} — lifts at 2026-10-06 22:30 PT" in l for l in lines), lines
 
-    # The operator observes the event: the record is re-run to re-observe it.
+    # The operator observes the event before then: the record is re-run to
+    # re-observe it, as before (DRE-7951 lifts it at its time with no note).
     observed = _sent_back(hold(*WAITING, 60), comment(linear_ops.proof_observed_line(
         "the 2026-10-14 release was cut at 10:02 PT"), 30, PERSON))
     h, _, _ = _gate_pass(monkeypatch, thread=observed, pr=_declined(),
@@ -2583,8 +2589,7 @@ def test_gate_the_hold_names_every_waiting_row_in_table_order_and_wins(
     assert h.fired == []
     cut = proof_record._cut(long, 70)
     assert len(cut) == 70 and cut.endswith("…")
-    assert h.holds == [("DRE-5930", f"{cut}; {WAITING[0]}",
-                        f"the 02:07 PT nightly; {WAITING[1]}")]
+    assert h.holds == [("DRE-5930", f"{cut}; {WAITING[0]}", RECHECK_AT)]
 
 
 def test_gate_a_row_a_re_run_may_re_observe_is_re_run_not_held(monkeypatch, capsys):
@@ -3116,7 +3121,9 @@ def _after(doc: dict, minutes: float) -> str:
 def test_sent_back_dre_6678_every_row_waiting_is_held_not_re_run(monkeypatch, capsys):
     """The 19:22 PT pass on 2026-10-10 spent re-run 1 of 2 on a record whose
     nine judged rows all wait for the morning of 2026-10-11 or 2026-10-12.
-    It holds instead: one hold naming the rows and their events, no dispatch."""
+    It holds instead: one hold naming the rows, no dispatch. No row is
+    stamped, so the hold waits twelve hours from the pass and nothing else
+    (DRE-7951), and the line says when it lifts."""
     h, tally, doc, text = _pass_6678(monkeypatch)
     lines = _about(_lines(capsys), "DRE-6678")
     waiting = _waiting_cells(text)
@@ -3125,9 +3132,10 @@ def test_sent_back_dre_6678_every_row_waiting_is_held_not_re_run(monkeypatch, ca
     assert len(h.holds) == 1, h.holds
     ident, observed, needs = h.holds[0]
     assert ident == "DRE-6678"
-    assert observed.count("; ") == 8 and needs.count("; ") == 8
-    assert "the scheduled morning of 2026-10-11 06:00 PT" in needs
-    assert "the scheduled mornings of 2026-10-11 and 2026-10-12, 06:00 PT" in needs
+    assert observed.count("; ") == 8
+    assert needs == "not-before=2026-10-11T14:22+00:00"
+    assert proof_record.time_only(linear_ops.proof_waiting_line(observed, needs)) == (
+        datetime.fromisoformat(doc["as_of"].replace("Z", "+00:00")) + timedelta(hours=12))
     for half in (observed, needs):
         assert linear_ops.proof_text_refusal(half, "half") is None
     assert tally.held == 1 and tally.dispatched == 0
@@ -3136,6 +3144,7 @@ def test_sent_back_dre_6678_every_row_waiting_is_held_not_re_run(monkeypatch, ca
     assert len(said) == 1, lines
     assert ("9 row(s) of the record at 3a1671b wait on an event — held for "
             in said[0]), said
+    assert said[0].endswith(" — lifts at 2026-10-11 07:22 PT"), said
 
 
 def test_sent_back_dre_6678_a_second_pass_posts_no_second_hold(monkeypatch, capsys):
@@ -3448,10 +3457,10 @@ def test_replay_dre_6694_through_the_dispatcher_is_held_for_the_event_and_asked_
                                   text=record_md(MET_ROW, *DRE_6694_ROWS))
     lines = _about(_lines(capsys), "DRE-6694")
     assert h.fired == [] and h.posted == [] and moves.log == []
-    assert len(h.holds) == 1 and h.holds[0][2] == "; ".join([WEEKLY] * 5)
+    assert len(h.holds) == 1 and h.holds[0][2] == RECHECK_AT
     assert not h.holds[0][2].startswith(proof_cause_park.CAUSE_HOLD_OPENING)
     assert tally.held == 1
-    assert any(f"5 row(s) of the record at {SHA7} wait on an event — held for {WEEKLY}"
+    assert any(f"5 row(s) of the record at {SHA7} wait on an event — held for {RECHECK_AT}"
                in line for line in lines), lines
 
 
@@ -3465,7 +3474,7 @@ def test_replay_dre_6694_after_the_runs_cause_park_is_held_for_the_event(
     h, tally, moves = _cause_pass(monkeypatch, thread=parked, ident="DRE-6694",
                                   text=record_md(MET_ROW, *DRE_6694_ROWS))
     assert h.fired == [] and h.posted == [] and moves.log == []
-    assert [x[2] for x in h.holds] == ["; ".join([WEEKLY] * 5)]
+    assert [x[2] for x in h.holds] == [RECHECK_AT]
 
 
 def test_replay_dre_6772_through_the_dispatcher_is_held_and_asked_for_the_operator(
@@ -3632,8 +3641,10 @@ def test_press_dre_6638_is_held_on_a_line_that_names_no_ceos_press(monkeypatch, 
     line = linear_ops.proof_waiting_line(observed, needs)
     assert proof_record.CEO_PRESS not in line
     assert observed == proof_record._cut(f"needs the press named on the card: {PRESS}", 70)
-    assert needs.startswith("the operator's press:")
-    assert needs == f"the operator's press: {PRESS}"
+    # The press is an event that re-checks itself, never the operator's to
+    # discharge (DRE-7951): the hold waits for a time and nothing else.
+    assert needs == RECHECK_AT
+    assert proof_record.time_only(line) == NOW + timedelta(hours=12)
 
 
 def test_press_dre_6638_is_discharged_by_proof_observed_and_re_run(monkeypatch, capsys):
@@ -4072,17 +4083,20 @@ def test_timed_every_waiting_row_stamped_holds_on_the_latest_time(monkeypatch, c
     assert any("lifts at 2026-10-17 19:30 PT" in line for line in lines), lines
 
 
-def test_timed_one_prose_waiting_row_writes_the_hold_as_today(monkeypatch, capsys):
+def test_timed_one_unstamped_waiting_row_holds_twelve_hours_from_the_pass(
+        monkeypatch, capsys):
+    """One prose row among stamped ones: it is read as stamped twelve hours
+    after the pass (DRE-7951), and the hold waits for the latest time."""
     text = record_md(MET_ROW, DRE_6673_ROW, WAITING_ROW)
     h, _ = _timed_pass(monkeypatch, thread=_sent_back(), now=NOON_PT, text=text)
     lines = _about(_lines(capsys), "DRE-5930")
     observed = (f"{proof_record._cut(DRE_6673_ROW[0], 70)}; "
                 f"{proof_record._cut(WAITING_ROW[0], 70)}")
-    needs = (f"{WINDOW}: the seven days' arrivals, counted; "
-             "the 2026-10-14 release: the tag moves")
+    needs = "not-before=2026-10-18T07:00+00:00"
     assert h.holds == [("DRE-5930", observed, needs)]
-    assert proof_record.time_only(linear_ops.proof_waiting_line(observed, needs)) is None
-    assert not any("lifts at" in line for line in lines), lines
+    assert proof_record.time_only(linear_ops.proof_waiting_line(observed, needs)) == (
+        NOON_PT + timedelta(hours=12))
+    assert any("lifts at 2026-10-18 00:00 PT" in line for line in lines), lines
 
 
 @pytest.mark.parametrize("trigger", ["gate", "critic"])
@@ -4196,13 +4210,19 @@ def test_timed_a_time_hold_beside_any_other_open_hold_is_never_lifted_on_the_re_
     assert any(named in line for line in lines), lines
 
 
-def test_timed_a_prose_waiting_hold_is_never_lifted_on_the_re_run(monkeypatch, capsys):
+def test_timed_a_prose_hold_not_the_records_waiting_rows_is_never_lifted_on_the_re_run(
+        monkeypatch, capsys):
+    """A prose waiting hold lifts itself only when it is the one `_waiting`
+    posted for the record's own waiting rows (DRE-7951); any other prose
+    hold is a person's, and nothing reads a date out of it."""
     text = record_md(MET_ROW, WAITING_ROW)
-    h, tally = _timed_pass(monkeypatch, thread=_sent_back(hold(*WAITING, 60)),
+    other = ("The console renders the card as waiting for proof",
+             "the operator's word that the console was read")
+    h, tally = _timed_pass(monkeypatch, thread=_sent_back(hold(*other, 60)),
                            now=AFTER_PT, text=text)
     lines = _about(_lines(capsys), "DRE-5930")
     assert _lifts(h) == [] and h.fired == [] and h.posted == [] and tally.held == 1
-    line = linear_ops.proof_waiting_line(*WAITING)
+    line = linear_ops.proof_waiting_line(*other)
     assert any(l.endswith(f"re-run: held by {line}") for l in lines), lines
 
 
