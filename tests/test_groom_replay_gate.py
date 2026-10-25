@@ -420,6 +420,22 @@ def test_a_card_with_no_record_or_an_excluded_verdict_is_not_judged(
     assert lines[-1] == f"{TAG} 3 cases — 0 pass, 0 fail, 3 not judged, 0 regressed"
 
 
+def test_an_excluded_verdict_is_not_judged_wherever_the_card_ended(tmp_path, capsys):
+    """The verdict decides, not the list: an `excluded` record on a card the
+    proposal left on Planning is still not judged, so never regressed."""
+    proposal = _proposal(tmp_path, {"DRE-101": "planning"})
+    doc = json.loads(proposal.read_text())
+    for row in doc["outcomes"]["now"] + doc["sequence"]:
+        row["verify"]["verdict"] = gva.EXCLUDED
+    proposal.write_text(json.dumps(doc), encoding="utf-8")
+    code, lines, out = _judge(tmp_path, proposal, capsys)
+    assert code == 0
+    assert _line(lines, "c-planning") == (
+        f"{TAG} c-planning expect=off-planning main=pass head=planning "
+        "search=none not judged")
+    assert out["regressed"] == []
+
+
 def test_a_card_missing_from_the_proposal_is_head_none(tmp_path, capsys):
     proposal = _proposal(tmp_path, {"DRE-101": "cancel"})
     _, lines, _ = _judge(tmp_path, proposal, capsys)
