@@ -624,6 +624,17 @@ def sandbox_line(n: int) -> str:
         criterion=proof_record._cut(fixture_criteria()[n - 1], ppr.CUT))
 
 
+def press_lines(lines):
+    return [l for l in lines if "waits on the operator's press" in l]
+
+
+def press_line(n: int) -> str:
+    """The operator's-press finding the fixture's criterion `n` gives (DRE-7950)."""
+    return ppr.FINDING_PERSON_PRESS.format(
+        proof=fixture()["identifier"],
+        criterion=proof_record._cut(fixture_criteria()[n - 1], ppr.CUT))
+
+
 def listed_operations(text: str) -> list[str]:
     """The backticked operations of the bullets after the list's line."""
     lines = text.splitlines()
@@ -729,8 +740,11 @@ class TheSandboxPressRule(_Cli):
         lines = self.run_fixture(fixture())
         self.assertEqual([sandbox_line(n) for n in (2, 3, 4, 5)], sandbox_lines(lines))
         self.assertEqual([], reach_lines(lines))
-        self.assertEqual(4, len(lines), lines)
         self.assertIn("needs the CEO's press:", fixture_criteria()[4])
+        # DRE-7950: criteria 6 and 7 press outside the list, and the
+        # operator's press is refused for those too.
+        self.assertEqual([press_line(n) for n in (6, 7)], press_lines(lines))
+        self.assertEqual(6, len(lines), lines)
 
     def test_the_four_criteria_use_all_four_names(self):
         crit = fixture_criteria()
@@ -746,6 +760,10 @@ class TheSandboxPressRule(_Cli):
         self.assertEqual(1, len(found), lines)
         self.assertIn(proof_record._cut(fixture_criteria()[0], ppr.CUT), found[0])
         self.assertIn(what("console-sandbox-press"), found[0])
+        # DRE-7950: no proof-reader here, so every operator's-press row is
+        # refused as one, and the CEO's row (5) is not.
+        self.assertEqual([press_line(n) for n in (2, 3, 4, 6, 7)], press_lines(lines))
+        self.assertEqual(6, len(lines), lines)
 
     def test_the_caller_falls_back_to_the_flag(self):
         for labels in (["agent:ops"],
@@ -757,10 +775,13 @@ class TheSandboxPressRule(_Cli):
             lines = self.run_fixture(rec, "bureau-pipeline")
             self.assertEqual([], sandbox_lines(lines), labels)
             self.assertEqual(1, len(reach_lines(lines)), (labels, lines))
+            self.assertEqual([press_line(n) for n in (2, 3, 4, 6, 7)],
+                             press_lines(lines), labels)
             # The fallback holds one: the reverse.
             lines = self.run_fixture(rec, "agent-bureau")
             self.assertEqual(4, len(sandbox_lines(lines)), (labels, lines))
             self.assertEqual([], reach_lines(lines), labels)
+            self.assertEqual([press_line(n) for n in (6, 7)], press_lines(lines), labels)
 
     def test_the_owner_name_caller_is_read_as_its_slug(self):
         rec = fixture(labels=["agent:ops"])
@@ -772,7 +793,8 @@ class TheSandboxPressRule(_Cli):
         printed = self.run_fixture(fixture(), "bureau-pipeline",
                                    "--structural-file", structural)
         lines = [l for l in self.text("structural.txt").splitlines() if l]
-        self.assertEqual([sandbox_line(n) for n in (2, 3, 4, 5)], lines)
+        self.assertEqual([sandbox_line(n) for n in (2, 3, 4, 5)]
+                         + [press_line(n) for n in (6, 7)], lines)
         self.assertEqual(lines, printed)
 
         result = self.write("result.md", plan_critic.result_line(plan_critic.PASS) + "\n")
@@ -783,7 +805,7 @@ class TheSandboxPressRule(_Cli):
         verdict, _ = plan_critic.read_result(rewritten)
         self.assertEqual(plan_critic.SEND_BACK, verdict)
         found = plan_critic.all_findings(rewritten)
-        self.assertEqual(4, len(found), found)
+        self.assertEqual(6, len(found), found)
         for line in lines:
             self.assertIn(line, rewritten)
 
