@@ -325,9 +325,17 @@ only the stub can grant it — the same reason `self-merge-gate.yml` carries it
 for the conflict dispatch.
 
 A stub without it **degrades, it does not break**: the dispatch 403s, the run
-prints a `::warning::`, the PR says so and the card parks for a human — which
-is exactly what happened before this card existed. So the fleet loses the
-automatic second look until its stub is updated, and loses nothing else.
+prints a `::warning::` and the card parks for a human — which is exactly what
+happened before this card existed. The PR says so with a hold
+(`fix-attempt-disputed`, `state: escalated · next: operator`) naming
+`actions: write` and the stub file that grants it. The hold replaces the
+`state: dispatched` receipt posted before the dispatch, which is deleted once
+the hold is up, so no receipt is left promising a second look nobody will
+take (DRE-3576). A refused delete only prints a `::warning::`. The hold keeps
+the commit's `refuted-finding @<sha8>` key, so the review a person starts by
+moving the card back is that commit's one re-review and reads the evidence.
+So the fleet loses the automatic second look until its stub is updated, and
+loses nothing else.
 
 ### The `deliver-rescue` stub (DRE-3262)
 
