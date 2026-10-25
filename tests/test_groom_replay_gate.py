@@ -238,6 +238,48 @@ def test_reach_fails_open_with_a_reason_when_git_diff_fails(
     assert "git diff" in said and "failed open" in said
 
 
+@pytest.mark.parametrize("path", ["scripts/groomer.py", "scripts/groom_verify_agent.py"])
+def test_reach_is_true_when_a_verify_step_path_is_renamed_away(
+        path, repo, tmp_path, monkeypatch, capsys):
+    _change(repo, [path])
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "mv", path, path.replace(".py", "_old.py"))
+    _git(repo, "commit", "-q", "-m", "rename")
+    head = _git(repo, "rev-parse", "HEAD")
+    code, written, said = _reach(repo, base, head, _gate_set(tmp_path, ["DRE-1"]),
+                                 monkeypatch, capsys, tmp_path)
+    assert code == 0
+    assert written == {"reached": "true", "cases": "1"}
+    assert said.startswith(f"{TAG} reach true cards=1 — ")
+    assert path in said
+
+
+def _corrupt(tmp_path) -> Path:
+    path = tmp_path / "gate-set.json"
+    path.write_text("{not json", encoding="utf-8")
+    return path
+
+
+def _not_a_proposal(tmp_path) -> Path:
+    path = tmp_path / "gate-set.json"
+    path.write_text(json.dumps({"cases": []}), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize("gate_set", [
+    lambda tmp_path: tmp_path / "missing" / "gate-set.json", _corrupt, _not_a_proposal],
+    ids=["missing", "corrupt", "not-a-proposal"])
+def test_reach_fails_open_with_a_reason_when_the_gate_set_is_unreadable(
+        gate_set, repo, tmp_path, monkeypatch, capsys):
+    base, head = _change(repo, ["docs/groomer.md"])
+    code, written, said = _reach(repo, base, head, gate_set(tmp_path),
+                                 monkeypatch, capsys, tmp_path)
+    assert code == 0
+    assert written == {"reached": "true", "cases": "0"}
+    assert said.startswith(f"{TAG} reach true cards=0 — failed open: ")
+    assert "the gate set" in said
+
+
 def test_cases_counts_distinct_cards_in_the_gate_set(repo, tmp_path, monkeypatch, capsys):
     base, head = _change(repo, ["docs/groomer.md"])
     gate_set = _gate_set(tmp_path, ["DRE-1", "DRE-2", "DRE-3"])
