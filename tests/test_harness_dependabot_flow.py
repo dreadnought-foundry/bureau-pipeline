@@ -472,6 +472,8 @@ class FixtureSelfHealTest(unittest.TestCase):
         self.assertIn(f"[dependabot_flow] reopened fixture #{number}", logs)
         self.assertEqual(ctx.state["number"], number)
         self.assertEqual(ctx.state["head"], head)
+        self.assertIn(FIXTURE_LABEL, _label_names(gh.prs[number]))
+        self.assertEqual(gh.prs[number]["body"].splitlines()[0], BANNER)
 
     def test_reopened_fixture_carries_the_label_and_the_banner(self):
         gh = FakeGitHub()
