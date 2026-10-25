@@ -188,8 +188,13 @@ jobs:
     # search-speed refusal, up to `groom_lookups.SEARCH_WAIT_BUDGET_SECONDS`
     # (600 s) — 1,660 + 300 + 600 = 2,560 s, and the test reads all three.
     timeout-minutes: 45
+    # A REPLAY NEVER QUEUES WITH THE MORNING (DRE-7974). GitHub keeps one
+    # running and one pending run per group, and a newer pending run replaces
+    # the older one — so a replay gate's run waiting in `groomer` could
+    # displace the 06:00 PT proposal, or the morning a gate. A replay gets a
+    # group of its own run; every other run keeps `groomer` exactly.
     concurrency:
-      group: groomer
+      group: ${{ inputs.replay != '' && format('groomer-replay-{0}', github.run_id) || 'groomer' }}
       cancel-in-progress: false
     # The verify matrix's rows (DRE-4972): `[{"card": "DRE-N", "repository":
     # "<owner/repo>" | ""}, …]`, compacted onto one line. Empty on a drain.
@@ -984,8 +989,10 @@ jobs:
     if: ${{ always() && inputs.mode != 'drain' && needs.groom.result == 'success' }}
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # The groom job's rule (DRE-7974): a replay posts nothing, so it never
+    # waits in `groomer-post` behind, or in front of, the morning's post.
     concurrency:
-      group: groomer-post
+      group: ${{ inputs.replay != '' && format('groomer-post-replay-{0}', github.run_id) || 'groomer-post' }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
