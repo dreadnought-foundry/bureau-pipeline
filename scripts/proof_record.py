@@ -25,7 +25,13 @@ or read the hold. Both now do, through this module:
    cell, the operator's written decision as a Linear comment or a GitHub pull
    request comment (`row_accepted`). Only the link's shape is read; nothing
    here fetches it. An accepted row with no link is not met, and `unmet_row`
-   says so. `summary` renders the reading as both PROOF closes post it.
+   says so. A `Not met. wording-only:` row (`row_wording`, DRE-7949) is a
+   candidate, unmet on its own: it is accepted only by the record's critic —
+   the checker, a run separate from the one that took the reading — through
+   a `🔎 proof-row-accepted:` line in the verdict the caller binds to the
+   head (`reading`'s `verdict`), never one in the record, in any other
+   comment or in a row opening `ACCEPTED by checker`, and never for a row
+   not observed. `summary` renders the reading as both PROOF closes post it.
    `row_waiting` (DRE-6488) names the event a `Not observed. waiting for …`
    row waits on, which the proof dispatch holds on instead of a re-run, and
    `row_not_before` (DRE-7316) the time such a row is stamped with, which
@@ -130,6 +136,29 @@ CAUSE_OPENING = "Not observed. cause:"
 #: failed on something that cannot change (DRE-7740): every re-run reads the
 #: same result. It is not a cause — the run did observe the row as worded.
 HISTORY_OPENING = "Not met. history:"
+#: A result cell opening with this, then `seen “<quote from the record>” —
+#: differs: <what>`, is a CANDIDATE (DRE-7949): the mechanism was seen working
+#: and only the card's wording, a quote, a time, a count or the way it was
+#: observed differs. On its own it is unmet; the checker accepts it.
+WORDING_OPENING = "Not met. wording-only:"
+#: Opens a line of the critic's verdict comment accepting one candidate row:
+#: `“<criterion, cut to 70 as _cut renders it>” — seen: “<quote>” — differs:
+#: <what> — reason: <one sentence>`. The checker is the record's critic, a run
+#: separate from the one that took the reading: it posts as the qa-bot App and
+#: the proof run as the main bureau App, so the reading run can never write it.
+ACCEPTANCE_MARK = "🔎 proof-row-accepted:"
+#: A result cell opening with this is the reading run marking its own homework.
+CHECKER_OPENING = "accepted by checker"
+#: What a candidate is held for when its acceptance is the reading run's own —
+#: a row opening `CHECKER_OPENING`, or the line written into the record or
+#: into any comment but the bound critic verdict.
+OWN_ACCEPTANCE = ("the acceptance is the reading run's own — only the critic's "
+                  "verdict at the head accepts a wording-only row")
+#: What a `Not observed.` row the checker named is held for.
+NOT_SEEN = ("the checker accepts only a row seen working, and this one was "
+            "not observed")
+#: What a candidate is held for when the checker's seen-quote is not in it.
+UNQUOTED = "the checker's acceptance quotes text the record does not hold"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -159,6 +188,20 @@ _DECISION_LINK = re.compile(
     r"(?<![\w.-])(?:https?://)?(?:www\.)?"
     r"(?:linear\.app/[\w.-]+/issue/DRE-\d+/[^\s/#()<>\[\]|]+#comment-[\w-]+"
     r"|github\.com/[\w.-]+/[\w.-]+/pull/\d+#issuecomment-\d+)", re.IGNORECASE)
+#: The bound critic verdict's own comment (DRE-7949): a GitHub comment on a
+#: pull request, the whole URL. A verdict with no such link accepts nothing,
+#: so the close can always link what accepted a row.
+_VERDICT_LINK = re.compile(r"(?:https?://)?(?:www\.)?github\.com/[\w.-]+/[\w.-]+/pull/\d+"
+                           r"#issuecomment-\d+", re.IGNORECASE)
+_WORDING = re.compile(r"not met\.\s+wording-only:", re.IGNORECASE)
+_CHECKER = re.compile(rf"{CHECKER_OPENING}\b")
+_NOT_OBSERVED = re.compile(r"not observed\.", re.IGNORECASE)
+#: An acceptance line: `ACCEPTANCE_MARK` opening its line, then the four
+#: parts in order, each quote curly and each part non-empty.
+_ACCEPTANCE = re.compile(
+    rf"^[ \t]*{re.escape(ACCEPTANCE_MARK)}[ \t]*“(?P<criterion>.+?)”[ \t]+—[ \t]+seen:[ \t]*"
+    r"“(?P<seen>.+?)”[ \t]+—[ \t]+differs:[ \t]*\S.*?[ \t]+—[ \t]+reason:[ \t]*\S.*$",
+    re.MULTILINE)
 #: The record's own merge: the criterion leads with it — "Merged to main…",
 #: "The record is on main", "docs/<record>.md merged to main".
 _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
@@ -194,8 +237,12 @@ _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e
 
 #: `rows` is None when the record holds no criterion table; `met`, `unmet`
 #: and `accepted` are the (criterion, result) pairs that are not closing rows;
-#: `caused` the (criterion, cause word) pairs of the unmet rows that carry one.
-Reading = namedtuple("Reading", "rows met unmet accepted caused")
+#: `caused` the (criterion, cause word) pairs of the unmet rows that carry one;
+#: `checked` the (criterion, verdict comment URL) pairs of the accepted rows
+#: the checker accepted (DRE-7949), and `refused` the ((criterion, result),
+#: why) pairs of the unmet rows an acceptance named but could not accept.
+Reading = namedtuple("Reading", "rows met unmet accepted caused checked refused",
+                     defaults=((), ()))
 
 
 def _cells(line: str) -> list:
@@ -380,14 +427,86 @@ def _unknown_cause(result: str) -> str | None:
     return None if found.group(1) in proof_reach.causes() else found.group(1)
 
 
-def reading(text: str) -> Reading:
+def row_wording(result: str) -> bool:
+    """Does the result cell open `WORDING_OPENING` (any case, markup and
+    backticks stripped)? A candidate the checker may accept (DRE-7949)."""
+    return _WORDING.match(_plain(result).replace("`", "")) is not None
+
+
+def acceptances(body: str | None) -> list:
+    """The (criterion, seen-quote) pairs of every `ACCEPTANCE_MARK` line in
+    `body`, each opening its own line — whitespace folded, as `_cut` folds
+    it. Whose body it is, is the caller's to say."""
+    return [(" ".join(m.group("criterion").split()), " ".join(m.group("seen").split()))
+            for m in _ACCEPTANCE.finditer(body or "")]
+
+
+def _verdict_link(verdict) -> str | None:
+    """The bound verdict's comment URL, or None when there is no verdict or
+    its URL is not a GitHub pull request comment."""
+    if not isinstance(verdict, dict) or not isinstance(verdict.get("body"), str):
+        return None
+    url = verdict.get("url")
+    return url if isinstance(url, str) and _VERDICT_LINK.fullmatch(url) else None
+
+
+def _naming(lines: list, criterion: str) -> list:
+    """The seen-quotes of the acceptance lines whose criterion is this row's,
+    cut to 70 as `_cut` renders it."""
+    cut = _cut(criterion, 70)
+    return [seen for named, seen in lines if named == cut]
+
+
+def _refusal(criterion: str, result: str, checker: list, own: list) -> str | None:
+    """Why an unmet row an acceptance named was not accepted, or None."""
+    if _CHECKER.match(_plain(result).lower()):
+        return OWN_ACCEPTANCE
+    wording = row_wording(result)
+    if wording and _naming(own, criterion):
+        return OWN_ACCEPTANCE
+    if _NOT_OBSERVED.match(_plain(result)) and _naming(checker, criterion):
+        return NOT_SEEN
+    if wording and _naming(checker, criterion):
+        return UNQUOTED
+    return None
+
+
+def reading(text: str, verdict=None, others=()) -> Reading:
+    """The record's criterion table, judged.
+
+    `verdict` is the critic verdict the caller binds to the head — its
+    `{"body", "url"}`, qa-bot authored — or None (DRE-7949). A candidate row
+    (`row_wording`) is accepted only when that verdict carries an
+    `ACCEPTANCE_MARK` line whose criterion is the row's, cut to 70, and whose
+    seen-quote appears in the record's text. `others` are the bodies of every
+    other comment the caller read: an acceptance there, or written into the
+    record, or a row opening `CHECKER_OPENING`, accepts nothing and is named
+    the reading run's own (`refused`). A `Not observed.` row is never accepted.
+    The legacy `ACCEPTED_OPENING` row reads as it always has."""
     rows = criterion_rows(text)
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
-    accepted = [r for r in judged if row_accepted(r[1])]
-    unmet = [r for r in judged if not row_met(r[1]) and not row_accepted(r[1])]
+    url = _verdict_link(verdict)
+    checker = acceptances(verdict["body"]) if url else []
+    own = acceptances(text) + [a for body in others or () for a in acceptances(body)]
+    flat = " ".join((text or "").split())
+    met, accepted, unmet, checked, refused = [], [], [], [], []
+    for row in judged:
+        criterion, result = row
+        if row_met(result):
+            met.append(row)
+        elif row_accepted(result):
+            accepted.append(row)
+        elif row_wording(result) and any(seen in flat for seen in _naming(checker, criterion)):
+            accepted.append(row)
+            checked.append((criterion, url))
+        else:
+            unmet.append(row)
+            why = _refusal(criterion, result, checker, own)
+            if why is not None:
+                refused.append((row, why))
     caused = [(c, row_cause(r)) for c, r in unmet if row_cause(r)]
-    return Reading(rows=rows, met=[r for r in judged if row_met(r[1])], unmet=unmet,
-                   accepted=accepted, caused=caused)
+    return Reading(rows=rows, met=met, unmet=unmet, accepted=accepted, caused=caused,
+                   checked=checked, refused=refused)
 
 
 def all_unmet_caused(read: Reading) -> bool:
@@ -421,12 +540,16 @@ def unmet_row(criterion: str, result: str) -> str:
 
 def summary(read: Reading) -> str:
     """`<k> rows met`, and every accepted row by its criterion — what both
-    PROOF closes say of the table (DRE-6244)."""
+    PROOF closes say of the table (DRE-6244). A row the checker accepted is
+    named with the verdict comment that accepted it (DRE-7949)."""
     said = f"{len(read.met)} rows met"
-    if not read.accepted:
-        return said
-    named = "; ".join(f"“{_cut(c, 70)}”" for c, _ in read.accepted)
-    return f"{said}, {len(read.accepted)} {ACCEPTED_OPENING}: {named}"
+    parts = []
+    legacy = [c for c, r in read.accepted if row_accepted(r)]
+    if legacy:
+        named = "; ".join(f"“{_cut(c, 70)}”" for c in legacy)
+        parts.append(f"{len(legacy)} {ACCEPTED_OPENING}: {named}")
+    parts += [f"“{_cut(c, 70)}” accepted by the checker ({url})" for c, url in read.checked]
+    return f"{said}, " + "; ".join(parts) if parts else said
 
 
 # --------------------------------------------------------------------------- #
@@ -639,19 +762,22 @@ def fetch(repo: str, files, ref: str, gh=None) -> Record:
         return Record(path, None, f"{path} could not be read at {ref}: {_one_line(exc)}")
 
 
-def shortfall(record: Record) -> str | None:
+def shortfall(record: Record, verdict=None, others=()) -> str | None:
     """Why this record does not prove its card, or None when every judged row
     is met or accepted — the one judgment the merge gate and the PROOF close
-    make."""
+    make. `verdict` and `others` are `reading`'s: the bound critic verdict
+    and every other comment's body (DRE-7949)."""
     if record is None or record.text is None:
         detail = getattr(record, "detail", None) or "nothing was read"
         return f"no proof record could be read — {_one_line(detail)}"
     path = record.path or "the record"
-    read = reading(record.text)
+    read = reading(record.text, verdict, others)
     if read.rows is None:
         return f"{path} has no criterion table"
     if read.unmet:
-        rows = "; ".join(unmet_row(c, r) for c, r in read.unmet)
+        refused = dict(read.refused)
+        rows = "; ".join(f"{_row(c, r)} — {refused[(c, r)]}" if (c, r) in refused
+                         else unmet_row(c, r) for c, r in read.unmet)
         return f"{path} has {len(read.unmet)} row(s) not met: {rows}"
     if not read.met and not read.accepted:
         return f"{path} has a criterion table with no row but its closing step"
