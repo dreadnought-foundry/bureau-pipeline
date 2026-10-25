@@ -11,10 +11,12 @@ proposal a replay leaves behind.
 
   * `reach --base <sha> --head <sha> [--gate-set …]` — true when a path the
     diff changes is in `VERIFY_STEP_PATHS`, and true with the reason when
-    `git diff --name-only <base>...<head>` cannot be read (fail open, the CI
-    rule in `standards/engineering.md`). `cards` is the number of distinct
-    cards in the gate set. Under GitHub Actions it writes `reached=` and
-    `cases=` to `$GITHUB_OUTPUT`.
+    `git diff --name-only --no-renames <base>...<head>` or the gate set
+    cannot be read (fail open, the CI rule in `standards/engineering.md`).
+    A rename names its old path, so renaming a listed file away reaches.
+    `cards` is the number of distinct cards in the gate set, 0 when it cannot
+    be read. Under GitHub Actions it writes `reached=` and `cases=` to
+    `$GITHUB_OUTPUT`.
 
         groom-replay-gate: reach <true|false> cards=<n> — <why>
 
@@ -27,7 +29,9 @@ proposal a replay leaves behind.
 
   * `record-main --proposal <proposal-verified.json> --at <ISO> [--cases …]`
     — the same lines, and each case's `main` block rewritten from a replay of
-    `main`; never exits 1. It is the only writer of `main`.
+    `main`; never exits 1. It is the only writer of `main`. A card the replay
+    did not judge gets `passes: null` and its earlier block is not kept, as
+    the card says: its ratchet waits for the next replay that judges it.
 
 ## The ratchet
 
@@ -153,9 +157,11 @@ def unlisted_imports(root: Path = ROOT) -> list[str]:
 # --------------------------------------------------------------------------- #
 
 def changed_paths(base: str, head: str) -> list[str]:
-    """The paths `git diff --name-only <base>...<head>` names, in the current
-    directory's repository, or GateError with why they could not be read."""
-    argv = ["git", "diff", "--name-only", f"{base}...{head}"]
+    """The paths `git diff --name-only --no-renames <base>...<head>` names,
+    in the current directory's repository, or GateError with why they could
+    not be read. `--no-renames` names a rename's old path as a deletion,
+    where rename detection would name only the new one."""
+    argv = ["git", "diff", "--name-only", "--no-renames", f"{base}...{head}"]
     try:
         done = subprocess.run(argv, capture_output=True, text=True,  # nosec B603
                               timeout=120, check=False)
@@ -181,14 +187,23 @@ def gate_cases(path: Path) -> int:
 
 
 def reach(base: str, head: str, gate_set: Path) -> tuple[bool, int, str]:
-    """`(reached, cases, the line)`."""
-    cases = gate_cases(gate_set)
+    """`(reached, cases, the line)`. An unreadable gate set or diff is true,
+    and says why."""
+    unread = []
+    try:
+        cases = gate_cases(gate_set)
+    except GateError as e:
+        cases = 0
+        unread.append(str(e))
     try:
         changed = changed_paths(base, head)
     except GateError as e:
-        reached, why = True, f"failed open: {e}"
+        changed = []
+        unread.append(str(e))
+    matched = [p for p in changed if p in VERIFY_STEP_PATHS]
+    if unread:
+        reached, why = True, f"failed open: {'; '.join(unread)}"
     else:
-        matched = [p for p in changed if p in VERIFY_STEP_PATHS]
         reached, why = bool(matched), ", ".join(matched) or NO_PATH
     word = "true" if reached else "false"
     return reached, cases, f"{TAG} reach {word} cards={cases} — {why}"
