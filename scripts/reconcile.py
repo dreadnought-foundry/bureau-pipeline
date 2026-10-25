@@ -2707,7 +2707,9 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
     A `🔬 proof-waiting` hold is the operator's when its needs half — the text
     after ` — needs ` — OPENS `proof_cause_park.CAUSE_HOLD_OPENING` (DRE-6837's
     park), `proof_dispatch.OPERATOR_PRESS` (the dispatcher's `_waiting` over
-    a `waiting for the operator's press` row), or any other of
+    a `waiting for the operator's press` row, as it wrote one before
+    DRE-7951 — since then that hold waits for a time and nothing else, and a
+    standing one lifts itself 12 hours after its post), or any other of
     `proof_dispatch.OPERATOR_NEEDS` — the dispatcher's holds for an
     operator's reading once a dispatch or re-run budget is spent or a re-run
     answered nothing (DRE-7739). That tuple is the dispatcher's own
