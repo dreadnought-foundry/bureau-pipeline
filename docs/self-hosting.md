@@ -11,17 +11,23 @@ agent-bureau repo; the third clause added by DRE-2103).
   relay dispatches here, the `self-*` stubs (merged in PR #74) call this
   repo's own reusable workflows, and the normal build → PR → critic →
   merge-gate flow applies.
-- **The fleet consumes tagged releases.** v1 = `7ff9374` (the commit the
-  operator cut the annotated `v1` tag at). Product repos pin `@v1` with a
-  matching `pipeline_ref: v1`.
+- **The fleet consumed tagged releases at go-live; it rides `@stable`
+  now.** v1 = `7ff9374` (the commit the operator cut the annotated `v1` tag
+  at), and on go-live day the product repos were pinned to `@v1` with a
+  matching `pipeline_ref: v1`. Since DRE-2553 (2026-08-23) every consumer
+  stub rides `@stable` with `pipeline_ref: stable` — see the `stable` entry
+  below.
 - **agent-bureau and bureau-pipeline itself ride `@main`** — the canary
   channel. Every merge to main soaks on the canaries' real traffic before
   the fleet sees it.
-- **A merge to main here changes nothing live for the fleet — it only
-  stages the NEXT release.** The human gate is release promotion: the
-  operator cuts or re-points the `vN` tag at the soaked sha. Agents author;
-  a human promotes. **DRE-2551 did not change this** — it added a second,
-  automatic ref that nothing pins yet; see the last fact below.
+- **A merge to main here is not live for the fleet until the harness
+  proves it.** The fleet rides `stable`, which advances by itself to the
+  newest proven commit on `main` (DRE-2551, DRE-2553) — see the `stable`
+  entry below. Until 2026-08-23 the gate was a person: the operator cut or
+  re-pointed the `vN` tag at the soaked sha, and agents authored while a
+  human promoted. The proof `stable` waits for is that gate now. What stays
+  a human act is the `CHANNEL_HOLD` pause and the `vN` cut, which nothing
+  rides.
 - **The harness proves every release (DRE-2103).** The operator cuts `vN`
   only after a green integration-harness run against the candidate sha —
   the `pipeline_ref` input on `harness.yml` is how a candidate is tested
@@ -55,17 +61,19 @@ agent-bureau repo; the third clause added by DRE-2103).
   operator is involved in the ordinary case (there is a by-hand route since
   DRE-4111 — see below), the repository variable `CHANNEL_HOLD` pauses it
   (unset means run), and `release-gate.yml` fires on `stable` too, so an
-  automatic move is validated exactly like a hand-cut tag. Two limits are
+  automatic move is validated exactly like a hand-cut tag. Two facts are
   the point of this entry:
 
-  - **Nothing consumes it.** No product repo pins `@stable`; this change
-    re-pointed no stub. The fleet is on `vN` with a matching
-    `pipeline_ref: vN`, unchanged.
-  - **The `vN` flow stayed manual and operator-only** — cutting or
-    re-pointing the tag, then re-pointing the stubs, exactly as the README
-    describes. That is still the human gate between a merge here and
-    anything the fleet runs — the "agents author; a human promotes" fact
-    above holds in full.
+  - **The fleet pins `@stable`, and has since 2026-08-23 (DRE-2553).**
+    Every consumer stub rides `…@stable` with the paired
+    `pipeline_ref: stable`, required since DRE-2689. Which repo is on which
+    ref is computed by agent-bureau's `make check-channel-fleet`, never
+    counted here. This entry said the opposite until DRE-2709.
+  - **What stays manual is the pause and the `vN` cut.** `CHANNEL_HOLD` is
+    a person's call, and cutting or re-pointing a `vN` tag stays
+    operator-only, exactly as the README describes. No repo consumes a
+    `vN` tag, so a cut re-points nothing — the gate between a merge here
+    and anything the fleet runs is the proof `stable` waits for.
 
   - **A quiet channel says so.** The console's channel-health monitor
     (agent-bureau, `pipeline_channel_health`) raises the alarm when `stable`
@@ -84,14 +92,12 @@ agent-bureau repo; the third clause added by DRE-2103).
     channel writes nothing, and a Linear failure is one warning line that
     never fails or reverses the promotion.
 
-  So what `stable` buys today is the pre-tag question above, answered
-  continuously instead of by a hand-run dispatch: it is always the newest
-  proven sha on `main`, so once a candidate has soaked on the canary the
-  operator has its proof already in hand. Choosing WHICH sha to release,
-  and cutting it, stays theirs. Whether the
-  fleet ever pins `stable` directly — retiring the manual cut — is **not
-  decided by DRE-2551** and is not in its scope. Until that decision is
-  made and written here, `vN` is the only fleet-facing channel.
+  So `stable` is the fleet's channel: it is always the newest proven sha
+  on `main`, and a merge reaches the fleet when the channel advances to it
+  — not when the pull request merges, and not when anyone cuts a tag.
+  DRE-2551 left open whether the fleet would pin `stable` directly and
+  retire the manual cut. DRE-2553 decided it on 2026-08-23, and DRE-2689
+  made the paired `pipeline_ref: stable` required.
 - **Vendor actions ride the same channel, by SHA (DRE-3418).** Every
   third-party `uses:` in `.github/workflows` and `.github/actions` is pinned
   to a 40-char commit sha with its release in a trailing `# vX.Y.Z`
@@ -107,7 +113,7 @@ agent-bureau repo; the third clause added by DRE-2103).
   the fleet exactly the way our own code does: **Dependabot proposes, the
   harness proves, the channel carries.** The bump arrives as a PR the critic
   reviews and the harness exercises against the real action, and only then
-  does `stable` — and later a hand-cut `vN` — carry it. Before this, nothing
+  does `stable` carry it to the fleet. Before this, nothing
   stood in between: on 2026-09-08 the floating `claude-code-action@v1` tag
   moved to v1.0.218 and every Claude-running job in the fleet died for 72
   minutes (DRE-3416). A floating major also gave Dependabot nothing to bump,
