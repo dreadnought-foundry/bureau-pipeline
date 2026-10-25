@@ -682,6 +682,15 @@ and the next card in order takes its slot. The check walks the slots in order,
 so a spare with evidence that no slot reaches is recorded and **not** cancelled
 early — a card outside the morning's set waits its turn (DRE-4727).
 
+**The sweep (DRE-7969), off by default.** `groom_verify.check(…, sweep=True)`
+also reads every other card on offer — the `not-now`, `not-ready` and
+`rewrite` lists less the Planning list, the spares and the Cancel list
+(`sweep_window`) — the same three ways, after the spares. A swept card holds no
+slot: one with evidence goes to the Cancel list whatever the walk's slots did,
+which reverses "waits its turn" for the check's own evidence only, and one
+with an unread source is `unread` and never moved. The groomer does not turn
+it on yet.
+
 **A source it could not read is said, never passed off as clean.** Each card's
 record names the sources that were unread for it; a card with no evidence and
 an unread source is `unread`, never `clean`; a Planning card past the cards the
@@ -698,7 +707,8 @@ every card unread on every source.
 **The record.** `proposal["verification"]` carries, per card, `verdict`
 (`cancel`, `clean`, `unread`, `cancel-stands`, `cancel-rejected`,
 `cancel-kept`), `source` and `evidence`, beside `unread`, `moved_to_cancel`,
-`cancels_rejected` and `not_checked` — so the proof and the audit read them
+`cancels_rejected` and `not_checked`, and `swept` and `swept_to_cancel` (both
+`[]` with the sweep off) — so the proof and the audit read them
 rather than repeating the reads. The record is not in the id's digest; the
 lists it changed are.
 
