@@ -166,6 +166,7 @@ import critic_score  # noqa: E402
 import dead_run  # noqa: E402 — ONE source for the dead-run tags and cap
 import dedupe_dispatch  # noqa: E402 — ONE parse of the `bureau-card:` job name (DRE-4830)
 import dependabot_card  # noqa: E402 — ONE join between a dependabot PR and its card (DRE-3665)
+import dependency_cycle  # noqa: E402 — DRE-3539: the loop across the epic and card gates
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
@@ -1903,6 +1904,11 @@ _waiting_releases: dict[str, dict[str, str]] = {}
 _backlog_epics: set[str] = set()
 _returned_epics: set[str] = set()
 
+# The loops across the epic gate and the card gate the promotion pass found
+# (DRE-3539) — what `cycles_line()` counts for the full sweep's summary.
+# Replaced by each pass, reset with the sweep's board.
+_cycles: list = []
+
 # ── The read door's per-pass state (Stage 2 #6a) ────────────────────────────
 # Which cards this pass decided on the DOOR's facts rather than Linear's. Every
 # state write about one of them is from-lane-conditional (item 33), and every
@@ -1966,8 +1972,8 @@ def reset_sweep_cards() -> None:
     """Drop the sweep's board snapshot — and with it the pass's comment cache
     in linear_ops (DRE-3236), the sweep's open-PR listing (DRE-3435), its epic
     records (DRE-3642), blocker epics (DRE-6407), blocker cards and what the
-    strict gate released (DRE-7831) and waiting epics (DRE-6653),
-    its workflows listing
+    strict gate released (DRE-7831) and waiting epics (DRE-6653), the loops
+    the promotion pass found (DRE-3539), its workflows listing
     (DRE-4378) and its in-flight build runs (DRE-4830). Called once at the top
     of main()."""
     global _swept_cards, _pr_listing, _workflows_listing
@@ -1998,6 +2004,7 @@ def reset_sweep_cards() -> None:
     _waiting_releases.clear()
     _backlog_epics.clear()
     _returned_epics.clear()
+    _cycles.clear()
     _inverse_topup_refused.clear()
     linear_ops.reset_pass_cache()
 
@@ -8775,6 +8782,22 @@ def promote_ready(
         f"one-off(s), {by_hand} hand-built (nothing dispatched) "
         f"(WIP {active_count}+{spent}/{MAX_WIP})"
     )
+    # The loop neither gate sees alone (DRE-3539): an epic held behind a
+    # blocker epic that cannot finish because one of its own children is held
+    # behind the first epic's child. Each gate prints a correct "held by" line
+    # and nothing releases — DRE-3420/3421 held ten cards for 38 hours that
+    # way. Pure computation over the candidates and the epic records this pass
+    # already read (`epic_records` answers from its cache), so a pass with no
+    # loop spends nothing. The full sweep alone tells the epics, once per PT
+    # day; nothing here edits a relation — a person or the planner does.
+    _cycles[:] = dependency_cycle.find_cycles(candidates, epic_records(gated_epics))
+    for cycle in _cycles:
+        print(dependency_cycle.line(cycle))
+        if close_epics:
+            date = dependency_cycle.pacific_date(now)
+            for epic in dependency_cycle.epics(cycle):
+                _surface_once(epic, dependency_cycle.notice_tag(date),
+                              dependency_cycle.notice(cycle, date))
     # The stall clock (DRE-4210), the shape `_report_epic_prose_defect` runs on
     # an epic: a clocked refusal two hours old is named on the card ONCE, and
     # its ledger entry and ERROR line recur on every sweep it still stands —
@@ -8811,6 +8834,13 @@ def promote_ready(
             file=sys.stderr,
         )
     return promoted
+
+
+def cycles_line() -> str:
+    """The full sweep's count of the loops its promotion pass found (DRE-3539),
+    printed just before `sweep complete:` on every full sweep — `cycles: 0`
+    included, so a sweep that found no loop says so rather than nothing."""
+    return f"cycles: {len(_cycles)}"
 
 
 def close_finished_epics(epic_identifiers: set[str]) -> set[str]:
@@ -16021,6 +16051,7 @@ def main(
             + f" of {linear_ops.COMMENT_CAP} comments — move the receipts "
             "before the line (docs/epic-comment-cap.md)"
         )
+    print(cycles_line())
     print(f"sweep complete: {nudges} nudge(s)")
     _report_degraded()
     if _write_failures or _read_failures or _stale_defects:
