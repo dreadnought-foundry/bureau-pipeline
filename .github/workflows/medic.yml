@@ -1365,8 +1365,17 @@ jobs:
       # when `card_pr.py find` exits 0 and its state is exactly OPEN: `find`
       # counts MERGED too, and a merged pull request leaves the fix loop
       # nothing to work on. A lookup that fails warns with its exit code and
-      # passes no flag. `--planning-spent` only for `bad-card`, read off the
-      # card's whole thread in Linear (`dump-comments`, then `planning-spent`)
+      # passes no flag. `find` is given the failed run's head branch, so the
+      # exact `--head` lookup runs before the search index's `head:agent/DRE-N`,
+      # and the step logs what `find` printed (DRE-7925: on 2026-10-24 the
+      # search came back empty for DRE-7910's and DRE-7847's open pull
+      # requests, and both cards were asked of a person). An empty answer on a
+      # `pull_request` run on an `agent/*` head warns and passes the flag: a
+      # pull-request run always has a pull request, so the lookup missed it
+      # and the card is not put in front of a person on that ground. Any other
+      # run's empty answer still means no open pull request. Pinned by
+      # tests/test_medic_verdict_pr_lookup.py. `--planning-spent` only for
+      # `bad-card`, read off the card's whole thread in Linear (`dump-comments`, then `planning-spent`)
       # — not the snapshot, which sat in the agent's workspace. `true`,
       # `unknown` or a read that fails all pass it, so an unread thread asks a
       # person rather than sending the card round Planning again.
@@ -1409,6 +1418,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # env, not inline (DRE-1996): the branch name is agent-influenced text.
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           S=.bureau-pipeline/scripts
           CLASS=unreadable
@@ -1426,11 +1438,15 @@ jobs:
           fi
           if [ "$KIND" = card ] && [ -n "$TARGET" ]; then
             RC=0
-            FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO") || RC=$?
+            FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO" --branch "$HEAD_BRANCH") || RC=$?
             FIRST=${FOUND%%$'\n'*}
+            echo "card_pr.py find ${TARGET} --branch ${HEAD_BRANCH:-(none)} exited ${RC} and printed: ${FIRST:-(nothing)}"
             if [ "$RC" -ne 0 ]; then
               echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET}, so the medic decides as if the card has no open pull request."
             elif [ "${FIRST%%$'\t'*}" = OPEN ]; then
+              FLAGS+=(--has-open-pr)
+            elif [ -z "$FOUND" ] && [ "$TRIGGER_EVENT" = pull_request ] && [[ "$HEAD_BRANCH" == agent/* ]]; then
+              echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, but the failed run is a pull_request run on ${HEAD_BRANCH}, and a pull-request run always has a pull request, so the medic does not decide that the card has no open pull request."
               FLAGS+=(--has-open-pr)
             fi
             if [ "$CLASS" = bad-card ]; then
