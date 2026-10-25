@@ -221,6 +221,12 @@ P. PROOF RECORD (DRE-6141) — on a proof-record branch
    criterion table must be met, by the reader the hygiene lane and the PROOF
    close share (`proof_record.shortfall`); a row not met, no table, no
    judged row, no record found or a record unread is `hold`, naming why.
+   A `Not met. wording-only:` row counts as accepted only when the critic
+   verdict condition 2 bound carries a matching `🔎 proof-row-accepted:`
+   line (DRE-7949): the critic posts as the qa-bot and the proof run as the
+   main bureau App, so the run that took the reading cannot accept its own
+   row. The line anywhere else — another comment, the record itself — or a
+   row opening `ACCEPTED by checker` holds, named the reading run's own.
    Not `wait`, which posts nothing, and not `human`, which invites a person
    to merge an unproven record by hand. After 2 and 3, so the critic's own
    REQUEST_CHANGES still reads as the critic's hold (DRE-5931 re-runs on
@@ -722,6 +728,13 @@ def latest_verdict_comment(comments, qa_login: str, marker: str) -> Optional[str
     (b) opens with the marker on its first line. None if no such comment —
     forged, human, deleted-account, and quoting/prose comments are invisible,
     not merely non-approving."""
+    latest = latest_verdict_record(comments, qa_login, marker)
+    return None if latest is None else latest.get("body") or ""
+
+
+def latest_verdict_record(comments, qa_login: str, marker: str) -> Optional[dict]:
+    """The comment record `latest_verdict_comment` reads the body of — for
+    condition P, which also needs its `html_url` (DRE-7949)."""
     latest = None
     for c in comments:
         user = c.get("user") or {}
@@ -729,7 +742,7 @@ def latest_verdict_comment(comments, qa_login: str, marker: str) -> Optional[str
             continue
         if not opens_with_marker(c.get("body"), marker):
             continue
-        latest = c.get("body") or ""
+        latest = c
     return latest
 
 
@@ -1567,7 +1580,7 @@ def without_verdict_markers(text: str) -> str:
         text = stripped
 
 
-def evaluate_proof_record(head_branch, proof) -> Optional[Decision]:
+def evaluate_proof_record(head_branch, proof, verdict=None, others=()) -> Optional[Decision]:
     """Condition P (DRE-6141). None = proceed. `proof` is the record
     `proof_record.py gather` wrote, parsed (`read_payload`'s input), or None
     when the caller passed no record — which reproduces the pre-DRE-6141
@@ -1575,8 +1588,13 @@ def evaluate_proof_record(head_branch, proof) -> Optional[Decision]:
 
     On a proof-record branch the record must prove its card: every judged
     row of its criterion table met — or accepted by operator decision with
-    the decision linked, a link whose shape alone is read (DRE-6244) — by the
-    same reader the hygiene lane and the PROOF close judge it with. Anything else is a `hold` naming why —
+    the decision linked, a link whose shape alone is read (DRE-6244), or a
+    wording-only row the checker accepted (DRE-7949) — by the
+    same reader the hygiene lane and the PROOF close judge it with. `verdict`
+    is the critic verdict condition 2 bound to the head, `{"body", "url"}`,
+    and `others` the body of every comment not authored by the qa-bot: an
+    acceptance line counts only in the first, and one in the second is named
+    the reading run's own. Anything else is a `hold` naming why —
     a row not met, no criterion table, no judged row, no record found, a
     record that could not be read. Never a `wait`, which says nothing on the
     pull request, and never `human`, which invites a person to merge an
@@ -1595,7 +1613,7 @@ def evaluate_proof_record(head_branch, proof) -> Optional[Decision]:
         record = proof_record.Record(
             None, None, "the record was gathered as if this were not a "
             "proof-record branch")
-    why = proof_record.shortfall(record)
+    why = proof_record.shortfall(record, verdict, others)
     if why is None:
         return None
     why = " ".join(without_verdict_markers(why).split())
@@ -1747,9 +1765,8 @@ def _decide(
     # the carry can be reported wherever the decision lands.
     carried = []
 
-    critic_line = first_line(
-        latest_verdict_comment(comments, qa_login, CRITIC_MARKER)
-    )
+    critic = latest_verdict_record(comments, qa_login, CRITIC_MARKER)
+    critic_line = first_line(None if critic is None else critic.get("body"))
     blocked = evaluate_critic(
         critic_line, head_sha, head_content_id, pr_commit_shas
     )
@@ -1786,7 +1803,12 @@ def _decide(
 
     # Condition P (DRE-6141): the critic approved a proof record, but a
     # record whose rows were not all seen working proves nothing.
-    blocked = evaluate_proof_record(head_branch, proof)
+    # The critic's acceptance of a wording-only row is read only in the
+    # verdict condition 2 just bound (DRE-7949).
+    bound = {"body": critic.get("body") or "", "url": critic.get("html_url")}
+    others = [c.get("body") or "" for c in comments
+              if (c.get("user") or {}).get("login") != qa_login]
+    blocked = evaluate_proof_record(head_branch, proof, bound, others)
     if blocked:
         return _decided(blocked)
 
