@@ -732,13 +732,32 @@ def test_the_close_reads_each_epic_at_most_once_a_pass():
     """Two close passes in one sweep over an epic that stays open: one
     `_blocker_epic` read, and the next pass (after the reset) one more."""
     kids = _dre_7912_kids()
-    kids[0] = _in_motion_kid(BUILDS[0], "In Progress")
+    kids[0] = _in_motion_kid(BUILDS[0], "In Review")
     fake = BuiltOutLinear(kids)
     _close(fake, passes=2)
     assert fake.full_reads == [BUILT]
     reconcile.reset_sweep_cards()
     _close(fake)
     assert fake.full_reads == [BUILT, BUILT]
+
+
+@pytest.mark.parametrize("child", [
+    _in_motion_kid(BUILDS[0], lane_contract.DISPATCH_LANE),
+    _in_motion_kid("DRE-7922", lane_contract.DISPATCH_LANE,
+                   title="[EPIC] slice two", grandkids=1),
+])
+def test_a_child_in_the_dispatch_lane_keeps_the_epic_open_for_no_read(child):
+    """A card in the dispatch lane is a build in flight — a proof or a
+    person's card is never dispatched there — so the pass's record alone says
+    the epic is not built out, and the one-read-a-pass contract holds for
+    every epic mid-build (DRE-3642)."""
+    kids = _dre_7912_kids()
+    kids[0] = child
+    fake = BuiltOutLinear(kids)
+    closed, state, _, _ = _close(fake)
+    assert closed == set()
+    state.assert_not_called()
+    assert fake.full_reads == []
 
 
 def test_an_unreadable_full_read_skips_the_epic_out_loud(capsys):
