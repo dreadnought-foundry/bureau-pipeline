@@ -8869,7 +8869,8 @@ def _close_epic_if_finished(epic: str) -> bool:
     named on the receipt as follow-on work that carries on by itself. The
     pass's record carries only the children's states, so that case reads the
     epic once through `_blocker_epic`, cached for the pass, and only when its
-    children are not all closed and one is Done."""
+    children are not all closed, one is Done and none is in the dispatch
+    lane."""
     record = epic_records([epic]).get(epic)
     if record is None:
         # The same skip an unreadable children read has always taken: raised so
@@ -8912,11 +8913,17 @@ def _built_out_follow_on(epic: str, record: dict) -> str | None:
 
     Built out is `_not_built_out`'s answer, never a second definition: no
     `buildable()` child, no open child epic, the children page read to the
-    end. A state off the record that is not In Progress costs no read. A read
-    that fails raises, so the caller's guard says so and the next sweep tries
-    again (DRE-3148)."""
+    end. A state off the record that is not In Progress costs no read, and
+    nor does a child in the dispatch lane: a card there is a build in flight,
+    since a proof or a person's card is never dispatched, so the epic is not
+    built out and every epic mid-build keeps the pass at one read (DRE-3642).
+    A read that fails raises, so the caller's guard says so and the next
+    sweep tries again (DRE-3148)."""
     state = epic_cap._state(record)
     if state != epic_cap.IN_PROGRESS:
+        return None
+    if any(epic_cap._state(k) == lane_contract.DISPATCH_LANE
+           for k in epic_cap._children(record)):
         return None
     if _blocker_epic(epic) is None:
         raise LookupError(f"its children could not be read: {_blocker_epic_gaps.get(epic)}")
