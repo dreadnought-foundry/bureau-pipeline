@@ -572,6 +572,124 @@ def test_a_count_that_changed_adds_no_comment(fake, summary):
 
 
 # --------------------------------------------------------------------------
+# 6b. Linear's markdown escapes aside (DRE-7744).
+#
+# Linear stores a card's description as markdown and escapes it: DRE-7494's
+# description, read back, says `/home/runner/\_work/…` where the train wrote
+# `/home/runner/_work/…`. Its comments come back as written. On 2026-10-18
+# the lap at 2bc36122 (portico run 39106743803) compared the escaped line
+# with its own and commented "The reason changed" on a reason that differed
+# only by its commit id.
+# --------------------------------------------------------------------------
+
+#: The reason both of DRE-7494's laps share, around its commit and status words.
+_DRE_7494 = (
+    "deferred: portals at {sha} — the document half is unproven for at least "
+    "one account (engine: {engine}); dreadnought next: bash "
+    "/home/runner/{work}/portico/portico/infra/scripts/republish-app-doc.sh "
+    "portico. A document refused by name is republished once by hand from its "
+    "stored original (DRE-5296); one held because its rows did not survive is "
+    "cleared by a person, after looking, with the re-ingest tool's "
+    "`--clear-hold <docId>` (DRE-5297). No tag.")
+_COMPLETE = "everybite=complete dreadnought=complete-reingest-blocked"
+_CURRENT = "everybite=documents-current dreadnought=documents-unproven"
+#: DRE-7494's description as Linear returns it: the line at 96f691d7, escaped.
+DRE_7494_DESCRIPTION = (
+    "Deferred line: "
+    + _DRE_7494.format(sha="96f691d7", engine=_COMPLETE, work="\\_work")
+    + "\nCommit: 96f691d709bcedb3be1cec1c28438af56f925f22\n"
+    "Run: [https://github.com/dreadnought-foundry/portico/actions/runs/"
+    "39100946445](<https://github.com/dreadnought-foundry/portico/actions/"
+    "runs/39100946445>)\n\n"
+    "Read the reason, run the tool it names, and the next lap releases.\n\n"
+    "The release train closes this card itself on the next verified tag.")
+#: The lap at 2bc36122 (run 39106743803): the same reason, unescaped.
+DRE_7494_SAME = _DRE_7494.format(sha="2bc36122", engine=_COMPLETE, work="_work")
+#: The lap at 2bc36122 (run 39117685490): the status words changed.
+DRE_7494_CHANGED = _DRE_7494.format(sha="2bc36122", engine=_CURRENT, work="_work")
+
+
+def test_an_escaped_description_is_the_same_reason(fake, summary):
+    ident = fake.add(f"{PREFIX} — the document half is unproven",
+                     description=DRE_7494_DESCRIPTION)
+    lines = tagged(report(deferred(DRE_7494_SAME)))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+def test_changed_status_words_still_comment_on_an_escaped_description(
+        fake, summary):
+    ident = fake.add(f"{PREFIX} — the document half is unproven",
+                     description=DRE_7494_DESCRIPTION)
+    lines = tagged(report(deferred(DRE_7494_CHANGED)))
+    assert fake.comments and fake.comments[0][0] == ident
+    assert DRE_7494_CHANGED in fake.comments[0][1]
+    assert lines[-1] == f"release-deferred: card {ident} commented — the reason changed"
+
+
+# Linear escapes a description the way prosemirror-markdown does: `\`, `` ` ``,
+# `*`, `_`, `~`, `[` and `]` wherever they stand (an `_` between two word
+# characters is left alone), and `#`, `+`, `-`, `>` and a numbered list's `.`
+# only at the start of a line or a table cell. A survey of 1,000 descriptions
+# on 2026-10-20 found `~`, `*`, `[`, `]`, `_`, `#` and `.` escaped and nothing
+# else. The line-start escapes never reach a reason: the row it is read off
+# opens with `Deferred line: `. The seven a reason can carry are below.
+@pytest.mark.parametrize("raw,stored", [
+    ("bash /home/runner/_work/portico/x.sh", "bash /home/runner/\\_work/portico/x.sh"),
+    ("refused *.pdf uploads", "refused \\*.pdf uploads"),
+    ("the arm waited ~100 s", "the arm waited \\~100 s"),
+    ("psycopg[binary] missing", "psycopg\\[binary\\] missing"),
+    ("a lone ` in the name", "a lone \\` in the name"),
+    ("C:\\docs is not a path", "C:\\\\docs is not a path"),
+    ("see a\\_b path", "see a\\\\\\_b path"),
+], ids=["underscore", "asterisk", "tilde", "brackets", "backtick", "backslash",
+        "backslash-before-punctuation"])
+def test_each_character_linear_escapes_is_the_same_reason(raw, stored, fake,
+                                                         summary):
+    ident = fake.add(f"{PREFIX} — x",
+                     description=f"Deferred line: deferred: {stored}")
+    lines = tagged(report(deferred(f"deferred: {raw}")))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+def test_a_comment_carrying_the_reason_as_written_is_still_the_same_reason(
+        fake, summary):
+    # A comment is stored as written: the lap after a comment matches it.
+    ident = fake.add(f"{PREFIX} — the document half is unproven",
+                     description=DRE_7494_DESCRIPTION,
+                     comments=[f"The reason changed.\n\nDeferred line: "
+                               f"{DRE_7494_CHANGED}"])
+    lines = tagged(report(deferred(DRE_7494_CHANGED.replace("2bc36122",
+                                                            "5e4d3c2b"))))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+#: A reason with literal backslashes before punctuation and before a letter.
+_BACKSLASHED = "deferred: at {sha} see C:\\a\\_b\\[x] path"
+#: That reason at 96f691d7 as Linear stores a description: every `\`, `_`,
+#: `[` and `]` escaped.
+_BACKSLASHED_STORED = "deferred: at 96f691d7 see C:\\\\a\\\\\\_b\\\\\\[x\\] path"
+
+
+@pytest.mark.parametrize("where", ["description", "comment"])
+def test_a_backslash_before_punctuation_is_the_same_reason(where, fake,
+                                                           summary):
+    # The description comes back escaped, a comment as written: the next
+    # lap matches whichever the card recorded last.
+    comments = [] if where == "description" else [
+        "The reason changed.\n\nDeferred line: "
+        + _BACKSLASHED.format(sha="96f691d7")]
+    ident = fake.add(f"{PREFIX} — x",
+                     description=f"Deferred line: {_BACKSLASHED_STORED}",
+                     comments=comments)
+    lines = tagged(report(deferred(_BACKSLASHED.format(sha="2bc36122"))))
+    assert fake.writes() == []
+    assert lines[-1] == f"release-deferred: card {ident} already open — same reason"
+
+
+# --------------------------------------------------------------------------
 # 7. The next verified tag closes the card, wherever it sits.
 # --------------------------------------------------------------------------
 
@@ -687,3 +805,267 @@ def test_both_card_comments_are_declared_not_composed():
         assert [d["kind"] for d in rows] == ["not-an-act"], site.line
     assert [p for p in check_act_receipts.problems()
             if "release_deferral" in p] == []
+
+
+# --------------------------------------------------------------------------
+# 10. A lap that reads the surface current closes the card when its newest
+#     tag released the deferred commit (DRE-7900).
+#
+# DRE-7897's shape, 2026-10-24: the console deferred at d1f0476 and filed its
+# card; the CEO ran `make deploy-console`, which cut
+# `agent-bureau-console-v1.6.599` at a commit containing d1f0476 by hand; the
+# next lap read the console current, so no `Release console` job ran, and the
+# card sat in Green Light until the operator closed it.
+# --------------------------------------------------------------------------
+
+AGENT_BUREAU = "dreadnought-foundry/agent-bureau"
+CONSOLE_PREFIX = "agent-bureau: console release deferred"
+CONSOLE_TITLE = (f"{CONSOLE_PREFIX} — infra changed since "
+                 "agent-bureau-console-v1.6.598 — run make deploy-console")
+CONSOLE_LINE = ("deferred: infra changed since agent-bureau-console-v1.6.598 "
+                "— run make deploy-console")
+CONSOLE_RUN = "https://github.com/dreadnought-foundry/agent-bureau/actions/runs/40129148962"
+
+
+def _console(tmp_path):
+    """agent-bureau's console surface: tagged v1.6.598, then a commit `A`
+    under `infra/` — the one the deferral recorded — and a later commit `B`."""
+    repo = tmp_path / "agent-bureau"
+    for folder in ("console", "infra", ".github/bureau"):
+        (repo / folder).mkdir(parents=True)
+    (repo / "console" / "app.txt").write_text("v1\n")
+    (repo / "infra" / "stack.txt").write_text("v1\n")
+    (repo / "infra" / "deploy-console.sh").write_text("#!/usr/bin/env bash\n")
+    (repo / "infra" / "deploy-console.sh").chmod(0o755)
+    (repo / ".github" / "bureau" / "release.json").write_text(json.dumps({
+        "surfaces": {"console": {
+            "tag_series": ["agent-bureau-console-v*"],
+            "paths": ["console/", "infra/"],
+            "script": "infra/deploy-console.sh",
+            "rollback": "make rollback-console VERSION=<tag>",
+            "spacing_minutes": 0, "window": "always", "auto": True,
+            "identity": "console-release", "record": "tag",
+        }}}) + "\n")
+    _git(repo.parent, "init", "-q", "-b", "main", str(repo))
+    _git(repo, "config", "user.email", "train@example.com")
+    _git(repo, "config", "user.name", "Release Train")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "the console")
+    _tag(repo, "agent-bureau-console-v1.6.598", "2026-10-24T10:00:00-07:00")
+    return repo
+
+
+def _tag(repo, name, when="2026-10-24T14:42:00-07:00"):
+    """An annotated tag, dated: the newest tag is read by its date, and two
+    tags cut in the same second would sort either way."""
+    subprocess.run(["git", "-C", str(repo), "tag", "-a", name, "-m", name],
+                   check=True, capture_output=True,
+                   env={**os.environ, "GIT_COMMITTER_DATE": when})
+
+
+def _change(repo, path, text, message):
+    (repo / path).write_text(text)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _console_card(fake, commit, *, comments=()):
+    return fake.add(CONSOLE_TITLE, repo="agent-bureau",
+                    description=release_deferral.body(CONSOLE_LINE, commit,
+                                                      CONSOLE_RUN),
+                    comments=comments)
+
+
+def _plan_cli(repo, tmp_path, monkeypatch, capsys):
+    """One plan lap, the way the workflow's `Decide every surface` step runs
+    it, with `gh` faked so the decision record posts nowhere."""
+    binary = tmp_path / "bin"
+    binary.mkdir(exist_ok=True)
+    (binary / "gh").write_text(_GH_OK)
+    (binary / "gh").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{binary}:{os.environ['PATH']}")
+    monkeypatch.delenv(release_train.ENV_HOLD, raising=False)
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "github_output"))
+    monkeypatch.setattr(release_train, "_now",
+                        lambda: datetime(2026, 10, 24, 14, 42, tzinfo=release_train.PT))
+    code = release_train.main([
+        "--repo", AGENT_BUREAU, "--repo-root", str(repo),
+        "--file", str(repo / ".github" / "bureau" / "release.json"),
+        "plan", "--head", _git(repo, "rev-parse", "HEAD"),
+    ])
+    return code, capsys.readouterr().out.splitlines()
+
+
+CURRENT_RECEIPT = (f"release-train: no-op {AGENT_BUREAU} console — console reads "
+                   "current: nothing under console/, infra/ has changed since "
+                   "its newest tag")
+
+
+def test_a_hand_cut_tag_that_released_the_deferred_commit_closes_the_card(
+        tmp_path, monkeypatch, capsys, fake, summary):
+    """The replay: DRE-7897, closed by the lap that read the console current."""
+    repo = _console(tmp_path)
+    deferred_at = _change(repo, "infra/stack.txt", "v2\n", "A: infra changed")
+    _change(repo, "console/app.txt", "v2\n", "B: the hand release's commit")
+    _tag(repo, "agent-bureau-console-v1.6.599")
+    ident = _console_card(fake, deferred_at)
+
+    code, lines = _plan_cli(repo, tmp_path, monkeypatch, capsys)
+
+    assert code == 0
+    assert fake.comments == [(ident, "Released as agent-bureau-console-v1.6.599")]
+    assert fake.moves == [(ident, "Done")]
+    assert (f"release-deferred: card {ident} closed — Released as "
+            "agent-bureau-console-v1.6.599") in lines
+    assert warnings(lines) == []
+    # The receipt is what it was, and still the surface's last line.
+    assert lines[-1] == CURRENT_RECEIPT
+
+
+def test_a_current_lap_at_the_tag_the_deferral_named_leaves_the_card_open(
+        tmp_path, monkeypatch, capsys, fake, summary):
+    """Must not: the newest tag is still v1.6.598, whose commit does not
+    contain `A`. The lap reads current (nothing under the paths changed), and
+    the card stays open — no comment, no state write."""
+    repo = _console(tmp_path)
+    outside = _change(repo, "README.md", "notes\n", "A: outside the paths")
+    ident = _console_card(fake, outside)
+
+    code, lines = _plan_cli(repo, tmp_path, monkeypatch, capsys)
+
+    assert code == 0
+    assert lines[-1] == CURRENT_RECEIPT
+    assert fake.writes() == []
+    assert fake.card(ident)["state"] == "Green Light"
+    assert warnings(lines) == []
+    # The card was read, and the lap says why it stays.
+    assert tagged(lines) == [
+        f"release-deferred: open cards for agent-bureau console — {ident}",
+        f"release-deferred: card {ident} left open — "
+        f"agent-bureau-console-v1.6.598 does not contain {outside[:7]}",
+    ]
+
+
+def test_the_newest_commit_the_card_records_is_the_one_read(
+        tmp_path, monkeypatch, capsys, fake, summary):
+    """A later "The reason changed" comment carries a newer `Commit:`; the
+    tag contains the description's commit but not that one, so it stays open."""
+    repo = _console(tmp_path)
+    first = _change(repo, "infra/stack.txt", "v2\n", "A: infra changed")
+    _tag(repo, "agent-bureau-console-v1.6.599")
+    # A commit the tag does not contain, on a branch the head is not on.
+    _git(repo, "checkout", "-qb", "elsewhere")
+    later = _change(repo, "infra/stack.txt", "v3\n", "C: the newer deferral")
+    _git(repo, "checkout", "-q", "main")
+    ident = _console_card(fake, first, comments=[
+        f"The reason changed.\n\n{release_deferral._facts(CONSOLE_LINE, later, CONSOLE_RUN)}"])
+
+    code, lines = _plan_cli(repo, tmp_path, monkeypatch, capsys)
+
+    assert code == 0 and lines[-1] == CURRENT_RECEIPT
+    assert fake.writes() == []
+    assert fake.card(ident)["state"] == "Green Light"
+    assert (f"release-deferred: card {ident} left open — "
+            f"agent-bureau-console-v1.6.599 does not contain {later[:7]}") in lines
+
+
+def test_a_current_lap_with_no_open_card_writes_nothing(
+        tmp_path, monkeypatch, capsys, fake, summary):
+    repo = _console(tmp_path)
+    _change(repo, "infra/stack.txt", "v2\n", "A")
+    _tag(repo, "agent-bureau-console-v1.6.599")
+
+    code, lines = _plan_cli(repo, tmp_path, monkeypatch, capsys)
+
+    assert code == 0 and lines[-1] == CURRENT_RECEIPT
+    assert fake.writes() == []
+    # The one read the close path already makes, once for the one surface.
+    assert fake.calls == [("find_open_prefix", CONSOLE_PREFIX)]
+    assert warnings(lines) == []
+
+
+def _no_key(monkeypatch):
+    """The real `linear_ops`, inside Actions, with no key: a `KeyError`."""
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("LINEAR_API_KEY", raising=False)
+    monkeypatch.delenv(linear_ops.FALLBACK_ENV, raising=False)
+
+
+@pytest.mark.parametrize("failure", ["linear-error", "no-key"])
+def test_a_close_that_fails_leaves_the_plans_code_and_receipt(
+        failure, tmp_path, monkeypatch, capsys, summary):
+    if failure == "no-key":
+        _no_key(monkeypatch)
+        why = "LINEAR_API_KEY"
+    else:
+        monkeypatch.setattr(release_deferral, "linear_ops",
+                            FakeLinear(fail=linear_ops.LinearError("budget spent")))
+        why = "budget spent"
+    repo = _console(tmp_path)
+    _change(repo, "infra/stack.txt", "v2\n", "A")
+    _tag(repo, "agent-bureau-console-v1.6.599")
+
+    code, lines = _plan_cli(repo, tmp_path, monkeypatch, capsys)
+
+    assert code == 0
+    assert lines[-1] == CURRENT_RECEIPT
+    assert len(warnings(lines)) == 1
+    assert len(warnings(lines, "Release deferred card not closed")) == 1
+    not_closed = [l for l in lines
+                  if l.startswith("release-deferred: card not closed — ")]
+    assert len(not_closed) == 1 and why in not_closed[0]
+
+
+def test_a_lap_that_reads_no_surface_current_reads_no_card(fake, summary):
+    """Only a `current` lap looks: every other no-op is quiet, as before."""
+    for decision in (deferred("deferred: a reason — re-arm in 5 minutes",
+                              re_arm_at=datetime(2026, 10, 24, 15, tzinfo=release_train.PT)),
+                     release_train.Decision(release_train.NO_OP, "auto-false",
+                                            "console is `auto: false`")):
+        lines: list[str] = []
+        release_deferral.report_current(
+            decision, repo=AGENT_BUREAU, surface="console",
+            tag="agent-bureau-console-v1.6.599", released=lambda _sha: True,
+            warning=release_train._warning, out=lines.append)
+        assert lines == []
+    assert fake.calls == []
+
+
+def test_the_shared_current_code_is_the_trains():
+    reason = release_train.current_reason(
+        release_train.surface("console", {"tag_series": ["x-v*"]}))
+    decision = release_train.decide(
+        release_train.surface("console", {"tag_series": ["x-v*"],
+                                          "script": "s.sh", "auto": True}),
+        datetime(2026, 10, 24, 14, tzinfo=release_train.PT), None, "current",
+        True, None)
+    assert decision.code == release_deferral.CURRENT_CODE
+    assert decision.reason == reason
+
+
+def test_the_workflow_passes_the_linear_key_to_the_plan_step_and_nothing_else():
+    """On a `current` lap the `Release <surface>` job is skipped, so the plan
+    step is the only one that runs: it carries the key, and no other secret."""
+    import re
+    import yaml
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "release-train.yml")
+                         .read_text(encoding="utf-8"))
+    plan_job = doc["jobs"]["plan"]
+    decide = next(s for s in plan_job["steps"] if s.get("id") == "plan")
+    assert "release_train.py" in decide["run"] and " plan " in decide["run"]
+    assert decide["env"]["LINEAR_API_KEY"] == "${{ secrets.LINEAR_API_KEY }}"
+    named = set(re.findall(r"secrets\.([A-Z_]+)", yaml.dump(plan_job)))
+    assert named == {"LINEAR_API_KEY"}
+
+
+def test_the_card_and_the_document_say_a_hand_cut_tag_closes_it():
+    text = release_deferral.body(CONSOLE_LINE, SHA, CONSOLE_RUN)
+    assert "The release train closes this card itself on the next verified tag" in text
+    assert "a tag cut by hand" in text
+    rendered = release_train.render_markdown()
+    section = rendered.split("\n## A deferral is loud, and owes one card\n")[1]
+    section = " ".join(section.split("\n## ")[0].split())
+    assert "`current`" in section and "released the deferred commit" in section
+    on_disk = (ROOT / "docs" / "release-train.md").read_text(encoding="utf-8")
+    assert on_disk == release_train.render_markdown()

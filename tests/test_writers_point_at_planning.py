@@ -5,7 +5,7 @@ Three writers put a card straight into a lane the pipeline treats as ready work
 
   * `linear_ops._create_card`  — the one-off route's creator, `Backlog`
   * `linear_ops.cmd_create`    — the medic / red-main-repair seam, `Triage`
-  * `validate_card._bounce`    — the Todo gate's refusal, `Backlog`
+  * `validate_card._bounce`    — the start gate's refusal, `Backlog`
 
 One test per writer, and each NAMES the writer it pins, so reverting any single
 one of the three goes red on its own and the failure says which.
@@ -200,7 +200,7 @@ def _gate(fake) -> bool:
     return emitted["bounced"]
 
 
-class TheTodoGateRefusesToPlanning(unittest.TestCase):
+class TheStartGateRefusesToPlanning(unittest.TestCase):
     """WRITER 3 — `validate_card._bounce`, the one writer that knows for
     certain a card is invalid."""
 
@@ -208,7 +208,7 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
         # No repo line, no repo:/initiative: label, no project — the ONE case
         # the fix-first gate still refuses, because a repair would be a
         # wrong-repo guess.
-        return FakeLinear("Todo", "no repo line", ["agent:engineer"], project=None)
+        return FakeLinear("In Progress", "no repo line", ["agent:engineer"], project=None)
 
     def test_validate_card_bounce_puts_a_card_in_planning(self):
         fake = self._uninferable()
@@ -235,19 +235,19 @@ class TheTodoGateRefusesToPlanning(unittest.TestCase):
         )
 
 
-class TheTodoGateStillRepairsWhatItCanInfer(unittest.TestCase):
+class TheStartGateStillRepairsWhatItCanInfer(unittest.TestCase):
     """Operator decision D1 (2026-08-23), unchanged by this card: the gate
     infers and repairs what it can, and refuses only what it cannot. Bouncing
     what a lookup could fix trains people to route around the gate."""
 
     def test_a_missing_role_label_is_repaired_and_the_card_does_not_move(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="Fix it")
+        fake = FakeLinear("In Progress", "**Repo:** atlas", [], title="Fix it")
         self.assertFalse(_gate(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])
 
     def test_a_repo_inferred_from_the_initiative_label_is_repaired_not_refused(self):
-        fake = FakeLinear("Todo", "no repo line", ["agent:engineer", "initiative:bureau"])
+        fake = FakeLinear("In Progress", "no repo line", ["agent:engineer", "initiative:bureau"])
         self.assertFalse(_gate(fake))
         self.assertEqual(fake.states, [])
         self.assertTrue(

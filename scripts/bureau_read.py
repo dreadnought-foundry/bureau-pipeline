@@ -90,6 +90,11 @@ because the door serves relations when it is left out):
         "children_by_month", "unreadable", "unknown"}`. Read whatever the
         mode, with the board reads' token, max-age and refusal handling
         (`split_history()` says why).
+  GET /groom-removals[?since=<ISO-8601>]
+      — every stored groom decision (agent-bureau DRE-6660), outside the
+        envelope below: `{"schema", "read_at", "since", "reasons",
+        "decisions"}`. Read exactly as /split-history is
+        (`groom_removals()` says why).
 
 Envelope (HTTP 200 whenever the caller is authenticated):
   {"schema": "bureau-read/1", "verdict": "FRESH"|"UNKNOWN",
@@ -131,6 +136,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import datetime
 
 SCHEMA = "bureau-read/1"
 PATH_PREFIX = "/api/v1/pipeline"
@@ -1021,6 +1027,78 @@ def split_history(since: str) -> dict:
         if missing:
             ident = row.get("card") if isinstance(row, dict) else None
             raise _malformed(f"/split-history: {ident or 'a row'} lacks "
+                             f"{', '.join(missing[:5])}")
+    _state["served"] += 1
+    return answer
+
+
+# ── The groom decisions (DRE-7821) ──────────────────────────────────────────
+#: `GET /groom-removals[?since=<ISO-8601>]` — the console's record of every
+#: groom decision the CEO made on a proposal (agent-bureau DRE-6660).
+GROOM_REMOVALS_PATH = "/groom-removals"
+#: An hour, as the split history: the record changes when the CEO answers a
+#: proposal, once a morning at most.
+GROOM_REMOVALS_MAX_AGE = 3600
+#: Every key of one served decision — DRE-6660's response, exactly.
+GROOM_REMOVAL_FIELDS = (
+    "id", "recorded_at", "standing_card", "proposal_id", "card", "decision",
+    "reason", "hold_until_card", "hold_until_date", "actor_name", "comment",
+)
+#: The one key a decision must never carry: the door serves the CEO's name,
+#: never his login.
+_GROOM_REMOVAL_REFUSED = "actor_login"
+
+
+def _instant(value) -> bool:
+    """True for an ISO-8601 date and time with an offset or `Z`."""
+    if not isinstance(value, str) or "T" not in value:
+        return False
+    text = value.strip()
+    if text.endswith(("Z", "z")):
+        text = text[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def groom_removals(since: str | None = None) -> dict:
+    """Every stored groom decision, or those recorded since `since`, as the
+    door serves them — the whole answer, or ReadUnknown. Never part of one.
+
+    Read exactly as `split_history` is: the board reads' token,
+    `X-Bureau-Max-Age` and refusal handling, one failure and the door is not
+    asked again this run, asked whatever `BUREAU_READ` says (this record has
+    no Linear copy behind it), and the answer outside the lane envelope. A
+    missing `BUREAU_READ_URL` or `id-token: write` is ReadUnknown before any
+    request, and its reason says which. `decision` is passed through unread.
+    """
+    if since is not None and not _instant(since):
+        raise ValueError(f"bureau_read.groom_removals: since must be an ISO-8601 "
+                         f"instant with an offset or Z, got {since!r}")
+    query = {"since": since.strip()} if since is not None else {}
+    answer = _get(GROOM_REMOVALS_PATH, query,
+                  max_age=GROOM_REMOVALS_MAX_AGE, any_mode=True)
+    if not isinstance(answer, dict) or answer.get("schema") != SCHEMA:
+        raise _malformed(f"/groom-removals: schema is not {SCHEMA!r}")
+    for key in ("reasons", "decisions"):
+        if not isinstance(answer.get(key), list):
+            raise _malformed(f"/groom-removals: {key} is not a list")
+    for reason in answer["reasons"]:
+        if not (isinstance(reason, dict) and isinstance(reason.get("key"), str)
+                and isinstance(reason.get("label"), str)):
+            raise _malformed("/groom-removals: a reason is not {key, label} strings")
+    for row in answer["decisions"]:
+        if not isinstance(row, dict):
+            raise _malformed("/groom-removals: a decision is not an object")
+        ident = row.get("card") if isinstance(row.get("card"), str) else None
+        if _GROOM_REMOVAL_REFUSED in row:
+            raise _malformed(f"/groom-removals: {ident or 'a decision'} carries "
+                             f"{_GROOM_REMOVAL_REFUSED}")
+        missing = [f for f in GROOM_REMOVAL_FIELDS if f not in row]
+        if missing:
+            raise _malformed(f"/groom-removals: {ident or 'a decision'} lacks "
                              f"{', '.join(missing[:5])}")
     _state["served"] += 1
     return answer

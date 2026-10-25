@@ -355,6 +355,54 @@ class Receipts(unittest.TestCase):
                                   "live yet", 12)])
         self.assertEqual(got.receipts, [])
 
+    def test_a_re_armed_receipt_is_read_and_anchors_the_run(self):
+        """DRE-7740: `re-armed` is the fourth count phrase. It is read beside
+        the other three, anchors the run state, and spends neither budget."""
+        for reason in ("re-run after DRE-7639 shipped",
+                       "re-run after DRE-7639, DRE-7640 shipped",
+                       "re-run after the 🔬 proof-observed of 2026-10-20 09:00 PT"):
+            body = (f"🔬 proof-run: dispatched a proof run at 2026-10-20 10:30 PT"
+                    f" — {reason} (re-armed)")
+            self.assertEqual(proof_run_state.receipt(body), proof_run_state.Receipt(
+                reason, "re-armed", "2026-10-20 10:30 PT"))
+        read = Reads({RUN_PATH: run_answer("in_progress")})
+        got = read_state([
+            receipt(600), attempt(590), heartbeat(5, 500, "PR opened"),
+            receipt(60, reason="re-run after DRE-7639 shipped", count="re-armed"),
+            attempt(55)], read)
+        self.assertEqual(got.state, "running")
+        self.assertEqual(got.dispatches, 1)
+        self.assertEqual(got.receipts[-1].count, "re-armed")
+        self.assertFalse(got.receipts[-1].count.startswith("re-run"))
+
+    def test_a_re_check_receipt_is_read_and_anchors_the_run(self):
+        """DRE-7951: `re-check` is the fifth count phrase — the dispatcher's
+        own re-check of waiting rows nobody stamped. It anchors the run state
+        and spends neither budget."""
+        reason = "re-check of the waiting rows at 3a1671b"
+        body = (f"🔬 proof-run: dispatched a proof run at 2026-10-11 07:22 PT"
+                f" — {reason} (re-check)")
+        self.assertEqual(proof_run_state.receipt(body), proof_run_state.Receipt(
+            reason, "re-check", "2026-10-11 07:22 PT"))
+        read = Reads({RUN_PATH: run_answer("in_progress")})
+        got = read_state([
+            receipt(600), attempt(590), heartbeat(5, 500, "PR opened"),
+            receipt(60, reason=reason, count="re-check"), attempt(55)], read)
+        self.assertEqual(got.state, "running")
+        self.assertEqual(got.dispatches, 1)
+        self.assertEqual(got.receipts[-1].count, "re-check")
+        self.assertFalse(got.receipts[-1].count.startswith("re-run"))
+
+    def test_a_re_check_count_with_more_after_it_is_not_a_receipt(self):
+        self.assertIsNone(proof_run_state.receipt(
+            "🔬 proof-run: dispatched a proof run at 10:30 PT — re-check of the "
+            "waiting rows at 3a1671b (re-check 1 of 2)"))
+
+    def test_a_re_armed_count_with_more_after_it_is_not_a_receipt(self):
+        self.assertIsNone(proof_run_state.receipt(
+            "🔬 proof-run: dispatched a proof run at 10:30 PT — re-run after "
+            "DRE-7639 shipped (re-armed 1 of 2)"))
+
 
 class Cli(unittest.TestCase):
 

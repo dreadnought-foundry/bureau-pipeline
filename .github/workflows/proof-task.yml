@@ -388,6 +388,9 @@ jobs:
             request. A row that needs the CEO's or the operator's press, and a
             cause row, is written in the record as the brief says and never
             asked.
+          - Make no sandbox press: the real run beside you makes them, and a
+            second run would file a second Intake card. Your \`Sandbox press:\`
+            rows read \`Not observed. cause: out-of-reach — a shadow run makes no sandbox press\`.
           - Read Linear only through \`python3 .bureau-pipeline/scripts/linear_ops.py\`
             and \`python3 .bureau-pipeline/scripts/spoken_thread.py\`, within
             PROOF_LINEAR_REQUESTS. Never send a request to Linear any other way:
@@ -1093,8 +1096,10 @@ jobs:
                check it out, merge origin/${{ github.event.repository.default_branch || 'main' }}
                into it, and amend the record in a new commit — never restart
                it. Otherwise create it off ${{ github.event.repository.default_branch || 'main' }}.
-            2. Observe every acceptance criterion as the read-only identities
-               (`⏳ 2/5 observing`). Write the record at the path the card's
+            2. Observe every acceptance criterion as the read-only identities —
+               the one exception is the sandbox presses briefs/proof.md names,
+               which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
@@ -1102,14 +1107,27 @@ jobs:
             3. Push the branch with GH_TOKEN and open the pull request with
                `gh pr create`, titled `PROOF record: <card title>`, its body as
                the brief says — only if none is open for the branch. Post
-               `⏳ 5/5 PR opened`, and again on every amended push.
+               `⏳ 5/5 PR opened`, and again on every amended push. The workflow
+               rebuilds the body from the record after every push; never edit it
+               yourself.
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
-               `Not observed. needs the CEO's press: <the press>`. A press on
-               the sandbox project, or one the card's words say the operator may
-               make under the operator's standing permission of 2026-10-07, is
-               the operator's row instead, with no escalation file:
+               `Not observed. needs the CEO's press: <the press>`. A criterion
+               the card writes opening `Sandbox press:` is your own step, on the
+               sandbox project `agent-bureau-demo`: make it through agent-bureau's
+               `scripts/console_proof_reader.py press`, list the ids you made in
+               the record, and close or list them as briefs/proof.md says. A run
+               whose checkout holds no `scripts/console_proof_reader.py` (any repo
+               but agent-bureau today) makes no press and writes the row as the
+               console proof-reader bullet under Identities in briefs/proof.md
+               says, `Not observed. cause: out-of-reach — …`. A press the live
+               console refuses is written as the operator's row with the console's
+               reason, as briefs/proof.md's "When the console is not ready" says.
+               Every other press the card's words give the operator — one under
+               the operator's standing permission of 2026-10-07, or a sandbox
+               press not on the standard's list — is the operator's row, with no
+               escalation file:
                `Not observed. waiting for the operator's press: <the press>`.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
@@ -1327,8 +1345,10 @@ jobs:
                check it out, merge origin/${{ github.event.repository.default_branch || 'main' }}
                into it, and amend the record in a new commit — never restart
                it. Otherwise create it off ${{ github.event.repository.default_branch || 'main' }}.
-            2. Observe every acceptance criterion as the read-only identities
-               (`⏳ 2/5 observing`). Write the record at the path the card's
+            2. Observe every acceptance criterion as the read-only identities —
+               the one exception is the sandbox presses briefs/proof.md names,
+               which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
@@ -1336,14 +1356,27 @@ jobs:
             3. Push the branch with GH_TOKEN and open the pull request with
                `gh pr create`, titled `PROOF record: <card title>`, its body as
                the brief says — only if none is open for the branch. Post
-               `⏳ 5/5 PR opened`, and again on every amended push.
+               `⏳ 5/5 PR opened`, and again on every amended push. The workflow
+               rebuilds the body from the record after every push; never edit it
+               yourself.
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
-               `Not observed. needs the CEO's press: <the press>`. A press on
-               the sandbox project, or one the card's words say the operator may
-               make under the operator's standing permission of 2026-10-07, is
-               the operator's row instead, with no escalation file:
+               `Not observed. needs the CEO's press: <the press>`. A criterion
+               the card writes opening `Sandbox press:` is your own step, on the
+               sandbox project `agent-bureau-demo`: make it through agent-bureau's
+               `scripts/console_proof_reader.py press`, list the ids you made in
+               the record, and close or list them as briefs/proof.md says. A run
+               whose checkout holds no `scripts/console_proof_reader.py` (any repo
+               but agent-bureau today) makes no press and writes the row as the
+               console proof-reader bullet under Identities in briefs/proof.md
+               says, `Not observed. cause: out-of-reach — …`. A press the live
+               console refuses is written as the operator's row with the console's
+               reason, as briefs/proof.md's "When the console is not ready" says.
+               Every other press the card's words give the operator — one under
+               the operator's standing permission of 2026-10-07, or a sandbox
+               press not on the standard's list — is the operator's row, with no
+               escalation file:
                `Not observed. waiting for the operator's press: <the press>`.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
@@ -1559,8 +1592,10 @@ jobs:
                check it out, merge origin/${{ github.event.repository.default_branch || 'main' }}
                into it, and amend the record in a new commit — never restart
                it. Otherwise create it off ${{ github.event.repository.default_branch || 'main' }}.
-            2. Observe every acceptance criterion as the read-only identities
-               (`⏳ 2/5 observing`). Write the record at the path the card's
+            2. Observe every acceptance criterion as the read-only identities —
+               the one exception is the sandbox presses briefs/proof.md names,
+               which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
@@ -1568,14 +1603,27 @@ jobs:
             3. Push the branch with GH_TOKEN and open the pull request with
                `gh pr create`, titled `PROOF record: <card title>`, its body as
                the brief says — only if none is open for the branch. Post
-               `⏳ 5/5 PR opened`, and again on every amended push.
+               `⏳ 5/5 PR opened`, and again on every amended push. The workflow
+               rebuilds the body from the record after every push; never edit it
+               yourself.
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
-               `Not observed. needs the CEO's press: <the press>`. A press on
-               the sandbox project, or one the card's words say the operator may
-               make under the operator's standing permission of 2026-10-07, is
-               the operator's row instead, with no escalation file:
+               `Not observed. needs the CEO's press: <the press>`. A criterion
+               the card writes opening `Sandbox press:` is your own step, on the
+               sandbox project `agent-bureau-demo`: make it through agent-bureau's
+               `scripts/console_proof_reader.py press`, list the ids you made in
+               the record, and close or list them as briefs/proof.md says. A run
+               whose checkout holds no `scripts/console_proof_reader.py` (any repo
+               but agent-bureau today) makes no press and writes the row as the
+               console proof-reader bullet under Identities in briefs/proof.md
+               says, `Not observed. cause: out-of-reach — …`. A press the live
+               console refuses is written as the operator's row with the console's
+               reason, as briefs/proof.md's "When the console is not ready" says.
+               Every other press the card's words give the operator — one under
+               the operator's standing permission of 2026-10-07, or a sandbox
+               press not on the standard's list — is the operator's row, with no
+               escalation file:
                `Not observed. waiting for the operator's press: <the press>`.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
@@ -1970,6 +2018,35 @@ jobs:
           path: ${{ steps.rescue.outputs.patch }}
           if-no-files-found: warn
           retention-days: 30
+
+      # THE BODY IS THE RECORD'S (DRE-7813). A resumed run amends the record
+      # and pushes, and opens no second pull request, so the body the first
+      # run wrote went stale: on agent-bureau #3589 (DRE-6663, 2026-10-23) the
+      # critic sent a PASS record back four rounds running on "The PR body is
+      # stale and contradicts the record". This step rebuilds the body from
+      # the record at the pull request's head — `Proof record for <CARD>`,
+      # `What's new: none`, the card URL, the record's status line and its
+      # criterion table — on every run, first or resumed, and the model never
+      # edits it (briefs/proof.md, "The pull request").
+      #
+      # After the push rescue, so a branch it delivered is read too, and
+      # before the result step. No `continue-on-error`: a body that could not
+      # be rebuilt turns the run red rather than passing silently. A run with
+      # no open record pull request has no body to keep and exits 0.
+      #
+      # Never in a shadow (DRE-7286): it opens no pull request.
+      - name: Refresh the record pull request's body
+        if: always() && !inputs.shadow
+        env:
+          # The rescue's fresh mint when there is one: the worker token is an
+          # hour old by now on a long run (DRE-3043).
+          GH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          CARD_URL: ${{ github.event.client_payload.url }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 .bureau-pipeline/scripts/proof_pr_body.py refresh \
+            --repo "$REPO" --card "$CARD" --card-url "$CARD_URL"
 
       # ---- THE RESULT, AND THE PARK (DRE-5924, DRE-5925) ----
       # Written fresh for the proof run: agent-task.yml's report script reads

@@ -25,7 +25,8 @@ WHAT IS UNDER TEST:
      one-off wearing the label is sent to the planner, whose guard hands it
      back as one build. Neither goes to Planning; each gets one
      `agent-execute`.
-  4. THE CONFIG NAMES NO `Todo` outside Todo's own lane entry.
+  4. THE CONFIG NAMES NO `Todo` outside Todo's own lane entry — and since
+     that entry left the contract (DRE-7660), nowhere.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_build_starts_in_progress.py -v
 """
@@ -98,7 +99,7 @@ _Board = promo._Board
 class TestTheShippedRoute:
     def test_the_contract_and_vocabulary_ship_the_flip(self):
         assert lane_contract.START_LANE == "In Progress"
-        assert lane_contract.START_LANES == ("In Progress", "Todo")
+        assert lane_contract.START_LANES == ("In Progress",)  # DRE-7660
         assert routing_verdict.destination("FLEET") == "In Progress"
         assert routing_verdict.BUILD_LANE == lane_contract.DISPATCH_LANE
         assert routing_verdict.sweep_lanes() == ("In Progress", "Hand-work")
@@ -295,7 +296,8 @@ class TestTheGapBeforeTheNewRelayIsLive:
 
 
 # --------------------------------------------------------------------------
-# 4: the four config files name no `Todo` outside Todo's own lane entry
+# 4: the four config files name no `Todo` outside Todo's own lane entry,
+#    which left the contract with the board's state (DRE-7660)
 # --------------------------------------------------------------------------
 CONFIGS = ("lane-contract.json", "routing-verdicts.json", "holds.json", "pipeline-acts.json")
 # Assembled, so this file does not name the lane where a repo-wide scan reads.
@@ -334,7 +336,7 @@ def test_no_string_names_the_lane_outside_its_own_entry(name):
     doc = json.loads((ROOT / "config" / name).read_text(encoding="utf-8"))
     own = None
     if name == "lane-contract.json":
-        own = next(i for i, e in enumerate(doc["lanes"]) if e["name"] == LANE)
+        own = next((i for i, e in enumerate(doc["lanes"]) if e["name"] == LANE), None)
     found = [
         "/".join(map(str, path)) for path, text in _strings(doc)
         if WORD.search(text)
@@ -345,13 +347,14 @@ def test_no_string_names_the_lane_outside_its_own_entry(name):
 
 
 def test_the_scan_sees_the_lane_entry_it_exempts():
-    """Guard the guard: Todo's own entry still names it, so the exemption is
-    what lets that entry through — not a scan that reads nothing."""
+    """Guard the guard: Todo's own entry left the contract (DRE-7660), so the
+    exemption lets nothing through — and the scan still reads a string that
+    names the lane, so its green is not a scan that reads nothing."""
     doc = lane_contract.load()
-    own = next(e for e in doc["lanes"] if e["name"] == LANE)
-    assert any(WORD.search(text) for _, text in _strings(own))
-    assert own["replaced_by"] == "In Progress"
-    assert own["status"] == "retiring"  # DRE-7129
+    assert not any(e["name"] == LANE for e in doc["lanes"])
+    doc["lanes"][0]["reason"] = f"a card sat in {LANE}"
+    assert ("lanes", 0, "reason") in [
+        path for path, text in _strings(doc) if WORD.search(text)]
 
 
 if __name__ == "__main__":

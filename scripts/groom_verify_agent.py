@@ -16,10 +16,12 @@ and answers `still-needed`, `partly-solved`, `done-elsewhere`, `obsolete` or
 `target/`, a Done card with its merged pull request from the row's
 `matched_work`, or a fact from the row's `routing` — the last two checked
 against what the runner handed the agent. A Cancel of a card with children
-counts only a Done card not under it, or a routing fact, and a Cancel on a
+counts only a Done card not under it, or a routing fact, a Cancel of a
+`no-code` card counts only a Done `no-code` card (DRE-7485), and a Cancel on a
 pull request that did part of the card is `partly-solved`. This file never
 calls a model: the vendor action in the workflow does, and the four
-subcommands here are everything around it.
+subcommands here are everything around it — with a fifth, `exclusion`, that
+says why one card would be excluded and writes nothing (DRE-7783).
 
   * `targets` — in the groom job, which holds the Linear key: every card to
     verify, its title, body and board context — age, labels, parent and its
@@ -32,8 +34,10 @@ subcommands here are everything around it.
     judgement (DRE-5306): a parent epic with an open child, a `hand-built`
     card (or one carrying any hand mark the routing vocabulary declares,
     DRE-6226), a card moved into Intake from another lane in the last
-    `EXCLUDE_DAYS` days, a card whose board context could not be read, and
-    (DRE-5746) a card whose repo is not a key of `config/repo-map.json`.
+    `EXCLUDE_DAYS` days, a card whose board context could not be read,
+    (DRE-5746) a card whose repo is not a key of `config/repo-map.json`, and
+    (DRE-7783) a sandbox fixture filed by a proof run (DRE-7772) — titled
+    `SANDBOX FIXTURE (proof DRE-…` and labeled `repo:agent-bureau-demo`.
     An excluded card gets no agent, its verdict is `excluded`, and `apply`
     drops it from the batch and leaves it where it is on the board. And each
     card's `lookups` block, through `groom_lookups.cards` (DRE-5458): the
@@ -62,6 +66,9 @@ subcommands here are everything around it.
     failed for every card that names a file, or the pre-post check searched
     no owner for merged pull requests, and `not_posted_why` says so —
     `groomer.py post` reads it and posts no proposal.
+  * `exclusion --card <ID>` — read-only, with the Linear key: the card read
+    as `targets` reads it, and one line, `exclusion: <ID> <reason>` or
+    `exclusion: <ID> none`. A proof quotes it for its sandbox fixture.
 
 **A run that dies lands as `unverified`, never as `still-needed`.** Anything
 but a well-formed answer with the proof the brief requires, from a step that
@@ -142,11 +149,15 @@ NO_ARTIFACT = "no verdict artifact"
 #: A Cancel of a card with children left with no anchored item once code
 #: items and items under the card are set aside (DRE-7240).
 CHILD_PROOF = "proof belongs to a child"
+#: A Cancel of a `no-code` card left with no Done `no-code` card counted
+#: (DRE-7485): a merged pull request, a routing fact or a `file:line` quote
+#: shows that code landed or jobs ran, not that the operator work was done.
+NO_CODE_PROOF = "a no-code card needs a Done no-code card"
 #: Every reason an `unverified` mark may carry, beside `lookup failed: <why>`
 #: (`groom_lookups.LOOKUP_FAILED`). Nothing else reaches the page (DRE-5746):
 #: `_mark` reads any other as `unreadable answer`.
 UNVERIFIED_REASONS = (STEP_FAILED, STEP_SKIPPED, NO_FILE, NO_PROOF,
-                      UNREADABLE, NO_ARTIFACT, CHILD_PROOF)
+                      UNREADABLE, NO_ARTIFACT, CHILD_PROOF, NO_CODE_PROOF)
 
 #: The proof kinds (DRE-7240). Three are anchored — a `file:line` in
 #: `target/`, a Done card with its merged pull request from the row's
@@ -159,6 +170,10 @@ RESTED_ON = (CODE, DONE_WORK, ROUTING, "thread", "relations", "parent")
 #: A Cancel answer resting on a pull request that did part of the card is
 #: recorded `partly-solved`, saying so.
 ADJUSTED = "partial pull request"
+#: The label of an operator card, whose outcome is a live action — a
+#: deploy, an onboarding run, a secret — and never a diff (DRE-7485). A
+#: label is it when its name, lowercased, is this.
+NO_CODE_LABEL = "no-code"
 #: A done-work item's `covers_check`: the files the card names decided
 #: whether the pull request did the whole card, or the agent's `covers` alone.
 COVERS_PATHS, COVERS_AGENT = "paths", "agent"
@@ -268,10 +283,17 @@ EXCLUDE_EPIC = "parent epic with {n} open {children}"
 HAND_BUILT = routing_verdict.HAND_BUILT_LABEL
 EXCLUDE_MOVED = "moved into Intake on {day}"
 EXCLUDE_UNREAD = "board context unread: {why}"
+#: The sixth (DRE-7783): a card a proof run filed on the sandbox (DRE-7772).
+#: Both marks or neither — the opener is agent-bureau's
+#: `proof_reader_presses.SANDBOX_FIXTURE_TITLE_OPENER` (DRE-7776), the label
+#: the one the console's `makeTaskCard` puts on a sandbox card.
+EXCLUDE_SANDBOX_FIXTURE = "sandbox fixture filed by a proof run"
+SANDBOX_FIXTURE_TITLE_OPENER = "SANDBOX FIXTURE (proof DRE-"
+SANDBOX_FIXTURE_REPO_LABEL = "repo:agent-bureau-demo"
 
 
 def _exclusion_re() -> re.Pattern:
-    """The five reasons' exact shape. The label reason is whichever hand mark
+    """The six reasons' exact shape. The label reason is whichever hand mark
     `exclusion` found, read off the vocabulary each time (DRE-6226), so
     `operator-step` is a reason the moment OPERATOR is marked with it. Read as
     `_EXCLUSION_RE`, the name it has always had."""
@@ -279,7 +301,8 @@ def _exclusion_re() -> re.Pattern:
     return re.compile(
         r"(parent epic with [1-9]\d* open (child|children)|" + marks
         + r"|moved into Intake on \d{4}-\d{2}-\d{2}|board context unread: \S.*"
-        r"|repo not in config/repo-map\.json: \S+)")
+        r"|repo not in config/repo-map\.json: \S+|"
+        + re.escape(EXCLUDE_SANDBOX_FIXTURE) + ")")
 
 
 INTAKE = "Intake"
@@ -371,7 +394,7 @@ def _defanged(text: str) -> str:
 
 
 def is_exclusion(reason) -> bool:
-    """Is this one of the five exclusion reasons, in its exact shape?"""
+    """Is this one of the six exclusion reasons, in its exact shape?"""
     return isinstance(reason, str) and bool(_exclusion_re().fullmatch(reason))
 
 
@@ -632,6 +655,11 @@ def exclusion(issue: dict, *, now: datetime) -> str | None:
         return EXCLUDE_EPIC.format(n=n, children="child" if n == 1
                                    else "children")
     labels = {(label.get("name") or "").lower() for label in _nodes(issue, "labels")}
+    # A proof run's fixture on the sandbox (DRE-7783): both marks, or the
+    # card is judged as any other.
+    if (str(issue.get("title") or "").startswith(SANDBOX_FIXTURE_TITLE_OPENER)
+            and SANDBOX_FIXTURE_REPO_LABEL in labels):
+        return EXCLUDE_SANDBOX_FIXTURE
     for mark in routing_verdict.hand_marks():
         if mark.lower() in labels:
             return mark.lower()
@@ -774,8 +802,9 @@ Every answer but `unverified` needs at least one anchored proof item: a
 `file:line` from `target/`, a Done card with its merged pull request from the
 matched Done work, or a routing fact from where jobs ran. A `source` item
 never counts on its own. For a card with children, a Cancel counts only a
-Done card that is not under it, or a routing fact. If `target/` is absent or
-empty, the only answer is `unverified`. Write `"rewrite"` on a
+Done card that is not under it, or a routing fact. For a card labeled
+`no-code`, a Cancel counts only a Done card whose line ends `no-code`. If
+`target/` is absent or empty, the only answer is `unverified`. Write `"rewrite"` on a
 `partly-solved` answer only, and leave it out of every other."""
 
 
@@ -863,6 +892,14 @@ def _body(text: str) -> str:
     return _defanged(text)
 
 
+def _no_code(labels) -> bool:
+    """Do these label names carry `no-code` — read as `exclusion` reads
+    labels, lowercased?"""
+    return isinstance(labels, list) and any(
+        isinstance(label, str) and label.lower() == NO_CODE_LABEL
+        for label in labels)
+
+
 def _day(iso) -> str:
     moment = _moment(iso)
     return moment.strftime("%Y-%m-%d") if moment else ""
@@ -876,8 +913,10 @@ def matched_line(card: dict, pr: dict | None) -> str:
         DRE-5942 (Done 2026-10-07, under DRE-5910) — <title>
         DRE-5942 → dreadnought-foundry/agent-bureau#3297, merged 2026-10-07 — <PR title>
 
-    A pull request `fold` could not read says `not read: <why>`, and one
-    read but never merged says `not merged`."""
+    A card carrying `no-code` ends its parentheses `, no-code` (DRE-7485),
+    so the agent can see which Done cards count toward a `no-code` card's
+    Cancel. A pull request `fold` could not read says `not read: <why>`, and
+    one read but never merged says `not merged`."""
     ident = _one_line(card.get("identifier"))
     if pr is None:
         inside = " ".join(p for p in (_one_line(card.get("state")) or
@@ -885,6 +924,8 @@ def matched_line(card: dict, pr: dict | None) -> str:
                                       _day(card.get("completed_at"))) if p)
         if card.get("parent"):
             inside += f", under {_one_line(card['parent'])}"
+        if _no_code(card.get("labels")):
+            inside += f", {NO_CODE_LABEL}"
         text = f"{ident} ({inside}) — {_one_line(card.get('title'))}"
     else:
         ref = f"{_one_line(pr.get('repo'))}#{_one_line(pr.get('number'))}"
@@ -1053,8 +1094,9 @@ class _Unreadable(Exception):
 
 def _proof_item(item) -> dict:
     """One proof item in one of its four exact shapes (DRE-7240), or
-    `_Unreadable`. Nothing the agent writes beyond the shape is kept: `fact`
-    and `covers_check` are the runner's words, written in `_weigh`."""
+    `_Unreadable`. Nothing the agent writes beyond the shape is kept: `fact`,
+    `covers_check` and `no_code` are the runner's words, written in
+    `_weigh`."""
     if not isinstance(item, dict):
         raise _Unreadable
     quote = item.get("quote")
@@ -1190,6 +1232,13 @@ def _under(card: dict, row: dict, children: set[str]) -> bool:
             or _one_line(card.get("parent")) == me)
 
 
+def _is_no_code_card(row: dict) -> bool:
+    """Is the card being checked labeled `no-code`? A row with no board
+    context names no labels, and is not."""
+    context = row.get("context")
+    return isinstance(context, dict) and _no_code(context.get("labels"))
+
+
 def _supplied(row: dict) -> set[str]:
     """The context words whose context the row actually supplied."""
     context = row.get("context")
@@ -1208,15 +1257,17 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
     turned `partly-solved`. `verdict` is never `unverified` here.
 
     Each done-work or routing item is checked against what the row supplied,
-    and the runner writes `fact` (and on done work `covers_check`) onto each
-    one that matched; one that did not is left out of `proof`. A Cancel
-    counting any partial done-work item is `partly-solved`, whatever else it
-    counts. With `recorded`, a part the row does not carry — the
-    workflow's `apply` holds no folded targets — is read off the document
-    `verdict` wrote: an item carrying the runner's `fact` is one `judge`
-    matched, and the context words are the ones `judge` kept. A row with no
-    board context names no children, so the child rule stands as `judge`
-    applied it; a row that names children and no matched work counts no
+    and the runner writes `fact` (and on done work `covers_check` and
+    `no_code`, whether the Done card carries that label) onto each one that
+    matched; one that did not is left out of `proof`. A Cancel counting any
+    partial done-work item is `partly-solved`, whatever else it counts. With
+    `recorded`, a part the row does not carry — the workflow's `apply` holds
+    no folded targets — is read off the document `verdict` wrote: an item
+    carrying the runner's `fact` is one `judge` matched, its `no_code` is the
+    one `judge` wrote (missing is not `no-code`), and the context words are
+    the ones `judge` kept. A row with no board context names no children and
+    no labels, so the child rule and the no-code rule stand as `judge`
+    applied them; a row that names children and no matched work counts no
     recorded Done card toward a Cancel, since nothing shows it is not under
     the card.
     """
@@ -1226,18 +1277,21 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
     weighed, counted = [], []
     for raw in proof:
         item, kind = dict(raw), _kind(raw)
-        under, whole = False, True
+        under, whole, no_code = False, True, False
         if kind == CODE:
             anchored = is_file_line(item)
         elif kind == DONE_WORK and know_work:
             match = _done_match(item, row)
             item.pop("fact", None)
             item.pop("covers_check", None)
+            item.pop("no_code", None)
             anchored = match is not None
             if anchored:
                 card, pr = match
                 whole, check = _covers(item, pr, row)
-                item.update(fact=matched_line(card, pr), covers_check=check)
+                no_code = _no_code(card.get("labels"))
+                item.update(fact=matched_line(card, pr), covers_check=check,
+                            no_code=no_code)
                 under = _under(card, row, children)
         elif kind == ROUTING and know_routing:
             found = _routing_match(item, row)
@@ -1251,6 +1305,7 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
             # under the card whenever the card has children.
             under = kind == DONE_WORK
             whole = kind == ROUTING or item.get("covers") == "whole"
+            no_code = kind == DONE_WORK and item.get("no_code") is True
         else:
             anchored = False
         # A done-work or routing item the runner did not confirm is dropped,
@@ -1258,7 +1313,7 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
         if anchored or kind not in (DONE_WORK, ROUTING):
             weighed.append(item)
         if anchored:
-            counted.append((kind, under, whole))
+            counted.append((kind, under, whole, no_code))
     if not counted:
         return {"verdict": UNVERIFIED, "reason": NO_PROOF, "proof": [],
                 "rested_on": []}
@@ -1266,20 +1321,30 @@ def _weigh(verdict: str, proof: list[dict], row: dict, declared,
     # card not under it, and a routing fact — never a `file:line` quote,
     # which shows a line exists, not who landed it.
     if verdict in CANCELS and children:
-        counted = [(k, u, w) for k, u, w in counted
-                   if k == ROUTING or k == DONE_WORK and not u]
+        counted = [c for c in counted
+                   if c[0] == ROUTING or c[0] == DONE_WORK and not c[1]]
         if not counted:
             return {"verdict": UNVERIFIED, "reason": CHILD_PROOF, "proof": [],
                     "rested_on": []}
+    # The no-code rule (DRE-7485), on what the child rule left: a Cancel of
+    # a `no-code` card counts only a Done `no-code` card. A merged pull
+    # request from any other card, a routing fact and a `file:line` quote
+    # show that code landed or jobs ran, not that the operator work was
+    # done. The items set aside stay in `proof`, shown and not counted.
+    if verdict in CANCELS and _is_no_code_card(row):
+        counted = [c for c in counted if c[0] == DONE_WORK and c[3]]
+        if not counted:
+            return {"verdict": UNVERIFIED, "reason": NO_CODE_PROOF,
+                    "proof": [], "rested_on": []}
     supplied = (_supplied(row) if not recorded or isinstance(
         row.get("context"), dict) else set(RESTED_ON[3:]))
-    words = {k for k, _, _ in counted} | {
+    words = {c[0] for c in counted} | {
         w for w in (declared if isinstance(declared, list) else [])
         if isinstance(w, str) and w in RESTED_ON[3:] and w in supplied}
     found = {"verdict": verdict, "reason": None, "proof": weighed,
              "rested_on": [w for w in RESTED_ON if w in words]}
-    if verdict in CANCELS and any(k == DONE_WORK and not w
-                                  for k, _, w in counted):
+    if verdict in CANCELS and any(c[0] == DONE_WORK and not c[2]
+                                  for c in counted):
         found.update(verdict=PARTLY_SOLVED, adjusted=ADJUSTED)
     return found
 
@@ -1883,6 +1948,10 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--out", required=True)
     p.add_argument("--targets")
     p.add_argument("--repo-map", dest="repo_map", default=str(REPO_MAP))
+
+    p = sub.add_parser("exclusion",
+                       help="why one card is excluded, or none; writes nothing")
+    p.add_argument("--card", required=True)
     return parser
 
 
@@ -1906,6 +1975,17 @@ def _run(args, *, lops) -> int:
         print(f"groom-verify: {len(rows)} card(s) to verify"
               + (f"; excluded without judgement: {', '.join(excluded)}"
                  if excluded else ""))
+        return 0
+
+    if args.command == "exclusion":
+        try:
+            issue = _read_card(lops, args.card)
+        except Exception as e:  # noqa: BLE001 — an unread card is said, and exit 1
+            print(f"groom-verify: {args.card} could not be read: "
+                  f"{_one_line(e) or type(e).__name__}", file=sys.stderr)
+            return 1
+        print(f"exclusion: {args.card} "
+              f"{exclusion(issue, now=_utcnow()) or 'none'}")
         return 0
 
     if args.command == "prepare":

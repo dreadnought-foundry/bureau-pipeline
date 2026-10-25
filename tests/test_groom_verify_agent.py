@@ -2185,7 +2185,8 @@ def test_apply_still_cancels_an_epic_whose_children_are_all_closed(tmp_path):
 # --------------------------------------------------------------------------
 EXACT_UNVERIFIED = ("agent step failed", "agent step skipped",
                     "no verdict file", "no proof", "unreadable answer",
-                    "no verdict artifact", "proof belongs to a child")
+                    "no verdict artifact", "proof belongs to a child",
+                    "a no-code card needs a Done no-code card")
 
 
 def test_the_unverified_reasons_are_the_exact_strings_the_card_names():

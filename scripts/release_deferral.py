@@ -25,6 +25,16 @@ once the decision is final, beside the decision record. Two decisions reach it:
     card by the same prefix, comments `Released as <tag>` and moves it to
     Done, whatever lane it sits in by then.
 
+`report_current` is the plan's call (DRE-7900), once per surface the lap reads
+`current`. A tag cut by hand — the tool the deferred line names, such as
+`make deploy-console` — leaves the next lap nothing to release, so no
+`Release <surface>` job runs and `report` is never reached. The plan therefore
+closes the open card itself, through `close_deferral`, when the surface's
+newest tag contains the newest `Commit:` the card records: on its description,
+or on a later "The reason changed" comment. A commit, not the tag the deferred
+line names, because not every surface's line names one. A tag that does not
+contain it leaves the card open, and says so in one line.
+
 A deferral that names its minute (DRE-6005, ` — re-arm in <N> minutes`) is the
 train's own to re-arm, owed to nobody, and gets none of this. Neither does a
 window or spacing no-op, which `decide()` emits itself.
@@ -44,10 +54,11 @@ comment added. The card is found by its title and its `repo:` label, never by
 the deferred line's wording, which is not readable from this repository.
 
 THE FINGERPRINT. `deferral_fingerprint` decides whether a reason changed, with
-times, commit ids and every other free-standing number replaced. The cost is
-named on the card: two reasons that differ only in a number are one reason —
-a count that grew included — and each lap's `release-deferred:` line still
-carries the live reason verbatim.
+times, commit ids and every other free-standing number replaced, and every
+backslash before punctuation dropped, which undoes Linear's markdown escapes
+(DRE-7744). The cost is named on the card: two reasons that differ only in a
+number are one reason — a count that grew included —
+and each lap's `release-deferred:` line still carries the live reason verbatim.
 
 NO IMPORT OF `release_train`. The train imports this module; importing it
 back would be a cycle. The three strings shared with the train are written
@@ -80,7 +91,8 @@ SUMMARY_HEADING = "Deferred"
 #: (the `deferred-release` kind, DRE-7234). A module constant so the lane
 #: writers' discovery reads the destination (`ready_lane_writers.writes()`).
 DEFERRAL_LANE = "Green Light"
-#: Where the next verified tag closes it.
+#: Where the next verified tag — or a `current` lap at a tag containing the
+#: deferred commit (DRE-7900) — closes it.
 CLOSED_LANE = "Done"
 #: The labels after `repo:<repo>`: a person finishes it, nothing builds it.
 CARD_LABELS = (linear_ops.NO_CODE_LABEL, "needs-human", "agent:ops")
@@ -109,8 +121,16 @@ DEFERRAL_PREFIX = "deferred:"
 DEFERRED_CODE = "deferred"
 RELEASE_ACT = "release"
 
+#: The no-op code of a lap that reads the surface current — the train's
+#: (`release_train.decide`), bound by `tests/test_release_deferral.py`.
+CURRENT_CODE = "current"
+
+#: The line the card's commit is recorded on, in `_facts`.
+COMMIT_MARK = "Commit: "
+
 REPO_MAP = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
 
+_ESCAPE = re.compile(r"\\+(?=[!-/:-@\[-`{-~])")
 _TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}"
                    r"(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?")
 _SHA = re.compile(r"(?<![A-Za-z0-9])[0-9a-fA-F]{7,40}(?![A-Za-z0-9])")
@@ -119,14 +139,23 @@ _NUMBER = re.compile(r"(?<![A-Za-z0-9_-])\d+(?:\.\d+)?(?:ms|s|m|h|d)?"
 
 
 def deferral_fingerprint(reason: str) -> str:
-    """The reason with what changes lap to lap replaced, in this order: an
-    ISO-8601 timestamp is `<time>`, a run of 7 to 40 hex characters with no
-    letter or digit on either side is `<sha>`, and every other free-standing
-    number — digits, an optional decimal part, an optional unit `ms`, `s`,
-    `m`, `h` or `d`, with no letter, digit, `_` or `-` on either side — is
-    `<n>`. A number joined to a word by a hyphen stays: `d-2024-plan` and
-    `d-2025-plan` are two documents."""
-    text = _TIME.sub("<time>", reason)
+    """The reason with what changes lap to lap replaced, in this order: every
+    run of `\\` before an ASCII punctuation character is dropped, an ISO-8601
+    timestamp is `<time>`, a run of 7 to 40 hex characters with no letter or
+    digit on either side is `<sha>`, and every other free-standing number —
+    digits, an optional decimal part, an optional unit `ms`, `s`, `m`, `h` or
+    `d`, with no letter, digit, `_` or `-` on either side — is `<n>`. A number joined to a word by a hyphen
+    stays: `d-2024-plan` and `d-2025-plan` are two documents.
+
+    The escapes are Linear's (DRE-7744): it stores a description as markdown,
+    so the line written as `/home/runner/_work/…` reads back as
+    `/home/runner/\\_work/…`, while a comment reads back as written. Both
+    sides of the comparison pass through here, so a reason read off either
+    matches the lap's. Dropping the whole run, not one escape, is what makes
+    the two sides agree: a literal `\\_` is stored `\\\\\\_`, and both read
+    `_`; a literal `\\d` is stored `\\\\d`, and both read `\\d`."""
+    text = _ESCAPE.sub("", reason)
+    text = _TIME.sub("<time>", text)
     text = _SHA.sub("<sha>", text)
     return _NUMBER.sub("<n>", text)
 
@@ -168,7 +197,7 @@ def title(repo: str, surface: str, reason: str) -> str:
 
 
 def _facts(line: str, sha: str, url: str) -> str:
-    return f"{LINE_MARK}{line}\nCommit: {sha}\nRun: {url}"
+    return f"{LINE_MARK}{line}\n{COMMIT_MARK}{sha}\nRun: {url}"
 
 
 def body(line: str, sha: str, url: str) -> str:
@@ -177,21 +206,36 @@ def body(line: str, sha: str, url: str) -> str:
     return (
         f"{_facts(line, sha, url)}\n\n"
         "Read the reason, run the tool it names, and the next lap releases.\n\n"
-        "The release train closes this card itself on the next verified tag."
+        "The release train closes this card itself on the next verified tag, "
+        "and a tag cut by hand closes it too: the next lap that reads the "
+        "surface current at a tag containing this commit closes it."
     )
 
 
-def last_line(card: dict) -> str | None:
-    """The newest deferred line the card records, read off its description
-    and its comments (oldest to newest) in the one form this module writes."""
+def _last(card: dict, mark: str) -> str | None:
     found = None
     texts = [card.get("description") or ""]
     texts += [n.get("body") or "" for n in linear_ops.window_nodes(card.get("comments"))]
     for text in texts:
         for row in text.splitlines():
-            if row.startswith(LINE_MARK):
-                found = row[len(LINE_MARK):]
+            if row.startswith(mark):
+                found = row[len(mark):]
     return found
+
+
+def last_line(card: dict) -> str | None:
+    """The newest deferred line the card records, read off its description
+    and its comments (oldest to newest) in the one form this module writes."""
+    return _last(card, LINE_MARK)
+
+
+def last_commit(card: dict) -> str | None:
+    """The newest commit the card records, read the same way: the one the
+    deferral was last made at."""
+    found = _last(card, COMMIT_MARK)
+    if found is None:
+        return None
+    return found.strip() or None
 
 
 def surface_card(repo: str) -> dict | None:
@@ -253,13 +297,24 @@ def file_deferral(*, repo: str, surface: str, line: str, sha: str, url: str,
         f'title "{named}" — labels {", ".join(labels)}')
 
 
-def close_deferral(*, repo: str, surface: str, tag: str, out=print) -> None:
+def close_deferral(*, repo: str, surface: str, tag: str, out=print,
+                   released=None) -> None:
     """The surface cut a verified tag: close the open card, wherever it sits.
-    With none open, nothing is written — the read is made all the same."""
+    With none open, nothing is written — the read is made all the same.
+
+    `released(commit)` is a `current` lap's (DRE-7900): given, the card is
+    closed only when it answers true for the newest commit the card records,
+    and otherwise left open with one line saying so."""
     found = _open_cards(repo, surface, out)
     if found is None:
         return
     ident = found["identifier"]
+    if released is not None:
+        commit = last_commit(found)
+        if commit is None or not released(commit):
+            out(f"{TAG}: card {ident} left open — {tag} does not contain "
+                f"{commit[:7] if commit else 'a recorded commit'}")
+            return
     failed = linear_ops.cmd_comment(ident, f"Released as {tag}")
     if failed:
         raise linear_ops.LinearError(f"{ident} took no comment: {failed}")
@@ -316,13 +371,32 @@ def _deferred(decision, *, repo, surface, sha, warning, step_summary, out, env):
         out(f"{TAG}: card not filed — {why}")
 
 
-def _released(decision, *, repo, surface, warning, out):
+def report_current(decision, *, repo: str, surface: str, tag, released,
+                   warning, out=print) -> None:
+    """The plan's one call for a surface it decided (DRE-7900). Never raises.
+
+    Only a `current` lap with a tag reads anything: one `find_open_prefix`,
+    the read `close_deferral` makes, and no write unless a card is open and
+    `released(commit)` — the surface's newest `tag` contains the newest
+    commit the card records — is true. Every other decision returns at once."""
+    try:
+        if decision.code == CURRENT_CODE and tag:
+            _released(decision, repo=repo, surface=surface, warning=warning,
+                      out=out, tag=tag, released=released)
+    except Exception as error:  # noqa: BLE001 — a notice never fails a run
+        out(f"{TAG}: [{surface}] WARNING the deferral notice failed "
+            f"({_why(error)}) — the decision itself is unaffected")
+
+
+def _released(decision, *, repo, surface, warning, out, tag=None,
+              released=None):
     key = repo_key(repo)
     if key is None:
         # No card can exist for a repository the map does not name.
         return
     try:
-        close_deferral(repo=key, surface=surface, tag=decision.tag, out=out)
+        close_deferral(repo=key, surface=surface, tag=tag or decision.tag,
+                       out=out, released=released)
     except Exception as error:  # noqa: BLE001 — the surface is already live
         why = _why(error)
         warning(f"{WARNING_TITLE} card not closed", why, out=out)

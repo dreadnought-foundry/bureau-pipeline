@@ -1641,6 +1641,17 @@ _BUILD_LINE_RE = re.compile(
 PLANNER_ROLE = "planner"
 FIXER_ROLE = "fixer"
 
+# The test harness's sandbox (DRE-7618): the one repo where a cardless pull
+# request's builder line is read out of its own description, because a probe
+# has no card and the harness writes nothing to Linear. Compared
+# case-insensitively, as GitHub compares repository names.
+SANDBOX_REPO = "dreadnought-foundry/bureau-harness"
+# The worker App's login, as the REST API spells it (a pull request's
+# `.user.login`, the form DRE-1995's refutation read compares to) and as the
+# GraphQL API does (`gh pr view --json author`). Compared exactly: a bare
+# `agent-bureau-bot` names a user account, not the App.
+PROBE_AUTHOR_LOGINS = ("agent-bureau-bot[bot]", "app/agent-bureau-bot")
+
 # Substrings that mean "this model is not available for us" even absent a clean
 # HTTP status (Anthropic's 404 body says "not_found_error" / "not available").
 _UNAVAILABLE_HINTS = ("not_found_error", "not available", "not found")
@@ -2414,6 +2425,21 @@ def build_models(comment_bodies) -> list[str]:
     return models if authored else []
 
 
+def probe_build_models(repo: str | None, author: str | None, body: str | None) -> list[str]:
+    """The models a harness probe's description names on a build line, read
+    by `build_models` unchanged — or nothing unless the pull request is in
+    `SANDBOX_REPO` and its author is the worker App (DRE-7618).
+
+    Every real repo's reviewer is untouched: outside the sandbox, or from any
+    other author, the answer is empty and the caller keeps
+    `--built-on-unknown`."""
+    if (repo or "").strip().lower() != SANDBOX_REPO.lower():
+        return []
+    if author not in PROBE_AUTHOR_LOGINS:
+        return []
+    return build_models([body])
+
+
 def attempt_marker(model: str) -> str:
     """Marker recording which model an attempt used (the heartbeat)."""
     return f"{MARKER_PREFIX} {model}"
@@ -2550,6 +2576,14 @@ def main(argv: list[str]) -> int:
                                    exit 0: the caller's answer is then
                                    --built-on-unknown, which is the fail-closed
                                    one, so a Linear blip must not fail the job
+      probe-build-model --repo <owner/name> --author <login> <body-file>
+                                   print every model on a build line of a
+                                   cardless pull request's description, joined
+                                   with commas (DRE-7618) — and NOTHING unless
+                                   --repo is SANDBOX_REPO, --author is one of
+                                   PROBE_AUTHOR_LOGINS and the file reads.
+                                   Exit 0 either way, for the reason
+                                   build-model gives
       role-of <label,label,...>    print engineer|planner|devops|frontend from
                                    a card's labels
 
@@ -2568,7 +2602,9 @@ def main(argv: list[str]) -> int:
         print(
             "usage: model_fallback.py select [<agent>] [--explain-file <path>] "
             "[--built-on <model>|--built-on-unknown] [--repo <slug-or-owner/name>] "
-            "| build-model <comments.json> | role-of <labels>"
+            "| build-model <comments.json> "
+            "| probe-build-model --repo <owner/name> --author <login> <body-file> "
+            "| role-of <labels>"
         )
         return 2
     cmd, *rest = argv
@@ -2578,6 +2614,24 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "build-model":
         print(",".join(_build_models_from_thread(rest[0] if rest else "")))
+        return 0
+    if cmd == "probe-build-model":
+        repo = author = path = None
+        pending = list(rest)
+        while pending:
+            arg = pending.pop(0)
+            if arg == "--repo":
+                repo = pending.pop(0) if pending else None
+            elif arg == "--author":
+                author = pending.pop(0) if pending else None
+            else:
+                path = arg
+        try:
+            body = Path(path).read_text(encoding="utf-8") if path else None
+        except (OSError, ValueError):
+            body = None
+        if body is not None:
+            print(",".join(probe_build_models(repo, author, body)))
         return 0
     if cmd == "effort":
         print(effort_for(rest[0] if rest else "") or "")

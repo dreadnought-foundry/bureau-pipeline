@@ -578,6 +578,11 @@ def _cli_build(monkeypatch, cards, **extra):
                 window_days=groomer.WINDOW_DAYS, keep_answer=None, post=None,
                 hold_repo=[], priority=",".join(groomer.REPO_PRIORITY))
     args.update(extra)
+    if not args["post"]:
+        # Every standing card's thread is read before the census (DRE-7824);
+        # a dry run with no card reads none here.
+        monkeypatch.setattr(groomer.linear_ops, "comment_records",
+                            lambda card, whole_thread=False: [])
     return groomer._build(argparse.Namespace(**args))
 
 

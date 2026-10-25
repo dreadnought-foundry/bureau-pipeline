@@ -89,6 +89,14 @@ on:
         required: false
       BUREAU_APP_PRIVATE_KEY_4:
         required: false
+      # A throwaway value with nothing real at stake (DRE-7513), handed to the
+      # build agent's shell so a planted echo of it proves the log scrub's
+      # by-value pass (the DRE-5357 proof record's Route B). OPTIONAL: unset,
+      # which is every repo but the one the operator plants on, it reads as
+      # empty and the scrub drops it. Declared because a reusable workflow
+      # that reads a secret it never declared reads `''`.
+      BUREAU_PLANT_PROBE:
+        required: false
 
 jobs:
   execute:
@@ -774,6 +782,13 @@ jobs:
           # identical by tests/test_agent_task_rate_limit_retry.py. Pinned by
           # tests/test_build_run_no_background_wait.py.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The plant probe (DRE-7513): a throwaway secret in the agent's
+          # shell, so a planted echo of it leaves the log scrub's by-value
+          # pass something to replace. Empty wherever it is unset. In `env:`,
+          # never `with:`, like the key above; the scrub gets it as
+          # SCRUB_BUREAU_PLANT_PROBE. Pinned by
+          # tests/test_agent_task_plant_probe.py.
+          BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1049,6 +1064,8 @@ jobs:
           # https://code.claude.com/docs/en/env-vars — attempt 1's comment
           # gives the incident and the reasoning.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The plant probe, as in attempt 1 (DRE-7513).
+          BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1321,6 +1338,8 @@ jobs:
           # https://code.claude.com/docs/en/env-vars — attempt 1's comment
           # gives the incident and the reasoning.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The plant probe, as in attempt 1 (DRE-7513).
+          BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1718,6 +1737,7 @@ jobs:
           SCRUB_BUREAU_APP_PRIVATE_KEY_2: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
           SCRUB_BUREAU_APP_PRIVATE_KEY_3: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
           SCRUB_BUREAU_APP_PRIVATE_KEY_4: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
+          SCRUB_BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
           SCRUB_CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           SCRUB_LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           SCRUB_LINEAR_PLANNER_KEY: ${{ secrets.LINEAR_PLANNER_KEY }}

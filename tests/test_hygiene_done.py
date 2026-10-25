@@ -1,7 +1,8 @@
 """RED-first: the hygiene agent's build-lanes-and-proofs lane (DRE-5411).
 
 `scripts/hygiene_done.py` reads the cards in the start lanes
-(`lane_contract.START_LANES` — `In Progress` and `Todo` today, DRE-7112),
+(`lane_contract.START_LANES` — `In Progress` since Todo's entry was deleted,
+DRE-7112, DRE-7660),
 `In Review` and `Hand-work` once and closes what the evidence says is done, under four
 rules, each with the cause line the core's (tag, cause) key reads:
 
@@ -80,8 +81,23 @@ def need_lane():
     return lane
 
 
+#: The fixture was recorded with its build cards in Todo; the contract has
+#: named no Todo since DRE-7660, so they are read in the one start lane left,
+#: which the lane treats the same. Their re-dispatch receipts keep Todo's words.
+RECORDED_LANE = "Todo"
+
+
 def fixture() -> dict:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    doc = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    start = lane_contract.START_LANE
+    recorded = doc["lanes"].pop(RECORDED_LANE, [])
+    doc["lanes"][start] = recorded + doc["lanes"].get(start, [])
+    for card in recorded:
+        card["state"] = {"name": start}
+        for node in card["history"]["nodes"]:
+            if node["toState"]["name"] == RECORDED_LANE:
+                node["toState"]["name"] = start
+    return doc
 
 
 class FixtureGh:
@@ -554,13 +570,13 @@ def _plain(cell):
 def records_doc():
     """One `PROOF:` card per record, each whose merged pull request added it."""
     doc = fixture()
-    doc["lanes"] = {"Todo": []}
+    doc["lanes"] = {"In Progress": []}
     template = card_of(fixture(), "DRE-3646")
     for i, path in enumerate(sorted(RECORDS.iterdir())):
         ident = f"DRE-96{i:02d}"
         card = copy.deepcopy(template)
         card.update(identifier=ident, id=f"issue-{ident.lower()}")
-        doc["lanes"]["Todo"].append(card)
+        doc["lanes"]["In Progress"].append(card)
         doc["gh"][lookup_key(BP, ident)] = json.dumps(
             [merged_pr(BP, 800 + i, ident, "2026-09-30T20:00:00Z", [f"docs/{path.name}"])])
         doc["gh"][contents_key(BP, f"docs/{path.name}")] = contents_answer(
@@ -622,7 +638,7 @@ class TestTheThirteenRecordsOnMain:
         doc = records_doc()
         items, _ctx, _gh = plan(doc)
         by_name = {json.loads(doc["gh"][lookup_key(BP, c["identifier"])])[0]["files"][0]["path"]
-                   .split("/")[-1]: c["identifier"] for c in doc["lanes"]["Todo"]}
+                   .split("/")[-1]: c["identifier"] for c in doc["lanes"]["In Progress"]}
         closed = {n for n, i in by_name.items()
                   if [a.act for a in actions(items, i)] == ["hygiene-proof-close"]}
         assert closed == set(CLOSES)
@@ -684,7 +700,7 @@ class TestASupersededProof:
 
 
 # --------------------------------------------------------------------------- #
-# (4) a Todo build card with no run                                            #
+# (4) a start-lane build card with no run                                      #
 # --------------------------------------------------------------------------- #
 
 
@@ -787,7 +803,7 @@ class TestAStartLaneCardThatHasNotStarted:
         # left by that trip.
         doc = fixture()
         card = card_of(doc, "DRE-9107")
-        enter(card, "Todo", "2026-09-30T22:30:00Z")
+        enter(card, "In Progress", "2026-09-30T22:30:00Z")
         add_comment(card, "🧠 model-attempt: claude-opus-5-5", "2026-09-30T22:00:00Z")
         add_comment(card, "⏳ 1/5 plan", "2026-09-30T22:05:00Z")
         items, _ctx, _gh = plan(doc)
@@ -797,7 +813,7 @@ class TestAStartLaneCardThatHasNotStarted:
         # Entered at 16:30 PT, between the two re-dispatches (16:01, 17:16 PT):
         # one re-dispatch in this trip through the lane is not enough.
         doc = fixture()
-        enter(card_of(doc, "DRE-9107"), "Todo", "2026-09-30T23:30:00Z")
+        enter(card_of(doc, "DRE-9107"), "In Progress", "2026-09-30T23:30:00Z")
         items, _ctx, _gh = plan(doc)
         assert actions(items, "DRE-9107") == [] and lefts(items, "DRE-9107") == []
 
@@ -829,8 +845,8 @@ class TestAStartLaneCardThatHasNotStarted:
 
     @pytest.mark.parametrize("start", lane_contract.START_LANES)
     def test_a_card_in_each_start_lane_that_has_not_started_is_named(self, start):
-        # DRE-7112: In Progress is reported exactly as Todo is, and the row
-        # names the lane the card is really in.
+        # DRE-7112: every start lane is reported alike, and the row names the
+        # lane the card is really in.
         doc = fixture()
         move(doc, "DRE-9107", start)
         card = card_of(doc, "DRE-9107")
@@ -865,7 +881,7 @@ class TestAStartLaneCardThatHasNotStarted:
     def test_the_failed_run_row_names_the_lane(self):
         items, _ctx, _gh = plan()
         (row,) = lefts(items, "DRE-9109")
-        assert row.why.startswith("in Todo, not started, re-dispatched 2 times — ")
+        assert row.why.startswith("in In Progress, not started, re-dispatched 2 times — ")
 
 
 # --------------------------------------------------------------------------- #

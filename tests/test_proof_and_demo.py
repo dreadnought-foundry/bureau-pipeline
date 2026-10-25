@@ -2,7 +2,7 @@
 
 DRE-2746 made it a PAIR — a `PROOF:` card and a `DEMO:` card, the epic's last
 two children. DRE-3669 halves it. On 2026-09-12 the CEO decided there are no
-demo sittings: he reads the proof record and closes the proof card himself. All
+demo sittings, and the proof record is how he sees the work. All
 25 open DEMO cards were cancelled that morning, and the planner stopped filing
 them.
 
@@ -12,7 +12,8 @@ convention nothing checks is a convention that drifts.
 
   * **Proof** answers *did it work* — and it is not a green test suite. It is
     the mechanism observed running against real state, recorded in the repo.
-  * There is no demo card. The record IS how the CEO sees it.
+  * There is no demo card. The card closes on its approved, all-met record
+    (DRE-5919), and nothing on it asks a person to read or close it.
 
 WHAT THIS PINS, one section per acceptance criterion:
 
@@ -34,8 +35,10 @@ WHAT THIS PINS, one section per acceptance criterion:
      `🧭 routing-verdict` comment every other verdict uses — so
      `routing_verdict.promotion_refusal` reads it and the sweep refuses to
      promote it. It used to compute the answer, print it and stamp nothing.
-  7. The proof card's body carries the closing line (DRE-3669), verbatim, so
-     the card itself says who closes it and that nobody is owed a sitting.
+  7. The proof card's body carries no closing line (DRE-7773). The CEO
+     decided on 2026-10-22 that he does not close every card: the card closes
+     on its approved, all-met record, and a body without the line DRE-3669
+     required passes — as does an older body that still carries it.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_and_demo.py -v
 """
@@ -72,8 +75,8 @@ EPIC = "DRE-2746"
 #
 # Three work cards, then the one that closes the epic. Written the way a real
 # planner writes them: checkbox criteria, the proof card's criteria naming a
-# live observation rather than a passing suite, and its body carrying the
-# closing line verbatim.
+# live observation rather than a passing suite, and no criterion about merging,
+# reading or closing the record (DRE-7773).
 
 WORK_BODY = (
     "Add the gate.\n\n"
@@ -83,11 +86,9 @@ WORK_BODY = (
 
 PROOF_BODY = (
     "Record what was observed, where it was read, and when.\n\n"
-    f"{proof_and_demo.CLOSING_LINE}\n\n"
     "## Acceptance criteria\n\n"
     "- [ ] the gate is observed refusing a real epic in production\n"
-    "- [ ] the observation is written to docs/proof/DRE-2746.md and merged\n"
-    "- [ ] the CEO closes this card after reading the record\n"
+    "- [ ] the observation is written to docs/proof/DRE-2746.md\n"
 )
 
 # Kept for the legacy walks below: a `DEMO:` child the planner no longer emits,
@@ -164,8 +165,8 @@ class TestTheProofCard:
     def test_an_epic_with_no_demo_card_is_accepted(self):
         """INVERTED (DRE-3669). This assertion used to run the other way: an
         epic with no `DEMO:` child was refused and the reason named. The CEO's
-        decision of 2026-09-12 is that there is no demo sitting — he reads the
-        proof record and closes the proof card himself — so the absence of a
+        decision of 2026-09-12 is that there is no demo sitting — the proof
+        record is how he sees the work — so the absence of a
         demo card is the shape, not a defect, and nothing may ask for one."""
         assert proof_and_demo.findings(_plan(demo=False)) == []
         for plan in (_plan(demo=False), _plan(proof=False, demo=False)):
@@ -229,34 +230,49 @@ class TestTheProofCard:
 
 
 # ===========================================================================
-# 7: the closing line — the card says who closes it (DRE-3669)
+# 7: no closing line — the card closes on its approved record (DRE-7773)
 # ===========================================================================
 class TestTheClosingLine:
-    def test_the_line_says_the_ceo_reads_the_record_and_there_is_no_sitting(self):
-        line = proof_and_demo.CLOSING_LINE
-        assert line == ("The CEO reads this record and closes this card; "
-                        "there is no demo sitting.")
+    """INVERTED (DRE-7773). DRE-3669 refused a proof card whose body did not
+    carry `CLOSING_LINE`. The CEO decided on 2026-10-22 that he does not close
+    every card: a proof card closes on its approved, all-met record (DRE-5919),
+    so nothing on it asks him to read or close it, and no check reads the
+    line."""
 
-    def test_a_proof_card_without_the_line_is_refused(self):
+    def test_the_constant_still_names_the_sentence_older_cards_carry(self):
+        assert proof_and_demo.CLOSING_LINE == (
+            "The CEO reads this record and closes this card; "
+            "there is no demo sitting.")
+
+    def test_a_proof_card_without_the_line_passes(self):
+        plan = _plan()
+        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
+        assert proof_and_demo.CLOSING_LINE not in proof["body"]
+        assert proof_and_demo.findings(plan) == []
+
+    def test_a_bare_proof_body_is_not_refused_for_a_missing_line(self):
+        plan = _plan()
+        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
+        proof["body"] = ("Prove it.\n\n## Acceptance criteria\n\n"
+                         "- [ ] the gate is observed refusing a real epic\n")
+        assert proof_and_demo.findings(plan) == []
+
+    def test_an_older_card_carrying_the_line_still_passes(self):
         plan = _plan()
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["body"] = proof["body"].replace(
-            proof_and_demo.CLOSING_LINE + "\n\n", "")
-        found = proof_and_demo.findings(plan)
-        assert any("DRE-9091" in f for f in found), found
+            "## Acceptance criteria",
+            f"{proof_and_demo.CLOSING_LINE}\n\n## Acceptance criteria")
+        assert proof_and_demo.CLOSING_LINE in proof["body"]
+        assert proof_and_demo.findings(plan) == []
 
-    def test_the_refusal_quotes_the_line_so_the_planner_can_paste_it(self):
-        plan = _plan()
-        proof = next(c for c in plan if c["identifier"] == "DRE-9091")
-        proof["body"] = "Prove it.\n\n## Acceptance criteria\n\n- [ ] by hand\n"
-        found = [f for f in proof_and_demo.findings(plan) if "DRE-9091" in f]
-        assert any(proof_and_demo.CLOSING_LINE in f for f in found), found
-
-    def test_no_criterion_asks_for_a_sitting(self):
-        """The acceptance-criteria template drops any "the CEO has said so at a
-        sitting" line and keeps the one that says he closes it after reading."""
-        assert "sitting" not in PROOF_BODY.split("## Acceptance criteria")[1]
-        assert "the CEO closes this card after reading the record" in PROOF_BODY
+    def test_no_criterion_asks_for_a_sitting_or_a_reader(self):
+        """The acceptance-criteria template asks for neither a sitting nor a
+        person reading or closing the record."""
+        criteria = PROOF_BODY.split("## Acceptance criteria")[1]
+        assert "sitting" not in criteria
+        assert "the CEO" not in criteria
+        assert "merged" not in criteria
 
 
 # ===========================================================================
@@ -330,7 +346,7 @@ class TestTheProofIsNotFleetBuildable:
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(NO_ROLE_LABELS)
         proof["body"] = (
-            f"Prove it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+            "Prove it.\n\n"
             "## Acceptance criteria\n\n"
             "- [ ] the proof page renders with the design tokens\n"
         )
@@ -347,7 +363,7 @@ class TestTheProofIsNotFleetBuildable:
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(NO_ROLE_LABELS)
         proof["body"] = (
-            f"Prove it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+            "Prove it.\n\n"
             "## Acceptance criteria\n\n"
             "- [ ] the mechanism is proven\n"
         )
@@ -359,7 +375,7 @@ class TestTheProofIsNotFleetBuildable:
         proof = next(c for c in plan if c["identifier"] == "DRE-9091")
         proof["labels"] = list(PAIR_LABELS) + ["no-code"]
         proof["body"] = (
-            f"Run it.\n\n{proof_and_demo.CLOSING_LINE}\n\n"
+            "Run it.\n\n"
             "## Acceptance criteria\n\n- [ ] it ran\n"
         )
         assert proof_and_demo.findings(plan) == []
@@ -422,6 +438,23 @@ class TestTheBounce:
             EPIC, proof_and_demo.findings(_plan(proof=False)))
         for forbidden in ("VERDICT:", "QA Critic", "QA Verifier"):
             assert forbidden not in body
+
+    def test_the_comment_carries_no_closing_line(self):
+        """INVERTED (DRE-7773): the bounce used to quote `CLOSING_LINE` for
+        the planner to paste and say the CEO closes the card himself. The card
+        closes on its approved record now, so the comment asks for neither."""
+        body = proof_and_demo.bounce_comment(
+            EPIC, proof_and_demo.findings(_plan(proof=False)))
+        assert proof_and_demo.CLOSING_LINE not in body
+        assert "closes the card himself" not in body
+        assert "closing line" not in body.lower()
+
+    def test_the_comment_still_names_the_other_conditions(self):
+        body = proof_and_demo.bounce_comment(
+            EPIC, proof_and_demo.findings(_plan(proof=False)))
+        for needle in ("**last child**", "**blocked by every other child**",
+                       "fleet-buildable"):
+            assert needle in body, needle
 
     def test_the_comment_says_what_to_do(self):
         body = proof_and_demo.bounce_comment(EPIC, proof_and_demo.findings(_plan(proof=False)))

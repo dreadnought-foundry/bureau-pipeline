@@ -383,26 +383,31 @@ def _snapshot(monkeypatch, tmp_path, lin_kw=None):
     return path
 
 
+# The gate runs on a card in a start lane: In Progress, the only one since
+# DRE-7660. The fake's default lane, Todo, is a lane the gate now skips.
+
+
 def test_the_gate_decides_a_clean_card_on_the_snapshot(monkeypatch, tmp_path):
-    _snapshot(monkeypatch, tmp_path)
+    _snapshot(monkeypatch, tmp_path, lin_kw={"lane": "In Progress"})
     _new_process()
-    with linear(monkeypatch) as lin:
+    with linear(monkeypatch, lane="In Progress") as lin:
         _, out = _quiet(validate_card.cmd_gate, CARD)
     assert lin.kinds == []
     assert "bounced=false" in out and "role=engineer" in out
 
 
 def test_the_gate_without_a_snapshot_reads_as_it_always_did(monkeypatch):
-    with linear(monkeypatch) as lin:
+    with linear(monkeypatch, lane="In Progress") as lin:
         _, out = _quiet(validate_card.cmd_gate, CARD)
     assert lin.kinds == ["issue", "card", "thread"]
     assert "bounced=false" in out
 
 
 def test_the_gate_on_the_snapshot_still_bounces_a_broken_card(monkeypatch, tmp_path):
-    _snapshot(monkeypatch, tmp_path, lin_kw={"labels": ["agent:engineer"]})
+    _snapshot(monkeypatch, tmp_path,
+              lin_kw={"lane": "In Progress", "labels": ["agent:engineer"]})
     _new_process()
-    with linear(monkeypatch, labels=["agent:engineer"]) as lin:
+    with linear(monkeypatch, lane="In Progress", labels=["agent:engineer"]) as lin:
         _, out = _quiet(validate_card.cmd_gate, CARD)
     assert "bounced=true" in out
     assert lin.writes == ["Planning"]
@@ -490,11 +495,14 @@ def _pre_agent(monkeypatch, *, snapshot_path=None) -> list[int]:
     return counts
 
 
-def test_before_the_pre_agent_steps_read_the_card_eleven_times(monkeypatch):
-    with linear(monkeypatch) as lin:
+def test_before_the_pre_agent_steps_read_the_card_ten_times(monkeypatch):
+    """Eleven when the card arrived in Todo; since DRE-7660 it arrives in In
+    Progress, the only start lane, so the move is a same-lane no-op: it keeps
+    its reads (the card, the states, the re-read) and writes nothing."""
+    with linear(monkeypatch, lane="In Progress") as lin:
         _pre_agent(monkeypatch)
-    assert len(lin.reads) == 11
-    assert lin.writes == ["In Progress"]
+    assert len(lin.reads) == 10
+    assert lin.writes == []
 
 
 def test_off_the_pre_agent_steps_read_linear_four_times(monkeypatch, tmp_path):
@@ -574,7 +582,7 @@ def test_no_step_after_the_move_is_handed_the_snapshot():
         assert agent_task_snapshot.ENV not in (step.get("env") or {}), step.get("name")
 
 
-# ── the In Progress move runs from either start lane (DRE-7110) ─────────────
+# ── the In Progress move runs whether or not the card is there (DRE-7110) ──
 #
 # After the flip a build card arrives already in `In Progress`. The step's
 # write is then a same-lane no-op, and the step must still succeed and still

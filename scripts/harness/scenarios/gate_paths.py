@@ -81,7 +81,7 @@ HONEST COVERAGE LIMITS:
 
 from __future__ import annotations
 
-from harness import framework, sandbox_health
+from harness import builder_line, framework, sandbox_health
 from harness.framework import (
     PROBE_DIR,
     ScenarioFailure,
@@ -188,12 +188,13 @@ def pr_title(run_id: str, leg: str) -> str:
     return f"test(harness): gate-paths {leg} probe {run_id}"
 
 
-def pr_body(run_id: str, leg: str) -> str:
+def pr_body(run_id: str, leg: str, builder: str = builder_line.OFF) -> str:
     # The line first (DRE-5576): the skew and stale heads are
     # `agent/harness-…`, which owe a `What's new:` line, and the sandbox's
     # critic and gate run at `main`. The named leg's dependabot/ head owes
-    # none; one body for every leg keeps the three alike.
-    return (
+    # none; one body for every leg keeps the three alike. The builder's model
+    # line, when the run's switch is on, goes last on every leg (DRE-7619).
+    return builder_line.append(
         "What's new: none\n"
         "\n"
         f"Automated integration-harness probe (run `{run_id}`, scenario\n"
@@ -204,7 +205,8 @@ def pr_body(run_id: str, leg: str) -> str:
         f"The diff is one markdown record under `{PROBE_DIR}/` — no code,\n"
         "no behavior change, removed again by harness cleanup. This branch\n"
         "carries no Linear card on purpose: the harness never touches real\n"
-        "cards.\n"
+        "cards.\n",
+        builder,
     )
 
 
@@ -310,7 +312,7 @@ class GatePaths(framework.Scenario):
                 head=legs[leg]["branch"],
                 base=ctx.state["base"],
                 title=pr_title(rid, leg),
-                body=pr_body(rid, leg),
+                body=pr_body(rid, leg, builder_line.state_of(ctx)),
             )
             legs[leg]["pr"] = pr["number"]
 
@@ -324,7 +326,8 @@ class GatePaths(framework.Scenario):
         )
         pr = gh.create_pr(
             repo, head=branch, base=ctx.state["base"],
-            title=pr_title(rid, "stale"), body=pr_body(rid, "stale"),
+            title=pr_title(rid, "stale"),
+            body=pr_body(rid, "stale", builder_line.state_of(ctx)),
         )
         legs["stale"] = {"branch": branch, "h1": head, "pr": pr["number"]}
         for leg in LEGS:

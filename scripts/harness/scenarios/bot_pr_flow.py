@@ -29,7 +29,7 @@ review_card_context.py already defines for DRE-less branches).
 
 from __future__ import annotations
 
-from harness import framework
+from harness import builder_line, framework
 from harness.framework import (
     PROBE_DIR,
     ScenarioFailure,
@@ -63,11 +63,13 @@ def pr_title(run_id: str) -> str:
     return f"test(harness): live-rail probe {run_id}"
 
 
-def pr_body(run_id: str) -> str:
+def pr_body(run_id: str, builder: str = builder_line.OFF) -> str:
     # The line first (DRE-5576): this head is `agent/harness-…`, which owes a
     # `What's new:` line, and the sandbox's critic and gate run at `main` —
     # without it the probe is sent back and held, and `stable` stops moving.
-    return (
+    # The builder's model line, when the run's switch is on, goes last
+    # (DRE-7619).
+    return builder_line.append(
         "What's new: none\n"
         "\n"
         f"Automated integration-harness probe (run `{run_id}`), opened by\n"
@@ -79,7 +81,8 @@ def pr_body(run_id: str) -> str:
         f"The diff is one markdown record under `{PROBE_DIR}/` — no code,\n"
         "no behavior change, removed again by harness cleanup. This branch\n"
         "carries no Linear card on purpose: the harness never touches real\n"
-        "cards.\n"
+        "cards.\n",
+        builder,
     )
 
 
@@ -110,7 +113,7 @@ class BotPrFlow(framework.Scenario):
             head=branch,
             base=ctx.state["base"],
             title=pr_title(ctx.run_id),
-            body=pr_body(ctx.run_id),
+            body=pr_body(ctx.run_id, builder_line.state_of(ctx)),
         )
         ctx.state["pr"] = pr["number"]
         ctx.state["head_sha"] = head_sha
