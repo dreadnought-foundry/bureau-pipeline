@@ -36,7 +36,7 @@ either.
 | -- | -- | -- | -- | -- | -- |
 | `proof-waiting` | The earliest of the card's open `🔬 proof-waiting` holds that qualify — every one but a hold naming the CEO's press and a time-only hold whose time is still ahead. A time-only hold whose time has passed starts at the later of its post and its time. | One proof run on a `PROOF:` card in Hand-work whose event hold has stood `chase_after_hours` (DRE-7967). A record In Review waiting on an event is re-checked by the proof dispatcher's own 12-hour re-check instead (DRE-7951, epic DRE-7944), so the one hold is never run twice. | 24 hours | 72 hours | DRE-7965 |
 | `hand-work-overdue` | When the card entered Hand-work, as the sweep's Hand-work alarm reads it. A `PROOF:` card with a qualifying `proof-waiting` hold is judged on that hold's clock instead, so it is never listed twice. | The sweep's own once-only `hand-work-overdue` alarm on the card, for the operator. | 24 hours — equal to `config/hand-work-age.json` `hours`, and checked equal | 72 hours | DRE-7965 |
-| `unlanded-work-watchdog` | The newest commit on the branch no pull request has ever been opened for, the time the work-never-landed notice measures its idle minutes from. | None of its own: the sweep's existing work-never-landed notice, on that notice's own clock. | `null` | 24 hours | DRE-7966 |
+| `unlanded-work-watchdog` | The newest commit on the branch no pull request has ever been opened for, the time the work-never-landed notice measures its idle minutes from. For a person's card with no branch at all, the `createdAt` of its work-never-landed `no branch` notice. | None of its own: the sweep's existing work-never-landed notice, on that notice's own clock. | `null` | 24 hours | DRE-7966 |
 
 Each row also carries a `why`, the reason for its numbers.
 
@@ -70,6 +70,32 @@ comment exactly as before — that comment is the chase — and each now hands
 A standing card in `config/hand-work-age.json` and a `hand-built` card are
 listed by neither. An idle pass, a held board read and `promote_only` call
 `settle` from neither.
+
+## Where the sweep reads `unlanded-work-watchdog` (DRE-7966)
+
+`flag_unlanded_work` keeps its two `🚨 unlanded-work-watchdog` comments
+exactly as before — once per branch, once per no-branch card, and those are
+the chase — and hands `settle` one late list per pass, after both halves:
+
+- **A branch** the watchdog would report — commits ahead of the default, no
+  pull request ever opened, its card not finished and not in a promoted lane
+  — is late once its last commit is `due_hours` old, and waits on
+  `a pull request from <branch>`. It is judged before the "already posted"
+  check, so a branch reported weeks ago is still listed.
+- **A person's card with no branch and no pull request** that carries its
+  `no branch` notice is late once that notice's `createdAt` is `due_hours`
+  old — never `updatedAt`, which any comment moves — and waits on
+  `a branch and a pull request`. The time is read off the board read's
+  comment window when that is the whole thread, and off one whole-thread read
+  otherwise. It is judged before the watchdog's idle gate, so a fresh comment
+  holds back the notice but never the late list. A standing card in
+  `config/hand-work-age.json` is never listed.
+
+The pass is incomplete when a branch's pull-request or compare read answered
+nothing or could not be parsed, its card's lane read failed, a card's
+whole-thread read failed, or a branch's or card's evaluation raised. An
+unreadable or rate-limited pull-request or branch listing, and a held board,
+call `settle` not at all.
 
 ## The alert
 
