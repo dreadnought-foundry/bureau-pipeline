@@ -34,10 +34,10 @@ read.
 
 `🩹 proof-gap-card: <DRE-n>` (`RECEIPT_MARK`), posted on the PROOF card
 through `pipeline_act.receipt` (act `proof-gap-filed`). A pipeline-authored
-comment whose first line opens with it is the card's one fix card: a second
-close — a re-run of card-done, the reconcile backstop — reads the card off it
-and files nothing. A comment of that shape from anyone else counts for
-nothing. A receipt that failed to post after its card was created is caught
+comment (`linear_ops.comment_records`' `authored_by_pipeline`) whose first
+line opens with it is the card's one fix card: a second close — a re-run of
+card-done, the reconcile backstop — reads the card off it and files nothing.
+A comment of that shape from anyone else counts for nothing. A receipt that failed to post after its card was created is caught
 one step later: an open card with exactly the title is reused and receipted,
 never filed again.
 
@@ -56,7 +56,6 @@ import linear_ops  # noqa: E402 — the create seam, the thread and the comment 
 import pipeline_act  # noqa: E402 — the receipt's trailer
 import proof_reach  # noqa: E402 — the cause words and what each means, spelled once
 import proof_record  # noqa: E402 — the gap rows, read as the gate reads them
-import spoken_thread  # noqa: E402 — who wrote each comment
 
 #: Opens the receipt's first line, then the fix card's identifier.
 RECEIPT_MARK = "🩹 proof-gap-card:"
@@ -175,15 +174,16 @@ def _safe_lines(lines) -> str:
     return "\n".join(_safe(line) if line.strip() else "" for line in lines)
 
 
-def filed(voices) -> dict | None:
-    """The fix card a pipeline-authored `RECEIPT_MARK` line names, or None."""
-    for voice in voices or ():
-        if voice.kind != spoken_thread.PIPELINE:
+def filed(records) -> dict | None:
+    """The fix card a pipeline-authored `RECEIPT_MARK` line names, or None.
+    `records` is `linear_ops.comment_records`' answer."""
+    for record in records or ():
+        if not record.get("authored_by_pipeline"):
             continue
-        first = (voice.body or "").strip().split("\n", 1)[0].strip()
-        found = _RECEIPT.match(first)
+        body = record.get("body") or ""
+        found = _RECEIPT.match(body.strip().split("\n", 1)[0].strip())
         if found:
-            url = _LINEAR_URL.search(voice.body or "")
+            url = _LINEAR_URL.search(body)
             return {"identifier": found.group(1), "url": url.group(0) if url else None}
     return None
 
@@ -204,12 +204,12 @@ def receipt_text(proof_card: str, fix: dict, gaps, *, kind: str = GAP) -> str:
 
 
 def file_fix_card(proof_card: str, epic, record_pr_url: str, gaps, *, repo_slug: str,
-                  kind: str = GAP, voices=None) -> dict:
+                  kind: str = GAP, records=None) -> dict:
     """The fix card for `gaps`, created — or the one already filed, read off
-    the PROOF card's receipt. `voices` is the card's thread as
-    `linear_ops.read_card_voices` reads it, read here when not passed; a
-    thread that cannot be read is a refusal, since a filed card cannot be
-    ruled out. See the module docstring."""
+    the PROOF card's receipt. `records` is the card's whole thread as
+    `linear_ops.comment_records` reads it, read here when not passed; a read
+    that fails raises, since a filed card cannot be ruled out. See the
+    module docstring."""
     if kind not in TITLES:
         raise ValueError(f"the fix card kind {kind!r} is not one of {', '.join(TITLES)}")
     rows = _rows(gaps)
@@ -220,12 +220,9 @@ def file_fix_card(proof_card: str, epic, record_pr_url: str, gaps, *, repo_slug:
         if unknown:
             raise ValueError(f"{proof_card}: the gap kind(s) {', '.join(unknown)} are not "
                              f"one of {', '.join(FIXES)}")
-    if voices is None:
-        voices = linear_ops.read_card_voices(proof_card)
-        if voices is None:
-            raise linear_ops.LinearError(f"{proof_card}'s thread could not be read, so a "
-                                         "fix card already filed cannot be ruled out")
-    already = filed(voices)
+    if records is None:
+        records = linear_ops.comment_records(proof_card, whole_thread=True)
+    already = filed(records)
     if already is not None:
         print(f"proof-gap: {proof_card} already filed {already['identifier']} — nothing filed")
         return already

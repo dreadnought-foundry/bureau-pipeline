@@ -3155,7 +3155,7 @@ def merge_close_ruling(
         try:
             fix = proof_gap.file_fix_card(
                 identifier, proof_gap.epic_of(identifier), pr_url, gaps,
-                repo_slug=proof_gap.repo_slug_of(labels, pr_url), voices=voices)
+                repo_slug=proof_gap.repo_slug_of(labels, pr_url))
         except Exception as exc:  # noqa: BLE001 — a failed filing is a refusal, never a crash
             # The reconcile backstop asks this ruling inside its sweep, so a
             # raise here would end the pass for every other card.
