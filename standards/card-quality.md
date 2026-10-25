@@ -352,8 +352,17 @@ comment), and `INTAKE_HOLD` for an Intake hold. A plan without it is sent back
 at the first critic, whatever the critic wrote. Only the plan's own repo is
 read — the repo the plan run has checked out — so a card the plan files in
 another held repo is not caught, and the epic's note says so on every reading.
-Every other step that needs the CEO is still guidance; a check for those is
-DRE-7523.
+A child that needs the CEO is checked too (DRE-7523). That is an open child
+that is an operator card — the hold label, the `operator-step` mark, or routed
+`OPERATOR` by its labels or title, a PROOF title excepted — or that carries an
+acceptance criterion on a person's row, one containing `needs the CEO's press:`
+or `waiting for the operator's press:`. The plan names each such child by its
+identifier, as a whole token, in a `Step that needs the CEO:` paragraph, or the
+plan is sent back at the first critic: the check appends a `ceo-step:` line
+naming the card and the step to the structural file the seam gate reads.
+**What stays guidance.** A step on a card that is neither an operator card nor
+carries a person's row, and a one-off card's own question: you list those in
+the question just the same, and nothing checks them.
 
 ## Epics
 Expressed by Linear **native parent/child** (not a label, not frontmatter).

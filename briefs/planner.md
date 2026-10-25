@@ -815,10 +815,18 @@ next blank line, and it must say:
 
 **What is checked.** A plan for a held repo without that paragraph is sent
 back at the first critic, whatever the critic wrote — the check appends a
-`held-repo:` line to the structural file the seam gate reads. **What is still
-guidance.** Every other step that needs the CEO: you list it in the same
-question, and nothing checks it yet (DRE-7523). **Only the plan's own repo is
-read** — the repo this plan run has checked out. A card you file in another
+`held-repo:` line to the structural file the seam gate reads. So is a plan
+whose child needs the CEO and is not named by its identifier in a `Step that
+needs the CEO:` paragraph (DRE-7523): an open child that is an operator card,
+or that carries a criterion on a person's row (`needs the CEO's press:` or
+`waiting for the operator's press:`). The check appends a `ceo-step:` line
+naming the card and the step. Write one paragraph per such child, opening with
+the opener and naming its identifier, for example `Step that needs the CEO:
+DRE-1234 — the CEO republishes the document from his own session`. **What is
+still guidance.** A step on a card that is neither an operator card nor
+carries a person's row, and a one-off card's own question: you list it in the
+same question, and nothing checks it. **Only the plan's own repo is read** for
+its holds — the repo this plan run has checked out. A card you file in another
 repo that you know is held is not caught, so name its hold the same way. The epic's note says `— read for this plan's own repo only` on
 every reading, so nobody reads a pass as covering every repo.
 

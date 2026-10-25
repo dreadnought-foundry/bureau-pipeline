@@ -1685,17 +1685,23 @@ def lag_state(repo_root, tag, sha, paths, ignore=DOCUMENTATION_IGNORE) -> str:
     """
     if not tag:
         return "behind"
-    contained = subprocess.run(
-        ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", sha, tag],
-        capture_output=True, text=True,
-    )
-    if contained.returncode == 0:
+    if tag_contains(repo_root, tag, sha):
         return "current"
     args = ["diff", "--name-only", f"{tag}..{sha}"]
     spec = _pathspec(paths, ignore)
     if spec:
         args += ["--", *spec]
     return "behind" if _git(repo_root, *args) else "current"
+
+
+def tag_contains(repo_root, tag, sha) -> bool:
+    """True when `tag` contains `sha` — `sha` is the tag's commit or one of
+    its ancestors. A commit the checkout does not hold is not contained."""
+    contained = subprocess.run(
+        ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", sha, tag],
+        capture_output=True, text=True,
+    )
+    return contained.returncode == 0
 
 
 def ignored_changes(repo_root, tag, sha, paths, ignore=DOCUMENTATION_IGNORE) -> tuple:
@@ -2299,6 +2305,24 @@ def render_markdown() -> str:
     )
     w("")
     w(
+        "**DRE-7900.** A tag cut by hand closes it too. The tool a deferred "
+        "line names — `make deploy-console`, say — cuts the surface's tag "
+        "outside the train, so the next lap reads the surface "
+        f"`{release_deferral.CURRENT_CODE}` and runs no `Release <surface>` "
+        "job. The plan job then reads the open card itself, and a "
+        f"`{release_deferral.CURRENT_CODE}` lap whose newest tag released the "
+        "deferred commit — the tag contains the newest `Commit:` the card "
+        "records, on its description or on a later comment — closes it "
+        f"`{release_deferral.CLOSED_LANE}` under the same `Released as <tag>` "
+        "comment. A tag that does not contain that commit leaves the card "
+        f"open, with one `{release_deferral.TAG}: card <id> left open` line. "
+        "A lap that finds no open card writes nothing, and a close that "
+        "fails — no Linear key, an API error — is one `::warning::` and one "
+        f"`{release_deferral.TAG}: card not closed — <why>` line, the plan's "
+        "decision, receipt, record and exit code unchanged."
+    )
+    w("")
+    w(
         "A deferral that names its re-arm minute does none of that: it is the "
         "train's own to re-arm, owed to nobody. A deferral an open "
         f"{owners} card on the same repo speaks for is warned of and files no "
@@ -2707,10 +2731,18 @@ def _cmd_plan(args) -> int:
             # part of the sentence the receipt prints, so it is part of the
             # sentence the record carries. A surface that IS releasing is
             # recorded by its own job, whose decision is not made yet.
+            deployed = newest_tag(args.repo_root, entry.tag_series)[0]
             _record_decision(shown, entry=entry, repo=args.repo, phase="plan",
-                             sha=head, head=head, now=now,
-                             deployed=newest_tag(args.repo_root,
-                                                 entry.tag_series)[0])
+                             sha=head, head=head, now=now, deployed=deployed)
+            # A `current` lap runs no `Release <surface>` job, so a tag cut
+            # by hand would never reach `release_deferral.report` (DRE-7900):
+            # the plan closes the open deferral card itself when that tag
+            # contains the commit the card was deferred on. Never raises.
+            release_deferral.report_current(
+                decision, repo=args.repo, surface=entry.name, tag=deployed,
+                released=lambda commit, tag=deployed: tag_contains(
+                    args.repo_root, tag, commit),
+                warning=_warning)
         print(shown.receipt(args.repo, entry.name, decision.sha))
         _announce_channel(decision)
     _emit_output("matrix", json.dumps(matrix(planned)))

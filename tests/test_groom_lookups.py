@@ -1302,3 +1302,26 @@ def test_once_the_wait_budget_is_spent_a_refused_search_waits_no_further(wire):
         assert work["searched"] is False, r["card"]
         assert linear_ops.SEARCH_TOO_FAST_CONDITION in work["why"]
         assert len(w.searches_of(r["card"])) == 1, "not asked again unwaited"
+
+
+def test_the_matched_cards_labels_are_read_in_the_same_request_and_written(wire):
+    """DRE-7485: each matched Done card carries its labels, asked in the
+    request that already reads its lane and attachments — no new one."""
+    assert "labels { nodes { name } }" in gl._match_query(1)
+    assert '"labels"' in gl.cards.__doc__
+    found, issues = _dre_5942_found()
+    issues["DRE-5942"]["labels"] = {"nodes": [{"name": "No-Code"},
+                                              {"name": "agent:ops"}]}
+    w = wire(found, issues)
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+    [dre_5942] = rows[4]["matched_work"]["cards"]
+    assert dre_5942["labels"] == ["No-Code", "agent:ops"]
+    assert [k for k, _ in w.sent].count("match") == 1
+
+
+def test_a_matched_card_with_no_labels_carries_an_empty_list(wire):
+    found, issues = _dre_5942_found()
+    wire(found, issues)
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+    [dre_5942] = rows[4]["matched_work"]["cards"]
+    assert dre_5942["labels"] == []

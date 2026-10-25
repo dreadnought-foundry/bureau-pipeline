@@ -880,12 +880,13 @@ def _ancestry(levels: int) -> str:
 
 def _match_query(n: int) -> str:
     """One document, one aliased `issue` per candidate: its lane, when it
-    was completed, its attachments' urls and `MAX_ANCESTRY` levels of
-    parents. Each identifier a variable."""
+    was completed, its labels (DRE-7485), its attachments' urls and
+    `MAX_ANCESTRY` levels of parents. Each identifier a variable."""
     params = ", ".join(f"$c{i}: String!" for i in range(n))
     fields = "\n".join(
         f"  c{i}: issue(id: $c{i}) {{ identifier title state {{ name }} "
-        f"completedAt attachments {{ nodes {{ url }} }} "
+        f"completedAt labels {{ nodes {{ name }} }} "
+        f"attachments {{ nodes {{ url }} }} "
         f"{_ancestry(MAX_ANCESTRY)} }}"
         for i in range(n))
     return f"query({params}) {{\n{fields}\n}}"
@@ -901,6 +902,14 @@ def _ancestors(node: dict) -> list[str]:
         out.append(_clean(ident))
         parent = parent.get("parent")
     return out
+
+
+def _labels_on(node: dict) -> list[str]:
+    """The card's label names, as Linear gave them."""
+    labels = node.get("labels")
+    return [_clean(item.get("name")) for item in
+            ((labels or {}).get("nodes") or [] if isinstance(labels, dict)
+             else []) if isinstance(item, dict) and item.get("name")]
 
 
 def _unread_pr(repo: str, number: int) -> dict:
@@ -955,6 +964,7 @@ def _matched(row: dict, ranked, found: dict, since: datetime) -> list[dict]:
             "parent": ancestors[0] if ancestors else None,
             "ancestors": ancestors,
             "ancestors_cut": len(ancestors) >= MAX_ANCESTRY,
+            "labels": _labels_on(node),
             "terms": list(terms), "prs": _prs_on(node)}))
     out.sort(key=lambda pair: pair[0], reverse=True)
     out.sort(key=lambda pair: -len(pair[1]["terms"]))
@@ -1016,7 +1026,7 @@ def cards(rows, *, lops, now) -> list[dict]:
          "why": str | null, "terms": [str],
          "cards": [{"identifier", "title", "state": "Done", "completed_at",
                     "parent": str | null, "ancestors": [str],
-                    "ancestors_cut": bool, "terms": [str],
+                    "ancestors_cut": bool, "labels": [str], "terms": [str],
                     "prs": [{"repo", "number", "url", "read": false,
                              "why": "not looked up", "merged_at": null,
                              "title": null, "body": null, "files": [],
@@ -1027,7 +1037,7 @@ def cards(rows, *, lops, now) -> list[dict]:
     token, or cannot answer every term, Linear's `searchIssues` answers them
     all in ONE aliased document — `source` says which. The Done cards found
     (`MAX_CANDIDATES` of them) are re-read in ONE more Linear request for
-    their lane, completion, attachments and `MAX_ANCESTRY` levels of
+    their lane, completion, labels, attachments and `MAX_ANCESTRY` levels of
     parents; those completed after the card was created, never the card
     itself, are kept, ranked by terms matched and then newest completion, at
     most `MAX_MATCHED_CARDS`, each with its parent chain (`ancestors_cut`

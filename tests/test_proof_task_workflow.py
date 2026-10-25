@@ -66,6 +66,12 @@ APP_TOKEN_PIN = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
 #: The version comment the pin above carries on every mint.
 APP_TOKEN_VERSION = "v3.2.0"
 
+#: agent-task.yml's secrets the proof run does not take (DRE-7513): the plant
+#: probe is a throwaway handed to the BUILD agent alone, so a planted echo
+#: proves the build log scrub's by-value pass. The proof run's agent never
+#: reads it and its workflow never declares it.
+BUILD_ONLY_SECRETS = {"BUREAU_PLANT_PROBE"}
+
 AWS_NONE = "proof identity: aws — none, PROOF_ROLE_ARN not provided"
 AWS_ASSUMED = "proof identity: aws — role assumed as proof-"
 AWS_REFUSED = ("proof identity: aws — none, PROOF_ROLE_ARN provided but the "
@@ -155,6 +161,8 @@ class ProofTaskContractTest(unittest.TestCase):
     def test_secrets_are_agent_tasks_plus_an_optional_proof_role(self):
         mine = _on(_doc())["workflow_call"].get("secrets") or {}
         theirs = _on(yaml.safe_load(AGENT_TASK.read_text()))["workflow_call"]["secrets"]
+        self.assertLessEqual(BUILD_ONLY_SECRETS, set(theirs))
+        theirs = {k: v for k, v in theirs.items() if k not in BUILD_ONLY_SECRETS}
         self.assertEqual(set(theirs) | {"PROOF_ROLE_ARN"}, set(mine))
         for name, spec in theirs.items():
             self.assertEqual(spec, mine[name], f"{name} is declared differently")
