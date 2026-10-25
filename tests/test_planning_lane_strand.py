@@ -394,7 +394,7 @@ def test_the_walk_would_catch_a_flag():
     the Triage visit and the needs-human label the walk above asserts against.
     A harness that can't observe the failure would pass forever."""
     board = _Board(ident="DRE-1978")
-    board.move("Todo")
+    board.move("In Progress")
     board.age(999)  # off-map repo, long past the grace period
     board.card["labels"]["nodes"].append({"name": "repo:ghost-product"})
     assert board.sweep() == {"DRE-1978"}

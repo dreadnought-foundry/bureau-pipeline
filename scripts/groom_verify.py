@@ -16,7 +16,11 @@ reads and a handful of anchored patterns, in seconds.
 
 ## What it reads, per card
 
-The morning's Planning list plus `SPARE` cards after it, in proposal order:
+The morning's Planning list plus `SPARE` cards after it, in proposal order —
+and, with `sweep` on, every other card on offer after them (`sweep_window`,
+DRE-7969), read the same three ways and moved to Cancel on its evidence with
+no slot, which reverses DRE-4727's "waits its turn" for the check's own
+evidence only:
 
   * **its comments** — one that DECLARES the card superseded, done, or not to
     be built (`_DECLARES`) is evidence, quoted;
@@ -41,7 +45,9 @@ The Cancel list's own rows are read the other way round: **a Cancel that says
 "superseded by X" stands only if X is Done, a merged PR, or approved and in
 flight.** Otherwise it is rejected, and the card stays on the Planning list
 with the reason named. A replacement the check could not read does not stand
-either — Cancel is the direction that is hard to undo.
+either — Cancel is the direction that is hard to undo. A row a person's
+recorded Move to Cancel wrote (`RECORDED_CANCEL_SOURCE`, DRE-7826) names no
+replacement and needs none: the check writes no row for it and never keeps it.
 
 ## What it does with what it finds
 
@@ -98,6 +104,12 @@ VERDICTS = ("cancel", "clean", "unread", "cancel-stands", "cancel-rejected",
 #: lanes of its `work` segment other than `DONE`, in flow order, so a lane
 #: the contract makes live joins it with no edit here (DRE-5348).
 DONE = ("Done",)
+
+#: A Cancel row a person's recorded Move to Cancel wrote (DRE-7826) —
+#: `groomer.DEAD_FROM_RECORD`, written out because this module cannot import
+#: `groomer` (the import runs the other way). Its reason is a decision, not a
+#: replacement to read, so `check` writes no row for it and never keeps it.
+RECORDED_CANCEL_SOURCE = "console-record"
 
 
 def in_flight(contract: dict | None = None) -> tuple:
@@ -261,8 +273,30 @@ def window(proposal: dict, spare: int = SPARE) -> tuple[list[str], list[str]]:
     return planning, spares[:spare]
 
 
+def sweep_window(proposal: dict, spare: int = SPARE) -> list[str]:
+    """Every other card on offer (DRE-7969): the `not-now`, `not-ready` and
+    `rewrite` lists less the window and the Cancel list — `not-now` in the
+    proposal's own sequence, then `not-ready` and `rewrite` by position,
+    each card once (a `not-ready` card has a row per rule it trips)."""
+    outcomes = proposal["outcomes"]
+    planning, spares = window(proposal, spare)
+    skip = (set(planning) | set(spares)
+            | {r["identifier"] for r in outcomes.get("dead") or []})
+    order = {r["identifier"]: n for n, r in enumerate(proposal["sequence"])}
+    not_now = sorted(outcomes.get("not-now") or [],
+                     key=lambda r: order.get(r["identifier"], len(order)))
+    by_position = [r for name in ("not-ready", "rewrite")
+                   for r in sorted(outcomes.get(name) or [],
+                                   key=lambda r: r.get("position") or 0)]
+    swept: list[str] = []
+    for r in not_now + by_position:
+        if r["identifier"] not in skip and r["identifier"] not in swept:
+            swept.append(r["identifier"])
+    return swept
+
+
 # --------------------------------------------------------------------------- #
-# the reads                                                                    #
+# the reads                                                                  #
 # --------------------------------------------------------------------------- #
 
 def read_card(lops, identifier: str) -> dict:
@@ -553,14 +587,24 @@ def _cancel_target(row: dict) -> str | None:
     return None
 
 
+def _list(identifier: str, planning: list[str], swept: list[str]) -> str:
+    if identifier in planning:
+        return "planning"
+    return "sweep" if identifier in swept else "spare"
+
+
 def check(proposal: dict, *, lops, run=None, owners=None,
-          spare: int = SPARE) -> dict:
+          spare: int = SPARE, sweep: bool = False) -> dict:
     """Read the proposal's cards against the evidence; decide nothing about
     order. Returns what `groomer.propose(verified=…)` applies — `cancel`
     (card → reason) and `keep` (card → why its Cancel was rejected) — beside
-    the per-card record and the unread sources."""
+    the per-card record and the unread sources.
+
+    `sweep` reads `sweep_window`'s cards too, after the spares (DRE-7969);
+    `swept` lists them, `[]` when it is off."""
     planning, spares = window(proposal, spare)
-    candidates = planning + spares
+    swept = sweep_window(proposal, spare) if sweep else []
+    candidates = planning + spares + swept
     real = _Replacements(lops, run)
 
     # The cards first: their attachments are one of the three ways a merged
@@ -604,17 +648,21 @@ def check(proposal: dict, *, lops, run=None, owners=None,
         else:
             verdict, source = ("unread" if missing else "clean"), None
         rows.append({"identifier": identifier,
-                     "list": "planning" if identifier in planning else "spare",
+                     "list": _list(identifier, planning, swept),
                      "verdict": verdict, "source": source,
                      "evidence": evidence,
                      "unread": sorted(missing, key=SOURCES.index),
                      "acted": False})
 
     # The walk: a failed card hands its slot to the next card in order, and
-    # nothing past the last slot is acted on — it waits its turn.
+    # nothing past the last slot is acted on — it waits its turn. A swept
+    # card is not in the walk: it holds no slot, so its evidence moves it to
+    # Cancel whatever the slots did — DRE-4727's "waits its turn" reversed
+    # for the check's own evidence only (DRE-7969).
     cancel: dict[str, str] = {}
     slots, filled = len(planning), 0
-    for row in rows:
+    walked = len(planning) + len(spares)
+    for row in rows[:walked]:
         if filled >= slots:
             break
         if row["verdict"] == "cancel":
@@ -622,10 +670,18 @@ def check(proposal: dict, *, lops, run=None, owners=None,
             row["acted"] = True
         else:
             filled += 1
+    for row in rows[walked:]:
+        if row["verdict"] == "cancel":
+            cancel[row["identifier"]] = row["evidence"][0]["text"]
+            row["acted"] = True
 
     keep: dict[str, str] = {}
     for dead in sorted(proposal["outcomes"]["dead"],
                        key=lambda r: r.get("position") or 0):
+        if dead.get("source") == RECORDED_CANCEL_SOURCE:
+            # A person decided it; there is nothing here for the check to
+            # stand or reject, whatever card its title or reason names.
+            continue
         identifier = dead["identifier"]
         target = _cancel_target(dead)
         if target is None:
@@ -645,12 +701,14 @@ def check(proposal: dict, *, lops, run=None, owners=None,
 
     return {"cards": rows, "cancel": cancel, "keep": keep, "unread": unread,
             "checked": [r["identifier"] for r in rows], "spare": spare,
-            "merged_prs_searched": searched}
+            "merged_prs_searched": searched, "swept": swept}
 
 
-def unread_result(proposal: dict, why: str, *, spare: int = SPARE) -> dict:
+def unread_result(proposal: dict, why: str, *, spare: int = SPARE,
+                  sweep: bool = False) -> dict:
     """What `check` would have answered had it read nothing: every card it
-    would have read is `unread` on every source, and nothing moves.
+    would have read is `unread` on every source, and nothing moves — a swept
+    card too, so a failed check never reads as a clean sweep.
 
     The answer for a check that FAILED rather than one that found a source
     unreadable — a morning with no proposal costs the CEO a day, and a
@@ -660,16 +718,18 @@ def unread_result(proposal: dict, why: str, *, spare: int = SPARE) -> dict:
     as a token that could see nothing (DRE-5317).
     """
     planning, spares = window(proposal, spare)
+    swept = sweep_window(proposal, spare) if sweep else []
     rows = [{"identifier": i,
-             "list": "planning" if i in planning else "spare",
+             "list": _list(i, planning, swept),
              "verdict": "unread", "source": None, "evidence": [],
              "unread": list(SOURCES), "acted": False}
-            for i in planning + spares]
+            for i in planning + spares + swept]
     ids = [r["identifier"] for r in rows]
     return {"cards": rows, "cancel": {}, "keep": {},
             "unread": {source: {"cards": list(ids), "why": why}
                        for source in SOURCES} if ids else {},
-            "checked": ids, "spare": spare, "merged_prs_searched": None}
+            "checked": ids, "spare": spare, "merged_prs_searched": None,
+            "swept": swept}
 
 
 def settle(proposal: dict, result: dict) -> dict:
@@ -687,6 +747,7 @@ def settle(proposal: dict, result: dict) -> dict:
     # A Cancel the guard refused (DRE-5309) was not moved: `propose` kept the
     # card where the order put it and listed it under `cancels_refused`.
     refused = {r["identifier"] for r in proposal.get("cancels_refused") or []}
+    swept = list(result.get("swept") or [])
     proposal["verification"] = {
         "spare": result["spare"],
         "cards": result["cards"],
@@ -695,5 +756,8 @@ def settle(proposal: dict, result: dict) -> dict:
         "cancels_rejected": [i for i in result["keep"]],
         "not_checked": [i for i in planning if i not in checked],
         "merged_prs_searched": result.get("merged_prs_searched"),
+        "swept": swept,
+        "swept_to_cancel": [i for i in swept
+                            if i in result["cancel"] and i not in refused],
     }
     return proposal

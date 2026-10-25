@@ -116,7 +116,7 @@ def _iso(minutes_ago: float) -> str:
 
 def _card(
     identifier="DRE-1978",
-    state="Todo",
+    state="In Progress",
     labels=("repo:agent-bureau",),
     minutes_stale=45.0,
 ):
@@ -321,7 +321,7 @@ def test_routable_epic_in_todo_not_flagged(title, bodies):
     a real epic out of Planning does.
     """
     card = _card(
-        state="Todo",
+        state="In Progress",
         labels=("repo:agent-bureau", "agent:planner"),
         minutes_stale=999,
     )
@@ -340,7 +340,7 @@ def test_a_promoted_one_off_wearing_agent_planner_is_still_watched():
     one-off is real work with a real run to wait for, so a missing run receipt
     is the DRE-1993 strand, not a container's normal state."""
     card = _card(
-        state="Todo",
+        state="In Progress",
         labels=("repo:agent-bureau", "agent:planner"),
         minutes_stale=999,
     )
@@ -536,7 +536,7 @@ def test_active_cards_takes_a_states_filter():
     request count is the budget suite's business
     (tests/test_sweep_request_budget.py)."""
     board = [
-        _card("DRE-1", state="Todo"),
+        _card("DRE-1", state="In Progress"),
         _card("DRE-2", state="In Progress"),
         _card("DRE-3", state="In Review"),
         _card("DRE-4", state="Planning"),
@@ -592,7 +592,7 @@ def _todo_card():
     return {
         "identifier": "DRE-1978",
         "description": "**Repo:** agent-bureau\nwork",
-        "state": {"name": "Todo"},
+        "state": {"name": "In Progress"},
         "labels": {"nodes": []},
         "updatedAt": "2026-07-09T09:00:00Z",
     }

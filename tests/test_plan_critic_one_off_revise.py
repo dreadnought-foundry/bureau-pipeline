@@ -21,7 +21,8 @@ person who can act on it:
   * `QUESTION — <question>` → `escalate`: Green Light, with the question.
   * a send-back AT the bound → `park`: Triage, the operator's defect queue,
     with every finding raised so far named — never Green Light.
-  * no result → still not a pass: the card never moves to Todo.
+  * no result → still not a pass: the card never moves to Todo. The first in a
+    row is read again (`rerun`, DRE-7491) and the second goes to the CEO.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_plan_critic_one_off_revise.py -v
 """
@@ -190,7 +191,8 @@ class TheDecisionRoutesEachCaseToWhoCanAct(unittest.TestCase):
         self.assertEqual({pc.PASS}, moved)
 
     def test_every_action_is_declared(self):
-        self.assertEqual({pc.PROCEED, pc.REVISE, pc.ESCALATE, pc.PARK},
+        self.assertEqual({pc.PROCEED, pc.REVISE, pc.ESCALATE, pc.PARK,
+                          pc.RERUN},
                          set(pc.ONE_OFF_ACTIONS))
 
     def test_a_question_marker_never_spends_the_bound(self):
@@ -295,9 +297,15 @@ class TheDecideCli(unittest.TestCase):
         self.assertIn(pc.BOUND_PARK_LANE, run["note"])
 
     def test_no_result_does_not_proceed(self):
-        run = self._decide([], "")
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
-        self.assertNotEqual(pc.PROCEED, run["outputs"]["action"])
+        """A first no-result is read again (DRE-7491); the second in a row
+        goes to the CEO. Neither is ever a pass."""
+        first = self._decide([], "")
+        self.assertEqual(pc.RERUN, first["outputs"]["action"])
+        self.assertEqual("", first["escalation"])
+        second = self._decide(pipeline(first["record"].strip()), "")
+        self.assertEqual(pc.ESCALATE, second["outputs"]["action"])
+        for run in (first, second):
+            self.assertNotEqual(pc.PROCEED, run["outputs"]["action"])
 
     def test_a_question_between_two_send_backs_does_not_spend_the_bound(self):
         thread = pipeline(pc.marker(pc.STAGE_ONE_OFF, 1, pc.QUESTION,
@@ -653,7 +661,7 @@ class TheRailCarriesEachAction(unittest.TestCase):
     def test_the_move_to_the_build_queue_is_still_a_pass_alone(self):
         gate = str(_named(EXIT_STEP).get("if") or "")
         self.assertIn(f"steps.oneoff.outputs.action == '{pc.PROCEED}'", gate)
-        for other in (pc.REVISE, pc.ESCALATE, pc.PARK):
+        for other in (pc.REVISE, pc.ESCALATE, pc.PARK, pc.RERUN):
             self.assertNotIn(f"'{other}'", gate)
 
     def test_the_critic_is_told_both_result_lines(self):

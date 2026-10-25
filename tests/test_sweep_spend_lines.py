@@ -119,7 +119,7 @@ def _iso(minutes_ago: float) -> str:
 
 def _card(
     identifier="DRE-3639",
-    state="Todo",
+    state="In Progress",
     labels=("repo:agent-bureau",),
     minutes_stale=600.0,
     bodies=(),
@@ -317,7 +317,7 @@ def _busy_board(scale: int = 1):
     The shape `test_sweep_request_budget` measures its budget over."""
     active = []
     for n in range(4 * scale):
-        active.append(_card(f"DRE-{7000 + n}", state="Todo", minutes_stale=600.0))
+        active.append(_card(f"DRE-{7000 + n}", state="In Progress", minutes_stale=600.0))
         active.append(_card(f"DRE-{7300 + n}", state="Planning", minutes_stale=6000.0))
         active.append(_card(f"DRE-{7600 + n}", state="Intake", labels=(),
                             minutes_stale=_THIRTY_DAYS))

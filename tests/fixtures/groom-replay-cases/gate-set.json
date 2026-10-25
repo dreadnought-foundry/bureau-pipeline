@@ -1,0 +1,37 @@
+{
+  "id": "groom-replay-gate-set",
+  "generated_at": null,
+  "lane": "Intake",
+  "population": 0,
+  "census": {},
+  "held_repos": [],
+  "offered": 0,
+  "held_blockers": [],
+  "capacity": 0,
+  "cycle_days": 14,
+  "window_days": 14,
+  "older_than_window": {
+    "days": 14,
+    "cards": 0,
+    "line": ""
+  },
+  "batch": {
+    "cycles": [],
+    "cards": 0
+  },
+  "repo_order": [],
+  "sequence": [],
+  "outcomes": {
+    "now": [],
+    "not-now": [],
+    "dead": []
+  },
+  "collisions": {
+    "pairs": [],
+    "boilerplate": {},
+    "unreadable": []
+  },
+  "unhonoured_constraints": [],
+  "unstated_supersessions": [],
+  "cancels_refused": []
+}

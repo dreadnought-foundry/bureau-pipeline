@@ -93,10 +93,20 @@ def _kids(c: dict, *children) -> dict:
 
 
 def _lane_card(identifier: str, files=(), *, repo="portico",
-               state="In Progress") -> dict:
-    c = card(identifier, repo=repo,
+               state="In Progress", title=None, blocked_by=(),
+               children=()) -> dict:
+    """One in-flight card as `POPULATION_QUERY` returns it: `blocked_by` its
+    `inverseRelations` nodes of type `blocks`, `children` its children —
+    `(identifier, state, title)` each."""
+    c = card(identifier, repo=repo, title=title,
              description=" ".join(f"`{f}`" for f in files))
     c["state"] = {"name": state}
+    c["inverseRelations"] = {"nodes": [
+        {"type": "blocks", "issue": {"identifier": i, "state": {"name": "Intake"},
+                                     "archivedAt": None, "parent": None}}
+        for i in blocked_by]}
+    if children:
+        _kids(c, *children)
     return c
 
 
@@ -462,7 +472,7 @@ def test_an_epic_the_refusal_kept_off_the_cancel_list_is_evaluated():
 def test_rule_one_returns_the_card_once_the_named_card_is_done():
     c = card("DRE-1")
     verdicts = {"DRE-1": _waits("DRE-60")}
-    held = _board([c], verdicts, named={"DRE-60": _light("DRE-60", "Todo")})
+    held = _board([c], verdicts, named={"DRE-60": _light("DRE-60", "In Progress")})
     assert _rules(c, held) == ["read-waits-on-open-card"]
     assert _row(c, held, "read-waits-on-open-card")["condition"] == \
         "DRE-60 is Done"
@@ -868,6 +878,50 @@ def test_a_closed_parent_is_not_this_rule(state):
 
 
 # --------------------------------------------------------------------------
+# the start lanes (DRE-7112) — read off the contract, never spelled here
+# --------------------------------------------------------------------------
+def _waiting_start_lanes() -> tuple:
+    """The start lanes ahead of the dispatch lane: none since Todo's entry was
+    deleted (DRE-7660)."""
+    import lane_contract
+
+    return tuple(lane for lane in lane_contract.START_LANES
+                 if lane != lane_contract.DISPATCH_LANE)
+
+
+def test_the_open_and_in_flight_lanes_are_read_off_the_start_lanes():
+    import lane_contract
+
+    assert groom_readiness.OPEN_STATES == (
+        "Planning", "Green Light", *lane_contract.QUEUE_LANES,
+        *lane_contract.START_LANES, "In Review")
+    assert groom_readiness.IN_FLIGHT_LANES == (
+        "Planning", *lane_contract.START_LANES, "In Review")
+
+
+def test_a_parent_waiting_in_a_start_lane_has_not_started_and_one_dispatched_has():
+    # An epic in the dispatch lane is activated (rule 3's own name), so only
+    # the start lanes ahead of it hold a child.
+    import lane_contract
+
+    assert _waiting_start_lanes() == ()
+    assert groom_readiness.PARENT_NOT_STARTED == (
+        "Intake", "Planning", "Green Light", *lane_contract.QUEUE_LANES,
+        *_waiting_start_lanes(), "Triage")
+    assert lane_contract.DISPATCH_LANE not in groom_readiness.PARENT_NOT_STARTED
+
+
+@pytest.mark.parametrize("lane", __import__("lane_contract").START_LANES)
+def test_a_card_in_each_start_lane_is_open_and_in_flight(lane):
+    c = card("DRE-1", description="Edits `shared.py`.")
+    held = _board([c], {"DRE-1": _waits("DRE-60")},
+                  named={"DRE-60": _light("DRE-60", lane)},
+                  lanes={lane: [_lane_card("DRE-80", ["shared.py"], state=lane)]})
+    assert _rules(c, held) == ["read-waits-on-open-card",
+                               "file-named-by-in-flight-card"]
+
+
+# --------------------------------------------------------------------------
 # rule 4 — an undecided question, quoted and sent nowhere
 # --------------------------------------------------------------------------
 def test_the_question_is_quoted_with_its_heading_and_count():
@@ -947,7 +1001,7 @@ def test_a_file_cited_past_the_threshold_is_reference_not_ownership():
         ["file-named-by-in-flight-card"]
 
 
-@pytest.mark.parametrize("lane", ["Planning", "Todo", "In Progress", "In Review"])
+@pytest.mark.parametrize("lane", ["Planning", "In Progress", "In Review"])
 def test_every_in_flight_lane_is_read(lane):
     c = card("DRE-1", description="Edits `shared.py`.")
     other = _lane_card("DRE-80", ["shared.py"], state=lane)
@@ -1029,7 +1083,9 @@ def test_the_lane_rows_carry_each_path_as_the_card_wrote_it():
     assert rows["In Progress"] == [{"identifier": "DRE-80",
                                     "repo": "agent-bureau",
                                     "files": ["README.md",
-                                              "scripts/runners/README.md"]}]
+                                              "scripts/runners/README.md"],
+                                    "title": "DRE-80 does a thing",
+                                    "epic": False, "blocked_by": []}]
 
 
 def test_intake_cards_count_toward_boilerplate_by_path_never_by_name():
@@ -1058,6 +1114,243 @@ def test_file_paths_keeps_the_directory_and_drops_a_line_reference():
     assert groomer.file_paths("See `render/out.ts:341` and `README.md`.") == \
         {"render/out.ts", "README.md"}
     assert groomer.file_references("See `render/out.ts:341`.") == {"out.ts"}
+
+
+# --------------------------------------------------------------------------
+# rule 2 — an in-flight card that writes none of it, or waits on the card
+# (DRE-7814)
+# --------------------------------------------------------------------------
+FIXTURE_7814 = ROOT / "tests" / "fixtures" / "groom-readiness-dre-7814.json"
+GROOMER = "scripts/groomer.py"
+#: Every child of a built-out epic: one Done, one Canceled, its proof open.
+BUILT = (("DRE-91", "Done", "DRE-91 work"), ("DRE-92", "Canceled", "DRE-92 work"),
+         ("DRE-93", "In Review", "PROOF: the epic works"))
+
+
+def _candidate() -> dict:
+    return card("DRE-1", repo="bureau-pipeline",
+                description=f"Edits `{GROOMER}`.")
+
+
+def _lane_epic(state="In Progress") -> dict:
+    return _lane_card("DRE-90", [GROOMER], repo="bureau-pipeline", state=state,
+                      title="[EPIC] DRE-90 readiness rules", children=BUILT)
+
+
+def _epic_record(*children) -> dict:
+    """DRE-90 as `IN_MOTION_NODE` returns it."""
+    return _epic("DRE-90", [_child("DRE-91", "Done"), _child("DRE-92", "Canceled"),
+                            {**_child("DRE-93", "In Review"),
+                             "title": "PROOF: the epic works"}, *children])
+
+
+def _in_flight_rule(c: dict, lanes: dict, *, epics=None) -> dict | None:
+    rows = groom_readiness.evaluate(c, _board([c], lanes=lanes, epics=epics))
+    return next((r for r in rows if r["rule"] == "file-named-by-in-flight-card"),
+                None)
+
+
+def test_an_in_review_proof_card_naming_the_file_does_not_hold():
+    c = _candidate()
+    proof = _lane_card("DRE-80", [GROOMER], repo="bureau-pipeline",
+                       state="In Review", title="PROOF: the groom page works")
+    readiness = _facts(lanes={"In Review": [proof]})
+    proposal = _propose([c], readiness=readiness)
+    assert proposal["outcomes"]["not-ready"] == []
+    assert _ids(proposal["outcomes"]["now"]) == ["DRE-1"]
+
+
+def test_a_built_out_in_progress_epic_naming_the_file_does_not_hold():
+    c = _candidate()
+    epics = {"DRE-90": _epic_record()}
+    assert groom_readiness.built_out(epics["DRE-90"])
+    assert _in_flight_rule(c, {"In Progress": [_lane_epic()]}, epics=epics) is None
+    proposal = _propose([c], readiness=_facts(lanes={"In Progress": [_lane_epic()]},
+                                              epics=epics))
+    assert proposal["outcomes"]["not-ready"] == []
+    assert _ids(proposal["outcomes"]["now"]) == ["DRE-1"]
+
+
+def test_an_epic_with_an_unbuilt_child_still_holds_the_card():
+    c = _candidate()
+    epics = {"DRE-90": _epic_record(_child("DRE-94", "Queued"))}
+    assert not groom_readiness.built_out(epics["DRE-90"])
+    row = _in_flight_rule(c, {"In Progress": [_lane_epic()]}, epics=epics)
+    assert row["names"] == ["DRE-90"]
+    assert row["reason"] == (f"names `{GROOMER}`, which DRE-90 (In Progress) "
+                             "also names")
+    assert row["condition"] == "DRE-90 is Done"
+
+
+@pytest.mark.parametrize("epics", [
+    {"DRE-90": {"unread": "linear error: the epic read failed"}},
+    {"DRE-90": {"unread": groom_readiness.NO_ISSUE}},
+    {},                                                    # never read at all
+])
+def test_an_in_progress_epic_whose_record_is_unread_still_holds(epics):
+    c = _candidate()
+    row = _in_flight_rule(c, {"In Progress": [_lane_epic()]}, epics=epics)
+    assert row["names"] == ["DRE-90"]
+    assert row["reason"] == (f"names `{GROOMER}`, which DRE-90 (In Progress) "
+                             "also names")
+    assert row["condition"] == "DRE-90 is Done"
+
+
+@pytest.mark.parametrize("lane", ["Planning", "In Review"])
+def test_an_epic_in_any_lane_but_in_progress_is_not_built_out_and_holds(lane):
+    c = _candidate()
+    row = _in_flight_rule(c, {lane: [_lane_epic(state=lane)]},
+                          epics={"DRE-90": _epic_record()})
+    assert row["names"] == ["DRE-90"]
+    assert row["reason"] == f"names `{GROOMER}`, which DRE-90 ({lane}) also names"
+
+
+def test_an_in_flight_card_formally_blocked_by_the_candidate_does_not_hold():
+    c = _candidate()
+    waiting = _lane_card("DRE-80", [GROOMER], repo="bureau-pipeline",
+                         blocked_by=("DRE-1",))
+    assert _in_flight_rule(c, {"In Progress": [waiting]}) is None
+    proposal = _propose([c], readiness=_facts(lanes={"In Progress": [waiting]}))
+    assert proposal["outcomes"]["not-ready"] == []
+
+
+def test_a_blocks_relation_from_another_card_or_a_prose_line_still_holds():
+    c = _candidate()
+    other = _lane_card("DRE-80", [GROOMER], repo="bureau-pipeline",
+                       blocked_by=("DRE-2",))
+    assert _in_flight_rule(c, {"In Progress": [other]})["names"] == ["DRE-80"]
+    prose = _lane_card("DRE-81", [GROOMER], repo="bureau-pipeline")
+    prose["description"] += "\n\nBlocked by: DRE-1"
+    assert _in_flight_rule(c, {"In Progress": [prose]})["names"] == ["DRE-81"]
+    related = _lane_card("DRE-82", [GROOMER], repo="bureau-pipeline",
+                         blocked_by=("DRE-1",))
+    related["inverseRelations"]["nodes"][0]["type"] = "related"
+    assert _in_flight_rule(c, {"In Progress": [related]})["names"] == ["DRE-82"]
+
+
+def test_an_ordinary_in_flight_build_card_still_holds_with_todays_words():
+    c = _candidate()
+    build = _lane_card("DRE-80", [GROOMER], repo="bureau-pipeline",
+                       state="In Review", title="bureau-pipeline: a build card")
+    row = _in_flight_rule(c, {"In Review": [build]})
+    assert row == {"rule": "file-named-by-in-flight-card", "names": ["DRE-80"],
+                   "reason": f"names `{GROOMER}`, which DRE-80 (In Review) "
+                             "also names",
+                   "condition": "DRE-80 is Done"}
+    proposal = _propose([c], readiness=_facts(lanes={"In Review": [build]}))
+    assert _ids(proposal["outcomes"]["not-ready"]) == ["DRE-1"]
+
+
+def test_a_lane_row_written_before_dre_7814_reads_as_an_ordinary_card():
+    """A row with no `title`, `epic` or `blocked_by` — an older proposal
+    record or fixture — holds as today, even beside a built-out epic record
+    under its own id."""
+    c = _candidate()
+    old = {"identifier": "DRE-90", "repo": "bureau-pipeline", "files": [GROOMER]}
+    readiness = {"lanes": {"Planning": [], "In Progress": [old], "In Review": []},
+                 "named": {}, "epics": {"DRE-90": _epic_record()}}
+    row = _row(c, groom_readiness.board(readiness, population=[c]),
+               "file-named-by-in-flight-card")
+    assert row["names"] == ["DRE-90"]
+    assert row["condition"] == "DRE-90 is Done"
+
+
+def test_the_lane_rows_keep_the_title_the_epic_and_the_formal_blockers():
+    rows = groom_readiness.facts(lanes={
+        "In Progress": [_lane_epic(),
+                        _lane_card("DRE-80", [GROOMER], repo="bureau-pipeline",
+                                   blocked_by=("DRE-12", "DRE-3"))]})["lanes"]
+    epic, waiting = rows["In Progress"]
+    assert (epic["title"], epic["epic"], epic["blocked_by"]) == (
+        "[EPIC] DRE-90 readiness rules", True, [])
+    assert (waiting["epic"], waiting["blocked_by"]) == (False, ["DRE-3", "DRE-12"])
+
+
+def test_read_asks_the_epic_read_once_for_each_in_progress_epic_in_flight():
+    lanes = {"In Progress": [_lane_epic(),
+                             _lane_card("DRE-80", [GROOMER], repo="bureau-pipeline")],
+             "In Review": [_lane_card("DRE-81", [GROOMER], repo="bureau-pipeline",
+                                      state="In Review")]}
+    lops = Reads(epics={"DRE-90": _epic_record()})
+    facts = groom_readiness.read(lops, [_candidate()], None, lanes=lanes)
+    assert [v for _, v in lops.heavy] == [{"id": "DRE-90"}]
+    assert facts["epics"] == {"DRE-90": _epic_record()}
+    assert lops.light == [], "nothing is named, so nothing is light-read"
+
+
+def test_read_asks_nothing_for_a_card_not_an_epic_or_not_in_progress():
+    lanes = {"In Progress": [_lane_card("DRE-80", [GROOMER], repo="bureau-pipeline")],
+             "In Review": [_lane_epic(state="In Review")]}
+    lops = Reads()
+    facts = groom_readiness.read(lops, [_candidate()], None, lanes=lanes)
+    assert lops.heavy == [] and facts["epics"] == {}
+
+
+def test_an_epic_in_flight_and_named_on_a_line_is_read_once():
+    c = _candidate()
+    verdicts = {"DRE-1": _waits("DRE-90")}
+    lops = Reads({"DRE-90": _light("DRE-90", "In Progress", child=True)},
+                 {"DRE-90": _epic_record()})
+    facts = groom_readiness.read(lops, [c], verdicts,
+                                 lanes={"In Progress": [_lane_epic()]})
+    assert [v for _, v in lops.heavy] == [{"id": "DRE-90"}]
+    assert facts["epics"] == {"DRE-90": _epic_record()}
+    board = groom_readiness.board(facts, population=[c], verdicts=verdicts)
+    assert _rules(c, board) == []
+
+
+def test_an_in_flight_epic_read_that_fails_holds_the_card():
+    c = _candidate()
+    lops = Reads(epic_fail={"DRE-90"})
+    facts = groom_readiness.read(lops, [c], None,
+                                 lanes={"In Progress": [_lane_epic()]})
+    assert "unread" in facts["epics"]["DRE-90"]
+    assert len(lops.heavy) == 1, "nothing is retried in the run"
+    proposal = _propose([c], readiness=facts)
+    row = proposal["outcomes"]["not-ready"][0]
+    assert (row["identifier"], row["rule"], row["names"]) == (
+        "DRE-1", "file-named-by-in-flight-card", ["DRE-90"])
+
+
+def _fixture_7814() -> dict:
+    return json.loads(FIXTURE_7814.read_text(encoding="utf-8"))
+
+
+def _replay_7814():
+    """The two cards of 2026-10-15 to 10-23 against the board the card states,
+    read through `groom_readiness.read` with a stub Linear and proposed."""
+    fx = _fixture_7814()
+    lops = Reads(epics=fx["epics"])
+    facts = groom_readiness.read(lops, fx["cards"], None, lanes=fx["lanes"])
+    proposal = groomer.propose(fx["cards"], cycles=fx["cycles"],
+                               capacity=fx["capacity"], now=fx["generated_at"],
+                               judgement=None, readiness=facts)
+    return proposal, lops
+
+
+def test_the_dre_7814_fixture_is_hand_written_from_the_card_and_says_so():
+    fx = _fixture_7814()
+    assert "Hand-written from the facts DRE-7814 states" in fx["_source"]
+    assert {c["identifier"]: groomer.repo_of(c) for c in fx["cards"]} == {
+        "DRE-7397": "bureau-pipeline", "DRE-7745": "agent-bureau"}
+    epic = fx["epics"]["DRE-6644"]
+    children = {c["identifier"]: c["state"]["name"]
+                for c in epic["children"]["nodes"]}
+    assert children == {
+        **{f"DRE-{n}": "Done" for n in range(6664, 6668)},
+        **{f"DRE-{n}": "Canceled" for n in (6668, 6669, 6674, 6675, 6676, 6677)},
+        "DRE-6678": "In Review"}
+    assert groom_readiness.built_out(epic)
+    (proof,) = fx["lanes"]["In Review"]
+    assert proof["identifier"] == "DRE-7251"
+    assert groomer.file_paths(proof["description"]) == {"CLAUDE.md"}
+
+
+def test_the_dre_7814_replay_offers_both_cards_the_rule_held_for_a_week():
+    proposal, lops = _replay_7814()
+    assert proposal["outcomes"]["not-ready"] == []
+    assert sorted(_ids(proposal["outcomes"]["now"])) == ["DRE-7397", "DRE-7745"]
+    assert [v for _, v in lops.heavy] == [{"id": "DRE-6644"}]
 
 
 # --------------------------------------------------------------------------
@@ -1229,7 +1522,7 @@ def test_the_population_read_carries_child_titles_for_the_roll_up_rule():
 def test_build_reads_each_in_flight_lane_once_and_the_named_cards():
     class Board(Reads):
         def __init__(self):
-            super().__init__({"DRE-60": _light("DRE-60", "Todo")})
+            super().__init__({"DRE-60": _light("DRE-60", "In Progress")})
             self.lanes = []
 
         def gql_paged(self, query, variables=None, **_):

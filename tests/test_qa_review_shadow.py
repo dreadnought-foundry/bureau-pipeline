@@ -140,7 +140,10 @@ PRE_CHANGE_STEPS = [
     ('Fail fast — pull request too large to review', "always() && !cancelled() && steps.decide.outputs.review == 'true' && steps.size.outputs.strategy == 'oversized'"),
 ]
 
-# The Select model step's `run:` on main at afa91e9f, byte for byte.
+# The Select model step's `run:` on main at afa91e9f, byte for byte — plus
+# DRE-7618's cardless read of a harness probe's builder line, which prints
+# nothing outside the sandbox repo and so leaves every other review as it was
+# (tests/test_probe_builder_line.py runs the block).
 PRE_CHANGE_SELECT_RUN = '''\
 WHY_FILE="$RUNNER_TEMP/model-why.txt"
 BUILT_ON=""
@@ -149,6 +152,23 @@ if [ -n "$CARD" ] && python3 "$PIPELINE_DIR"/scripts/card_snapshot.py thread \\
   BUILT_ON=$(python3 \\
     "$PIPELINE_DIR"/scripts/model_fallback.py build-model \\
     "$RUNNER_TEMP/card-thread.json")
+fi
+# DRE-7618: no card — a harness probe's builder line, from its own
+# description. A failed read leaves AUTHOR or the body empty, and the
+# command then prints nothing: still `--built-on-unknown`.
+if [ -z "$CARD" ]; then
+  AUTHOR=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq .user.login 2>/dev/null) || AUTHOR=""
+  BODY_FILE=/tmp/cardctx-pr-body.txt
+  if [ ! -f "$BODY_FILE" ]; then
+    BODY_FILE="$RUNNER_TEMP/probe-pr-body.txt"
+    gh pr view "$PR" --json body --jq .body > "$BODY_FILE" 2>/dev/null || : > "$BODY_FILE"
+  fi
+  BUILT_ON=$(python3 "$PIPELINE_DIR"/scripts/model_fallback.py probe-build-model \\
+    --repo "$GITHUB_REPOSITORY" \\
+    --author "$AUTHOR" "$BODY_FILE") || BUILT_ON=""
+  if [ -n "$BUILT_ON" ]; then
+    echo "probe-builder: $BUILT_ON read from the pull request description"
+  fi
 fi
 if [ -n "$BUILT_ON" ]; then
   SEPARATION_ARG="--built-on $BUILT_ON"

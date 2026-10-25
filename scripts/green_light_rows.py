@@ -70,7 +70,10 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      or the sweep's park on a spent review budget,
      `reconcile.py#hand_review_nudge_to_person` (DRE-6181), or the sweep's ask
      for a build agent's blocker it cannot act on, `blocker_ask.py#resolve`
-     (DRE-6459), reached from the resolver alone and reconciled by rule 6.
+     (DRE-6459), reached from the resolver alone and reconciled by rule 6, or
+     `medic.yml#Ask a person about the diagnosis`, the medic's park on a
+     diagnosis only a person can settle (DRE-7794), whose shell echoes its own
+     🙋 question the same way, through `linear_ops.py comment`.
    * `epic-growth`: the unit is `reconcile.py#ask_epic_growth_question` and
      no other (DRE-6414) — the sweep's question about an epic grown past the
      size the CEO approved, created in the lane on a card of its own. Its
@@ -151,15 +154,18 @@ QUEUED_LABEL = "epic-queued"
 
 #: The workflow units an `agent-escalation` row may be written from, each with
 #: the receipt its shell must post before the write: DRE-1655's
-#: escalate-by-exception park, and the proof run's park on a press only the
-#: CEO can make (DRE-5925). The step name is the unit `where` declares. The
-#: proof run's receipt is a literal: no Python module posts it, the workflow
-#: does, and a reworded receipt there fails this rule closed.
+#: escalate-by-exception park, the proof run's park on a press only the CEO
+#: can make (DRE-5925), and the medic's park on a diagnosis only a person can
+#: settle (DRE-7794). The step name is the unit `where` declares. The proof
+#: run's and the medic's receipts are literals: no Python module posts them,
+#: the workflow does, and a reworded receipt there fails this rule closed.
 AGENT_ESCALATION_STEP = "agent-task.yml#Report result to Linear"
 PROOF_PARK_STEP = "proof-task.yml#Report proof result to Linear"
+MEDIC_PARK_STEP = "medic.yml#Ask a person about the diagnosis"
 AGENT_ESCALATION_STEPS = {
     AGENT_ESCALATION_STEP: planner_score.ESCALATION_RECEIPT_PREFIX,
     PROOF_PARK_STEP: "🙋 The proof run met a press only the CEO can make",
+    MEDIC_PARK_STEP: "🙋 The medic diagnosed a failure only a person can settle",
 }
 
 #: What the proof run's park must run before it writes the lane, besides its

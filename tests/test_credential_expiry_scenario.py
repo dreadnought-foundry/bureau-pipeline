@@ -49,6 +49,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import lane_contract  # noqa: E402
 import push_rescue  # noqa: E402
 
 import test_platform_fault_scenario as platform_fault  # noqa: E402
@@ -488,7 +489,9 @@ class TheReportStepSaysCredentialNotDied(unittest.TestCase):
     def test_it_still_requeues_the_card(self):
         _, journal = self.report()
         self.assertEqual(
-            [e["args"][1] for e in platform_fault.ops(journal, "state")], ["Todo"]
+            # The queue lane, where the sweep requeues a dead run (DRE-7111).
+            [e["args"][1] for e in platform_fault.ops(journal, "state")],
+            [lane_contract.QUEUE_LANE]
         )
 
     def test_the_same_run_without_local_work_reads_as_a_silent_death(self):

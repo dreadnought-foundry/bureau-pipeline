@@ -27,6 +27,7 @@ import copy
 import io
 import json
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -583,6 +584,252 @@ class TheOperatorCardsCommand(_Cli):
                                           self.path("ops.json")]))
         self.assertEqual([], json.loads(self.text("ops.json")))
         self.assertIn("boom", err.getvalue())
+
+
+# --------------------------------------------------------------------------- #
+# the sandbox press sent to a person (DRE-7779)                                #
+# --------------------------------------------------------------------------- #
+
+FIXTURE = os.path.join(ROOT, "tests", "fixtures", "sandbox-press-proof-card.json")
+CARD_QUALITY = os.path.join(ROOT, "standards", "card-quality.md")
+SANDBOX_LIST = "The sandbox presses, the one list (DRE-7772):"
+_LIST_BULLET = re.compile(r"^- `([^`]+)`")
+
+
+def fixture(*, labels=None) -> dict:
+    with open(FIXTURE, encoding="utf-8") as fh:
+        rec = json.load(fh)
+    if labels is not None:
+        rec["labels"] = list(labels)
+    return rec
+
+
+def fixture_criteria() -> list[str]:
+    """The fixture's seven criteria, numbered 1 to 7 as the card numbers them."""
+    return ppr.criteria(fixture()["body"])
+
+
+def sandbox_lines(lines):
+    return [l for l in lines if "sends a press on the sandbox project to a person" in l]
+
+
+def reach_lines(lines):
+    return [l for l in lines if "asks for a reading the proof run cannot make" in l]
+
+
+def sandbox_line(n: int) -> str:
+    """The finding the fixture's criterion `n` gives."""
+    return ppr.FINDING_SANDBOX_PRESS.format(
+        proof=fixture()["identifier"],
+        criterion=proof_record._cut(fixture_criteria()[n - 1], ppr.CUT))
+
+
+def press_lines(lines):
+    return [l for l in lines if "waits on the operator's press" in l]
+
+
+def press_line(n: int) -> str:
+    """The operator's-press finding the fixture's criterion `n` gives (DRE-7950)."""
+    return ppr.FINDING_PERSON_PRESS.format(
+        proof=fixture()["identifier"],
+        criterion=proof_record._cut(fixture_criteria()[n - 1], ppr.CUT))
+
+
+def listed_operations(text: str) -> list[str]:
+    """The backticked operations of the bullets after the list's line."""
+    lines = text.splitlines()
+    start = lines.index(SANDBOX_LIST) + 1
+    out = []
+    for line in lines[start:]:
+        found = _LIST_BULLET.match(line)
+        if not found:
+            break
+        out.append(found.group(1))
+    return out
+
+
+def copy_differs(listed: list[str]) -> str:
+    """Empty when `SANDBOX_PRESSES` copies the list, else the operation that differs."""
+    ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+    for i in range(max(len(ours), len(listed))):
+        mine = ours[i] if i < len(ours) else None
+        theirs = listed[i] if i < len(listed) else None
+        if mine != theirs:
+            return (f"bullet {i + 1}: the standard lists {theirs!r} and "
+                    f"`SANDBOX_PRESSES` carries {mine!r}")
+    return ""
+
+
+class TheSandboxPressSentence(unittest.TestCase):
+
+    def test_the_sentence(self):
+        self.assertEqual(
+            ppr.FINDING_SANDBOX_PRESS,
+            "{proof}: criterion “{criterion}” sends a press on the sandbox project "
+            "to a person — write it as a `Sandbox press:` step the proof run makes "
+            "as the console proof-reader, or drop it.")
+
+    def test_the_names(self):
+        self.assertEqual(("agent-bureau-demo", "Agent Bureau Sandbox",
+                          "the sandbox project", "the sandbox"), ppr.SANDBOX_NAMES)
+
+
+class TheListIsCopied(unittest.TestCase):
+
+    def standard(self) -> str:
+        with open(CARD_QUALITY, encoding="utf-8") as fh:
+            return fh.read()
+
+    def test_the_operations_are_the_standards_bullets_in_order(self):
+        listed = listed_operations(self.standard())
+        self.assertEqual(6, len(listed), listed)
+        self.assertEqual("", copy_differs(listed))
+
+    def test_a_changed_bullet_is_named(self):
+        changed = self.standard().replace("- `markTaskDone` —", "- `finishTask` —", 1)
+        said = copy_differs(listed_operations(changed))
+        self.assertIn("finishTask", said)
+        self.assertIn("markTaskDone", said)
+
+    def test_each_pattern_compiles_and_names_its_own_fixture_press(self):
+        crit = fixture_criteria()
+        own = {"createTask": crit[1], "answerDeskPermission": crit[2],
+               "markTaskDone": crit[3], "makeTaskCard": crit[4]}
+        for op, pattern in ppr.SANDBOX_PRESSES:
+            compiled = re.compile(pattern, re.IGNORECASE)
+            for n, text in enumerate(crit, 1):
+                hit = compiled.search(text) is not None
+                if op == "createTask" and n == 2:
+                    # Criterion 2 carries the operation itself, not the words.
+                    continue
+                self.assertEqual(own.get(op) == text, hit, (op, n, text))
+        self.assertEqual(["createTask"], ppr.sandbox_presses(crit[1]))
+        self.assertEqual(["answerDeskPermission"], ppr.sandbox_presses(crit[2]))
+        self.assertEqual(["markTaskDone"], ppr.sandbox_presses(crit[3]))
+        self.assertEqual(["makeTaskCard"], ppr.sandbox_presses(crit[4]))
+        self.assertEqual([], ppr.sandbox_presses(crit[5]))
+        self.assertEqual([], ppr.sandbox_presses(crit[6]))
+
+    def test_the_two_presses_the_fixture_does_not_use(self):
+        self.assertEqual(["snoozeTask"], ppr.sandbox_presses(
+            "waiting for the operator's press: on the sandbox, snooze the fixture task"))
+        self.assertEqual(["sendProjectAgentMessage"], ppr.sandbox_presses(
+            "waiting for the operator's press: on the sandbox, send a Desk message"))
+        self.assertEqual(["sendProjectAgentMessage"], ppr.sandbox_presses(
+            "waiting for the operator's press: on the sandbox, open a conversation"))
+
+
+class TheSandboxPressRule(_Cli):
+    """The fixture card over the CLI, the run's caller `bureau-pipeline`."""
+
+    def run_fixture(self, rec, caller="bureau-pipeline", *extra):
+        cards, detail = split([rec])
+        argv = ["findings", "--detail-file", self.write("detail.json", detail),
+                "--caller", caller,
+                "--proof-local", self.path("no-such-proof-local.json")] + list(extra)
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(cards))), \
+                mock.patch.object(sys, "stdout", out):
+            self.assertEqual(0, ppr.main(argv))
+        return [l for l in out.getvalue().splitlines() if l]
+
+    def test_the_fixture_has_seven_criteria(self):
+        self.assertEqual(7, len(fixture_criteria()))
+
+    def test_four_lines_for_criteria_2_to_5_and_no_reach_for_criterion_1(self):
+        lines = self.run_fixture(fixture())
+        self.assertEqual([sandbox_line(n) for n in (2, 3, 4, 5)], sandbox_lines(lines))
+        self.assertEqual([], reach_lines(lines))
+        self.assertIn("needs the CEO's press:", fixture_criteria()[4])
+        # DRE-7950: criteria 6 and 7 press outside the list, and the
+        # operator's press is refused for those too.
+        self.assertEqual([press_line(n) for n in (6, 7)], press_lines(lines))
+        self.assertEqual(6, len(lines), lines)
+
+    def test_the_four_criteria_use_all_four_names(self):
+        crit = fixture_criteria()
+        used = {name for text in crit[1:5] for name in ppr.SANDBOX_NAMES
+                if name.casefold() in text.casefold()}
+        self.assertEqual(set(ppr.SANDBOX_NAMES), used)
+
+    def test_relabeled_for_bureau_pipeline(self):
+        lines = self.run_fixture(fixture(labels=["repo:bureau-pipeline", "agent:ops"]),
+                                 "agent-bureau")
+        self.assertEqual([], sandbox_lines(lines))
+        found = reach_lines(lines)
+        self.assertEqual(1, len(found), lines)
+        self.assertIn(proof_record._cut(fixture_criteria()[0], ppr.CUT), found[0])
+        self.assertIn(what("console-sandbox-press"), found[0])
+        # DRE-7950: no proof-reader here, so every operator's-press row is
+        # refused as one, and the CEO's row (5) is not.
+        self.assertEqual([press_line(n) for n in (2, 3, 4, 6, 7)], press_lines(lines))
+        self.assertEqual(6, len(lines), lines)
+
+    def test_the_caller_falls_back_to_the_flag(self):
+        for labels in (["agent:ops"],
+                       ["repo:not-in-the-map", "agent:ops"],
+                       ["repo:agent-bureau", "repo:portico", "agent:ops"]):
+            rec = fixture(labels=labels)
+            # The fallback holds no proof-reader: criterion 1 is refused, and
+            # nothing is a person's sandbox press.
+            lines = self.run_fixture(rec, "bureau-pipeline")
+            self.assertEqual([], sandbox_lines(lines), labels)
+            self.assertEqual(1, len(reach_lines(lines)), (labels, lines))
+            self.assertEqual([press_line(n) for n in (2, 3, 4, 6, 7)],
+                             press_lines(lines), labels)
+            # The fallback holds one: the reverse.
+            lines = self.run_fixture(rec, "agent-bureau")
+            self.assertEqual(4, len(sandbox_lines(lines)), (labels, lines))
+            self.assertEqual([], reach_lines(lines), labels)
+            self.assertEqual([press_line(n) for n in (6, 7)], press_lines(lines), labels)
+
+    def test_the_owner_name_caller_is_read_as_its_slug(self):
+        rec = fixture(labels=["agent:ops"])
+        lines = self.run_fixture(rec, "dreadnought-foundry/agent-bureau")
+        self.assertEqual(4, len(sandbox_lines(lines)), lines)
+
+    def test_it_is_appended_to_the_structural_file_and_is_a_send_back(self):
+        structural = self.write("structural.txt", "")
+        printed = self.run_fixture(fixture(), "bureau-pipeline",
+                                   "--structural-file", structural)
+        lines = [l for l in self.text("structural.txt").splitlines() if l]
+        self.assertEqual([sandbox_line(n) for n in (2, 3, 4, 5)]
+                         + [press_line(n) for n in (6, 7)], lines)
+        self.assertEqual(lines, printed)
+
+        result = self.write("result.md", plan_critic.result_line(plan_critic.PASS) + "\n")
+        with mock.patch.object(sys, "stdout", io.StringIO()):
+            self.assertEqual(0, plan_seam_gate.main(
+                ["gate", "--result-file", result, "--structural-file", structural]))
+        rewritten = self.text("result.md")
+        verdict, _ = plan_critic.read_result(rewritten)
+        self.assertEqual(plan_critic.SEND_BACK, verdict)
+        found = plan_critic.all_findings(rewritten)
+        self.assertEqual(6, len(found), found)
+        for line in lines:
+            self.assertIn(line, rewritten)
+
+
+class TheSandboxPressRuleReadsTheDeclaration(unittest.TestCase):
+
+    def test_held_for_is_read_off_the_reading(self):
+        doc = proof_reach.load()
+        for r in doc["readings"]:
+            if r["id"] == "console-sandbox-press":
+                r["held_for"] = ["bureau-pipeline"]
+                r["queries_declared_by"] = {"bureau-pipeline": "x.py"}
+        rec = fixture(labels=["repo:bureau-pipeline", "agent:ops"])
+        lines = read([rec], doc=doc).lines
+        self.assertEqual(4, len(sandbox_lines(lines)), lines)
+        self.assertEqual([], sandbox_lines(read([fixture()], doc=doc).lines))
+
+    def test_an_unknown_caller_with_the_label_still_reads_the_label(self):
+        lines = read([fixture()], caller_slug=False).lines
+        self.assertEqual(4, len(sandbox_lines(lines)), lines)
+
+    def test_a_criterion_with_no_row_is_not_read(self):
+        text = "on the sandbox, mark the fixture task done"
+        self.assertEqual([], sandbox_lines(read([proof("DRE-7901", text)]).lines))
 
 
 class ItRestatesNothing(unittest.TestCase):

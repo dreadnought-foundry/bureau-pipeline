@@ -578,14 +578,15 @@ def moves(journal) -> list[tuple]:
 class TurnDeathIsReadScenario(unittest.TestCase):
     """The three rules, driven through the real step."""
 
-    def test_a_first_death_past_green_requeues_to_todo(self):
+    def test_a_first_death_past_green_requeues_to_the_queue(self):
         _, journal = run_report(self, _this_run(3), prior="0")
         posted = comments(journal)
         self.assertEqual(1, len(posted), posted)
         self.assertTrue(posted[0].startswith(REQUEUE_PREFIX), posted[0])
         self.assertIn("⏳ 3/5", posted[0])
         self.assertIn("budget, not size", posted[0])
-        self.assertEqual([("state", "Todo")], moves(journal))
+        # The queue lane, where the sweep requeues a dead run (DRE-7111).
+        self.assertEqual([("state", lane_contract.QUEUE_LANE, "--park")], moves(journal))
 
     def test_a_death_before_green_goes_to_planning_and_is_not_retried(self):
         _, journal = run_report(self, _this_run(2), prior="0")
@@ -595,7 +596,7 @@ class TurnDeathIsReadScenario(unittest.TestCase):
         self.assertIn("⏳ 1/5 plan formed", posted[0])
         self.assertIn("⏳ 2/5 failing tests written", posted[0])
         # The hand-back path's write, copied: Planning, from the build lanes.
-        self.assertEqual([("advance", "Planning", "In Progress,Todo")],
+        self.assertEqual([("advance", "Planning", "In Progress")],
                          moves(journal))
 
     def test_a_replan_writes_no_hold_label_and_no_backlog(self):
@@ -661,7 +662,7 @@ class HandBackBeforeDyingScenario(unittest.TestCase):
         self.assertTrue(posted[0].startswith(REPLAN_PREFIX), posted[0])
         self.assertIn("1. the ledger counter", posted[0])
         self.assertIn("2. the medic refusal", posted[0])
-        self.assertEqual([("advance", "Planning", "In Progress,Todo")],
+        self.assertEqual([("advance", "Planning", "In Progress")],
                          moves(journal))
 
 
@@ -694,7 +695,7 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
         self.assertEqual(2, len(posted), posted)
         self.assertIn("Which of A or B?", posted[0])
         self.assertEqual(1, len(self._tagged(posted)), posted)
-        self.assertIn(("advance", "Green Light", "In Progress,Todo"),
+        self.assertIn(("advance", "Green Light", "In Progress"),
                       moves(journal))
 
     def test_a_blocker_written_before_dying_keeps_its_exit_and_the_tag(self):
@@ -727,7 +728,7 @@ class EveryTurnDeathLeavesTheTagScenario(unittest.TestCase):
             exit_files={"agent-blocker.txt": "the API does not exist"})
         posted = comments(journal)
         self.assertEqual(1, len(self._tagged(posted)), posted)
-        self.assertIn(("advance", "Green Light", "In Progress,Todo"),
+        self.assertIn(("advance", "Green Light", "In Progress"),
                       moves(journal))
         self.assertFalse([m for m in moves(journal)
                           if set(lane_contract.QUEUE_LANES) & set(m)])

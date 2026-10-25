@@ -63,8 +63,10 @@ class TestTheDestinations:
         assert routing_verdict.destination("WORKBENCH") == HAND_WORK
         assert routing_verdict.destination("OPERATOR") == HAND_WORK
 
-    def test_fleet_still_lands_in_todo(self):
-        assert routing_verdict.destination("FLEET") == "Todo"
+    def test_fleet_lands_in_the_start_lane(self):
+        """The flip (DRE-7120): the move into In Progress is the dispatch."""
+        assert routing_verdict.destination("FLEET") == "In Progress"
+        assert routing_verdict.destination("FLEET") == lane_contract.START_LANE
 
     def test_the_marks_are_the_vocabulary_s_own_and_actor_and_promotable_are_unchanged(self):
         # DRE-6227: `hand-built` is the CEO's mark and no verdict applies it.
@@ -103,7 +105,7 @@ class TestWhatTheSweepCarries:
         assert not hasattr(routing_verdict, "PROMOTION_LANE")
 
     def test_the_sweep_lanes_are_read_off_the_vocabulary(self):
-        assert routing_verdict.sweep_lanes() == ("Todo", HAND_WORK)
+        assert routing_verdict.sweep_lanes() == ("In Progress", HAND_WORK)
 
     def test_the_planning_exit_landing_lane_is_never_a_sweep_lane(self):
         landing = lane_contract.planning_exit()[1]
@@ -125,10 +127,13 @@ class TestWhatTheSweepCarries:
         doc = copy.deepcopy(routing_verdict.load())
         routing_verdict.record("WORKBENCH", doc)["destination"] = lane
         assert routing_verdict.sweep_promotes("WORKBENCH", doc) is False
-        assert lane not in routing_verdict.sweep_lanes(doc)
+        # In Progress is still a sweep lane — FLEET's, the dispatch lane
+        # (DRE-7120) — and WORKBENCH is not carried there with it.
+        swept = routing_verdict.sweep_lanes(doc)
+        assert lane not in swept or lane == routing_verdict.destination("FLEET", doc)
 
-    @pytest.mark.parametrize("lane", ["In Progress", "In Review", "Done"])
-    def test_fleet_pointed_past_todo_is_a_config_problem(self, lane):
+    @pytest.mark.parametrize("lane", ["In Review", "Done"])
+    def test_fleet_pointed_past_the_dispatch_lane_is_a_config_problem(self, lane):
         doc = copy.deepcopy(routing_verdict.load())
         routing_verdict.record("FLEET", doc)["destination"] = lane
         problems = routing_verdict.config_problems(doc)
@@ -153,7 +158,7 @@ class TestThePromotionRefusal:
     def test_a_card_with_no_verdict_is_told_where_each_route_lands(self):
         refusal = routing_verdict.promotion_refusal("DRE-1", [])
         assert routing_verdict.NO_VERDICT_TAG in refusal
-        assert "Todo" in refusal and HAND_WORK in refusal
+        assert "In Progress" in refusal and HAND_WORK in refusal
 
 
 # --------------------------------------------------------------------------- #
@@ -227,11 +232,13 @@ class TestTheCheck:
         assert any("WORKBENCH" in p and HAND_WORK in p and "live" in p for p in problems), problems
         assert any("OPERATOR" in p and HAND_WORK in p for p in problems), problems
 
-    def test_the_todo_binding_is_still_checked(self, contract):
-        writers = _lane_entry(contract, "Todo")["clauses"]["writers"]
+    def test_the_fleet_binding_is_still_checked(self, contract):
+        """FLEET's lane is In Progress since the flip (DRE-7120)."""
+        lane = routing_verdict.destination("FLEET")
+        writers = _lane_entry(contract, lane)["clauses"]["writers"]
         writers["who"] = [w for w in writers["who"] if w != routing_verdict.PROMOTER]
         problems = routing_verdict.config_problems()
-        assert any("'Todo'" in p and routing_verdict.PROMOTER in p for p in problems), problems
+        assert any(f"'{lane}'" in p and routing_verdict.PROMOTER in p for p in problems), problems
 
 
 # --------------------------------------------------------------------------- #
@@ -274,10 +281,10 @@ class TestTheDocuments:
         so its clauses move with the vocabulary in the same PR (the critic on
         #703): the queue's exit and Todo's entrance stop saying Todo is where a
         WORKBENCH or OPERATOR card goes today. The queue's exit is Queued's
-        since Backlog began retiring (DRE-6753)."""
+        since Backlog began retiring (DRE-6753), and Todo's entrance went with
+        its clauses when it began retiring too (DRE-7129)."""
         clauses = {
             ("Queued", "exit"): lane_contract.lane("Queued")["clauses"]["exit"],
-            ("Todo", "entrance"): lane_contract.lane("Todo")["clauses"]["entrance"],
         }
         for where, clause in clauses.items():
             for key in ("text", "pending"):

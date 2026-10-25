@@ -104,8 +104,10 @@ START_OWNER_SLUG = "bureau-pipeline"
 #: only the activate route promotes a child out of Queued. Read off the
 #: epic's own children, never off its comment thread — `count_comments`
 #: reads the fifty newest comments, and a running epic's `▶️ Epic activated`
-#: comment falls out of that window within a day.
-ACTIVATED_STATES = ("Todo", "In Progress", "In Review", "Done")
+#: comment falls out of that window within a day. The start lanes are the
+#: contract's (`lane_contract.START_LANES`, DRE-7112), so a child in the
+#: dispatch lane counts exactly as one in Todo did.
+ACTIVATED_STATES = (*lane_contract.START_LANES, "In Review", "Done")
 
 IN_PROGRESS = "In Progress"
 GREEN_LIGHT = "Green Light"
@@ -290,6 +292,15 @@ def buildable(child: dict) -> bool:
     labels = {(n.get("name") or "").lower()
               for n in (((child.get("labels") or {}).get("nodes")) or [])}
     return not labels.intersection(unbuilt_labels())
+
+
+def follow_on(child: dict) -> bool:
+    """Open, not an epic, and not `buildable`: a proof, or a card marked for a
+    person — the work that carries on by itself once an epic's builds are Done
+    (DRE-7948). The complement of `buildable` among open non-epic children,
+    never a definition of its own: the epic close names these, and the sweep
+    still promotes one whose epic is Done."""
+    return _is_open(child) and not _child_is_epic(child) and not buildable(child)
 
 
 def _rollup_flag(count_rollup_parents: bool | None) -> bool:

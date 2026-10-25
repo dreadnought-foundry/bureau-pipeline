@@ -55,6 +55,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import deliver_rescue  # noqa: E402
+import lane_contract  # noqa: E402
 import push_rescue  # noqa: E402
 import step_shell  # noqa: E402
 
@@ -1030,7 +1031,9 @@ class FailedDeliveryScenario(unittest.TestCase):
         self.assertEqual(dispatches, [])
         self.assertIn("credential", bodies[0].lower())
         self.assertEqual(
-            [e["args"][1] for e in report_harness.ops(journal, "state")], ["Todo"]
+            # The queue lane, where the sweep requeues a dead run (DRE-7111).
+            [e["args"][1] for e in report_harness.ops(journal, "state")],
+            [lane_contract.QUEUE_LANE]
         )
 
     def test_a_run_that_pushed_its_own_work_says_nothing_of_the_kind(self):

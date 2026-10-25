@@ -43,7 +43,8 @@ The files the card names, then every other `tests/test_model_*.py`,
 `tests/test_project_model_*.py` and `tests/test_session_*.py` — less every
 walk (DRE-6909). The copy, the save and the inner run are
 `tests/console_change_walk.py`'s, shared by every walk, and the cases run side
-by side in the walks' own job (`scripts/unit_test_parts.py run-walks`).
+by side in the walks' own job (`scripts/unit_test_parts.py run-walks`). Each job runs one shard of the cases, `SHARD`, which the helper picks
+(DRE-7907); with no shard named, every case.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_console_every_default_keeps_the_suite_green.py -q
 """
@@ -135,6 +136,10 @@ def cases(choices: dict, refuses) -> dict:
 CASES = cases(json.loads(CHOICES.read_text()),
               lambda group, model: refusals(MODELS.read_text(), group, model))
 
+#: The cases this job's shard runs (DRE-7907) — every case when no shard is
+#: named. The coverage tests read the whole `CASES`.
+SHARD = walk.shard(walk.case_names(CASES))
+
 
 def suite_files(tree: Path) -> list[str]:
     """The named files plus every other `tests/test_model_*.py`,
@@ -153,7 +158,7 @@ def run_case(name: str, base: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def results(tmp_path_factory) -> dict:
-    return walk.run_all(CASES, run_case, tmp_path_factory.mktemp("dre6935"))
+    return walk.run_all(SHARD, run_case, tmp_path_factory.mktemp("dre6935"))
 
 
 def test_the_walk_covers_every_offered_default_and_every_allowed_move():
@@ -233,7 +238,7 @@ def test_the_suite_covers_the_named_files_and_every_model_and_session_test():
     assert not [rel for rel in files if walk.is_walk(rel)], files
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", SHARD)
 def test_the_saved_change_is_in_the_tree(results, name):
     """A save that never landed would leave the suite green for the wrong
     reason."""
@@ -246,7 +251,7 @@ def test_the_saved_change_is_in_the_tree(results, name):
         assert models["agents"][change["agent"]] == change["group"]
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", SHARD)
 def test_every_test_passes_after_the_save(results, name):
     got = results[name]
     assert got["failed"] == [], "\n".join(got["failed"]) + "\n\n" + got["tail"]

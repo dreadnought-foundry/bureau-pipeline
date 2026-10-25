@@ -48,6 +48,7 @@ os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import lane_contract  # noqa: E402
 import step_shell  # noqa: E402
 
 CARD = "DRE-2911"
@@ -452,7 +453,8 @@ class TurnCapDeathScenario(unittest.TestCase):
         _, journal = self.report()
         self.assertIn(dead_run.TURN_TAG, comments(journal)[0])
         self.assertEqual(
-            [e["args"][1] for e in ops(journal, "state")], ["Todo"]
+            # The queue lane, where the sweep requeues a dead run (DRE-7111).
+            [e["args"][1] for e in ops(journal, "state")], [lane_contract.QUEUE_LANE]
         )
 
     def test_it_reads_the_turn_budget_not_the_death_budget(self):

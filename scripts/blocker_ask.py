@@ -59,7 +59,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_class  # noqa: E402
 import console_escalation  # noqa: E402
 import linear_ops  # noqa: E402
-from lane_contract import QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue, written and read (DRE-6747)
+from lane_contract import DISPATCH_LANE, QUEUE_LANE, QUEUE_LANES  # noqa: E402 — the queue, written and read (DRE-6747); the lane a proceed names (DRE-7112)
 
 #: The ask's first line — a machine prefix, so the sweep reads a standing ask
 #: as its own comment.
@@ -71,10 +71,11 @@ FIRST_LINE = ("🙋 The build agent stopped on this card and the sweep could not
 QUESTION = "Which way should this card go?"
 WHO = "the build agent"
 
-#: The closing line, before the agent's run.
-CLOSING = ("Answer here, then move this card to **Todo** to proceed (a fresh run "
-           f"picks up your guidance), or to **{QUEUE_LANE}** to drop it. Asked by the "
-           "sweep; the agent's run: ")
+#: The closing line, before the agent's run. "Proceed" names the lane whose
+#: entry dispatches a build (`lane_contract.DISPATCH_LANE`, DRE-7112).
+CLOSING = (f"Answer here, then move this card to **{DISPATCH_LANE}** to proceed (a "
+           f"fresh run picks up your guidance), or to **{QUEUE_LANE}** to drop it. "
+           "Asked by the sweep; the agent's run: ")
 NOT_RECORDED = "not recorded"
 
 #: How much of the Question line the note quotes.

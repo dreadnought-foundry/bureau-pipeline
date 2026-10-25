@@ -144,15 +144,17 @@ owns the requeue once the run has actually CONCLUDED without a PR: dead-run
 handling as today, never over a live run.
 
 The cap is a budget, and a human can REFILL it: `linear_ops.py unpark <CARD>`
-clears the hold label, posts a `dead-run-budget-reset` marker, and returns the
-card to Todo. The prior dead count is then only the `dead-run-requeue` comments
+clears the hold label, posts a `dead-run-budget-reset` marker, and restarts the
+card's build in the start lane, `lane_contract.START_LANE` (DRE-7109). The prior
+dead count is then only the `dead-run-requeue` comments
 AFTER that marker (linear_ops.count_comments(..., since=RESET_TAG)) — so a card
 held for a reason that was never about the card (a fleet-wide model outage;
 DRE-2308/2309/2310) gets a genuinely fresh set of attempts instead of re-holding
 on its first death forever.
 
 This module is the no-I/O core that decides — given the prior dead count and the
-death class — whether to REQUEUE (→ Todo) or HOLD (→ Queued + needs-human), and
+death class — whether to REQUEUE (→ Queued, which the sweep promotes again) or
+HOLD (→ Queued + needs-human), and
 what comment(s) to post. The workflow does the Linear writes; the decision is
 unit-tested here so the "is_error counts toward the cap" regression is pinned.
 """
@@ -186,11 +188,18 @@ import credential_rotation  # noqa: E402 — after the path insert, by design
 # of the line it writes. Stdlib-only at module level, so no import cycle.
 import stream_watchdog  # noqa: E402 — after the path insert, by design
 
+# The two waits a build death can be (DRE-7795): `KINDS` is the contract a
+# `--wait-kind` is checked against (DRE-7800). Stdlib-only at module level —
+# it imports its own readers inside the functions that need them — so no cycle.
+import vendor_wait  # noqa: E402, RUF100 — after the path insert, by design
+
 # The queue lane (DRE-6745): the park writes `QUEUE_LANE`, the planning exit's
 # destination — the lane `Queued` replaces until DRE-6742 moves the exit, then
 # `Queued` — and never a name of its own. Read where it is written, so a test
-# that moves the exit moves the park and every receipt that names it.
-from lane_contract import QUEUE_LANE  # noqa: E402 — after the path insert, by design
+# that moves the exit moves the park and every receipt that names it. A requeue
+# lands there too (DRE-7111), where the sweep requeues a dead run (DRE-7108),
+# and the un-park's receipt names the start lane its restart writes (DRE-7109).
+from lane_contract import QUEUE_LANE, START_LANE  # noqa: E402 — after the path insert, by design
 
 DEAD_TAG = "dead-run-requeue"
 HOLD_LABEL = "needs-human"
@@ -199,6 +208,20 @@ HOLD_LABEL = "needs-human"
 # limit_recovery, and the marker's own paragraph names it. Six hours, because
 # the Claude usage window is five: a reset five hours out is a real wait.
 LIMIT_DEATH_CLOCK_MINUTES = int(os.environ.get("LIMIT_DEATH_CLOCK_MINUTES", "360"))
+# A vendor wait's reset (DRE-7800): a `vendor-transient` marker comes back this
+# many minutes after the run ended, because a 529 clears in seconds and five
+# minutes is one sweep pass. A `rotation` marker's reset is the run's end
+# itself — the renewed token is already in place.
+VENDOR_WAIT_MINUTES = 5
+# A wait is bounded (DRE-7801). A wait spends no strike, so without a cap a card
+# that meets the same refusal run after run would wait forever. The bound
+# counts waits IN A ROW, not waits in a day: the thread the report script
+# passes is bare comment bodies with no times on them, so the count is
+# positional — the build wait markers since the newest strike. At this many,
+# the next wait death is a strike again. The dead-run cap still holds the card
+# after its strikes, so a card waits at most (REQUEUE_CAP + 1) * this many
+# times before it is held for a person.
+WAIT_REPEAT_CAP = 2
 REQUEUE_CAP = 2  # requeue at most twice (attempts 1,2,3), then hold
 
 # Turn exhaustion's own budget tag and cap (DRE-2312). The string discipline
@@ -658,10 +681,15 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
         first += f" account={account}"
     if assumed:
         first += " assumed=yes"
-    wall = (
-        "the Claude account's usage limit" if kind == "claude"
-        else "Linear's request budget (the workspace's hourly quota)"
-    )
+    # The two vendor waits (DRE-7800) are named in plain words too: a build
+    # death the reader called a wait is a wall the card never put up.
+    wall = {
+        "claude": "the Claude account's usage limit",
+        vendor_wait.ROTATION: "the access token our own renewal replaced",
+        vendor_wait.VENDOR_TRANSIENT: (
+            "the model service refusing for a moment (a 529 or 5xx)"
+        ),
+    }.get(kind, "Linear's request budget (the workspace's hourly quota)")
     if assumed:
         back = (
             f"The run named no reset time, so the reset is assumed five hours "
@@ -672,9 +700,10 @@ def limit_marker(kind: str, stage: str, reset: datetime | None, run_id: str,
             f"is handed to a person."
         )
     elif reset:
+        over = "the wait is over" if kind in vendor_wait.KINDS else "the window resets"
         back = (
             f"The reconcile sweep re-enters the {stage} stage on its own once "
-            f"the window resets (at {pacific(reset)})."
+            f"{over} (at {pacific(reset)})."
         )
     elif kind == "linear":
         back = (
@@ -755,10 +784,24 @@ class LimitDeath:
                             reset_assumed=self.reset_assumed)
 
 
+def wait_death(kind: str, run_id: str, end: datetime) -> LimitDeath | None:
+    """A build death `vendor_wait` called a wait, as the `LimitDeath` that
+    fills `decide`'s `limit` (DRE-7800), or None for a kind outside
+    `vendor_wait.KINDS`. `end` is the run's end; a `rotation` comes back at
+    it and a `vendor-transient` VENDOR_WAIT_MINUTES after it."""
+    if kind not in vendor_wait.KINDS:
+        return None
+    reset = end.astimezone(UTC)
+    if kind == vendor_wait.VENDOR_TRANSIENT:
+        reset += timedelta(minutes=VENDOR_WAIT_MINUTES)
+    return LimitDeath(kind=kind, stage="build", reset=reset, run_id=run_id or "unknown")
+
+
 class Decision:
     """What to do about a dead run.
 
-    action   — "requeue" (→ Todo), "hold" (→ Queued + needs-human label),
+    action   — "requeue" (→ `QUEUE_LANE`, promoted again by the sweep —
+               DRE-7111), "hold" (→ Queued + needs-human label),
                "replan" (DRE-4366: a turn-cap death before implementation
                green — → Planning, no label, no retry; DRE-6178: a silent
                death at the dead-run cap whose budget has not tried the
@@ -921,7 +964,9 @@ def decide(
     carrying neither budget tag and no `model-error:` marker, no state move,
     no hold label — the reconcile sweep brings the card back
     (limit_recovery.py) once the reset time has passed or the account has
-    switched.
+    switched. A build death `vendor_wait` called a wait (DRE-7800) arrives
+    here too, as `wait_death()`'s `LimitDeath`: the CLI's `--wait-kind` fills
+    this same parameter, so it is ranked exactly where every limit is.
 
     `split_tried`/`deaths`/`footprint` (DRE-6178): the planner gets a card once
     before the dead-run cap holds it — on the SILENT class only, the one death
@@ -1067,7 +1112,7 @@ def decide(
                 f"🪦 {TURN_TAG}: the agent ran out of steps — it hit {facts}, "
                 f"having reached {_marker(last_progress)}. That is budget, not "
                 f"size: the work "
-                f"was finished and the run was not. Requeued to Todo for one "
+                f"was finished and the run was not. Requeued to {QUEUE_LANE} for one "
                 f"more attempt at the same budget (turn exhaustion "
                 f"{prior_dead + 1}/{turn_cap + 1}). If that run also dies past "
                 f"implementation green, the card parks in {QUEUE_LANE} with the "
@@ -1126,7 +1171,7 @@ def decide(
         return Decision(
             "requeue",
             [
-                f"🪦 {DEAD_TAG}: {note}. Requeued to Todo for a fresh attempt "
+                f"🪦 {DEAD_TAG}: {note}. Requeued to {QUEUE_LANE} for a fresh attempt "
                 f"(attempt {prior_dead + 1}/{cap + 1}).{kept}{run_suffix}"
             ],
         )
@@ -1166,7 +1211,7 @@ def decide(
     return Decision(
         "requeue",
         [
-            f"🪦 {DEAD_TAG}: agent died with {cause} — requeued to Todo for a "
+            f"🪦 {DEAD_TAG}: agent died with {cause} — requeued to {QUEUE_LANE} for a "
             f"fresh attempt (dead run {prior_dead + 1}/{cap + 1})."
             f"{run_suffix}{error_marker_line}"
         ],
@@ -1254,6 +1299,24 @@ def death_lines(comment_bodies) -> list[str]:
         for body in _since_reset(comment_bodies)
         if DEAD_TAG in (body or "")
     ]
+
+
+def waits_in_a_row(comment_bodies) -> int:
+    """How many build waits (DRE-7800's `rotation` and `vendor-transient`
+    markers) this budget holds since its newest `dead-run-requeue` strike
+    (DRE-7801). A Claude or Linear wall, and a marker from any other stage, is
+    not a wait this cap bounds. Pure, the shape of `split_tried`."""
+    bodies = _since_reset(comment_bodies)
+    for i in range(len(bodies) - 1, -1, -1):
+        if DEAD_TAG in (bodies[i] or ""):
+            bodies = bodies[i + 1:]
+            break
+    count = 0
+    for body in bodies:
+        marker = parse_limit_marker(body)
+        if marker and marker["stage"] == "build" and marker["kind"] in vendor_wait.KINDS:
+            count += 1
+    return count
 
 
 def count_of(comment_bodies, tag: str) -> int:
@@ -1447,7 +1510,7 @@ def reset_comment(note: str = "") -> str:
     tail = f" Operator note: {note}" if note else ""
     return (
         f"♻️ {RESET_TAG}: un-parked by a human — the '{HOLD_LABEL}' label is "
-        f"cleared and the card is back in Todo with a FULL set of attempts "
+        f"cleared and the card is back in {START_LANE} with a FULL set of attempts "
         f"({REQUEUE_CAP + 1}). Agent deaths recorded above this line no longer "
         f"count toward the hold cap; only deaths after it do.{tail}"
     )
@@ -1465,6 +1528,19 @@ def _flag_value(rest: list[str], flag: str) -> str:
         if i + 1 < len(rest):
             return rest[i + 1]
     return ""
+
+
+def _run_end(rest: list[str]) -> datetime:
+    """The run's end: `--now`, else the current UTC time — the clock both a
+    `--limit-log` reset and a `--wait-kind` reset count from."""
+    now_raw = _flag_value(rest, "--now")
+    try:
+        now = datetime.fromisoformat(now_raw) if now_raw else datetime.now(UTC)
+    except ValueError:
+        now = datetime.now(UTC)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    return now
 
 
 #: The two reasons a park here is stamped with (DRE-6178): the dead-run cap
@@ -1511,7 +1587,7 @@ def _cmd_park(identifier: str, reason: str = "") -> int:
     def write_state() -> None:
         # --park: a deliberate HOLD-cap park (DRE-1403). Without it the
         # DRE-1885 building-card guard re-routes this In Progress → queue-lane
-        # move back to Todo and the loop returns. The destination is
+        # move to the start lane and the loop returns. The destination is
         # `lane_contract.QUEUE_LANE`, imported by name and readable statically,
         # so this stays the ONE lane this module can write
         # (ready_lane_writers.py, DRE-2859; DRE-6745).
@@ -1543,6 +1619,8 @@ def main(argv: list[str]) -> int:
              [--run-url U]
              [--pre-agent [--failed-step NAME] [--rate-limited]]
              [--credential-expiry [--push-status N] [--artifact NAME]]
+             [--limit-log PATH --workflow NAME --run-id ID [--account L]]
+             [--wait-kind KIND --run-id ID] [--now ISO]
       park <CARD> --reason dead-run-cap|turn-cap-park
       park-unlanded [--run-url U] [--turn-exhaustion]
       turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]
@@ -1561,7 +1639,9 @@ def main(argv: list[str]) -> int:
     hand-off (DRE-6178): `split_tried` and `death_lines` over it, so the shell
     carries no copy of the rule. No file, or one that cannot be read, passes
     `split_tried=None` and the answer is exactly what it was before the
-    hand-off existed.
+    hand-off existed. With --wait-kind the same thread is read for
+    `waits_in_a_row` (DRE-7801): at WAIT_REPEAT_CAP the wait is dropped and the
+    death decides as without the flag; no thread is zero waits.
 
     A turn-cap "replan" body is completed here, not in decide(): the run's own markers
     and, when the agent wrote one before it died, the hand-back at
@@ -1584,6 +1664,7 @@ def main(argv: list[str]) -> int:
              "[--failed-step NAME] [--rate-limited] [--credential-expiry] "
              "[--push-status N] [--artifact NAME] [--run-url U] "
              "[--limit-log PATH --workflow NAME --run-id ID [--account L] "
+             "[--now ISO]] [--wait-kind rotation|vendor-transient --run-id ID "
              "[--now ISO]] | "
              "park <CARD> --reason <code> | park-unlanded [--run-url U] [--turn-exhaustion] | "
              "turn-noted [--exit NAME] [--execution-file PATH] [--run-url U]")
@@ -1653,13 +1734,7 @@ def main(argv: list[str]) -> int:
         kind = limit_kind(limit_text)
         stage = limit_stage(_flag_value(rest, "--workflow"), failed_step)
         if kind and stage:
-            now_raw = _flag_value(rest, "--now")
-            try:
-                now = datetime.fromisoformat(now_raw) if now_raw else datetime.now(UTC)
-            except ValueError:
-                now = datetime.now(UTC)
-            if now.tzinfo is None:
-                now = now.replace(tzinfo=UTC)
+            now = _run_end(rest)
             # DRE-5455: a Claude wall that names no reset gets one usage
             # window from the run's own completion time, marked as assumed.
             # A stated reset is never assumed over, and Linear is unchanged.
@@ -1675,6 +1750,45 @@ def main(argv: list[str]) -> int:
                 account=_flag_value(rest, "--account") or None,
                 reset_assumed=reset_assumed,
             )
+    # DRE-7800: a build death `vendor_wait` called a wait fills the same
+    # `limit` — the CLI's second way to, never a second parameter. A wall
+    # `--limit-log` read wins: it names the wall the vendor stated and its own
+    # reset, the fuller account of the same death. A kind outside the
+    # reader's contract is refused out loud and the death decides as without it.
+    # DRE-7801: a card that has already waited WAIT_REPEAT_CAP times in a row
+    # decides as without the flag too — a strike, with the reason added to its
+    # receipt when that receipt spends one. No thread, or one that cannot be read, is zero waits: an
+    # unreadable thread never spends a strike on its own.
+    wait_kind = _flag_value(rest, "--wait-kind")
+    waited_out = ""
+    if wait_kind:
+        wait = wait_death(wait_kind, _flag_value(rest, "--run-id"), _run_end(rest))
+        waits = 0
+        if wait is not None and limit is None and comments_path:
+            try:
+                import json as _json
+
+                with open(comments_path) as fh:
+                    bodies = _json.load(fh)
+                waits = waits_in_a_row(bodies) if isinstance(bodies, list) else 0
+            except Exception as exc:  # noqa: BLE001 — an unreadable thread spends no strike
+                print(f"dead_run: could not read the card's thread from "
+                      f"{comments_path} ({exc}) — counting no waits, so this "
+                      f"one waits", file=sys.stderr)
+        if wait is None:
+            print(f"dead_run: --wait-kind {wait_kind!r} is not one of "
+                  f"{', '.join(vendor_wait.KINDS)} — the death decides as it "
+                  f"would without it", file=sys.stderr)
+        elif limit is not None:
+            print(f"dead_run: --limit-log read a {limit.kind} wall and --wait-kind "
+                  f"named {wait_kind} — the {limit.kind} marker is written and "
+                  f"the {wait_kind} wait is dropped", file=sys.stderr)
+        elif waits >= WAIT_REPEAT_CAP:
+            times = "twice" if WAIT_REPEAT_CAP == 2 else f"{WAIT_REPEAT_CAP} times"
+            waited_out = (f"This card has already waited {times} in a row on a "
+                          f"vendor or renewal refusal, so this death is counted.")
+        else:
+            limit = wait
     turn_facts = ""
     if turn_exhaustion and exec_path:
         import check_agent_result  # local: only this branch needs the loader
@@ -1743,6 +1857,13 @@ def main(argv: list[str]) -> int:
         deaths=deaths,
     )
     body = d.comments[0]
+    if waited_out and DEAD_TAG in body:
+        # Its own paragraph under the receipt's first line, so `death_lines`
+        # quotes the strike as it always has and the `model-error:` marker
+        # stays on its own line. Only on a receipt that spends a strike: a
+        # cancelled run, a pre-agent fault or a turn-cap death counts nothing.
+        first, _, more = body.partition("\n")
+        body = f"{first}\n\n{waited_out}" + (f"\n{more}" if more else "")
     if d.action == "replan" and turn_exhaustion:
         body += replan_evidence(markers, _read_handback(handback_path))
     print(d.action)

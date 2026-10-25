@@ -1,0 +1,52 @@
+# Self-host trigger stub (DRE-1929, adr-bureau-pipeline-self-host) — this repo
+# consumes its OWN reusable workflows exactly like a product repo. The stub
+# owns the trigger, concurrency, and permissions; everything else is central.
+#
+# @main on purpose: bureau-pipeline IS the canary channel (self-proof-task.yml
+# says why, and the fully qualified form's reason).
+#
+# The proof shadow (DRE-7287): the proof dispatcher's `proof-shadow`
+# dispatch (`plan_run.PROOF_SHADOW_EVENT`), fired beside each confirmed real
+# proof run while the repo variable PROOF_SHADOW_MODEL is set. It runs the same
+# proof card on the payload's `shadow_model` through proof-task.yml's shadow
+# mode (DRE-7286), which writes nothing but a `proof-shadow/<CARD>-<run id>`
+# branch.
+#
+# ITS OWN NAME, NOT `Proof Task`. The medic watches `Proof Task`, and a shadow
+# is a measurement, not a pipeline run: one that failed would be retried, or
+# filed as a `Pipeline failure: Proof Task` card, for a model that could not
+# finish or a rate limit. `Proof Shadow` is declared in
+# scripts/check_workflow_watchers.py's NOT_WATCHED with that reason, and
+# self-proof-task.yml keeps listening for `proof-execute` only, so a shadow
+# event never wakes `Proof Task`.
+name: Proof Shadow
+
+on:
+  repository_dispatch:
+    types: [proof-shadow]
+
+# Its own group per card, never the real run's `proof-<CARD>`: a shadow never
+# queues behind, or cancels, the real run beside it. A second shadow for the
+# same card queues behind the first.
+concurrency:
+  group: proof-shadow-${{ github.event.client_payload.identifier }}
+  cancel-in-progress: false
+
+# self-proof-task.yml's four grants, for its reasons: a reusable workflow can
+# hold no more permission than the stub that calls it, and proof-task.yml's
+# shadow mode narrows what it writes itself (the agent's token is minted
+# read-only; `Push the shadow record` is the one writing step).
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+  actions: write
+
+jobs:
+  call:
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/proof-task.yml@main
+    with:
+      pipeline_ref: main
+      shadow: true
+      model: ${{ github.event.client_payload.shadow_model }}
+    secrets: inherit

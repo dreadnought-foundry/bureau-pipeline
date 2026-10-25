@@ -48,7 +48,8 @@ cores: each is the whole model suite, and one after another they would cost
 the sum of their wall clocks. The copy, the save and the inner run are
 `tests/console_change_walk.py`'s, shared by every walk, and the inner run
 holds no walk (DRE-6909). The walks run in their own job
-(`scripts/unit_test_parts.py run-walks`), never in a numbered part.
+(`scripts/unit_test_parts.py run-walks`), never in a numbered part. Each job runs one shard of the cases, `SHARD`, which the helper picks
+(DRE-7907); with no shard named, every case.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_console_project_model_keeps_the_suite_green.py -q
 """
@@ -159,6 +160,10 @@ GRID = grid()
 for _name, (_slug, _kind, _model) in GRID.items():
     CASES[_name] = ([[_set(_slug, _kind, _model)]], {_slug: {_kind: _model}})
 
+#: The cases this job's shard runs (DRE-7907) — every case when no shard is
+#: named. The coverage tests read the whole `CASES`.
+SHARD = walk.shard(walk.case_names(CASES))
+
 
 def reset_projects(tree: Path) -> None:
     """Empty the copy's `projects` block and regenerate its mirrors."""
@@ -189,7 +194,7 @@ def run_case(name: str, base: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def results(tmp_path_factory) -> dict:
-    return walk.run_all(CASES, run_case, tmp_path_factory.mktemp("dre6858"))
+    return walk.run_all(SHARD, run_case, tmp_path_factory.mktemp("dre6858"))
 
 
 def test_the_suite_covers_the_six_files_and_every_model_test():
@@ -237,7 +242,7 @@ def test_the_grid_reads_a_project_added_to_the_repo_map(monkeypatch, tmp_path):
     assert all(case[2] is not None for case in added.values()), added
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", SHARD)
 def test_the_saved_change_is_in_the_tree(results, name):
     """A save that never landed would leave the suite green for the wrong
     reason."""
@@ -248,7 +253,7 @@ def test_the_saved_change_is_in_the_tree(results, name):
                               for slug, exceptions in want.items()]
 
 
-@pytest.mark.parametrize("name", list(CASES))
+@pytest.mark.parametrize("name", SHARD)
 def test_every_model_test_passes_after_the_save(results, name):
     got = results[name]
     assert got["failed"] == [], "\n".join(got["failed"]) + "\n\n" + got["tail"]

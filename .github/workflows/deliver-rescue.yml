@@ -188,11 +188,12 @@ jobs:
             --base "${BASE:-main}" --card-url "$CARD_URL"
 
       # The card moves only when there IS a pull request, and only from the
-      # lanes a build leaves behind — the same `advance` the Report step makes
-      # for a PR the agent opened. `|| true`: the pull request is the delivery,
-      # and a Linear write that fails must not fail a job that already
-      # succeeded (the reconcile sweep re-reads the state). For a fix run's
-      # card this is a no-op: it is already past those lanes. A build run's
+      # lane a build leaves behind, In Progress — no writer puts a card in the
+      # old start lane since the flip (DRE-7120, DRE-7121) — the same `advance`
+      # the Report step makes for a PR the agent opened. `|| true`: the pull
+      # request is the delivery, and a Linear write that fails must not fail a
+      # job that already succeeded (the reconcile sweep re-reads the state).
+      # For a fix run's card this is a no-op: it is already past that lane. A build run's
       # delivery that found the card's work already up, or put it on the
       # card's open pull request (DRE-6868), is green too, and right to move
       # the card: that pull request is open.
@@ -203,4 +204,4 @@ jobs:
           CARD: ${{ inputs.card }}
         run: |
           python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" \
-            "In Review" "In Progress,Todo" || true
+            "In Review" "In Progress" || true

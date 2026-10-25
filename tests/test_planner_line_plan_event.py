@@ -260,9 +260,11 @@ LABEL_RULE_SITES = {
     ("linear_ops.py", "_redispatch_in_place"),
 }
 # The sweep's re-fire of a promoted card no run started on is a BUILD, named
-# outright as `plan_run.EXECUTE_EVENT` (DRE-7108).
+# outright as `plan_run.EXECUTE_EVENT` (DRE-7108). So is the planner gate's
+# hand-back of a one-off card it was wrongly handed (DRE-7110).
 BUILD_SITES = {
     ("reconcile.py", "redispatch"),
+    ("dedupe_dispatch.py", "_hand_back"),
 }
 # Passes `event=` from its `--route`: `activate` (the default) hands it None,
 # which is the label rule; `plan` hands it PLAN_EVENT (DRE-5376).

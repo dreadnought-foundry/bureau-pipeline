@@ -445,7 +445,7 @@ def test_the_matched_card_carries_the_contract_shape():
         "identifier": "DRE-5942", "title": "stranded runs re-run",
         "state": "Done", "completed_at": "2026-10-07T01:18:52.501Z",
         "parent": "DRE-5910", "ancestors": ["DRE-5910"],
-        "ancestors_cut": False, "terms": ["stranded run"],
+        "ancestors_cut": False, "labels": [], "terms": ["stranded run"],
         "prs": [unread_pr(AB, 3297)]}]
     json.dumps(rows)
 

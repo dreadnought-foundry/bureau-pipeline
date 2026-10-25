@@ -332,9 +332,6 @@ def _lane_refusal(lane: str | None) -> str:
     if lane == "Green Light":
         return (head + " — both critics passed this plan and it waits for a "
                 "decision, so nothing here is waiting on a review")
-    if lane == "Todo":
-        return (head + " — an epic in Todo is with nobody, so nothing here is "
-                "waiting on a review")
     return head + " — nothing here is waiting on a review"
 
 
@@ -557,8 +554,9 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
     `plan_critic` or `planner_queue` rather than re-derived:
 
       * a lane that is not Planning or In Progress. In Green Light both
-        critics passed the plan; in Todo the epic is with nobody; anywhere
-        else there is no plan under review. An UNREADABLE lane is unknown,
+        critics passed the plan; anywhere else — a start lane waiting on
+        the dispatch lane among them — the epic is in a lane its plan does
+        not explain, and there is no plan under review. An UNREADABLE lane is unknown,
         and unknown says nothing.
       * the planner line. An epic waiting for a planner slot is quiet inside
         the line's bound and the stall watchdog's past it.

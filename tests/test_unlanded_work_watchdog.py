@@ -22,7 +22,7 @@ halves that share one branch listing and one PR listing:
       merged), gets ONE plain-English comment on its card after
       UNLANDED_MINUTES — naming the branch and the route out: open the PR, and
       the work meets the same gates as everything else.
-  (C) a HAND-BUILT card in Todo / In Progress with nothing to point at — no
+  (C) a HAND-BUILT card in a start lane with nothing to point at — no
       card branch and no PR — is reported after HAND_IDLE_MINUTES. This is the
       alarm that replaces what the `hand-built` label suppresses: it measures
       the HAND thing (no branch, or a branch with no PR) rather than the FLEET
@@ -319,11 +319,19 @@ def test_a_branch_whose_card_waits_in_todo_is_not_reported():
     it" names the wrong action and invites a duplicate PR. A Todo card that
     was never dispatched is flag_stranded's no-run case, not this alarm's."""
     stale = reconcile.UNLANDED_MINUTES + 1
-    assert sweep(compare={BRANCH: (3, stale)}, states={CARD: "Todo"})[0] == []
+    # The contract names no start lane ahead of the dispatch lane since
+    # DRE-7660, so the skip is exercised against a stand-in.
+    with mock.patch.object(reconcile, "PROMOTED_LANES", ("Todo",)):
+        assert sweep(compare={BRANCH: (3, stale)}, states={CARD: "Todo"})[0] == []
+
+
+def test_the_shipped_contract_promotes_into_no_lane_ahead_of_the_dispatch_lane():
+    """Todo's entry is gone (DRE-7660): no lane is skipped as promoted."""
+    assert reconcile.PROMOTED_LANES == ()
 
 
 def test_a_branch_whose_card_is_in_progress_in_the_same_shape_still_speaks():
-    """The Todo skip is a lane skip, not a blanket one: the same aged,
+    """The promoted-lane skip is a lane skip, not a blanket one: the same aged,
     PR-less branch on an In Progress card is still reported."""
     stale = reconcile.UNLANDED_MINUTES + 1
     comments, _, _ = sweep(

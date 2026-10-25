@@ -391,14 +391,15 @@ class TestTheOneOffIsActuallyPromoted:
         card["description"] = ONE_OFF_BODY
         return card
 
-    def test_a_parentless_one_off_carrying_its_route_verdict_reaches_todo(self):
+    def test_a_parentless_one_off_carrying_its_route_verdict_reaches_in_progress(self):
         exit_plan = planning_route.exit_plan(_read_card(), [_stamp("one-off")])
         stamped = routing_verdict.verdict_comment(exit_plan.verdict, exit_plan.reason)
         board = _Board(self._one_off_in_backlog([_stamp("one-off"), stamped]))
 
         assert board.promote() == 1
-        assert board.lane_of(CARD) == "Todo"
-        assert board.advanced == [(CARD, "Todo", ",".join(lane_contract.QUEUE_LANES))]
+        assert board.lane_of(CARD) == "In Progress"
+        assert board.advanced == [
+            (CARD, "In Progress", ",".join(lane_contract.QUEUE_LANES))]
 
     def test_the_same_card_without_that_verdict_does_not(self):
         """The pairing that makes the test above mean something: the verdict

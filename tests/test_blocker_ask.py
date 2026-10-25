@@ -70,8 +70,8 @@ DECLARED = (
 
 FIRST_LINE = ("🙋 The build agent stopped on this card and the sweep could not act "
               "on its note — it needs your call.")
-CLOSING = ("Answer here, then move this card to **Todo** to proceed (a fresh run "
-           f"picks up your guidance), or to **{lane_contract.QUEUE_LANE}** to drop it. "
+CLOSING = ("Answer here, then move this card to **In Progress** to proceed (a fresh "
+           f"run picks up your guidance), or to **{lane_contract.QUEUE_LANE}** to drop it. "
            "Asked by the "
            "sweep; the agent's run: ")
 
@@ -370,3 +370,13 @@ class TestTheModuleShape:
             env={**os.environ, "PYTHONPATH": str(ROOT / "scripts")},
         )
         assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_closing_line_proceeds_through_the_dispatch_lane():
+    """DRE-7112: the CEO's "proceed" names the lane whose entry starts a
+    build, `lane_contract.DISPATCH_LANE` — `In Progress` on the shipped
+    contract, as every sibling's instruction does."""
+    assert lane_contract.DISPATCH_LANE == "In Progress"
+    assert module.CLOSING == CLOSING
+    assert f"move this card to **{lane_contract.DISPATCH_LANE}** to proceed" in module.CLOSING
+    assert "Todo" not in module.CLOSING

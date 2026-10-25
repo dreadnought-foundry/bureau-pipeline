@@ -315,7 +315,9 @@ class AgentsRegistryTest(unittest.TestCase):
         App token, the Linear keys and the model credential — never a
         person's key, and nothing the build agent does not already hold
         beyond `GH_READ_TOKEN`. Read off the agent step, like every
-        credential check here."""
+        credential check here. The one build credential it does not hold is
+        the plant probe (DRE-7513), a throwaway handed to the build agent
+        alone so a planted echo proves the build log scrub."""
         roster = {a["name"]: a for a in load()}
         self.assertIn("proof", roster)
         proof = roster["proof"]
@@ -323,7 +325,9 @@ class AgentsRegistryTest(unittest.TestCase):
         self.assertEqual("briefs/proof.md", proof["briefPath"])
         self.assertEqual(400, proof["maxTurns"])
         self.assertEqual([CALLER, "dreadnought-foundry/bureau-pipeline"], proof["repoScope"])
-        allowed = set(roster["engineer"]["credentials"]) | {"GH_READ_TOKEN"}
+        build_only = {"BUREAU_PLANT_PROBE"}
+        self.assertLessEqual(build_only, set(roster["engineer"]["credentials"]))
+        allowed = (set(roster["engineer"]["credentials"]) - build_only) | {"GH_READ_TOKEN"}
         doc = yaml.safe_load(open(os.path.join(ROOT, proof["workflow"])).read())
         steps = agent_steps(doc)
         self.assertTrue(steps, "proof-task.yml runs no agent step")

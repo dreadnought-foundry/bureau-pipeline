@@ -115,6 +115,20 @@ def test_reset_comment_accepts_an_operator_note():
     assert dead_run.DEAD_TAG not in body
 
 
+def test_reset_comment_names_the_start_lane():
+    """unpark restarts the build in `lane_contract.START_LANE` (DRE-7109), so
+    the reset receipt says the card is back there — Todo under the shipped
+    contract, In Progress once the flip sets `build_start.lane` (DRE-7111)."""
+    assert f"back in {lane_contract.START_LANE} with a FULL set" in dead_run.reset_comment()
+
+
+def test_reset_comment_follows_the_start_lane_not_a_name(monkeypatch):
+    monkeypatch.setattr(dead_run, "START_LANE", "In Progress")
+    body = dead_run.reset_comment()
+    assert "back in In Progress with a FULL set" in body
+    assert "Todo" not in body
+
+
 def test_hold_comment_still_carries_the_death_tag():
     """Regression pin, not an endorsement: the hold comment DOES contain the
     tag (it is the third death's own receipt). That is exactly why an explicit

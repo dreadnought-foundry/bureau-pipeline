@@ -57,8 +57,11 @@ set -e
 #    - Refutation: the agent answered the finding with evidence. The
 #      first one on this head posts `fix-finding-refuted`, then
 #      dispatches the critic once more on DISPATCH_TOKEN (pr-review.yml
-#      in this repo, qa-review.yml elsewhere). If the dispatch fails, the
-#      card is parked. A second one on the same head posts
+#      in this repo, qa-review.yml elsewhere). If the dispatch fails, it
+#      posts `fix-attempt-disputed` naming `actions: write` and the stub
+#      that grants it, deletes the `fix-finding-refuted` comment by the id
+#      its post printed (a refused delete is a warning), and parks the
+#      card. A second one on the same head, the hold's included, posts
 #      `fix-attempt-disputed` with both quoted and parks the card.
 #    - Blocker: the agent stopped and pushed nothing. `fix_exit.py cause`
 #      reads the thread and the head's check runs for the one cause, and
@@ -88,10 +91,13 @@ set -e
 #    also posts a plain-English note on the card. A draft's card is never
 #    parked: `park_for_human` reads the PR's `isDraft` first and leaves the
 #    card where it is when it is `true`. A note that asks a person offers
-#    Todo to try again or Queued to drop the card. Queued is
+#    the start lane to try again or Queued to drop the card. Queued is
 #    `lane_contract.QUEUE_LANE`, read once through `python3 -c` like every
 #    other pipeline constant a step shell reads: the lane `Queued` replaces
 #    until the planning exit moves (DRE-6742), then `Queued` (DRE-6745).
+#    The start lane is `lane_contract.START_LANE`, and the Triage park's
+#    from-list reads `lane_contract.START_LANES` beside In Review, both
+#    read the same way (DRE-7111).
 #
 # Inputs, all from the step's `env:`:
 #   GH_TOKEN         the worker App's token: every PR read and comment
@@ -199,6 +205,13 @@ set -e
 #   workflow's own token, because the App token holds no Actions
 #   permission (DRE-1254). A stub without `actions: write` 403s, and the
 #   card is parked rather than promised a re-review that will not run.
+#   Since DRE-3576 (2026-10-25) the PR is not left promising it either:
+#   on agent-bureau PR #2433 (2026-09-10) the receipt still said
+#   `state: dispatched` after the 403, and the console read it as a
+#   recovery in flight. A refused dispatch posts `fix-attempt-disputed`
+#   first and then deletes the receipt, so the thread is never without
+#   one. The hold keeps `refuted-finding @<sha8>`, so the review a person
+#   starts is the commit's one re-review and reads the evidence.
 # 2026-09-15, DRE-3951, DRE-3484. The handoff is keyed to (repo, PR,
 #   head). The agent used to write fixed paths under /tmp, which any
 #   earlier run could leave behind. What cannot be proved to be this
@@ -335,6 +348,10 @@ if [ "$REASON_RC" -eq 4 ]; then refuse "the no-push reason is not this run's"; f
 FORMAT=$(python3 .bureau-pipeline/scripts/fix_context.py --answer-format)
 # The lane a person drops the card in, from its one source (DRE-6745).
 QUEUE_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(lane_contract.QUEUE_LANE)')
+# The start lanes a card may sit in once its build started, and the one a
+# person's retry writes, read the same way (DRE-7111).
+START_LANES=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(",".join(lane_contract.START_LANES))')
+START_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(lane_contract.START_LANE)')
 
 # Broken card: Triage plus needs-human. A judgement call is Green Light (DRE-2722, DRE-2776).
 # Never a draft's card (DRE-5801): read live, at the park, since it can go back to draft mid-run.
@@ -347,7 +364,7 @@ park_for_human() {
   # The hold carries its reason and the head it stands on — the pull
   # request's head when it was read, the run's starting head when not (DRE-6179).
   python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason fix-dispute --at "${HEAD_NOW:-$PRE_SHA}" --by agent-fix.yml || true
-  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,In Progress,Todo" || \
+  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Triage" "In Review,$START_LANES" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
 }
 
@@ -455,7 +472,7 @@ $FORMAT"
     gh pr comment "$PR" --repo "$REPO" --body-file /tmp/act-fix-refused-again.md
     if [ -n "$CARD" ]; then
       python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-        "🙋 Two fix runs finished this fix and GitHub refused both pushes, so the pipeline has stopped trying. $KEPT This needs your call. Details on PR #$PR. Answer on the PR with a first line starting Operator decision, or move this card to **Todo** to try again or to **$QUEUE_LANE** to drop it." || true
+        "🙋 Two fix runs finished this fix and GitHub refused both pushes, so the pipeline has stopped trying. $KEPT This needs your call. Details on PR #$PR. Answer on the PR with a first line starting Operator decision, or move this card to **$START_LANE** to try again or to **$QUEUE_LANE** to drop it." || true
     fi
     park_for_human
     exit 0
@@ -546,7 +563,8 @@ A person decides which reading is right.
 
 $FORMAT"
   fi
-  REFUTED_BODY="🛑 Fix attempt $ATTEMPT refuted the finding: $REFUTATION
+  REFUTED_OPENING="🛑 Fix attempt $ATTEMPT refuted the finding: $REFUTATION"
+  REFUTED_BODY="$REFUTED_OPENING
 
 $REFUTED_TAIL
 
@@ -558,10 +576,18 @@ $REFUTE_KEY"
     # Posted before the dispatch: the re-review reads it off the thread.
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted.md
     gh pr comment "$PR" --repo $REPO \
-      --body-file /tmp/act-fix-refuted.md
+      --body-file /tmp/act-fix-refuted.md > /tmp/act-fix-refuted.url
+    REFUTED_URL=$(cat /tmp/act-fix-refuted.url)
+    printf '%s\n' "$REFUTED_URL"
+    # Its id, so a refused dispatch can take the promise back (DRE-3576).
+    REFUTED_ID=$(printf '%s\n' "$REFUTED_URL" | sed -n 's/.*#issuecomment-\([0-9][0-9]*\).*/\1/p' | tail -1)
     # pr-review.yml in this repo, where qa-review.yml cannot be dispatched (DRE-2056).
     REVIEW_WF=qa-review.yml
-    [ "$REPO" = "dreadnought-foundry/bureau-pipeline" ] && REVIEW_WF=pr-review.yml
+    FIX_STUB=.github/workflows/agent-fix.yml
+    if [ "$REPO" = "dreadnought-foundry/bureau-pipeline" ]; then
+      REVIEW_WF=pr-review.yml
+      FIX_STUB=.github/workflows/self-agent-fix.yml
+    fi
     # The workflow's own token: the App token holds no Actions permission (DRE-1254).
     if GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "$REVIEW_WF" \
          --repo "$REPO" \
@@ -572,9 +598,34 @@ $REFUTE_KEY"
       fi
     else
       echo "::warning::could not dispatch $REVIEW_WF for PR #$PR — this repo's agent-fix stub needs \`actions: write\`; parking for a human instead of promising a re-review that will not run"
+      # The receipt above promised a second look nobody will take. A hold
+      # replaces it: the hold first, so the thread is never without a
+      # receipt, then the delete (DRE-3576). The hold keeps the per-commit
+      # key, so the review a person starts is this commit's one re-review.
+      HOLD_BODY="$REFUTED_OPENING
+
+Nothing was pushed. The pipeline could not start the reviewer's second look at this commit, because GitHub refused the dispatch of the review workflow ($REVIEW_WF). That dispatch rides the workflow's own token, which needs the \`actions: write\` permission granted by $FIX_STUB in this repo.
+
+A person decides which reading is right.
+
+$FORMAT
+
+$REFUTE_KEY"
+      python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+        --body "$HOLD_BODY" --out /tmp/act-fix-refuted-hold.md \
+        || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refuted-hold.md
+      printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-hold.md
+      gh pr comment "$PR" --repo $REPO \
+        --body-file /tmp/act-fix-refuted-hold.md
+      # The same delete scripts/gate_note.py makes.
+      if [ -z "$REFUTED_ID" ]; then
+        echo "::warning::could not read the id of the fix-finding-refuted comment on PR #$PR ($REFUTED_URL) — it stays on the thread, under the hold"
+      elif ! gh api --method DELETE "repos/$REPO/issues/comments/$REFUTED_ID"; then
+        echo "::warning::could not delete the fix-finding-refuted comment $REFUTED_ID on PR #$PR — it stays on the thread, under the hold"
+      fi
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-          "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look by itself. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **$QUEUE_LANE** to drop it." || true
+          "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look by itself. This needs your look. Details on PR #$PR. Move it to **$START_LANE** to retry or to **$QUEUE_LANE** to drop it." || true
       fi
       park_for_human
     fi
@@ -591,7 +642,7 @@ $REFUTE_KEY"
       --body-file /tmp/act-fix-refuted-capped.md
     if [ -n "$CARD" ]; then
       python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-        "🙋 The fix agent and the reviewer disagree about the same point twice on the same work, and the automatic second look is already spent. This needs your call. Details on PR #$PR — both sides are quoted there. Answer on the PR with a first line starting Operator decision, or move this card to **Todo** to try again or to **$QUEUE_LANE** to drop it." || true
+        "🙋 The fix agent and the reviewer disagree about the same point twice on the same work, and the automatic second look is already spent. This needs your call. Details on PR #$PR — both sides are quoted there. Answer on the PR with a first line starting Operator decision, or move this card to **$START_LANE** to try again or to **$QUEUE_LANE** to drop it." || true
     fi
     park_for_human
   fi
@@ -623,7 +674,7 @@ $FORMAT"
   # The fixer pushed nothing, so the card parks rather than stall in review.
   if [ -n "$CARD" ]; then
     python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-      "🙋 $CAUSE This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **Todo** to have the reviewer take another look, or to **$QUEUE_LANE** to drop it." || true
+      "🙋 $CAUSE This needs your call. Details on PR #$PR. Answer on the PR — comment there with a first line starting Operator decision, for example: **Operator decision** — <your answer here>. What happens next: your comment starts the fix loop on its own, normally within a minute. If that run never arrives, the pipeline sweep picks your answer up on its next pass, normally within about 15 minutes. You do not need to run anything by hand. Or move this card to **$START_LANE** to have the reviewer take another look, or to **$QUEUE_LANE** to drop it." || true
   fi
   park_for_human
 else
@@ -693,7 +744,7 @@ $FORMAT
 $ANSWERS"
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-          "🙋 Two fix runs in a row ran out of steps on this PR before finishing — both did real work and hit their step limit. That means the remaining fix is too big for one sitting, so it needs breaking into smaller pieces rather than another retry. This needs your look. Details on PR #$PR. Move it to **Todo** to try again anyway, or to **$QUEUE_LANE** to drop it." || true
+          "🙋 Two fix runs in a row ran out of steps on this PR before finishing — both did real work and hit their step limit. That means the remaining fix is too big for one sitting, so it needs breaking into smaller pieces rather than another retry. This needs your look. Details on PR #$PR. Move it to **$START_LANE** to try again anyway, or to **$QUEUE_LANE** to drop it." || true
       fi
       park_for_human
     elif [ "$ACTION" = "retry-runner-lost" ]; then
@@ -714,7 +765,7 @@ $FORMAT
 $ANSWERS"
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-          "🙋 Two fix runs in a row on PR #$PR lost their machine before the agent finished — the work itself has not failed. The pipeline is holding for a person rather than starting another run on the same commit. Move this card to **Todo** to try again, or to **$QUEUE_LANE** to drop it." || true
+          "🙋 Two fix runs in a row on PR #$PR lost their machine before the agent finished — the work itself has not failed. The pipeline is holding for a person rather than starting another run on the same commit. Move this card to **$START_LANE** to try again, or to **$QUEUE_LANE** to drop it." || true
       fi
       park_for_human
     elif [ "$ACTION" = "hold" ]; then
@@ -725,7 +776,7 @@ $FORMAT
 $ANSWERS"
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-          "🙋 The AI service failed several fix runs in a row on this PR — that looks like an outage or account problem, not bad work. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **$QUEUE_LANE** to drop it." || true
+          "🙋 The AI service failed several fix runs in a row on this PR — that looks like an outage or account problem, not bad work. This needs your look. Details on PR #$PR. Move it to **$START_LANE** to retry or to **$QUEUE_LANE** to drop it." || true
       fi
       park_for_human
     else
@@ -742,7 +793,7 @@ $ANSWERS"
       gh pr comment "$PR" --repo $REPO --body-file "$NO_PUSH_FILE"
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-          "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **Todo** to retry or to **$QUEUE_LANE** to drop it." || true
+          "🙋 The fix agent ran but produced no change the reviewer can re-check, so this card can't move on its own. This needs your look. Details on PR #$PR. Move it to **$START_LANE** to retry or to **$QUEUE_LANE** to drop it." || true
       fi
       park_for_human
     fi

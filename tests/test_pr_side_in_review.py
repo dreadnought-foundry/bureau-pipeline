@@ -267,11 +267,18 @@ class TheFromLanesAreThePreReviewLanesTest(unittest.TestCase):
             with self.subTest(lane=old):
                 self.assertNotIn(old, _from_lanes())
 
+    def test_the_old_start_lane_is_not_a_from_lane(self):
+        """Since the flip (DRE-7120) no writer puts a card in `Todo`, and a
+        card the board still answers it for is drained to `In Progress`, which
+        is on the list — so the list no longer reads it (DRE-7121)."""
+        self.assertNotIn("Todo", _from_lanes())
+        self.assertIn("In Progress", _from_lanes())
+
     def test_every_pre_review_flow_lane_but_those_is_present(self):
         flow = lane_contract.flow_lanes()
         upstream = [
             name for name in flow[: flow.index(REVIEW_LANE)]
-            if name != "Green Light"
+            if name not in ("Green Light", "Todo")
         ]
         self.assertEqual(
             [lane for lane in _from_lanes() if lane in flow], upstream,

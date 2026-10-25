@@ -1,0 +1,79 @@
+{
+  "id": "groom-replay-set",
+  "generated_at": null,
+  "lane": "Intake",
+  "population": 1,
+  "census": {
+    "bureau-pipeline": 1
+  },
+  "held_repos": [],
+  "offered": 1,
+  "held_blockers": [],
+  "capacity": 1,
+  "cycle_days": 14,
+  "window_days": 14,
+  "older_than_window": {
+    "days": 14,
+    "cards": 0,
+    "line": ""
+  },
+  "batch": {
+    "cycles": [],
+    "cards": 1
+  },
+  "repo_order": [
+    "bureau-pipeline"
+  ],
+  "sequence": [
+    {
+      "identifier": "DRE-7239",
+      "title": "bureau-pipeline: groom_replay.py turns a stored groom proposal into a run's input and reports where each card ended",
+      "position": 1,
+      "unit": "DRE-7239",
+      "epic": null,
+      "repo": "bureau-pipeline",
+      "band": null,
+      "cycle": null,
+      "cycle_id": null,
+      "projected": false,
+      "open_children": 0,
+      "reason": "",
+      "trigger": null,
+      "evidence": null,
+      "judged": false,
+      "reasons": {}
+    }
+  ],
+  "outcomes": {
+    "now": [
+      {
+        "identifier": "DRE-7239",
+        "title": "bureau-pipeline: groom_replay.py turns a stored groom proposal into a run's input and reports where each card ended",
+        "position": 1,
+        "unit": "DRE-7239",
+        "epic": null,
+        "repo": "bureau-pipeline",
+        "band": null,
+        "cycle": null,
+        "cycle_id": null,
+        "projected": false,
+        "open_children": 0,
+        "reason": "",
+        "trigger": null,
+        "evidence": null,
+        "judged": false,
+        "reasons": {}
+      }
+    ],
+    "not-now": [],
+    "dead": []
+  },
+  "collisions": {
+    "pairs": [],
+    "boilerplate": {},
+    "unreadable": []
+  },
+  "unhonoured_constraints": [],
+  "unstated_supersessions": [],
+  "cancels_refused": []
+}

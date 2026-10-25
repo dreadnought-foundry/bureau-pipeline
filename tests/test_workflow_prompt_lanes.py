@@ -252,3 +252,51 @@ class TestTheWorkflowsSayQueued:
         text = self._text("plan.yml")
         assert "the children stay in Queued until then" in text
         assert "the children stay in Backlog" not in text
+
+
+class TestTheWorkflowsStopNamingTodo:
+    """DRE-7121: since the flip (DRE-7120) no writer puts a card in `Todo`, so
+    the lane lists these six workflows run no longer read it. A card the board
+    still answers `Todo` for is drained to `In Progress` by the retirement
+    card, whose repo-wide test asserts this for every workflow; this reads the
+    same `_scan_yaml` over the six this card owns. `agent-task.yml` is
+    DRE-7110's."""
+
+    OLD = "Todo"
+    OWNED = (
+        "plan.yml",
+        "qa-review.yml",
+        "proof-task.yml",
+        "agent-fix.yml",
+        "deliver-rescue.yml",
+        "linear-sync.yml",
+    )
+
+    def test_no_non_comment_line_names_todo(self):
+        import lane_contract
+
+        named = sorted(
+            name for name in self.OWNED
+            if lane_contract._scan_yaml(str(WORKFLOWS / name), [self.OLD])
+        )
+        assert named == [], f"non-comment lines still say {self.OLD!r}: {named}"
+
+    def test_the_scan_would_see_todo_in_a_lane_list(self, tmp_path):
+        # Not vacuous: the same scan, on the advance this card rewrites, finds it.
+        probe = tmp_path / "probe.yml"
+        probe.write_text(
+            '  # requeued to Todo\n'
+            '            "In Review" "In Progress,Todo" || true\n',
+            encoding="utf-8",
+        )
+        import lane_contract
+
+        assert lane_contract._scan_yaml(str(probe), [self.OLD]) == {self.OLD}
+
+    def test_the_three_advances_read_the_lanes_a_card_is_in_after_the_flip(self):
+        qa = (WORKFLOWS / "qa-review.yml").read_text(encoding="utf-8")
+        assert '"Intake,Triage,Planning,Queued,Hand-work,In Progress"' in qa
+        rescue = (WORKFLOWS / "deliver-rescue.yml").read_text(encoding="utf-8")
+        assert '"In Review" "In Progress" || true' in rescue
+        fix = (WORKFLOWS / "agent-fix.yml").read_text(encoding="utf-8")
+        assert 'advance "$CARD" "Triage" "In Review,In Progress" ||' in fix
