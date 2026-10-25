@@ -75,6 +75,9 @@ class FakeGitHub:
         self.writes = []
         self.on_create_pr = None  # hook(fake, pr) — the test's "pipeline"
         self.on_poll = None  # hook(fake) — fired on get_pr/list_comments polls
+        # hook(fake, pr) — fired on a reopen, which in the sandbox starts a
+        # real review as the reopening bot (DRE-7957)
+        self.on_reopen = None
 
     # -- helpers for tests -------------------------------------------------
     def _new_sha(self):
@@ -252,6 +255,8 @@ class FakeGitHub:
             raise RuntimeError(f"PR #{number} head branch is gone")
         self.writes.append(("reopen_pr", number))
         pr["state"] = "open"
+        if self.on_reopen:
+            self.on_reopen(self, pr)
 
     def add_labels(self, repo, number, labels):
         self.writes.append(("add_labels", number, tuple(labels)))

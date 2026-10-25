@@ -453,6 +453,34 @@ def _label_names(pr):
     return [label["name"] for label in pr.get("labels") or []]
 
 
+def _review_on_reopen(gh, polls):
+    """The sandbox's answer to a reopen: its review stub fires on
+    `reopened`, the actor is the worker bot, so the reusable reviews for
+    real. The run sits in progress for `polls` check-run polls (one fake
+    second each), then concludes and posts a verdict bound to the head."""
+    real_list_check_runs = gh.list_check_runs
+    seen = {"polls": 0}
+
+    def reopen_starts_a_review(fake, pr):
+        fake.check_runs.setdefault(pr["head"]["sha"], []).append(
+            {"name": "qa / review", "status": "in_progress", "conclusion": None}
+        )
+        seen["pr"] = pr
+
+    def list_check_runs(repo, sha):
+        pr = seen.get("pr")
+        if pr is not None and sha == pr["head"]["sha"]:
+            seen["polls"] += 1
+            if seen["polls"] == polls:
+                run = gh.check_runs[sha][-1]
+                run["status"], run["conclusion"] = "completed", "success"
+                gh.post_verdict(pr["number"], "REQUEST_CHANGES", sha)
+        return real_list_check_runs(repo, sha)
+
+    gh.on_reopen = reopen_starts_a_review
+    gh.list_check_runs = list_check_runs
+
+
 class FixtureSelfHealTest(unittest.TestCase):
     """DRE-7957: the sandbox's Dependabot PR is a closable object that looks
     like stale debt. Closed twice as a semver-major, it turned main red and
@@ -498,6 +526,47 @@ class FixtureSelfHealTest(unittest.TestCase):
 
         self.assertTrue(result.ok, result.errors)
         self.assertEqual(gh.prs[number]["state"], "open")
+
+    def test_the_review_the_reopen_fires_is_awaited_and_its_verdict_accepted(self):
+        # The sandbox stub reviews on `reopened` and the reusable skips only
+        # actor dependabot[bot], so the harness's own reopen starts a REAL
+        # review as the worker bot: an in-flight run on the head that takes
+        # a critic's time, then a bound verdict no dispatch receipt preceded.
+        # Neither may fail the run that just healed the fixture.
+        gh = FakeGitHub()
+        number, head = _seed_closed_fixture(gh)
+        _skipped_review_runs(gh, head)
+        _review_on_reopen(gh, polls=int(dependabot_flow.CHECKS_TIMEOUT) + 50)
+        logs = []
+
+        result = framework.run_scenario(
+            dependabot_flow.SCENARIO, _ctx(gh, log=logs.append)
+        )
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(
+            dependabot_flow.receipt_count(gh.comments[number], WORKER, head), 0
+        )
+        self.assertTrue(
+            any("reopen" in line and "receipt" in line for line in logs), logs
+        )
+
+    def test_without_a_reopen_the_same_unreceipted_verdict_still_fails(self):
+        # The inverse: the tolerance is the heal's alone. An open PR whose
+        # head carries a worker-actor review and a bound verdict with no
+        # receipt still means the receipted route never ran.
+        gh = FakeGitHub()
+        number, head = _seed_real_pr(gh)
+        _skipped_review_runs(gh, head, extra=[
+            {"name": "qa / review", "status": "completed", "conclusion": "success"},
+        ])
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+
+        self.assertFalse(result.ok)
+        self.assertEqual(result.failed_phase, "verify")
+        self.assertIn("receipt", "\n".join(result.errors).lower())
 
     def test_every_fixture_write_goes_out_as_ctx_gh_and_no_other_client(self):
         # bureau-harness and bureau-pipeline are public: the reopen is the
