@@ -11,7 +11,7 @@ agent-bureau repo; the third clause added by DRE-2103).
   relay dispatches here, the `self-*` stubs (merged in PR #74) call this
   repo's own reusable workflows, and the normal build → PR → critic →
   merge-gate flow applies.
-- **The fleet consumed tagged releases at go-live; it rides `@stable`
+- **The fleet consumed tagged releases at go-live — it rides `@stable`
   now.** v1 = `7ff9374` (the commit the operator cut the annotated `v1` tag
   at), and on go-live day the product repos were pinned to `@v1` with a
   matching `pipeline_ref: v1`. Since DRE-2553 (2026-08-23) every consumer
