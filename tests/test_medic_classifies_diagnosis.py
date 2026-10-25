@@ -149,7 +149,7 @@ class TheVerdictStepTest(unittest.TestCase):
         self.assertIn("medic_next_step.py\" decide", flat)
         for flag in ("--resume-spent", "--has-open-pr", "--planning-spent"):
             self.assertIn(flag, flat)
-        self.assertIn('card_pr.py" find "$TARGET" --repo "$REPO"', flat)
+        self.assertIn('card_pr.py" find "$TARGET" --repo "$REPO" --branch "$HEAD_BRANCH"', flat)
         self.assertIn('linear_ops.py" dump-comments "$TARGET"', flat)
         self.assertIn("medic_next_step.py\" planning-spent --comments-file", flat)
 
@@ -262,6 +262,10 @@ def _run_verdict(*, verdict="bad-code", report="The tests fail on the branch.",
         "steps.target.outputs.target": target,
         "github.event.workflow_run.run_attempt": attempt,
         "needs.classify.outputs.retry": retry,
+        # Not a pull-request run, so an empty lookup still reads as no open
+        # pull request here (DRE-7925, tests/test_medic_verdict_pr_lookup.py).
+        "github.event.workflow_run.head_branch": f"agent/{CARD}-x",
+        "github.event.workflow_run.event": "workflow_dispatch",
         "github.token": "test-token",
         "github.repository": "dreadnought-foundry/atlas",
         "secrets.LINEAR_API_KEY": "test-linear-key",
@@ -321,7 +325,8 @@ class TheOpenPullRequestTest(unittest.TestCase):
         self.assertIn("--has-open-pr", _decide_call(calls))
         self.assertEqual("bad-code", outputs["class"])
         self.assertEqual("fix-path", outputs["step"])
-        self.assertIn(f"card_pr.py find {CARD} --repo dreadnought-foundry/atlas", calls)
+        self.assertIn(f"card_pr.py find {CARD} --repo dreadnought-foundry/atlas "
+                      f"--branch agent/{CARD}-x", calls)
 
     def test_merged_empty_and_unreadable_pass_no_flag(self):
         for find_out, find_rc in ((f"MERGED\t{PR_URL}", 0), ("", 0), ("", 3)):
