@@ -1,0 +1,23 @@
+{
+  "proof-waiting": {
+    "chase_after_hours": 24,
+    "due_hours": 72,
+    "chase": "One proof run on a PROOF: card in Hand-work whose event hold has stood chase_after_hours (DRE-7967); a record In Review waiting on an event is re-checked by the proof dispatcher's own 12-hour re-check instead (DRE-7951), so the one hold is never run twice.",
+    "clock": "The clock starts at the time of the card's newest 🔬 proof-waiting hold that nothing has discharged.",
+    "why": "A proof that waits on an observation stood still for 2,126.8 hours in one week (DRE-7960) because nothing said when it was overdue; three days is long enough for the event a proof waits on to happen, and a day is when one run is worth trying first."
+  },
+  "hand-work-overdue": {
+    "chase_after_hours": 24,
+    "due_hours": 72,
+    "chase": "The sweep's own once-only hand-work-overdue alarm on the card, raised for the operator at config/hand-work-age.json's hours.",
+    "clock": "The clock starts when the card entered Hand-work, or, for a PROOF: card held In Review for the operator, at the time of the hold it waits under.",
+    "why": "A person's card stood still in Hand-work for 338.7 hours in one week (DRE-7960); the alarm at a day was the chase and nothing came after it, so three days is when the wait is late and the console says so."
+  },
+  "unlanded-work-watchdog": {
+    "chase_after_hours": null,
+    "due_hours": 24,
+    "chase": "None of its own: the chase is the sweep's existing work-never-landed notice, on that notice's own clock.",
+    "clock": "The clock starts at the newest commit on the branch that no pull request has ever been opened for, the same time the work-never-landed notice measures its idle minutes from.",
+    "why": "Work with no pull request passes no gate and closes no card, and it stood still for 1,060.6 hours in one week (DRE-7960); a day is long enough to open the pull request for work somebody meant to land."
+  }
+}

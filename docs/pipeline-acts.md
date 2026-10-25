@@ -194,6 +194,16 @@ count is `timed re-run <n> of 2`, so it never spends the two re-runs counted off
 `re-run`. It has its own two per record pull request; after them, one hold for
 the operator and never a third.
 
+**Every waiting hold lifts itself** (DRE-7951). A waiting row nobody stamped —
+a prose event, or the operator's press — is read as stamped 12 hours after the
+pass that posts the hold, so that hold is time-only too, and a prose waiting
+hold posted before this lifts itself 12 hours after its post. When the rows a
+lift read were not all stamped, the run is a `re-check` — one per record head,
+spending neither budget — and the second timed re-run says it is the last.
+Re-checks have their own three per record pull request, across every head;
+after them, one hold for the operator, which the sweep alarms on, and never a
+fourth.
+
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
 | Field | Value |
@@ -437,11 +447,15 @@ whose unmet rows are all `Not met. history: …` rows (or cause rows) is held fo
 the operator's decision at once and never re-run. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to
 cause: on either trigger, beside any other unmet row, the card is held with
-`🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
-re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
-for the critic's trigger DRE-6814) — or, when every waiting row is stamped with
-a `[not-before=<T>]`, the hold is `— needs not-before=<T>` and the dispatcher
-lifts it itself once `<T>` passes, with a timed re-run (DRE-7316). A record the gate declined, or the critic
+`🔬 proof-waiting: <the waiting criteria> — needs not-before=<T>` instead of a
+re-run (DRE-6488, and for the critic's trigger DRE-6814), and the dispatcher
+lifts it itself once `<T>` passes — a person's `proof-observed` before then
+lifts it sooner. `<T>` is the latest of the rows' stamps, a stamped row
+carrying `[not-before=<T>]` (DRE-7316) and a row nobody stamped — a prose
+event, or the operator's press — read as stamped 12 hours after the pass that
+posts the hold (DRE-7951). Once lifted, stamped rows get a timed re-run, and
+rows not all stamped get one `re-check` per record head, which spends neither
+budget — three per record pull request, then one hold for the operator. A record the gate declined, or the critic
 sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
 at that head, since a re-run would read the same thing: the dispatcher puts it
 to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
@@ -458,12 +472,16 @@ The receipt is posted only after `plan_run.fire` confirms the dispatch:
 The reasons open `first proof run`, `second dispatch — no run started after`,
 `second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
 the critic's findings at`, `re-run after the gate's decline at`, `re-run after
-DRE-<n> shipped`, `re-run after the 🔬 proof-observed of` and `timed
-re-run after not-before <PT> at`; the counts are `dispatch <n> of 2`, `re-run
+DRE-<n> shipped`, `re-run after the 🔬 proof-observed of`, `timed
+re-run after not-before <PT> at`, `last timed re-run after not-before <PT> at`
+(timed re-run 2 of 2, DRE-7951) and `re-check of the waiting rows at`; the
+counts are `dispatch <n> of 2`, `re-run
 <n> of 2` (DRE-5931, through the same composer), `timed re-run <n> of 2`
 (DRE-7316 — its own budget, never counted with `re-run`), `after the CEO's
-answer` and `re-armed` (DRE-7740) — one more run on a spent
-re-run budget, which does not open `re-run` and so spends none of it. **The tag is a live key**: `proof_run_state.reading`
+answer`, `re-armed` (DRE-7740) — one more run on a spent
+re-run budget, which does not open `re-run` and so spends none of it — and
+`re-check` (DRE-7951), one per record head over waiting rows nobody stamped,
+which spends neither budget and has its own three per record pull request. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof
 run` or `second dispatch`.

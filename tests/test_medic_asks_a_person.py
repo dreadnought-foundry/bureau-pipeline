@@ -168,6 +168,8 @@ def _run_job(*, verdict="platform-fault", agent="success", report=REPORT_TEXT,
         "github.event.workflow_run.name": "Agent Task",
         "github.event.workflow_run.path": ".github/workflows/agent-task.yml",
         "github.event.workflow_run.head_branch": f"agent/{CARD}-x",
+        # An Agent Task run is dispatched, never a pull-request run (DRE-7925).
+        "github.event.workflow_run.event": "repository_dispatch",
         "github.event.workflow_run.head_sha": "abc123",
         "github.event.repository.default_branch": "main",
         "vars.BUREAU_READ_URL": "",

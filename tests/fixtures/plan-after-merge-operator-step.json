@@ -1,0 +1,49 @@
+{
+  "_readme": "A plan modeled on epic DRE-7912 (large heavy runners on studio-1), read off Linear on 2026-10-25 and trimmed to one build card, the after-merge operator step and the PROOF. `operator_card_plan` is the plan as filed: the step is the OPERATOR card DRE-7917 (`operator-step`, `no-code`), and the PROOF DRE-7919 is blocked by it and reads its result. `press_row_plan` is the same PROOF written the way DRE-7950 refuses: the step as the operator's-press row, with no operator card and no blockedBy to one. `tests/test_plan_person_press_refused.py` reads both.",
+  "epic": "DRE-7912",
+  "press_row": "waiting for the operator's press: update the helper on studio-1",
+  "operator_card_plan": [
+    {
+      "identifier": "DRE-7913",
+      "title": "agent-bureau: the split rule learns a heavy size — standard (2 cores, 4 GB) or large (4 cores, 8 GB) — in its helper, console and web copies, with studio-1's vectors",
+      "body": "The split rule learns the heavy runner's size.\n\n## Acceptance criteria\n\n- [ ] The studio-1 vectors are in `split_rule_vectors.json` and pass in all three runners of it.",
+      "labels": ["repo:agent-bureau", "initiative:bureau", "agent:engineer"],
+      "blocked_by": [],
+      "state": "Todo"
+    },
+    {
+      "identifier": "DRE-7917",
+      "title": "OPERATOR — agent-bureau: at studio-1, update the helper, bench standard, apply 3 Large Heavy + 4 Light in the night window, bench large, and re-run agent-bureau CI on the Studio",
+      "body": "The operator's steps at studio-1, once the build cards have merged and the console release carrying them is live. Nothing here is code.\n\n## Acceptance criteria\n\n- [ ] studio-1's helper runs the merged code: the operator records on this card the commit the checkout is at and the time of the restart, in PT.\n\n**Blocked by:** DRE-7913",
+      "labels": ["repo:agent-bureau", "initiative:bureau", "no-code", "agent:devops", "operator-step"],
+      "blocked_by": ["DRE-7913"],
+      "state": "Todo"
+    },
+    {
+      "identifier": "DRE-7919",
+      "title": "PROOF: agent-bureau — studio-1 runs 3 Large Heavy + 4 Light, set from the Runners tab, read live from its own heartbeat and the console's record, with a CI job run on a large runner since",
+      "body": "Proof that a Mac's heavy runners can be made large from the console. The apply itself is the operator's step on DRE-7917, which this card is blocked by.\n\n## Acceptance criteria\n\n- [ ] The Linear card DRE-7917's comments carry the commit studio-1's checkout is at and the time of the helper's restart, in PT; the record quotes them.\n\n**Blocked by:** DRE-7913, DRE-7917",
+      "labels": ["repo:agent-bureau", "initiative:bureau", "agent:ops", "no-code"],
+      "blocked_by": ["DRE-7913", "DRE-7917"],
+      "state": "Todo"
+    }
+  ],
+  "press_row_plan": [
+    {
+      "identifier": "DRE-7913",
+      "title": "agent-bureau: the split rule learns a heavy size — standard (2 cores, 4 GB) or large (4 cores, 8 GB) — in its helper, console and web copies, with studio-1's vectors",
+      "body": "The split rule learns the heavy runner's size.\n\n## Acceptance criteria\n\n- [ ] The studio-1 vectors are in `split_rule_vectors.json` and pass in all three runners of it.",
+      "labels": ["repo:agent-bureau", "initiative:bureau", "agent:engineer"],
+      "blocked_by": [],
+      "state": "Todo"
+    },
+    {
+      "identifier": "DRE-7919",
+      "title": "PROOF: agent-bureau — studio-1 runs 3 Large Heavy + 4 Light, set from the Runners tab, read live from its own heartbeat and the console's record, with a CI job run on a large runner since",
+      "body": "Proof that a Mac's heavy runners can be made large from the console.\n\n## Acceptance criteria\n\n- [ ] waiting for the operator's press: update the helper on studio-1\n\n**Blocked by:** DRE-7913",
+      "labels": ["repo:agent-bureau", "initiative:bureau", "agent:ops", "no-code"],
+      "blocked_by": ["DRE-7913"],
+      "state": "Todo"
+    }
+  ]
+}
