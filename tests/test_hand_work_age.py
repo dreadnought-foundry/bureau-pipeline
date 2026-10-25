@@ -1076,13 +1076,14 @@ def test_the_config_readme_names_the_in_review_kind():
 # (an operator reading the critic's findings…)`.
 
 #: Every hold the dispatcher writes when a budget is spent: the first run's
-#: two dispatches, each trigger's two re-runs, and the two timed re-runs
-#: (DRE-7316).
+#: two dispatches, each trigger's two re-runs, the two timed re-runs
+#: (DRE-7316), and the re-checks (DRE-7951).
 BUDGET_SPENT = [
     (proof_dispatch.EXHAUSTED_OBSERVED, proof_dispatch.EXHAUSTED_NEEDS),
     (proof_dispatch.RERUN_EXHAUSTED_OBSERVED, proof_dispatch.RERUN_EXHAUSTED_NEEDS),
     (proof_dispatch.GATE_EXHAUSTED_OBSERVED, proof_dispatch.GATE_EXHAUSTED_NEEDS),
     (proof_dispatch.TIMED_EXHAUSTED_OBSERVED, proof_dispatch.TIMED_EXHAUSTED_NEEDS),
+    (proof_dispatch.RECHECK_EXHAUSTED_OBSERVED, proof_dispatch.RECHECK_EXHAUSTED_NEEDS),
 ]
 #: ...and the two it writes when a re-run finished and read nothing new.
 UNANSWERED = [

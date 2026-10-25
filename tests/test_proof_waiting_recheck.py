@@ -15,6 +15,8 @@ Pinned here, through the dispatcher's real sweep with injected reads:
     posted, under the pipeline's own `🔬 proof-observed`;
   * a lift over rows nobody stamped dispatches a `re-check` — once per record
     head — that spends neither the re-run budget nor the timed one;
+  * re-checks have their own budget, `RECHECK_BUDGET` per record pull request
+    across every head, and then one hold for the operator, which alarms;
   * a spent re-run budget never strands a waiting row;
   * timed re-run 2 of 2 says it is the last (`LAST_TIMED_REASON`);
   * DRE-6678 replayed: three passes on the evening of 2026-10-10 dispatch
@@ -29,6 +31,8 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -287,6 +291,100 @@ def test_a_re_check_spends_neither_budget_with_both_spent(monkeypatch, capsys):
     assert [f[2] for f in h.fired] == [RECHECK]
     assert _receipt_line(h).endswith(f" — {RECHECK} (re-check)")
     assert tally.dispatched == 1
+
+
+# --------------------------------------------------------------------------- #
+# 2b. re-checks have their own budget, across heads                            #
+# --------------------------------------------------------------------------- #
+#
+# A re-check amends the record, so the record's head moves, and "one per head"
+# alone would re-check a row whose event is days away twice a day until it
+# came — each a full proof run, and nothing alarming. `RECHECK_BUDGET` per
+# record pull request, then one hold for the operator.
+
+RECHECK_HELD = (proof_dispatch.RECHECK_EXHAUSTED_OBSERVED,
+                proof_dispatch.RECHECK_EXHAUSTED_NEEDS)
+
+
+def _rechecked(n: int) -> tuple:
+    """`n` re-checks, each at an earlier head of its own, each followed by
+    the amend that moved the head on."""
+    nodes = []
+    for i in range(n):
+        nodes += [recheck_receipt(1800 - 300 * i, sha7=f"{i + 1}" * 7),
+                  comment("⏳ 5/5 re-checked", 1750 - 300 * i)]
+    return tuple(nodes)
+
+
+def _lifted_waiting(row) -> dict:
+    return time_hold("2026-10-06T08:00-07:00", 60,
+                     observed=proof_record._cut(row[0], 70))
+
+
+def test_the_re_check_budget():
+    assert proof_dispatch.RECHECK_BUDGET == 3
+    assert proof_dispatch.RECHECK_EXHAUSTED_NEEDS in proof_dispatch.OPERATOR_NEEDS
+
+
+@pytest.mark.parametrize("row", [WAITING_ROW, PRESS_ROW], ids=["event", "press"])
+def test_a_record_that_spent_its_re_checks_is_held_for_the_operator(
+        monkeypatch, capsys, row):
+    budget = proof_dispatch.RECHECK_BUDGET
+    thread = _thread(*_rechecked(budget), _lifted_waiting(row))
+    h, tally = _pass(monkeypatch, thread=thread, now=NOW, text=record_md(MET_ROW, row))
+    lines = _said(capsys)
+    assert len(_lifts(h)) == 1
+    assert h.fired == [] and tally.dispatched == 0 and tally.held == 1
+    assert h.holds == [(CARD, *RECHECK_HELD)]
+    assert any(f"re-check budget — {budget} re-checks on #900" in line
+               and "held for an operator" in line for line in lines), lines
+
+
+def test_one_re_check_short_of_the_budget_still_re_checks(monkeypatch, capsys):
+    thread = _thread(*_rechecked(proof_dispatch.RECHECK_BUDGET - 1),
+                     _lifted_waiting(WAITING_ROW))
+    h, tally = _pass(monkeypatch, thread=thread, now=NOW,
+                     text=record_md(MET_ROW, WAITING_ROW))
+    assert [f[2] for f in h.fired] == [RECHECK]
+    assert h.holds == [] and tally.dispatched == 1
+
+
+def test_re_checks_before_the_record_opened_spend_none_of_it(monkeypatch, capsys):
+    thread = _thread(*_rechecked(proof_dispatch.RECHECK_BUDGET),
+                     _lifted_waiting(WAITING_ROW))
+    h, tally = _pass(monkeypatch, thread=thread, now=NOW, pr=_declined(opened=200),
+                     text=record_md(MET_ROW, WAITING_ROW))
+    assert [f[2] for f in h.fired] == [RECHECK]
+    assert tally.dispatched == 1
+
+
+def test_the_spent_re_check_hold_stands_and_fires_nothing_after(monkeypatch, capsys):
+    """The next pass, twelve hours on: the operator's hold is no time hold,
+    so nothing lifts it and nothing is posted again."""
+    text = record_md(MET_ROW, WAITING_ROW)
+    thread = _thread(*_rechecked(proof_dispatch.RECHECK_BUDGET),
+                     _lifted_waiting(WAITING_ROW))
+    h, _ = _pass(monkeypatch, thread=thread, now=NOW, text=text)
+    (note,) = _lifts(h)
+    after = thread + [node(note, NOW),
+                      node(linear_ops.proof_waiting_line(*RECHECK_HELD), NOW)]
+    capsys.readouterr()
+    h, tally = _pass(monkeypatch, thread=after, now=NOW + TWELVE, text=text)
+    lines = _said(capsys)
+    assert h.fired == [] and h.posted == [] and h.holds == [] and tally.held == 1
+    assert any(f"re-run: held by {linear_ops.proof_waiting_line(*RECHECK_HELD)}"
+               in line for line in lines), lines
+
+
+def test_an_unpressed_press_alarms_through_the_spent_re_check_hold():
+    """The press's own hold waits for a time now; the spent re-checks' hold
+    is the operator's, so the sweep's held-for-operator read alarms on it."""
+    line = linear_ops.proof_waiting_line(*RECHECK_HELD)
+    held = node(line, NOW - timedelta(hours=30))
+    clock, kind, why_not = reconcile._held_for_operator(
+        lane_card(CARD, state="In Review", window=[held]))
+    assert clock is held, why_not
+    assert kind == "operator's-reading hold"
 
 
 # --------------------------------------------------------------------------- #
