@@ -585,7 +585,8 @@ def test_the_walk_list_installs_what_walks_json_needs():
     assert install < listing, steps
     walks_install = next(s for s in job["steps"]
                          if "setup-python-cached" in str(s.get("uses", "")))
-    assert steps[install] == walks_install, steps[install]
+    # The same install, less the walks' gate on `walk-list`'s answer (DRE-7908).
+    assert steps[install] == {k: v for k, v in walks_install.items() if k != "if"}, steps[install]
     assert "python3 scripts/unit_test_parts.py walks --json" in steps[listing]["run"]
 
 
@@ -798,3 +799,258 @@ def test_run_walks_with_no_shard_runs_every_case_as_one_shard(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert f"shard 1 of 1 of walk {rel}: 3 case(s) selected" in proc.stdout
     assert sorted(p.name for p in marks.iterdir()) == ["a", "b", "c"]
+
+
+# ---------------------------------------------------------------------------
+# 6. The walks run only when a change can reach them (DRE-7908).
+# ---------------------------------------------------------------------------
+# On 2026-10-24 PR #1119 merged one proof record and its run on main
+# (40133214810) spent 46 to 60 minutes on walks nothing in it could turn red,
+# while the channel promotion refused `unit-suite-not-finished`. `walk-list`
+# now asks `scripts/walk_reach.py` once, and every walk step is gated on the
+# answer. No document that exists is named here: a sample is
+# `docs/no-such-proof.md`.
+
+REACH = "scripts/walk_reach.py"
+GATE = "needs.walk-list.outputs.run == 'true'"
+SKIP_LINE = "skipped: no relevant change"
+
+
+def _reach_step(list_job: dict) -> tuple[int, dict]:
+    found = [(i, s) for i, s in enumerate(list_job["steps"])
+             if REACH in str(s.get("run", ""))]
+    assert len(found) == 1, f"exactly one walk-list step must ask {REACH}"
+    return found[0]
+
+
+def test_the_walk_list_holds_what_the_decision_needs():
+    """Its own token reads earlier runs (the App lacks `actions: read`,
+    DRE-1346), the history is real for the ancestry check, and the walks'
+    imports are installed before the decision imports them."""
+    key, list_job = _walk_list_job()
+    assert key == "walk-list"
+    assert list_job.get("permissions") == {"contents": "read", "actions": "read"}
+    checkout = next(s for s in list_job["steps"]
+                    if "actions/checkout" in str(s.get("uses", "")))
+    assert (checkout.get("with") or {}).get("fetch-depth") == 0, checkout
+    install = next(i for i, s in enumerate(list_job["steps"])
+                   if "setup-python-cached" in str(s.get("uses", "")))
+    i, step = _reach_step(list_job)
+    assert install < i
+    assert list_job["steps"][install]["with"]["requirements"].strip() == "requirements-dev.txt"
+    assert "if" not in step
+    assert step["env"].get("GH_TOKEN") == "${{ github.token }}"
+    outputs = list_job.get("outputs") or {}
+    sid = step.get("id")
+    assert outputs.get("run") == f"${{{{ steps.{sid}.outputs.run }}}}", outputs
+    assert outputs.get("reason") == f"${{{{ steps.{sid}.outputs.reason }}}}", outputs
+    assert "${{" not in step["run"], "inputs reach the shell through env alone"
+
+
+def test_the_push_base_is_never_event_before():
+    """Push A goes red, push B changes a doc: against `event.before` B would
+    skip and move `stable` past A. The base is the last green main commit."""
+    _, list_job = _walk_list_job()
+    assert "event.before" not in yaml.safe_dump(list_job)
+    _, step = _reach_step(list_job)
+    assert "walk_reach.py base" in step["run"]
+    assert "actions/workflows/tests.yml/runs" in step["run"]
+
+
+def test_the_walk_list_is_still_red_with_no_walk():
+    _, list_job = _walk_list_job()
+    listing = next(s for s in list_job["steps"]
+                   if "walks --json" in str(s.get("run", "")))
+    assert "if" not in listing and "||" not in listing["run"], listing
+
+
+def _stub_bin(tmp_path: Path, runs: str | None, changed: list[str] | None,
+              ancestor: str = "") -> tuple[Path, Path]:
+    """`gh` and `git` stubs on a PATH of their own: `gh` serves the run list
+    and the compare's file list (or fails where one is None) and logs every
+    call; `git merge-base --is-ancestor` holds only for `ancestor`."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "gh.log"
+    (tmp_path / "runs.json").write_text(runs or "")
+    (tmp_path / "changed.txt").write_text("".join(f"{c}\n" for c in changed or []))
+    gh = bin_dir / "gh"
+    gh.write_text(
+        "#!/usr/bin/env bash\n"
+        f"echo \"$*\" >> {str(log)!r}\n"
+        "case \"$*\" in\n"
+        f"  *actions/workflows/*) {'cat ' + repr(str(tmp_path / 'runs.json')) if runs is not None else 'exit 1'} ;;\n"
+        f"  *compare/*) {'cat ' + repr(str(tmp_path / 'changed.txt')) if changed is not None else 'exit 1'} ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac\n")
+    git = bin_dir / "git"
+    git.write_text(
+        "#!/usr/bin/env bash\n"
+        f"[ \"$1 $2 $3\" = \"merge-base --is-ancestor {ancestor}\" ]\n")
+    for path in (gh, git):
+        path.chmod(0o755)
+    return bin_dir, log
+
+
+def _run_reach(tmp_path: Path, event: str, runs=None, changed=None,
+               ancestor: str = "", head: str = "e" * 40) -> tuple[dict, str, str]:
+    _, list_job = _walk_list_job()
+    _, step = _reach_step(list_job)
+    bin_dir, log = _stub_bin(tmp_path, runs, changed, ancestor)
+    out = tmp_path / "output.txt"
+    out.write_text("")
+    env = dict(_env(), **{k: str(v) for k, v in step["env"].items()
+                          if "${{" not in str(v)})
+    env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", GITHUB_OUTPUT=str(out),
+               RUNNER_TEMP=str(tmp_path), GITHUB_REPOSITORY="test/test",
+               GH_TOKEN="test", EVENT=event, HEAD=head,
+               PR_BASE="f" * 40 if event == "pull_request" else "")
+    proc = subprocess.run(["bash", "-e", "-c", step["run"]], capture_output=True,
+                          text=True, cwd=ROOT, env=env)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    got = dict(line.split("=", 1) for line in out.read_text().splitlines() if "=" in line)
+    return got, proc.stdout, log.read_text() if log.exists() else ""
+
+
+def test_the_walk_list_step_reads_the_env_it_is_run_with_here():
+    _, step = _reach_step(_walk_list_job()[1])
+    for name in ("EVENT", "HEAD", "PR_BASE", "GH_TOKEN"):
+        assert name in step["env"], step["env"]
+    assert step["env"]["EVENT"] == "${{ github.event_name }}"
+    assert step["env"]["PR_BASE"] == "${{ github.event.pull_request.base.sha }}"
+
+
+def test_a_schedule_run_runs_every_walk_and_asks_nothing(tmp_path):
+    got, stdout, calls = _run_reach(tmp_path, "schedule")
+    assert got["run"] == "true", got
+    assert "schedule" in got["reason"], got
+    assert calls == "", "a schedule run has no range, so nothing is fetched"
+
+
+@pytest.mark.parametrize("event", ["workflow_dispatch", "merge_group"])
+def test_any_other_event_runs_every_walk(tmp_path, event):
+    got, _, _ = _run_reach(tmp_path, event)
+    assert got["run"] == "true" and event in got["reason"], got
+
+
+def test_a_pull_request_of_one_absent_doc_skips_and_says_why(tmp_path):
+    got, stdout, calls = _run_reach(tmp_path, "pull_request", changed=["docs/no-such-proof.md"])
+    assert got["run"] == "false", (got, stdout)
+    assert got["reason"], got
+    assert f"compare/{'f' * 40}...{'e' * 40}" in calls, calls
+
+
+def test_a_pull_request_touching_the_workflow_runs_and_names_it(tmp_path):
+    got, stdout, _ = _run_reach(tmp_path, "pull_request",
+                                changed=[".github/workflows/tests.yml", "docs/no-such-proof.md"])
+    assert got["run"] == "true" and ".github/workflows/tests.yml" in got["reason"], got
+    assert ".github/workflows/tests.yml" in stdout
+
+
+def test_a_compare_that_fails_runs_every_walk(tmp_path):
+    got, _, _ = _run_reach(tmp_path, "pull_request", changed=None)
+    assert got["run"] == "true" and got["reason"], got
+
+
+def _runs_body(*runs: tuple[str, str]) -> str:
+    return json.dumps({"total_count": len(runs), "workflow_runs": [
+        {"head_sha": sha, "conclusion": conclusion, "status": "completed",
+         "event": "push", "head_branch": "main",
+         "created_at": f"2026-10-24T2{i}:00:00Z"} for i, (sha, conclusion) in
+        enumerate(reversed(runs))][::-1]})
+
+
+def test_a_push_compares_from_the_last_green_commit_on_main(tmp_path):
+    green, red = "a" * 40, "b" * 40
+    got, _, calls = _run_reach(tmp_path, "push",
+                               runs=_runs_body((red, "failure"), (green, "success")),
+                               changed=["docs/no-such-proof.md"], ancestor=green)
+    assert f"compare/{green}...{'e' * 40}" in calls, calls
+    assert got["run"] == "false", got
+
+
+@pytest.mark.parametrize("case", ["lookup-fails", "no-success", "not-ancestor"])
+def test_a_push_with_no_usable_base_runs_every_walk(tmp_path, case):
+    green = "a" * 40
+    runs = None if case == "lookup-fails" else _runs_body(
+        (green, "failure" if case == "no-success" else "success"))
+    got, _, calls = _run_reach(tmp_path, "push", runs=runs,
+                               changed=["docs/no-such-proof.md"], ancestor="")
+    assert got["run"] == "true" and got["reason"], got
+    assert "compare/" not in calls, calls
+
+
+def _walks_skip_step(job: dict) -> dict:
+    ungated = [s for s in job["steps"] if "if" not in s]
+    assert len(ungated) == 1, (
+        f"exactly one walks step runs whatever walk-list answered; found {ungated}")
+    return ungated[0]
+
+
+def test_every_step_that_installs_or_runs_a_walk_is_gated_and_the_job_is_not():
+    _, job = _walks_job()
+    assert "if" not in job, "a skipped required job counts as passing"
+    skip = _walks_skip_step(job)
+    for step in job["steps"]:
+        if step is not skip:
+            assert step.get("if") == GATE, step
+    for needle in ("actions/checkout", "setup-python-cached", "run-walks"):
+        assert any(needle in str(s.get("uses", "")) + str(s.get("run", ""))
+                   for s in job["steps"] if s is not skip), needle
+    assert "run-walks" not in str(skip.get("run", ""))
+
+
+def _run_skip_step(tmp_path: Path, run: str) -> tuple[subprocess.CompletedProcess, str]:
+    _, job = _walks_job()
+    step = _walks_skip_step(job)
+    summary = tmp_path / "summary.md"
+    summary.write_text("")
+    env = dict(os.environ, GITHUB_STEP_SUMMARY=str(summary), RUN=run,
+               REASON="none of the 1 changed file(s) reach a walk")
+    assert step["env"]["RUN"] == "${{ needs.walk-list.outputs.run }}"
+    assert step["env"]["REASON"] == "${{ needs.walk-list.outputs.reason }}"
+    proc = subprocess.run(["bash", "-e", "-c", step["run"]], capture_output=True,
+                          text=True, env=env)
+    return proc, summary.read_text()
+
+
+def test_a_skipped_walk_says_so_in_its_log_and_its_summary(tmp_path):
+    proc, summary = _run_skip_step(tmp_path, "false")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    line = f"{SKIP_LINE} — none of the 1 changed file(s) reach a walk"
+    assert line in proc.stdout and line in summary, (proc.stdout, summary)
+
+
+def test_a_running_walk_prints_no_skip_line(tmp_path):
+    proc, summary = _run_skip_step(tmp_path, "true")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert SKIP_LINE not in proc.stdout + summary
+
+
+@pytest.mark.parametrize("run", ["", "maybe"])
+def test_a_walk_list_answer_that_is_neither_is_red(tmp_path, run):
+    """Every walk step is gated on `'true'`, so an answer that is neither
+    would leave the shard a silent green."""
+    proc, _ = _run_skip_step(tmp_path, run)
+    assert proc.returncode != 0, proc.stdout
+
+
+def test_the_required_check_needs_the_walk_list_and_says_why_the_walks_were_skipped(tmp_path):
+    job = _aggregate()
+    needs = job.get("needs")
+    assert "walk-list" in needs and "walks" in needs, needs
+    final = next(s for s in job["steps"] if s.get("name") == "Every part passed")
+    assert final["env"]["WALKS_RUN"] == "${{ needs.walk-list.outputs.run }}"
+    assert final["env"]["WALKS_REASON"] == "${{ needs.walk-list.outputs.reason }}"
+    summary = tmp_path / "summary.md"
+    for walks, run, code, says in (
+            ("success", "false", 0, True), ("success", "true", 0, False),
+            ("skipped", "", 1, False), ("failure", "true", 1, False)):
+        proc = subprocess.run(
+            ["bash", "-e", "-c", final["run"]], capture_output=True, text=True,
+            env=dict(os.environ, PARTS="success", WALKS=walks, WALKS_RUN=run,
+                     WALKS_REASON="none of the 1 changed file(s) reach a walk",
+                     GITHUB_STEP_SUMMARY=str(summary)))
+        assert proc.returncode == code, (walks, run, proc.stdout, proc.stderr)
+        assert (f"{SKIP_LINE} — none of the 1 changed file(s) reach a walk"
+                in proc.stdout) is says, (walks, run, proc.stdout)
