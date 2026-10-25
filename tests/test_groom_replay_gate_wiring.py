@@ -162,8 +162,9 @@ class _Expression:
     or the last, and `==`/`!=` bind tighter than both. A context name the
     caller did not supply fails, so a misspelt name is never read as empty."""
 
-    def __init__(self, text: str, context: dict):
+    def __init__(self, text: str, context: dict, functions: dict | None = None):
         self.tokens, self.at, self.context = _tokens(text), 0, context
+        self.functions = _FUNCTIONS if functions is None else functions
 
     def _peek(self) -> str | None:
         return self.tokens[self.at][1] if self.at < len(self.tokens) else None
@@ -232,7 +233,7 @@ class _Expression:
                     self._take()
                     args.append(self._or())
             self._take(")")
-            return _FUNCTIONS[value](*args)
+            return self.functions[value](*args)
         assert value in self.context, f"no context value for {value}"
         return self.context[value]
 
@@ -243,6 +244,26 @@ def evaluate(text: str, context: dict):
     if inner.startswith("${{") and inner.endswith("}}"):
         inner = inner[3:-2]
     return _Expression(inner, context).value()
+
+
+_STATUS = {"success", "failure", "always", "cancelled"}
+
+
+def job_runs(text: str, context: dict, *, needs_failed: bool,
+             canceled: bool = False) -> bool:
+    """Whether a job with this `if:` runs, as GitHub decides it: an `if:` that
+    names no status function is read as `success() && (<if>)`, and `success()`
+    is false once a job it needs has failed or the run is canceled."""
+    inner = str(text).strip()
+    if inner.startswith("${{") and inner.endswith("}}"):
+        inner = inner[3:-2]
+    if not {v for k, v in _tokens(inner) if k == "name"} & _STATUS:
+        inner = f"success() && ({inner})"
+    functions = {**_FUNCTIONS,
+                 "success": lambda: not (needs_failed or canceled),
+                 "failure": lambda: needs_failed,
+                 "cancelled": lambda: canceled}
+    return _truthy(_Expression(inner, context, functions).value())
 
 
 def render(text: str, context: dict) -> str:
@@ -367,6 +388,22 @@ def test_judge_runs_on_the_same_condition_after_replay():
     job = _jobs()["judge"]
     assert CONDITION in job["if"]
     assert job["runs-on"] == SHORT_RUNS_ON
+
+
+def test_judge_still_runs_after_a_failed_replay_and_replay_not_after_a_failed_reach():
+    jobs = _jobs()
+    ctx = {"needs.reach.outputs.reached": "true",
+           "needs.reach.outputs.cases": "3"}
+    # `judge` names a status function, so a replay that breaks partway still
+    # gets judged and its cases read as not judged rather than going unsaid.
+    assert job_runs(jobs["judge"]["if"], ctx, needs_failed=False) is True
+    assert job_runs(jobs["judge"]["if"], ctx, needs_failed=True) is True
+    # ...but never on a canceled run: a newer push replaced this one.
+    assert job_runs(jobs["judge"]["if"], ctx, needs_failed=True, canceled=True) is False
+    # `replay` names none, so GitHub's implicit `success()` skips it when
+    # `reach` fails.
+    assert job_runs(jobs["replay"]["if"], ctx, needs_failed=False) is True
+    assert job_runs(jobs["replay"]["if"], ctx, needs_failed=True) is False
 
 
 def test_judge_judges_the_downloaded_verified_proposal_with_its_targets():
