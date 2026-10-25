@@ -59,6 +59,8 @@ speeds, chosen by the environment:
     side through the helper's thread pool. `BUREAU_SUITE_GREEN_PART=<n>` with
     `BUREAU_SUITE_GREEN_OF=<m>` (both or neither) keeps the cases whose index
     modulo m is n - 1, so a job can split them across runners (DRE-6873).
+    The walks job's shard (`tests/console_change_walk.py`'s `shard`,
+    DRE-7907) narrows that further: a case runs when both pick it.
 
 The inner pytest runs with none of these four set, so this file's heavy cases
 could never nest even if a walk were collected. Each case prints
@@ -254,9 +256,18 @@ def suite_files(tree: Path) -> list[str]:
     return [rel for rel in files if not walk.is_walk(rel)]
 
 
+def kept(case_list, env=None) -> list[tuple[str, dict]]:
+    """The cases this job runs: those its suite-green part (`selected`) AND
+    its walk shard (the helper's `shard`, DRE-7907) both pick, each by its
+    index in the whole `case_list`. Neither pair set, every case. In CI the
+    two never meet: the shard is the `walks` job's, the part `suite-green`'s."""
+    picked = set(walk.shard(walk.case_names(case_list), env))
+    return [case for case in selected(case_list, env) if case[0] in picked]
+
+
 TREE = tree_root()
 CASES = cases(TREE)
-SELECTED = selected(CASES)
+SELECTED = kept(CASES)
 
 
 # --------------------------------------------------------------------------- #
@@ -460,6 +471,25 @@ def test_the_parts_cover_every_case_exactly_once():
                 {PART_ENV: "0", OF_ENV: "2"}):
         with pytest.raises(ValueError):
             selected(CASES, env)
+
+
+def test_the_walk_shard_narrows_the_suite_green_part():
+    """DRE-7907: a case is kept when its suite-green part AND its walk shard
+    both pick it, each by its index in the whole `CASES`; neither pair set
+    keeps every case. In CI the two pairs never meet — the shard is the
+    `walks` job's, the part the `suite-green` job's."""
+    names = walk.case_names(CASES)
+    assert len(names) >= 6, names
+    assert kept(CASES, {}) == CASES
+    shard = {walk.SHARD_ENV: "2", walk.SHARDS_ENV: "3"}
+    part = {PART_ENV: "1", OF_ENV: "2"}
+    both = kept(CASES, {**part, **shard})
+    want = set(walk.shard(names, shard)) & {name for name, _ in selected(CASES, part)}
+    assert [name for name, _ in both] == [name for name in names if name in want]
+    assert want and len(want) < len(walk.shard(names, shard))
+    assert [name for name, _ in kept(CASES, shard)] == walk.shard(names, shard)
+    assert kept(CASES, part) == selected(CASES, part)
+    assert SELECTED == kept(CASES, os.environ)
 
 
 def test_the_inner_run_is_the_model_reading_tests_and_no_walk():
