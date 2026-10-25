@@ -20,7 +20,9 @@ The fix, in that one step: it passes the run's head branch, so `find` asks
 for the exact `--head` first; it prints what `find` printed; and on a
 `pull_request` run on an `agent/*` head, an empty answer warns and is not
 taken as "no open pull request" — a pull-request run always has a pull
-request.
+request. `find` drops a pull request closed without merging, so before that
+inference the step asks the exact head for one: a closed pull request, or a
+read that fails, still means no open pull request.
 
 The step's script runs here as the job runs it, with `card_pr.py` and
 `medic_next_step.py` the real scripts and `gh` a stub that answers the exact
@@ -63,12 +65,15 @@ with open(os.environ["CALLS"], "a", encoding="utf-8") as f:
 """
 
 # `gh pr list`: the exact `--head` lookup and the `--search` lookup answer
-# from separate fakes, because that day they gave different answers.
+# from separate fakes, because that day they gave different answers. The
+# step's own closed-pull-request read on the head can fail on its own.
 STUB_GH = "#!/usr/bin/env python3" + STUB_LOG.replace("NAME", '"gh"') + """
 argv = sys.argv[1:]
 if argv[:2] != ["pr", "list"]:
     sys.exit(2)
 if "--head" in argv:
+    if "closed" in argv and os.environ.get("FAKE_CLOSED_RC", "0") != "0":
+        sys.exit(int(os.environ["FAKE_CLOSED_RC"]))
     print(os.environ.get("FAKE_HEAD_JSON", "[]"))
 elif "--search" in argv:
     print(os.environ.get("FAKE_SEARCH_JSON", "[]"))
@@ -105,7 +110,7 @@ class Run:
 
 
 def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code",
-                 head_prs=(), search_prs=(), gh_rc=0, repo=PORTICO,
+                 head_prs=(), search_prs=(), gh_rc=0, closed_rc=0, repo=PORTICO,
                  attempt="1") -> Run:
     step = _step()
     values = {
@@ -153,6 +158,7 @@ def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code
                  "FAKE_HEAD_JSON": json.dumps(list(head_prs)),
                  "FAKE_SEARCH_JSON": json.dumps(list(search_prs)),
                  "FAKE_GH_RC": str(gh_rc),
+                 "FAKE_CLOSED_RC": str(closed_rc),
                  "PATH": f"{bin_}:{os.path.dirname(sys.executable)}:{os.environ['PATH']}",
                  "PYTHONIOENCODING": "utf-8",
                  "REAL_SCRIPTS": os.path.join(ROOT, "scripts"),
@@ -266,6 +272,21 @@ class TheEmptyLookupOnAPullRequestRunTest(unittest.TestCase):
         self.assertNotIn("--has-open-pr", run.decide)
         self.assertEqual("ask-person", run.outputs["step"])
         self.assertIn(f"MERGED\thttps://github.com/{PORTICO}/pull/1044", run.log)
+
+    def test_a_pull_request_closed_without_merging_still_falls_back(self):
+        # `find` drops it, so its answer is empty; the run's pull request is
+        # gone, and the fix loop would have nothing to work on.
+        run = _run_verdict(target="DRE-7910", head_branch=self.HEAD,
+                           head_prs=[_pr(1044, self.HEAD, "CLOSED")])
+        self.assertNotIn("--has-open-pr", run.decide)
+        self.assertEqual("ask-person", run.outputs["step"])
+        self.assertIn(self.HEAD, run.log)
+
+    def test_a_closed_read_that_fails_still_falls_back(self):
+        run = self._empty(closed_rc=1)
+        self.assertNotIn("--has-open-pr", run.decide)
+        self.assertEqual("ask-person", run.outputs["step"])
+        self.assertIn("::warning", run.log)
 
     def test_a_lookup_that_fails_still_warns_with_its_exit_code(self):
         run = self._empty(gh_rc=1)
