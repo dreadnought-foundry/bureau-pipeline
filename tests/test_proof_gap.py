@@ -500,18 +500,44 @@ class TestThePROOFClose:
         close = next(b for _, b in board.comments if b.startswith("✅ Merged:"))
         assert proof_gap.RECEIPT_MARK not in close
 
-    def test_a_failed_filing_leaves_the_card_open(self):
+    def test_a_failed_filing_leaves_the_card_open_and_says_why(self):
         """The fix card is filed before the close, so a create Linear refused
-        leaves the card open for the backstop to ask again."""
+        leaves the card open for the backstop to ask again — a refusal with
+        its reason, never an exception: the reconcile backstop asks the same
+        ruling inside its sweep, and one card's failed write must not end the
+        pass."""
         board = _Board()
 
         def refuse(*a, **k):
             raise linear_ops.LinearError("HTTP 503 from Linear")
 
         board.create = refuse
-        with pytest.raises(linear_ops.LinearError):
-            _card_done(board, GAP_RECORD)
+        out = _card_done(board, GAP_RECORD)
         assert board.states == []
+        assert "AUTO-DONE SKIPPED" in out
+        left = [b for _, b in board.comments if linear_ops.MERGED_NOT_CLOSED_MARKER in b]
+        assert len(left) == 1 and "fix card could not be filed" in left[0]
+        assert "HTTP 503 from Linear" in left[0]
+
+    def test_the_backstop_ruling_refuses_rather_than_raises_on_a_failed_filing(self):
+        board = _Board()
+
+        def refuse(*a, **k):
+            raise linear_ops.LinearError("HTTP 503 from Linear")
+
+        board.create = refuse
+        ps = _patched(board) + [
+            patch.object(linear_ops, "read_merged_pr", return_value=APPROVED),
+            patch.object(proof_record, "_gh", _contents(GAP_RECORD)),
+        ]
+        for p in ps:
+            p.start()
+        try:
+            skip, note = linear_ops.merge_close_ruling(CARD, PROOF_TITLE, PROOF_LABELS, PR_URL)
+        finally:
+            for p in reversed(ps):
+                p.stop()
+        assert note is None and "fix card could not be filed" in skip
 
 
 # --------------------------------------------------------------------------
