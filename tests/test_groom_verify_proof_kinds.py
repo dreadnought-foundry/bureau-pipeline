@@ -41,7 +41,8 @@ import groomer  # noqa: E402
 
 from test_groom_verify import cancel  # noqa: E402
 from test_groom_verify_agent import (  # noqa: E402
-    PROOF_LINE, build_targets, proposal, read)
+    PROOF_LINE, CardText, build_targets, issue_node, proposal, raw_answer,
+    read, row_of, run_apply, run_verdict, write)
 
 BRIEF = ROOT / "briefs" / "groom-verify.md"
 PORTICO = "dreadnought-foundry/portico"
@@ -73,11 +74,12 @@ def pr(number=3297, *, repo=AGENT_BUREAU, merged="2026-10-07T01:10:00Z",
 
 
 def done(ident="DRE-5942", *, state="Done", parent="DRE-5910",
-         ancestors=("DRE-5910",), cut=False, prs=None):
+         ancestors=("DRE-5910",), cut=False, prs=None, labels=()):
     return {"identifier": ident, "title": "The pool releases a stranded run",
             "state": state, "completed_at": "2026-10-07T01:18:52Z",
             "parent": parent, "ancestors": list(ancestors),
-            "ancestors_cut": cut, "terms": ["stranded run"],
+            "ancestors_cut": cut, "labels": list(labels),
+            "terms": ["stranded run"],
             "prs": list(prs if prs is not None else [pr()])}
 
 
@@ -91,7 +93,7 @@ def fact(fid=FACT_ID):
 
 
 def row(*, cards=(), facts=(), routing_read=True, children=(), paths=(),
-        left_out=0, comments=(), relations=(), parent=None):
+        left_out=0, comments=(), relations=(), parent=None, labels=()):
     """One verify-targets row for DRE-101, as both folds leave it."""
     return {
         "card": CARD, "repository": PORTICO, "repo_slug": "portico",
@@ -100,7 +102,7 @@ def row(*, cards=(), facts=(), routing_read=True, children=(), paths=(),
         "body_digest": "0123456789ab", "evidence": [], "excluded": None,
         "context": {
             "created_at": "2026-09-01T00:00:00Z", "age_days": 42,
-            "labels": [], "parent": parent,
+            "labels": list(labels), "parent": parent,
             "children": [{"identifier": i, "state": s} for i, s in children],
             "relations": list(relations), "last_moved": None,
             "comments": list(comments), "comments_read": len(comments),
@@ -539,3 +541,291 @@ def test_the_brief_names_the_kinds_the_guards_and_the_two_judgements():
     assert "with the routing fact as its proof" in flat
     assert "DRE-5656" in flat
     assert "already reads PASS" in flat
+
+
+# --------------------------------------------------------------------------
+# DRE-7485 — a no-code card is canceled only on a Done no-code card
+#
+# On 2026-10-17 batch 51e3653fb40a canceled three `no-code` / `agent:ops`
+# cards whose operator work had not happened, each on a merged pull request
+# or a routing fact. Code landing is a precondition of a deploy or an
+# onboarding run, never evidence it happened.
+# --------------------------------------------------------------------------
+NO_CODE = "a no-code card needs a Done no-code card"
+OPS = ("repo:portico", "agent:ops", "no-code")
+OPERATOR = "DRE-6001"
+
+
+def operator_done(ident=OPERATOR, number=4100):
+    """A Done `no-code` card, with the merged pull request on it."""
+    return done(ident, parent=None, ancestors=(), labels=("no-code", "agent:ops"),
+                prs=[pr(number)])
+
+
+def test_the_no_code_reason_is_one_the_page_may_carry():
+    assert gva.NO_CODE_PROOF == NO_CODE
+    assert NO_CODE in gva.UNVERIFIED_REASONS
+    assert gva.is_unverified_reason(NO_CODE)
+    flat = " ".join((ROOT / "docs" / "groomer.md").read_text(
+        encoding="utf-8").split())
+    assert f"`{NO_CODE}`" in flat
+
+
+def test_a_matched_cards_line_ends_no_code_only_when_it_carries_the_label():
+    assert gva.matched_line(done(labels=("No-Code",)), None) == (
+        "DRE-5942 (Done 2026-10-07, under DRE-5910, no-code) — "
+        "The pool releases a stranded run")
+    assert gva.matched_line(done(parent=None, labels=("no-code",)), None) == (
+        "DRE-5942 (Done 2026-10-07, no-code) — The pool releases a stranded run")
+    for labels in ((), ("agent:ops", "no-code-ish"), ("needs-human",)):
+        assert gva.matched_line(done(labels=labels), None) == (
+            "DRE-5942 (Done 2026-10-07, under DRE-5910) — "
+            "The pool releases a stranded run")
+    # The pull request line, the `fact` the page shows, is unchanged.
+    assert gva.matched_line(done(labels=("no-code",)), pr()) == (
+        gva.matched_line(done(), pr()))
+    # And the agent reads the line in its input.
+    the_row = row(cards=[done(labels=("no-code",))])
+    text = gva.agent_input(the_row, "brief")
+    assert "- DRE-5942 (Done 2026-10-07, under DRE-5910, no-code) — " in text
+
+
+def applied(tmp_path, cards=(), facts=(), *, labels=OPS, verdict="done-elsewhere",
+            proof=(), drop_work=False):
+    """The answer through `judge` on DRE-101's targets row, then `apply` over
+    the proposal: `(the verdict document, the applied proposal)`. With
+    `drop_work`, `apply` holds the row without its `matched_work`, as the
+    workflow's `apply` may."""
+    pfile, targets, _ = build_targets(tmp_path, proposal())
+    rows = read(targets)
+    [the_row] = [r for r in rows if r["card"] == CARD]
+    the_row["context"]["labels"] = list(labels)
+    the_row["matched_work"] = row(cards=cards)["matched_work"]
+    the_row["routing"] = row(facts=facts)["routing"]
+    doc = {"card": CARD, **gva.judge(answer(tmp_path, verdict, list(proof)),
+                                     card=CARD, row=the_row,
+                                     outcome="success")}
+    if drop_work:
+        del the_row["matched_work"]
+        del the_row["routing"]
+    return doc, gva.apply(read(pfile), {CARD: doc}, rows)
+
+
+def assert_refused(doc, after):
+    """Not canceled: unverified with the no-code reason, out of the batch,
+    and the page's verdict line opens with that reason."""
+    assert (doc["verdict"], doc["reason"]) == ("unverified", NO_CODE)
+    assert CARD not in [r["identifier"] for r in cancel(after)]
+    assert CARD not in [r["identifier"] for r in after["outcomes"]["now"]]
+    mark = row_of(after, CARD)["verify"]
+    assert (mark["verdict"], mark["reason"]) == ("unverified", NO_CODE)
+    assert groomer._verdict_line(mark).startswith(
+        f"Verified against main: **unverified** — {NO_CODE}")
+
+
+def test_a_no_code_cancel_on_a_code_cards_merged_pull_request_is_refused(tmp_path):
+    doc, after = applied(tmp_path, cards=[done()], proof=[done_item()])
+    assert_refused(doc, after)
+
+
+def test_a_no_code_cancel_on_a_routing_fact_alone_is_refused(tmp_path):
+    doc, after = applied(tmp_path, facts=[fact()], verdict="obsolete",
+                         proof=[routing_item()])
+    assert_refused(doc, after)
+
+
+def test_a_no_code_cancel_on_a_file_line_alone_is_refused(tmp_path):
+    doc, after = applied(tmp_path, verdict="not-worth-it", proof=[PROOF_LINE])
+    assert_refused(doc, after)
+
+
+@pytest.mark.parametrize("verdict", ["done-elsewhere", "obsolete",
+                                     "not-worth-it"])
+def test_every_cancel_answer_on_a_no_code_card_takes_the_rule(tmp_path, verdict):
+    got, mark = both(tmp_path, row(cards=[done()], facts=[fact()],
+                                   labels=("No-Code",)),
+                     verdict, [done_item(), routing_item(), PROOF_LINE])
+    assert (got["verdict"], got["reason"]) == ("unverified", NO_CODE)
+    assert mark["reason"] == NO_CODE
+
+
+def test_a_no_code_cancel_on_a_done_no_code_card_stands(tmp_path):
+    doc, after = applied(tmp_path, cards=[operator_done()],
+                         proof=[done_item(OPERATOR, ref=f"{AGENT_BUREAU}#4100")])
+    assert (doc["verdict"], doc["reason"]) == ("done-elsewhere", None)
+    [item] = doc["proof"]
+    assert item["no_code"] is True
+    assert doc["rested_on"] == ["done-work"]
+    assert CARD in [r["identifier"] for r in cancel(after)]
+
+
+def test_a_no_code_cancel_on_mixed_proof_rests_on_the_no_code_card(tmp_path):
+    """A Done `no-code` card beside a code card's merged pull request — one
+    that did only part of the card — and a routing fact: the Cancel stands
+    on the `no-code` card alone, the others are shown and not counted, and
+    the code card's partial pull request does not make it partly-solved."""
+    proof = [done_item(covers="part"), routing_item(),
+             done_item(OPERATOR, ref=f"{AGENT_BUREAU}#4100")]
+    the_row = row(cards=[done(), operator_done()], facts=[fact()],
+                  labels=OPS)
+    got, mark = both(tmp_path, the_row, "done-elsewhere", proof)
+    assert (got["verdict"], got["reason"]) == ("done-elsewhere", None)
+    assert "adjusted" not in got and "adjusted" not in mark
+    assert got["rested_on"] == ["done-work"]
+    assert mark["rested_on"] == ["done-work"]
+    assert [p.get("done_card") or p.get("routing") for p in got["proof"]] == [
+        "DRE-5942", FACT_ID, OPERATOR]
+    assert [p.get("no_code") for p in got["proof"]] == [False, None, True]
+    assert mark["proof"] == got["proof"]
+
+
+def test_a_no_code_cards_own_partial_pull_request_is_still_partly_solved(tmp_path):
+    proof = [done_item(OPERATOR, ref=f"{AGENT_BUREAU}#4100", covers="part")]
+    got, _ = both(tmp_path, row(cards=[operator_done()], labels=OPS),
+                  "done-elsewhere", proof)
+    assert (got["verdict"], got["adjusted"]) == ("partly-solved",
+                                                 "partial pull request")
+
+
+def test_still_needed_and_partly_solved_on_a_no_code_card_are_unchanged(tmp_path):
+    got, _ = both(tmp_path, row(labels=OPS), "still-needed", [PROOF_LINE])
+    assert (got["verdict"], got["rested_on"]) == ("still-needed", ["code"])
+    got, _ = both(tmp_path, row(cards=[done()], labels=OPS), "partly-solved",
+                  [done_item(covers="part")])
+    assert (got["verdict"], got["reason"]) == ("partly-solved", None)
+
+
+def test_a_code_cards_cancel_on_a_merged_pull_request_is_unchanged(tmp_path):
+    doc, after = applied(tmp_path, cards=[done()], labels=("repo:portico",
+                                                            "agent:engineer"),
+                         proof=[done_item()])
+    assert (doc["verdict"], doc["reason"]) == ("done-elsewhere", None)
+    assert doc["proof"][0]["no_code"] is False
+    assert doc["rested_on"] == ["done-work"]
+    assert CARD in [r["identifier"] for r in cancel(after)]
+
+
+def test_a_no_code_card_with_children_takes_the_child_rule_first(tmp_path):
+    """The rule runs after the child rule, on what it left counted: a
+    child's `no-code` card is still a child's."""
+    child = done("DRE-201", parent=CARD, ancestors=(CARD,),
+                 labels=("no-code",))
+    got, _ = both(tmp_path, row(cards=[child], children=CHILDREN, labels=OPS),
+                  "done-elsewhere", [done_item("DRE-201")])
+    assert got["reason"] == gva.CHILD_PROOF
+    got, _ = both(tmp_path, row(cards=[operator_done()], facts=[fact()],
+                                children=CHILDREN, labels=OPS),
+                  "obsolete", [routing_item()])
+    assert got["reason"] == NO_CODE
+
+
+# --------------------------------------------------------------------------
+# DRE-7485 — `apply` re-weighs from the recorded verdict
+# --------------------------------------------------------------------------
+def test_apply_keeps_a_no_code_cancel_whose_recorded_item_is_no_code(tmp_path):
+    doc, after = applied(tmp_path, cards=[operator_done()], drop_work=True,
+                         proof=[done_item(OPERATOR, ref=f"{AGENT_BUREAU}#4100")])
+    assert doc["proof"][0]["no_code"] is True
+    assert CARD in [r["identifier"] for r in cancel(after)]
+    [dead] = [r for r in cancel(after) if r["identifier"] == CARD]
+    assert dead["verify"]["verdict"] == "done-elsewhere"
+
+
+@pytest.mark.parametrize("recorded", [False, None], ids=["false", "missing"])
+def test_apply_refuses_a_no_code_cancel_whose_recorded_item_is_not(tmp_path, recorded):
+    pfile, targets, _ = build_targets(tmp_path, proposal())
+    rows = read(targets)
+    [the_row] = [r for r in rows if r["card"] == CARD]
+    the_row["context"]["labels"] = list(OPS)
+    item = {**done_item(), "fact": gva.matched_line(done(), pr()),
+            "covers_check": "agent"}
+    if recorded is not None:
+        item["no_code"] = recorded
+    doc = {"card": CARD, "verdict": "done-elsewhere", "summary": "s",
+           "reason": None, "proof": [item], "rested_on": ["done-work"]}
+    the_row.pop("matched_work", None)
+    after = gva.apply(read(pfile), {CARD: doc}, rows)
+    assert_refused(gva._mark(the_row, doc), after)
+
+
+def test_mark_over_a_row_with_no_board_context_stands_as_verdict_applied_it():
+    bare = {"card": CARD, "repository": PORTICO, "repo_slug": "portico",
+            "list": "planning"}
+    item = {**done_item(), "fact": gva.matched_line(done(), pr()),
+            "covers_check": "agent", "no_code": False}
+    mark = gva._mark(bare, {"card": CARD, "verdict": "done-elsewhere",
+                            "summary": "s", "reason": None, "proof": [item]})
+    assert (mark["verdict"], mark["reason"]) == ("done-elsewhere", None)
+
+
+def test_the_agent_cannot_write_no_code_onto_its_own_item(tmp_path):
+    forged = {**done_item(), "no_code": True}
+    got = judged(tmp_path, row(cards=[done()], labels=OPS), "done-elsewhere",
+                 [forged])
+    assert (got["verdict"], got["reason"]) == ("unverified", NO_CODE)
+
+
+# --------------------------------------------------------------------------
+# DRE-7485 — batch 51e3653fb40a's three cards, through `verdict` and `apply`
+# (that batch's rows are not in the repository; these are built from the
+# card's description of them)
+# --------------------------------------------------------------------------
+ROUTING_PR = 6120   # the merged routing pull request onboarding Foundry
+REGISTRY_PR = 6188  # DRE-7464's merged Keel registry CDK code
+
+
+def test_batch_51e3653fb40a_cancels_none_of_its_three_no_code_cards(tmp_path):
+    ops = ("repo:portico", "agent:ops", "no-code")
+    issues = {c: issue_node(c, labels=ops)
+              for c in ("DRE-101", "DRE-102", "DRE-103")}
+    pfile, targets, _ = build_targets(tmp_path, proposal(),
+                                      lops=CardText(issues=issues))
+    rows = read(targets)
+    routing_card = done("DRE-7300", parent=None, ancestors=(),
+                        labels=("agent:engineer",), prs=[pr(ROUTING_PR)])
+    registry_card = done("DRE-7464", parent=None, ancestors=(),
+                         labels=("agent:devops",), prs=[pr(REGISTRY_PR)])
+    shapes = {
+        # DRE-7076: a routing fact and a Done code card's merged routing PR.
+        "DRE-101": ([routing_card], [fact()],
+                    [routing_item(), done_item("DRE-7300",
+                                               ref=f"{AGENT_BUREAU}#{ROUTING_PR}")]),
+        # DRE-7377: the routing fact alone.
+        "DRE-102": ([], [fact()], [routing_item()]),
+        # DRE-7085: a Done code card and its merged PR covering the whole card.
+        "DRE-103": ([registry_card], [],
+                    [done_item("DRE-7464", ref=f"{AGENT_BUREAU}#{REGISTRY_PR}",
+                               covers="whole")]),
+    }
+    for the_row in rows:
+        if the_row["card"] in shapes:
+            cards, facts, _ = shapes[the_row["card"]]
+            assert "no-code" in the_row["context"]["labels"]
+            the_row["matched_work"] = row(cards=cards)["matched_work"]
+            the_row["routing"] = row(facts=facts)["routing"]
+    write(targets, rows)
+    for card_id, (_, _, proof) in shapes.items():
+        doc = run_verdict(tmp_path, card_id, targets, raw=raw_answer(
+            tmp_path, card_id, "done-elsewhere", proof))
+        assert (doc["verdict"], doc["reason"]) == ("unverified", NO_CODE), card_id
+    after = run_apply(tmp_path, pfile, tmp_path / "verdicts", targets)
+    canceled = [r["identifier"] for r in cancel(after)]
+    for card_id in shapes:
+        assert card_id not in canceled, card_id
+        mark = row_of(after, card_id)["verify"]
+        assert (mark["verdict"], mark["reason"]) == ("unverified", NO_CODE)
+        assert groomer._verdict_line(mark).startswith(
+            f"Verified against main: **unverified** — {NO_CODE}")
+
+
+def test_the_brief_says_the_no_code_rule():
+    flat = " ".join(BRIEF.read_text(encoding="utf-8").split())
+    assert ("for a card labeled `no-code`, a Cancel needs a Done card that is "
+            "itself `no-code`") in flat
+    assert ("a merged pull request from any other card, a routing fact and a "
+            "`file:line` quote are not counted toward it") in flat
+    assert f"`{NO_CODE}`" in flat
+    assert "the card's line ends `no-code`" in flat
+    docs = " ".join((ROOT / "docs" / "groomer.md").read_text(
+        encoding="utf-8").split())
+    assert "a Cancel of a card labeled `no-code` counts only a Done `no-code` card" in docs

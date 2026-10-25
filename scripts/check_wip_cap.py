@@ -28,7 +28,8 @@ This checker FAILS (exit 1) when:
     reconcile.py read the repo's own cap from the caller's reconcile.yml stub;
     a declared "8" rendered 8 instead, and a repo held at "0" promoted three
     cards when an epic was approved on 2026-09-15. The ONE fallback is
-    `reconcile.DEFAULT_MAX_WIP`, in the script, and nowhere else.
+    `sweep_holds.DEFAULT_MAX_WIP` (bound in reconcile.py as
+    `reconcile.DEFAULT_MAX_WIP`, DRE-7750), in the scripts, and nowhere else.
   * any promotion step has no `BUREAU_MAX_WIP` in scope, or one whose value
     is anything but `${{ vars.BUREAU_MAX_WIP }}` (DRE-6631). That is the
     caller's Actions variable — the number the console writes — and
@@ -39,8 +40,9 @@ This checker FAILS (exit 1) when:
     vars.BUREAU_MAX_WIP` — one value where the script needs two would leave
     the stub no place between them, and the `MAX_WIP` rule above refuses it.
 
-Deterministic, PyYAML-only (the script default is read with `ast`, so
-importing reconcile.py — which requires live env — is never needed). Run
+Deterministic, PyYAML-only (the script default is read with `ast` from
+sweep_holds.py, where the cap reading lives since DRE-7750, so no script is
+ever imported). Run
 from anywhere:
 
     python3 scripts/check_wip_cap.py [workflows_dir]
@@ -66,7 +68,9 @@ VARIABLE_ENV_NAME = "BUREAU_MAX_WIP"
 REQUIRED_VARIABLE_EXPR = "${{ vars.BUREAU_MAX_WIP }}"
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
-RECONCILE_PY = Path(__file__).resolve().parent / "reconcile.py"
+# The cap reading, and with it the ONE fallback, moved here from reconcile.py
+# (DRE-7750); reconcile.py binds the same objects.
+SWEEP_HOLDS_PY = Path(__file__).resolve().parent / "sweep_holds.py"
 
 # reconcile.py invocations that promote nothing — they need no cap.
 NON_PROMOTING_FLAGS = ("--close-epics", "--conflicts-only")
@@ -77,10 +81,11 @@ _INLINE_VARIABLE_ASSIGN = re.compile(rf"(?:^|\s){VARIABLE_ENV_NAME}=(\S+)")
 _VARIABLE_EXPR = re.compile(r"^\$\{\{\s*vars\.BUREAU_MAX_WIP\s*\}\}$")
 
 
-def script_default(path=RECONCILE_PY):
-    """`reconcile.DEFAULT_MAX_WIP`, read statically. Importing reconcile.py
-    would demand REPO/LINEAR_API_KEY in the environment; the guard must run
-    anywhere, so parse the module instead of executing it."""
+def script_default(path=SWEEP_HOLDS_PY):
+    """`sweep_holds.DEFAULT_MAX_WIP`, read statically. The guard must run
+    anywhere, so it parses the module instead of executing it — and the
+    literal is read from the one module that declares it, never from
+    reconcile.py's binding of it (DRE-7750)."""
     tree = ast.parse(Path(path).read_text())
     for node in tree.body:
         if isinstance(node, ast.Assign):
@@ -90,7 +95,7 @@ def script_default(path=RECONCILE_PY):
     return None
 
 
-def canonical_default(path=RECONCILE_PY):
+def canonical_default(path=SWEEP_HOLDS_PY):
     """The ONE cap. Single-sourced from the script so the workflows' declared
     defaults and the script's own fallback can never drift apart."""
     return script_default(path)
@@ -320,7 +325,7 @@ def check_workflow(doc, name, default=None):
                     f"(got {spec.get('default')!r}) — a silent stub has to "
                     f"render empty so reconcile.py reads the repo's own cap "
                     f"from its reconcile.yml stub; the one fallback, "
-                    f"{str(default)!r}, lives in reconcile.DEFAULT_MAX_WIP "
+                    f"{str(default)!r}, lives in sweep_holds.DEFAULT_MAX_WIP "
                     f"(DRE-3994)"
                 )
 
@@ -386,11 +391,11 @@ def check_stubs(docs, promoters):
     return violations
 
 
-def check_dir(workflows_dir=WORKFLOWS_DIR, reconcile_py=RECONCILE_PY):
+def check_dir(workflows_dir=WORKFLOWS_DIR, sweep_holds_py=SWEEP_HOLDS_PY):
     """(violations, stats) across every *.yml in the directory. stats guards
     against a silently vacuous run: it counts what was actually inspected."""
     violations = []
-    default = canonical_default(reconcile_py)
+    default = canonical_default(sweep_holds_py)
     stats = {
         "workflows": 0,
         "promoters": 0,
@@ -400,7 +405,7 @@ def check_dir(workflows_dir=WORKFLOWS_DIR, reconcile_py=RECONCILE_PY):
     }
     if default is None:
         violations.append(
-            f"{reconcile_py.name}: no DEFAULT_MAX_WIP constant — the one cap "
+            f"{sweep_holds_py.name}: no DEFAULT_MAX_WIP constant — the one cap "
             f"has no single source for the workflow defaults to match"
         )
         return violations, stats

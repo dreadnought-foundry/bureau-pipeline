@@ -97,12 +97,12 @@ skips the critic on it and runs the exit on it.
 
 A card sent back to Planning used to leave on the verdict it was sent back
 from: `_one_off_check` found the old one and stamped nothing, and the sweep
-routed the card on it — DRE-4724 went back to Todo marked `hand-built` on a
-WORKBENCH its rewrite had removed the reason for. So the exit retires, on the
-record, every verdict written before the card re-entered Planning
-(`routing_verdict.retiring`), takes off a `hand-built` the old verdict put on
-when the new one does not, and then decides and stamps exactly as for a card
-on its first trip.
+routed the card on it — DRE-4724 went back to the start lane marked
+`hand-built` on a WORKBENCH its rewrite had removed the reason for. So the
+exit retires, on the record, every verdict written before the card re-entered
+Planning (`routing_verdict.retiring`), takes off a `hand-built` the old verdict
+put on when the new one does not, and then decides and stamps exactly as for a
+card on its first trip.
 
 ## An epic still to be planned waits on its open blocker (DRE-6651)
 

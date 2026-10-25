@@ -238,9 +238,11 @@ class GateWalkTest(unittest.TestCase):
 
     def test_a_bounced_plan_stamps_nothing(self):
         """An epic on its way back to Planning is not an epic whose cards get a
-        routing decision written on them."""
-        self._walk(plan(proof_body="Prove it.\n\n"
-                                   "## Acceptance criteria\n\n- [ ] by hand\n"))
+        routing decision written on them. Bounced for wearing a build role:
+        the missing closing line it was bounced for until DRE-7773 is no
+        longer a reason, so the walk first proves the plan really bounced."""
+        r = self._walk(plan(pair_labels=LABELS))
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
         self.assertEqual(
             [w for w in self._writes() if w[1] == PROOF_ID], [],
             "a refused proof card may not be stamped",

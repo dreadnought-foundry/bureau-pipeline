@@ -57,7 +57,7 @@ DRE-4149; the harness now proves `main` once — see `docs/self-hosting.md`,
 | --- | --- | --- |
 | `agent_task_parses` | yes | a real `agent-execute` `repository_dispatch` produces a run with `jobs > 0`, whose `referenced_workflows` names this repo's `agent-task.yml` with a resolved commit |
 | `bot_pr_flow` | yes | the happy path: worker-bot authorship → sha-bound critic verdict → qa-bot merge (author ≠ merger) |
-| `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds |
+| `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds. Its fixture PR is labeled `harness-fixture` and reopens itself when closed, so closing it as a stale major is harmless (DRE-7957) |
 | `gate_paths` | yes | merge-gate semantics: a behind-base merge at the reviewed head, condition D's waiting-for-human state, and a stale-verdict race |
 | `lane_contract` | yes | `config/lane-contract.json`'s conformance rules over the live board, the console's state lists and this checkout's own vocabulary |
 | `proof_task_parses` | yes | a real `proof-execute` `repository_dispatch` produces a run with `jobs > 0`, whose `referenced_workflows` names this repo's `proof-task.yml` with a resolved commit — `agent_task_parses`, copied, for the proof run (DRE-6045) |
@@ -112,6 +112,47 @@ sandbox's `proof-task.yml` stub, and asserts everything above against this
 repo's `proof-task.yml`. A 404 on the stub is reported as *"bureau-harness has
 no proof-task.yml stub"*, naming DRE-6034, the card that installed it. A fix
 to one of the two modules is probably owed to the other.
+
+## The builder's model line on the probe pull requests (DRE-7619)
+
+A real build posts `🧠 model-attempt: <model-id> — <role> agent starting`, and
+the critic reads the build's model off it to review on a model the build did
+not run on. No agent builds a probe, so by default the sandbox critic reviews
+every probe as built on an unknown model. With the switch `on`,
+`bot_pr_flow` and every leg of `gate_paths` end each probe description with
+one more line, after a blank one, `What's new: none` staying the first:
+
+    🧠 model-attempt: claude-opus-5-5 — harness agent starting (a fixture: no agent built this probe; it names the model a real build runs on)
+
+The model is the `workhorse` ladder's first rung as `scripts/model_fallback.py`
+reads it, never typed (`scripts/harness/builder_line.py`). The sandbox critic
+then reads the probe as an Opus-built change and reviews it on the model real
+repos' known-builder reviews run on. With the switch `off`, every probe
+description is byte for byte what it was before.
+
+**The switch.** `harness.yml` resolves it once per run, in this order:
+
+1. the `builder_line` dispatch input (`on` or `off`; empty means "use the
+   variable"), which only a by-hand run carries;
+2. the bureau-pipeline repository variable `HARNESS_BUILDER_LINE`, which
+   every push run follows;
+3. `off`.
+
+Any other value counts as `off` and prints one `::warning::`. Every run logs
+`harness-builder-line: <on|off> (from <input|variable|default>)` once, before
+any scenario starts. The dispatch input is for the measurement runs: run them
+on a throwaway branch, never on `main`, while every push run keeps proving
+`main` on the variable. Setting `HARNESS_BUILDER_LINE` to `off` is the
+one-step rollback. The next harness run that starts reads it when its job
+starts, with no pull request and no review wait, and a run already going
+keeps the value it started with (`docs/model-choice-levers.md`, the
+`DRE-7187` row).
+
+**The known limit.** `dependabot_flow` reviews a pull request Dependabot itself
+opens. The scenario adds only its do-not-close banner to that description
+(DRE-7957), never a builder line, so the switch cannot reach it.
+That review stays on the unknown-builder walk, on Opus 5.5 — about one probe
+review in five.
 
 ## Adding a workflow to the fleet
 

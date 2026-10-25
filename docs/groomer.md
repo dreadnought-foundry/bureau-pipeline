@@ -63,10 +63,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      computes the proposal, reads the card's thread and posts nothing, then
      `groom_verify_agent.py targets`, which reads each Planning and spare
      card's text — this job holds the Linear key — and writes the matrix.
-     `targets` alone is handed the read door's settings (DRE-7242), so its
-     problem search asks the door before Linear; `propose` is not, and runs
-     as before. A stub that grants no `id-token: write` mints no token for
-     the door, and the search falls back to Linear. The step before it runs
+     `targets` is handed the read door's four settings (DRE-7242), so its
+     problem search asks the door before Linear. `propose` is handed the
+     door's address, audience and ref but never `BUREAU_READ` (DRE-7821):
+     enough to read the console's record of groom decisions
+     (`bureau_read.groom_removals()`, asked whatever the mode says), while
+     every board read it makes still goes to Linear. A stub that grants no
+     `id-token: write` mints no token for the door: the search falls back to
+     Linear, and the groom-decisions read is `ReadUnknown` `no-token`. The step before it runs
      the door's identity check (`bureau_read.py check-ref`), as
      `reconcile.yml` does: a `pipeline_ref` other than the ref the stub
      called refuses the run.
@@ -101,7 +105,13 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      proof. A Cancel of a card with children, in any state,
      counts only a Done card not under it or a routing fact, never a
      `file:line` quote, else it is `unverified` with `proof belongs to a
-     child`; a Cancel counting a pull request that did part of the card,
+     child`; after that, a Cancel of a card labeled `no-code` counts only a
+     Done `no-code` card with its merged pull request — a merged pull
+     request from any other card, a routing fact and a `file:line` quote
+     show the code landed, not that the operator work was done — else it is
+     `unverified` with `a no-code card needs a Done no-code card`
+     (DRE-7485), and the matched card's line in the agent's input ends
+     `no-code` when it carries the label; a Cancel counting a pull request that did part of the card,
      even beside other proof, is recorded `partly-solved` with `adjusted:
      partial pull request`; and
      each verdict carries `rested_on`, what it rested on.
@@ -136,7 +146,22 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    writes no model-attempt receipt: it prints the page to the log and the
    step summary, then `groom_replay.py report`'s one `groom-replay:` line per
    card. A `drain` with `replay` set refuses before any write. The scheduled
-   morning never sets it. The page carries a
+   morning never sets it.
+
+   **The replay cases** (DRE-7971) are the stored proposals a replay is
+   meant for. `scripts/groom_replay_cases.py build` reads every decision a
+   person recorded about a card on a proposal — the console's record and the
+   markers on every standing card's thread, uncollapsed
+   (`groom_memory.all_decisions`) — and keeps one case per proposal and card
+   a person removed with a reason in
+   `tests/fixtures/groom-replay-cases/cases.json`: a Planning card taken off
+   is `off-planning`, a Cancel card kept is `off-cancel`. It writes
+   `replay-set.json` beside it, every case card, and `gate-set.json`, only
+   the cards of cases that pass on `main`, at most 50. A case is never
+   dropped, and its `main` block is written only by the replay gate. One
+   seed case, DRE-7239, ships so the set is never empty.
+
+   The page carries a
    `## Verified against main` section after the Cancel list, and its
    `Verify step:` line is the verify total — cards, dollars and wall clock —
    so the verify total is on the proposal page, never in a separate comment.
@@ -277,7 +302,9 @@ link to work in flight still precedes a High card that has one.
   page names the pair under its collisions, with the epic the held-back card
   serves (`unhonoured_constraints` in the JSON).
 - **The page says so.** A rules-only row placed by this step reads
-  `in flight — serves DRE-N (In Progress)` in its `Why` cell, and the batch
+  `in flight — serves DRE-N (In Progress)` in its `Why` cell, a judged row
+  reads the same mark followed by ` — ` and the model's reason (DRE-7397),
+  and the batch
   paragraph gains one sentence naming the rule — only on a batch the step
   placed a card in, so `--no-judgement` renders byte for byte as before on a
   population with nothing in flight.
@@ -326,8 +353,8 @@ rule — `id`, a plain-English `reason` and `condition` with placeholders, and
 evaluators disagree on the ids. The six rules:
 
 1. `read-waits-on-open-card` — the ranked read's `depends on` line names a
-   card that is open: Planning, Green Light, Queued, Todo, In Progress or In
-   Review. A named card with no child and no `[EPIC]` title holds the card
+   card that is open: Planning, Green Light, Queued, a start lane
+   (`lane_contract.START_LANES`, `In Progress` among them) or In Review. A named card with no child and no `[EPIC]` title holds the card
    until it is Done. A named epic holds it until the epic is **built out or
    Done**, read exactly as the sweep's epic gate reads a blocker
    (`reconcile._not_built_out`, DRE-6407): In Progress with children, no child
@@ -336,7 +363,7 @@ evaluators disagree on the ids. The six rules:
    another epic until that epic is built out, and never for the card's own
    parent: a child waiting on its own epic is DRE-6664's in-flight case.
 2. `file-named-by-in-flight-card` — a path the card names in backticks is
-   named by a card in Planning, Todo, In Progress or In Review, each lane read
+   named by a card in Planning, a start lane or In Review, each lane read
    once a morning. Two cards match only on the **same path in the same repo**
    (DRE-6908), never on the bare file name: on 2026-10-11 the basename tied
    `scripts/runners/README.md` to `console/backend/monitors/README.md`, and
@@ -346,9 +373,19 @@ evaluators disagree on the ids. The six rules:
    cell prints each path as the card wrote it. A path cited by more than
    `BOILERPLATE_THRESHOLD` cards across Intake and the four lanes is
    reference, not ownership — `collision_report`'s rule, counted by path.
-   Ready when that card is Done.
+   Ready when that card is Done. Three in-flight cards never hold it
+   (DRE-7814), because each would wait on the card that waits on it: a
+   PROOF card (`proof_and_demo.is_proof` on its title), which writes only its
+   record and names files to read them; an In Progress epic that is built
+   out, read as rule 1 reads one (`built_out` on its `IN_MOTION_NODE`
+   record); and a card formally blocked by the candidate — a `blocks`
+   relation, never a prose `Blocked by:` line. From 2026-10-15 DRE-7397 waited on
+   epic DRE-6644 and DRE-7745 on PROOF card DRE-7251, each of which waited on
+   them, until a person moved both by hand on 10-23. An epic in any other lane, or one whose record is missing
+   or unread, still holds. A skipped card is shown nowhere on the page.
 3. `child-of-epic-not-in-progress` — the card's parent epic is in Intake,
-   Planning, Green Light, Queued, Todo or Triage. Ready when the epic is In
+   Planning, Green Light, Queued, a start lane ahead of In Progress (DRE-7112)
+   or Triage. Ready when the epic is In
    Progress. The epic card itself trips nothing and keeps its slot as a unit
    of one, and the verify step's own exclusion keeps it in Intake with its
    reason on the page — nothing of the unit moves until a person moves the
@@ -380,7 +417,11 @@ no `[EPIC]` title is decided on that read alone. Then the epic read: one
 `issue(id:)` request carrying `epic_cap.IN_MOTION_NODE` per named card the
 light read shows In Progress and an epic, however many cards name it — never
 aliased over a list, because Linear prices that node at up to 1,200. An epic
-in any other open state is not built out and costs no second read. A named
+in any other open state is not built out and costs no second read. Every
+card the in-flight lanes hold that is an epic and In Progress gets the same
+request, for rule 2 (DRE-7814) — one a `depends on` line already names is
+read once, not twice, and the count is bounded by the epic cap's In Progress
+epics. A named
 card that could not be read holds the card: when a request raises or Linear
 returns no issue, every card naming it is Not ready with the Reason `its
 ranked read waits on DRE-N, which could not be read this morning (<why>)` and
@@ -568,6 +609,20 @@ section not at all: the rules place a card by priority and age and have nothing
 labelled to say about it, and that page still renders byte for byte as it did
 before this card.
 
+**A judged Cancel row gets a block too (DRE-7823).** The console finds a
+card's verify verdict in this section and nowhere else, and draws the verdict
+chip on the Planning list and the Cancel list alike. So after every batch
+card's block comes one block per Cancel row the verify agent judged, in Cancel
+list order: `- **Why:** <its Cancel reason>`, then the same `Verified against
+main:` line a batch card gets. A Cancel row nobody judged — one from a
+`Superseded by:` line, the ranked read or the check — gets no block: an
+absence, never an invented verdict. The section renders when the ranked read
+ran or a row on either list was judged, and there is a block to write, so a
+morning with an empty Planning list and a judged Cancel row renders that row's
+block alone. On 2026-10-13 (proposal 3381b8d562a8) DRE-7060 and DRE-4054 were
+judged done-elsewhere on the Cancel list, and the page said so nowhere the
+console reads.
+
 A card on the Cancel list always says what it came from, in its reason:
 `superseded by DRE-N` is a declaration a person wrote on the card, and anything
 else is the evidence the ranked read named — and the reason ends with the
@@ -612,8 +667,10 @@ to ten cards behind it, in proposal order:
 — the description's own line, or a card or PR the ranked read's evidence names
 — stands only if X is **Done**, is a **merged PR**, or is **approved and in
 flight** — in a live lane of the lane contract's `work` segment other than
-Done, read off `config/lane-contract.json`: Queued, Todo, Hand-work (live
-since DRE-5320), In Progress or In Review (DRE-5348).
+Done, read off `config/lane-contract.json`: Queued, Hand-work (live since
+DRE-5320), In Progress or In Review (DRE-5348). Todo, the start lane before
+the flip (DRE-7120), stopped counting when its entry left the contract
+(DRE-7660).
 Otherwise the Cancel is
 rejected, and the card stays on the Planning list with the reason as its Why.
 A replacement the check could not read does not stand either: Cancel is the
@@ -624,6 +681,15 @@ piece of it as the reason (comments first, then merged PRs, then other cards),
 and the next card in order takes its slot. The check walks the slots in order,
 so a spare with evidence that no slot reaches is recorded and **not** cancelled
 early — a card outside the morning's set waits its turn (DRE-4727).
+
+**The sweep (DRE-7969), off by default.** `groom_verify.check(…, sweep=True)`
+also reads every other card on offer — the `not-now`, `not-ready` and
+`rewrite` lists less the Planning list, the spares and the Cancel list
+(`sweep_window`) — the same three ways, after the spares. A swept card holds no
+slot: one with evidence goes to the Cancel list whatever the walk's slots did,
+which reverses "waits its turn" for the check's own evidence only, and one
+with an unread source is `unread` and never moved. The groomer does not turn
+it on yet.
 
 **A source it could not read is said, never passed off as clean.** Each card's
 record names the sources that were unread for it; a card with no evidence and
@@ -641,7 +707,8 @@ every card unread on every source.
 **The record.** `proposal["verification"]` carries, per card, `verdict`
 (`cancel`, `clean`, `unread`, `cancel-stands`, `cancel-rejected`,
 `cancel-kept`), `source` and `evidence`, beside `unread`, `moved_to_cancel`,
-`cancels_rejected` and `not_checked` — so the proof and the audit read them
+`cancels_rejected` and `not_checked`, and `swept` and `swept_to_cancel` (both
+`[]` with the sweep off) — so the proof and the audit read them
 rather than repeating the reads. The record is not in the id's digest; the
 lists it changed are.
 
@@ -694,8 +761,9 @@ card excluded without judgement by id with its reason, one line `Verify step: <N
 <S> s wall clock`, and each unverified card by id with its reason, under
 `Not verified — not in the batch, each stays in Intake:`. A Cancel
 row the verify step wrote (`source: verify-agent`) carries its `file:line`
-proof whole in the Reason cell, and a batch card's verdict is under its entry
-in `## Why each card is in the batch`.
+proof whole in the Reason cell, and a batch card's verdict — or a judged
+Cancel row's (DRE-7823) — is under its entry in `## Why each card is in the
+batch`.
 
 **The proof line (DRE-5746).** That verdict is one plain line —
 `Verified against main: **<verdict>** — <summary>; <proof>; <proof>` — and
@@ -710,7 +778,8 @@ drain parse both, and they render byte for byte as before. A Planning card
 with no proof is one whose verdict is `unverified`, and its line carries the
 reason instead, one of exactly `agent step failed`, `agent step skipped`,
 `no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact`,
-`proof belongs to a child` or `lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
+`proof belongs to a child`, `a no-code card needs a Done no-code card` or
+`lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
 document naming any other reason is read as `unreadable answer`. An
 `excluded` card is never on the Planning list. A cost or clock the step could not read
 says `unknown`, never zero. A record with no `verify` block renders byte for
@@ -736,10 +805,15 @@ at every limit — 200 long comments, 50 relations each way, 50 children and
 50 labels of 40 characters — adds 64,013 characters, under the 65,000 target
 and roughly 16,000 tokens. A label name is the one field not held to a
 length, so that figure assumes labels of that size. It also
-excludes five kinds before any agent runs, never by the
+excludes six kinds before any agent runs, never by the
 model: `parent epic with <n> open child(ren)` (a child not Done, Canceled or
 Duplicate — an epic with no open child is judged like any card),
-`hand-built` or `operator-step` (whichever hand mark the card carries, read
+`sandbox fixture filed by a proof run` (DRE-7783: a card whose title opens
+`SANDBOX FIXTURE (proof DRE-` and which carries the label
+`repo:agent-bureau-demo` — the card a proof run files on the sandbox and
+leaves in its Intake as the proof record's residue, DRE-7772; a card with only
+one of the two is judged like any card, and the open-children reason is read
+before it), `hand-built` or `operator-step` (whichever hand mark the card carries, read
 off `routing_verdict.hand_marks` — a person builds it), `moved into Intake on YYYY-MM-DD` (a move from another lane in
 the last seven days; it reads the move, not its author, since a move carries
 no signature and the console's move for the CEO looks like any workflow's),
@@ -753,7 +827,7 @@ card. On the 2026-10-02 morning DRE-5270, still wearing the retired
 cannot build; `apply` believes this reason off a verdict document as it does
 the other four. The groomer cancels nothing and changes no label for it —
 whether such a card is canceled or relabeled is a person's call on the card,
-and the Todo gate already bounces a retired slug. An excluded card gets no agent and no token, and its
+and the card-validation gate at the start of a build already bounces a retired slug. An excluded card gets no agent and no token, and its
 verdict is `excluded` with the reason. It is dropped from the batch and stays
 where it is on the board: off the Planning list, the next still-needed spare
 joins the Planning list, which is re-ordered by the rules' order and
@@ -761,7 +835,10 @@ renumbered from 1 (DRE-5858) — so the spare follows every card the rules
 placed — it goes on no Cancel list and nothing moves it, and the page
 names it under `## Verified against main` with its reason, and it waits in
 `not-now` with the reason `excluded without judgement: <reason>`. It is judged
-again on a morning none of the five holds.
+again on a morning none of the six holds. `groom_verify_agent.py exclusion
+--card <ID>` reads one card the same way and prints `exclusion: <ID> <reason>`
+or `exclusion: <ID> none`, writing nothing — a proof quotes that line for its
+fixture.
 
 **The lookups before the agent runs (DRE-5308, DRE-5458).** On 2026-09-29 the
 merged pull request search failed for every card and every card was judged on
@@ -833,6 +910,17 @@ characters) and up to `MAX_PR_FILES` = 30 files. `fold` writes them onto
 every row that carries them. A search that fails, or that cannot run (no
 Linear key, an excluded card), writes `searched: false` and the reason. It
 never changes the card's `lookups` block or its lookup state.
+
+Linear can refuse a search with "You're trying to search issues too fast"
+(DRE-7613). On 2026-10-17 that refusal came on the fourth of twenty cards and
+was read as the spent hour, so every later card went unsearched. Now
+`linear_ops` raises it as `LinearSearchTooFast` and does not stop the
+process. The problem search and the newer-cards lookup both wait
+`SEARCH_WAIT_SECONDS` = 60 and ask once more, and the waits in one run total
+at most `SEARCH_WAIT_BUDGET_SECONDS` = 600. A second refusal, or one past
+that budget, leaves that search unanswered with the refusal named in its
+`why`, and the next card is still asked. The Groom job's clock covers the
+600 seconds.
 
 ### Rewrite first (DRE-6666)
 
@@ -984,8 +1072,8 @@ batch that was right apart from two rows.
 | `🧺 groom-proposal: <id>` | propose | unchanged |
 | `🧺 groom-approved: <id>` | the CEO (console or by hand) | unchanged |
 | `🧺 groom-declined: <id> — <reason>` | the CEO | reason required |
-| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card — **Don't do**: held back from this drain, and never proposed again until `groom-added` names it (DRE-4966) |
-| `🧺 groom-held: <id> DRE-N[ — <reason>]` | the CEO (the console, DRE-4979/DRE-4980) | per card — **Hold**: held back from this drain exactly as an exclusion is; a later proposal may offer it again, ranked after every card never held (DRE-4966) |
+| `🧺 groom-excluded: <id> DRE-N[ — <reason>]` | the CEO | per card — **Don't do**: held back from this drain, and never proposed again until `groom-added` names it (DRE-4966); with the tail `— move to Cancel`, on the next proposal's Cancel list instead (DRE-7826) |
+| `🧺 groom-held: <id> DRE-N[ — <reason>]` | the CEO (the console, DRE-4979/DRE-4980) | per card — **Hold**: held back from this drain exactly as an exclusion is; a later proposal may offer it again, ranked after every card never held (DRE-4966) — or, with the tail `— until DRE-M` or `— until YYYY-MM-DD`, not before that card is Done or that date has come (DRE-7826) |
 | `🧺 groom-added: <id> DRE-N[ — <reason>]` | the CEO | per card |
 | `🧺 groom-rewrite-accepted: <id> DRE-N` | the CEO, typed by hand on the standing card — the console offers no control for it; one that writes the marker is a later card in the console's repository, not in this epic | per card — accepts the draft the pipeline posted on card DRE-N, which the drain writes as its body before moving it to Planning (DRE-6667) |
 | `🧺 groom-drained: <id>` + `moved: n · held back: n · added: n · cancelled: n · refused: n → Planning at <time PT>` + table | the drain | one per drain; `rewritten: n · ` follows `moved: n · ` only on a drain that wrote an accepted draft (DRE-6667) |
@@ -1460,19 +1548,9 @@ card also marks it lower priority… Don't do means never propose it again."
 
 The drain always honoured an exclusion for the batch it named. Nothing carried
 it forward, so a card the CEO excluded yesterday was offered again this
-morning. Now `propose --post` reads the standing card's whole thread and takes
-the CEO's newest per-card marker for each card, on **any** proposal
-(`standing_decisions`):
-
-- **`groom-excluded` — Don't do.** The card leaves the offer before the census,
-  exactly as a held repo's card does, and is listed under *Your earlier
-  answers* on the page. `🧺 groom-added: <id> DRE-N` brings it back.
-- **`groom-held` — Hold.** The drain leaves it in Intake for the batch it
-  names, exactly as an exclusion. A later proposal may offer it again, but
-  sequences every held card after every card that was never held, whatever
-  their priority or age. The console also lowers the card's Linear priority to
-  Low (DRE-4979).
-- **`groom-added`** after either clears it.
+morning. Now `propose` takes the newest decision for each card, on **any**
+proposal on **any** standing card, and acts on what it was — see *The memory*
+below for where it is read and the four decisions.
 
 Only a decider's marker counts — a person's, or one the console signed — so the
 proposer cannot take a card off its own offer. A decider's marker that names no
@@ -1480,7 +1558,7 @@ card is listed on the next proposal under *Decisions I could not read*, once:
 a proposal reports what was written since the one before it. A thread with no per-card
 marker proposes exactly what it did before.
 
-Such a marker changes neither list, so the next proposal usually carries the
+When such a marker changes neither list, the next proposal carries the
 **same id** as the one already on the card — and a proposal whose id already
 stands there is normally not posted again. When the proposal has decisions to
 list, it is posted again under that id unless a page with the id already
@@ -1488,6 +1566,93 @@ quotes every one of them. The second page carries the same lists, so an
 approval of the id means the same batch on either page, and the id is not
 retired. The run after that lists nothing, because the second page is now the
 newest proposal, and a repeat id posts nothing as before.
+
+### The memory (DRE-7822, DRE-7824, DRE-7826)
+
+The groomer's memory is the newest decision about each card, whichever
+proposal and whichever standing card it was written on.
+
+**Where it is read.** `read_memory`, once per `propose` run and before the
+census, so a card the memory keeps off the offer is never sent to the model,
+ranked, counted or batched. It reads the console's record of every groom
+decision first (`bureau_read.groom_removals`, the read door), then the whole
+thread of every standing card, each read once and its console receipts checked
+against that card. `groom_memory.remembered` gives the newest decision per card
+across the door's rows and the threads' markers, and `groom_memory.standing`
+says where each one stands this morning — today the Pacific date of the run,
+and the state of every card a hold names, read in **one** Linear request
+(`hold_states`). The repo switch still reads the current card only.
+
+**The standing cards.** `groom_memory.standing_cards(current)` is
+`groom_memory.STANDING_CARDS` — DRE-2840, DRE-3013, DRE-3327, DRE-4488 and
+DRE-4541, every card proposals have ever been posted on — plus the
+`--card`/`--post` card (`GROOM_PROPOSAL_CARD`) when it is not one of them, so a
+new card is read from its first morning and the outgoing one stays read. Until
+DRE-7824 only the current card's thread was read, which is how DRE-4267,
+DRE-4271 and DRE-4272 — excluded on DRE-4488 on 2026-09-22 — were offered
+again on DRE-4541. **At rotation** the pull request that moves the standing
+card to a new one adds it to `config/hand-work-age.json`'s `standing` list, so
+it never alarms, and appends it to `STANDING_CARDS` — never removing one;
+`tests/test_groom_memory.py` holds that same pull request to both.
+
+**The four decisions** (`groom_memory.DECISIONS`, the console's words):
+
+- **`not-doing`** — **Not doing** on the console, `groom-excluded` on a thread.
+  The card leaves the offer before the census, exactly as a held repo's card
+  does, and is listed under *Your earlier answers* with the reason recorded for
+  it — or "no reason recorded" — and the Pacific date of the decision.
+- **`cancel`** — **Move to Cancel** on the console, `groom-excluded: <id> DRE-N
+  — move to Cancel` on a thread. Since DRE-7826 the card goes on the **next
+  proposal's Cancel list**, whatever its place in the order and taking no
+  Planning slot — the one Cancel row not drawn from the morning's twenty,
+  because a person already decided it. Its `source` is `console-record`
+  (`groomer.DEAD_FROM_RECORD`), its reason reads `You moved this card to Cancel
+  on <Pacific date> (proposal <id>)`, and its one proof item is the console's
+  record (`Move to Cancel recorded by <actor> on <Pacific date>, proposal
+  <id>`), so approving that proposal cancels it with that reason written on the
+  card. The ranked read never re-judges it, and the check before posting writes
+  no row for it and never keeps it (`groom_verify.RECORDED_CANCEL_SOURCE`). An
+  epic with an open child is still refused, under *Cancels refused* as
+  proposed by `your Move to Cancel`. Only a card on offer that morning is
+  placed: one that has left the lane, or sits in a held repo, is not shown.
+  Before DRE-7826 a Move to Cancel was read as Don't do and the card stayed in
+  Intake for ever.
+- **`hold`** — **Hold until** on the console, `groom-held` on a thread.
+  - Held until a card, `— until DRE-M`: off both lists until DRE-M is `Done`,
+    and named under *Your earlier answers* with DRE-M's lane
+    (`Held until DRE-M (In Review) — not offered until it is Done: …`). A hold
+    card that is `Canceled` or `Duplicate`, or whose state could not be read,
+    keeps the hold, and the line says why. The first proposal built after
+    DRE-M is `Done` offers the card, sequenced as any card and never ranked
+    last, and says `Back on offer — the hold you set is met: DRE-Y (DRE-M is
+    Done)`.
+  - Held until a date, `— until YYYY-MM-DD`: off both lists until that date in
+    Pacific time — a proposal built at 23:30 PT the day before still holds it
+    — and back on offer, said `(<date> has come)`, on the date itself.
+  - Held with no condition: the drain leaves it in Intake for the batch it
+    names, and a later proposal offers it again sequenced after every card
+    never held, whatever its priority or age. The console also lowers the
+    card's Linear priority to Low (DRE-4979).
+- **`put-back`** — the door's `put-back`, a `groom-added` marker, or a
+  `groom-rewrite-accepted` newer than the removal. The card is on offer again,
+  and while it is in the lane the page names it in the `Put back on offer by
+  you:` line, with the reason recorded and its date — or, for an accepted
+  rewrite, in its own `Back on offer because you accepted its rewrite:` line.
+  Neither line names a card that was never removed.
+
+**The fallback.** A morning the door cannot be read says so on the page, with
+the door's reason and detail (`The console's record of your decisions could
+not be read this morning: …`), and the decisions written on the threads are
+honored instead; no card is offered because its decision could not be read.
+Every run prints one line in the Groom step's log:
+
+```
+groom-memory: source=<record|fallback> rows=<N> history=<H> thread=<T> fallback=<F> excluded=<E> held=<K> standing=<cards>[ door=<reason> detail=<detail>]
+```
+
+`rows` is the door's rows; `history`, `thread` and `fallback` count the newest
+decisions by the source they came from (`groom_memory.SOURCES`); `excluded` is
+the `not-doing` cards and `held` every `hold`, met or not.
 
 ## The next proposal answers your last decline (DRE-3373)
 

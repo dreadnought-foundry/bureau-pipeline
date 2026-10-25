@@ -362,6 +362,12 @@ jobs:
           # Set, the script walks from DEFAULT_BRANCH's tip as it stands when
           # the run woke, never from the dispatch-time HEAD_SHA below.
           NOT_BEFORE: ${{ github.event.inputs.not_before }}
+          # A `current` lap closes the surface's open deferral card when its
+          # newest tag — one cut by hand, say — released the deferred commit
+          # (DRE-7900). No `Release <surface>` job runs on that lap, so this
+          # step is the only one that can; `scripts/release_deferral.py`
+          # reads under it. Optional: unset, the close is one warning.
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           # A CI run that concluded anything but success is a no-op that says
           # so — in the step's own shell, not a job-level `if:`, because a

@@ -56,6 +56,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import dead_run  # noqa: E402
 import hold  # noqa: E402
+import lane_contract  # noqa: E402
 import medic_retry  # noqa: E402
 import planning_classify  # noqa: E402
 import planning_route  # noqa: E402
@@ -274,6 +275,28 @@ class TestTheReceiptSpendsNothing:
 # ===========================================================================
 # 4b. the turn-cap paths are untouched
 # ===========================================================================
+class TestARequeueNamesTheQueueLane:
+    """DRE-7111: every requeue `decide` answers says the card went where the
+    Report step's requeue puts it, `lane_contract.QUEUE_LANE` — the lane the
+    sweep requeues a dead run to (DRE-7108)."""
+
+    @pytest.mark.parametrize("kw", [
+        {},
+        {"is_error": True, "error_model": OPUS},
+        {"credential_expiry": True, "push_status": "401"},
+        {"turn_exhaustion": True, "last_progress": 3},
+    ])
+    def test_the_receipt_names_the_queue_lane(self, kw):
+        d = dead_run.decide(0, **kw)
+        assert d.action == "requeue"
+        assert f"equeued to {lane_contract.QUEUE_LANE} for " in d.comments[0], d.comments[0]
+        assert "Todo" not in d.comments[0]
+
+    def test_the_receipt_follows_the_queue_lane_not_a_name(self, monkeypatch):
+        monkeypatch.setattr(dead_run, "QUEUE_LANE", "Backlog")
+        assert "requeued to Backlog for a fresh attempt" in dead_run.decide(0).comments[0]
+
+
 class TestTheTurnCapPathsAreUntouched:
     @pytest.mark.parametrize("tried", [False, True])
     @pytest.mark.parametrize("prior,progress,action", [
@@ -434,6 +457,10 @@ def run_block(td: str, *, death_class: str, action: str = "hold", **env_extra):
         RATE_FLAGS="", EXEC_FILE=os.path.join(td, "exec.json"), MODEL_USED=OPUS,
         CLAUDE_OUTCOME="failure", FAILED_STEP="", RUN_URL=RUN_URL,
         RESCUE_PUSH_STATUS="401", RESCUE_PATCH="", RESCUE_ARTIFACT="",
+        # The lanes the script reads through the seam at its top (DRE-7111),
+        # which this block alone never runs.
+        QUEUE_LANE=lane_contract.QUEUE_LANE,
+        START_LANES=",".join(lane_contract.START_LANES),
     )
     env.update(env_extra)
     proc = subprocess.run(["bash", "-c", script], cwd=td, env=env,
@@ -497,9 +524,21 @@ class TestTheReportStepHandsDecideTheThread:
         journal = run_block(td, death_class="none", action="replan")
         assert not _calls(journal, "dead_run", "park")
         (advance,) = _calls(journal, "linear_ops", "advance")
-        assert advance["args"] == ["advance", "DRE-1", "Planning", "In Progress,Todo"]
+        assert advance["args"] == ["advance", "DRE-1", "Planning",
+                                   ",".join(lane_contract.START_LANES)]
         (comment,) = _calls(journal, "linear_ops", "comment")
         assert comment["args"] == ["comment", "DRE-1", "the body"]
+
+    @pytest.mark.parametrize("death_class", ["none", "api_death", "credential_expiry",
+                                             "turn_exhaustion"])
+    def test_a_requeue_writes_the_queue_lane(self, td, death_class):
+        """DRE-7111: a requeue lands where the sweep's does (DRE-7108), and
+        `--park` keeps the building-card reroute from turning it into a
+        start-lane move."""
+        journal = run_block(td, death_class=death_class, action="requeue")
+        (state,) = _calls(journal, "linear_ops", "state")
+        assert state["args"] == ["state", "DRE-1", lane_contract.QUEUE_LANE, "--park"]
+        assert not _calls(journal, "linear_ops", "advance")
 
     def test_the_count_is_read_the_same_number_of_ways(self):
         text = REPORT.read_text(encoding="utf-8")

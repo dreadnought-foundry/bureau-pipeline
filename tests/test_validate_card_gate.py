@@ -1,4 +1,4 @@
-"""Todo-entry card-validation gate — the cmd_gate behavior (DRE-1405).
+"""Start-lane card-validation gate — the cmd_gate behavior (DRE-1405).
 
 The cases the gate must get right (linear_ops is stubbed so no network). Since
 the fix-first extension the gate REPAIRS what it can rather than bouncing — the
@@ -6,8 +6,9 @@ fine-grained repair/proceed/bounce cases live in test_validate_card_autofix.py.
 These pin the surviving invariants:
   - clean card        → no bounce, bounced=false, untouched
   - missing repo, NOT inferable → comment + Planning, bounced=true
-  - already past Todo  → untouched, bounced=false (gate validates the Todo-entry
-                         transition only; never drags work backward)
+  - already past the start lanes → untouched, bounced=false (gate validates
+                         the promotion into a start lane only; never drags
+                         work backward)
 """
 
 import os
@@ -76,7 +77,7 @@ class GateBehaviorTest(unittest.TestCase):
         return emitted["bounced"]
 
     def test_clean_card_proceeds(self):
-        fake = FakeLinear("Todo", "**Repo:** atlas", ["agent:engineer"])
+        fake = FakeLinear("In Progress", "**Repo:** atlas", ["agent:engineer"])
         self.assertFalse(self._run(fake))
         self.assertEqual(fake.comments, [])
         self.assertEqual(fake.states, [])
@@ -84,7 +85,7 @@ class GateBehaviorTest(unittest.TestCase):
     def test_missing_repo_not_inferable_bounces(self):
         # No **Repo:** line, no repo:/initiative: label, no project → the one
         # case the fix-first gate still bounces (can't guess a repo).
-        fake = FakeLinear("Todo", "no repo line", ["agent:engineer"], project=None)
+        fake = FakeLinear("In Progress", "no repo line", ["agent:engineer"], project=None)
         self.assertTrue(self._run(fake))
         self.assertEqual(fake.states, [("DRE-999", "Planning")])
         self.assertIn("Repo:", fake.comments[0][1])
@@ -94,14 +95,16 @@ class GateBehaviorTest(unittest.TestCase):
     def test_missing_agent_label_is_auto_fixed_not_bounced(self):
         # Behavior change (fix-first): a card with a resolvable repo but no agent
         # label is REPAIRED (engineer inferred) and proceeds — no longer bounced.
-        fake = FakeLinear("Todo", "**Repo:** atlas", [], title="Fix it")
+        fake = FakeLinear("In Progress", "**Repo:** atlas", [], title="Fix it")
         self.assertFalse(self._run(fake))
         self.assertIn(("DRE-999", "agent:engineer"), fake.added_labels)
         self.assertEqual(fake.states, [])
 
-    def test_already_in_progress_untouched(self):
-        # A card already past Todo is NEVER bounced, even if malformed.
-        fake = FakeLinear("In Progress", "no repo, no labels", [])
+    def test_already_in_review_untouched(self):
+        # A card already past the start lanes is NEVER bounced, even if
+        # malformed. In Progress is a start lane since DRE-7110 and is gated
+        # (tests/test_validate_card_start_lanes.py).
+        fake = FakeLinear("In Review", "no repo, no labels", [])
         self.assertFalse(self._run(fake))
         self.assertEqual(fake.comments, [])
         self.assertEqual(fake.states, [])

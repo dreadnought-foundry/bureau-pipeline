@@ -182,6 +182,14 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: re-reads its card live before it moves: six more requests in
 #: `promote_ready`. 48 + 6 = 54.
 #:
+#: It stays 54 under DRE-7755 (measured 2026-10-21: 52 before, 53 after). The
+#: lift pass reads this repo's Queued cards that wear the hold, once, on a
+#: full pass that is not idle, charged to `lift_wip_cap_holds`. The board
+#: holds none whose window is partial, so no whole-thread read: 52 + 1 = 53.
+#: The replay answers that read with Linear's own filter (the repo label and
+#: `needs-human`); a lane read in its place paid 22 whole-thread reads for
+#: Queued cards no hold was ever on.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
 REAL_BOARD_SWEEP_BUDGET = 54
@@ -308,6 +316,22 @@ class ReplayLinear(FakeLinear):
                         and parent_lane in v.get("epicStates", ())):
                     nodes.append(card)
             return self._page(nodes, v.get("after"))
+        if query == reconcile.repo_held_epics.HELD_QUERY:
+            # The lift pass's read (DRE-7755): this repo's Queued cards that
+            # wear the hold, with the filter Linear applies — the repo label
+            # AND `needs-human` — so the replay pays a whole-thread read only
+            # for a held card whose window is partial, as a live board does.
+            self.queries.append((query, v))
+            needle = (v.get("needle") or "").lower()
+            nodes = []
+            for card in self.cards.values():
+                labels = [l["name"].lower()
+                          for l in (card.get("labels") or {}).get("nodes") or []]
+                if (card["state"]["name"] in v.get("states", ())
+                        and any(needle in name for name in labels)
+                        and reconcile.HOLD_LABEL in labels):
+                    nodes.append(card)
+            return self._page(nodes, v.get("after"))
         return super().gql(query, variables)
 
 
@@ -330,7 +354,8 @@ _ESCALATION_LANES = (
 def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
     """The four decisions the sweep made, read off the stubbed writes.
 
-      promote  — a Backlog card advanced to Todo by the dependency gate.
+      promote  — a Backlog card advanced to In Progress by the dependency
+                 gate (to Todo until the flip, DRE-7120).
       hold     — a card told why it is NOT being promoted (the refusal's own
                  tag, so a cut that changes the reason fails too), or parked
                  behind the hold label.
@@ -351,9 +376,15 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
     thing the record exists to stop.
     """
     promote, hold, escalate, close = [], [], [], []
+    # A park is the hold label and the move together. A dead run's requeue
+    # makes the same deliberate `--park` move to the queue since DRE-7108, but
+    # holds nothing — the sweep promotes it again — so it is no decision here,
+    # exactly as its requeue to Todo was not.
+    labelled = {call.args[0] for call in label.call_args_list
+                if call.args[1:2] == (reconcile.HOLD_LABEL,)}
     for call in advance.call_args_list:
         ident, to = call.args[0], call.args[1]
-        if to == "Todo":
+        if to == "In Progress":
             promote.append(ident)
         elif to in _ESCALATION_LANES:
             escalate.append(f"{ident} → {to}")
@@ -363,7 +394,8 @@ def _decisions(advance, state, label, refusals) -> dict[str, list[str]]:
             close.append(ident)
         elif to in _ESCALATION_LANES:
             escalate.append(f"{ident} → {to}")
-        elif to == reconcile.QUEUE_LANE and "--park" in call.args[2:]:
+        elif (to == reconcile.QUEUE_LANE and "--park" in call.args[2:]
+              and ident in labelled):
             hold.append(f"{ident} parked")
     for call in label.call_args_list:
         if call.args[1:2] == (reconcile.HOLD_LABEL,):
@@ -661,6 +693,15 @@ def test_the_pass_ran_to_its_end(replay):
         "the pass never reached its end: " + "\n".join(replay.printed[-8:])
     )
     assert replay.spend_lines[-1].startswith("sweep-spend: total ")
+
+
+def test_the_full_sweep_counts_its_dependency_cycles(replay):
+    """DRE-3539: every full sweep says how many loops across the epic and
+    card gates it found, just before its summary — `cycles: 0` included. The
+    synthetic board holds none."""
+    done = next(i for i, l in enumerate(replay.printed) if l.startswith("sweep complete:"))
+    assert replay.printed[done - 1] == "cycles: 0", replay.printed[done - 3:done + 1]
+    assert not any(l.startswith("dependency-cycle:") for l in replay.printed)
 
 
 def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):

@@ -32,10 +32,12 @@ Three properties, in the order they matter:
     the abbreviated sha — never the run id, because attempt 2 is a DIFFERENT
     failed run at the SAME commit and must find the first attempt's card
     instead of minting a second.
-  * **The lane is a working lane, never Todo.** A card entering Todo is
-    dispatched by the relay, which would put a second agent on work an agent is
-    already doing. The repair is in flight before this card exists, so the card
-    is filed where the work actually is, and the routing verdict — stamped
+  * **The card is created in its lane, never moved into it.** A card MOVED
+    into `In Progress` from a waiting lane is a build dispatch (DRE-7107), which
+    would put a second agent on work an agent is already doing; a card CREATED
+    there has no lane before it and is never dispatched. The repair is in
+    flight before this card exists, so the card is created where the work
+    actually is, and the routing verdict — stamped
     through `routing_verdict.stamp_card`, the ONE writer of that vocabulary —
     says the fleet has nothing to dispatch for it.
 
@@ -108,7 +110,8 @@ import failed_tests  # noqa: E402
 import github_output  # noqa: E402
 import red_main_repair  # noqa: E402
 
-#: Where the card lands. Never Todo — see the module docstring.
+#: Where the card is created — never moved here, which would dispatch a build
+#: (see the module docstring).
 LANE = "In Progress"
 
 #: The verdict the fleet's promoter reads: nothing to dispatch here. The

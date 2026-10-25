@@ -79,7 +79,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import blocker_prose  # noqa: E402
-from lane_contract import QUEUE_LANE  # noqa: E402 — the lane a fixed card returns to (DRE-6747)
+from lane_contract import DISPATCH_LANE, QUEUE_LANE  # noqa: E402 — the lane a fixed card returns to (DRE-6747), and the one it must not (DRE-7112)
 
 # A blocker is met when it is terminal, and only then. Read inline off the
 # relation, so the gate never fetches a state it was already handed.
@@ -105,8 +105,9 @@ UNKNOWN_TAG = "relations-unknown"
 DECLARING_PHRASES = ("Blocked by", "Depends on", "Serialize after")
 
 # Where a defective CARD goes, and where its author sends it back from. The
-# queue, not Todo: Todo dispatches an agent run, and the card's real blockers may
-# still be unmet — the queue is the lane the dependency gate re-evaluates it in.
+# queue, not the dispatch lane (`DISPATCH_LANE`, DRE-7112): its entry dispatches
+# an agent run, and the card's real blockers may still be unmet — the queue is
+# the lane the dependency gate re-evaluates it in.
 # The return is a write, so it is `QUEUE_LANE`, the lane the planning exit writes
 # (DRE-6747); the sweep reads the queue under either of its names.
 DEFECT_LANE = "Triage"
@@ -248,10 +249,10 @@ def card_refusal(identifier: str, claims) -> str:
         "authoritative to every human who opens this card and is invisible to "
         "every gate — so it is worth fixing rather than leaving to rot.\n\n"
         f"{_both_fixes(claims)}\n\n"
-        f"**Then move the card back to `{RETURN_LANE}`, not `Todo`.** "
+        f"**Then move the card back to `{RETURN_LANE}`, not `{DISPATCH_LANE}`.** "
         f"`{RETURN_LANE}` is where the dependency gate re-evaluates it — its "
-        "real blockers may still be unmet — while `Todo` dispatches an agent "
-        "run at it immediately."
+        f"real blockers may still be unmet — while `{DISPATCH_LANE}` dispatches "
+        "an agent run at it immediately."
     )
 
 

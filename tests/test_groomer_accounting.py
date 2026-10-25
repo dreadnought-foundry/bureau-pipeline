@@ -154,6 +154,10 @@ def test_the_receipt_comment_without_the_key_reads_as_before():
 
 def _build(monkeypatch, cards, judgement, **extra):
     monkeypatch.setattr(groomer, "read_population", lambda lops, lane: cards)
+    # Every standing card's thread is read before the census (DRE-7824);
+    # this test reads none of them.
+    monkeypatch.setattr(groomer.linear_ops, "comment_records",
+                        lambda card, whole_thread=False: [])
     monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
     monkeypatch.setattr(groom_context, "read_pack", lambda lops: PACK)
     monkeypatch.setattr(groom_judgement, "run", lambda rows, pack: judgement)

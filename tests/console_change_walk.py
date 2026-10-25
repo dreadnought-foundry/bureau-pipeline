@@ -18,6 +18,16 @@ one handed to it however it got there. A walk never runs a walk.
 The walks themselves run in a job of their own, `tests.yml`'s `walks`
 (`scripts/unit_test_parts.py run-walks`), never in a numbered part.
 
+A WALK RUNS IN SHARDS (DRE-7907). On 2026-10-24 the every-default walk took
+60m07s in one job (job 120989216560), and `unit-result` waited on it. So
+each walk's cases are spread across several jobs: `walks --json` gives each
+walk a shard count, and `shard` picks the cases one shard runs by
+`BUREAU_WALK_SHARD` of `BUREAU_WALK_SHARDS` — index modulo the count equal to
+the shard minus one, the change walk's `selected` rule. It is the one reader
+of those two names: a walk asks it for its shard and never reads them itself,
+and `case_names` reads a walk's case names off either shape of `CASES`. An
+inner run never sees them, so a copy never runs a shard of anything.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_tests_workflow_parts.py -q
 """
 
@@ -40,6 +50,11 @@ ROOT = Path(__file__).resolve().parents[1]
 #: the walks' job's files by.
 WALK = "*_keeps_the_suite_green.py"
 
+#: The shard a walk's job runs, and how many there are (DRE-7907): both or
+#: neither. `tests.yml`'s `walks` step sets them and nothing else does.
+SHARD_ENV = "BUREAU_WALK_SHARD"
+SHARDS_ENV = "BUREAU_WALK_SHARDS"
+
 #: Not copied: the repository's history, and the pipeline checkout a workflow
 #: run puts beside the tree (it is not this repository's code).
 SKIPPED = {".git", ".bureau-pipeline", ".pytest_cache"}
@@ -50,6 +65,31 @@ FAILED = re.compile(r"^(?:FAILED|SUBFAILED(?:\(.*?\)|\[.*?\])?) (\S+::\S+)", re.
 
 def is_walk(rel: str) -> bool:
     return fnmatch.fnmatch(Path(rel).name, WALK)
+
+
+def case_names(cases) -> list[str]:
+    """A walk's case names, in order: the keys of a dict `CASES`, or the
+    first of each `(name, change set)` pair of the change walk's list."""
+    if isinstance(cases, dict):
+        return list(cases)
+    return [name for name, _ in cases]
+
+
+def shard(names, env=None) -> list[str]:
+    """The names shard n of m runs: index modulo m equal to n - 1. Neither
+    variable set, every name; one without the other, or a shard outside
+    1..m, is refused."""
+    env = os.environ if env is None else env
+    n, m = env.get(SHARD_ENV), env.get(SHARDS_ENV)
+    if n is None and m is None:
+        return list(names)
+    if n is None or m is None:
+        raise ValueError(f"{SHARD_ENV} and {SHARDS_ENV} are set together or "
+                         f"not at all")
+    n, m = int(n), int(m)
+    if not 1 <= n <= m:
+        raise ValueError(f"{SHARD_ENV}={n} is not a shard of {SHARDS_ENV}={m}")
+    return [name for i, name in enumerate(names) if i % m == n - 1]
 
 
 def copy_tree(base: Path, root: Path = ROOT) -> Path:
@@ -67,9 +107,10 @@ def copy_tree(base: Path, root: Path = ROOT) -> Path:
 
 
 def run(tree: Path, *args: str) -> subprocess.CompletedProcess:
-    """`python3 <args>` inside the copy."""
+    """`python3 <args>` inside the copy, with no shard named."""
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
-    env.pop("GITHUB_STEP_SUMMARY", None)
+    for name in ("GITHUB_STEP_SUMMARY", SHARD_ENV, SHARDS_ENV):
+        env.pop(name, None)
     return subprocess.run([sys.executable, *args], capture_output=True,
                           text=True, cwd=tree, env=env)
 

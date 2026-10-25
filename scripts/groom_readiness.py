@@ -27,8 +27,11 @@ holds.
    DRE-6407). The card's own parent never holds it — that is DRE-6664's
    in-flight case.
 2. `file-named-by-in-flight-card` — a path the card names in backticks is
-   named, the same path in the same repo, by a card in Planning, Todo, In
-   Progress or In Review (DRE-6908).
+   named, the same path in the same repo, by a card in Planning, a start lane
+   (`lane_contract.START_LANES`, DRE-7112) or In Review (DRE-6908). Never
+   by a PROOF card, an In Progress epic that is built out, or a card
+   formally blocked by the card: none of them writes the file before the
+   card does, and holding on one is a deadlock (DRE-7814).
 3. `child-of-epic-not-in-progress` — the card's parent epic has not started.
 4. `undecided-question` — a `decide before building` section with a question
    still beneath it, and no `## Decisions from the CEO` block.
@@ -42,10 +45,14 @@ before anything here runs (DRE-3403).
 In two steps (`read_named`, `read_epics`), and neither aliases
 `epic_cap.IN_MOTION_NODE` over a list. The light read asks `NAMED_NODE` for at
 most `NAMED_PAGE` ids a request; the epic read asks `IN_MOTION_NODE` once for
-each named card the light read shows In Progress and an epic. A read that
-fails — `lops.gql` raises, or Linear returns no issue — leaves that card
-`unread`, and an unread card holds every card naming it. Nothing is retried in
-the run; the next morning reads again.
+each named card the light read shows In Progress and an epic. The in-flight
+epics are read too (DRE-7814): every card the in-flight lanes hold that is an
+epic and In Progress gets the same single-issue `EPIC_QUERY` request, and one
+a `depends on` line already names is read once, not twice — bounded by the
+epic cap's In Progress epics. A read that fails — `lops.gql` raises, or Linear
+returns no issue — leaves that card `unread`, and an unread card holds every
+card naming it, on a line or by a file. Nothing is retried in the run; the
+next morning reads again.
 
 Run: python3 scripts/groom_readiness.py check
 """
@@ -64,7 +71,12 @@ import answer_into_card  # noqa: E402 — the CEO's decisions block, one heading
 import epic_cap  # noqa: E402 — buildable(), counts_against_cap(), IN_MOTION_NODE
 import groomer  # noqa: E402 — file references, repo labels, the boilerplate rule
 import mid_epic  # noqa: E402 — the one reading of "is this card an epic"
-from lane_contract import QUEUE_LANES  # noqa: E402 — the queue, read under either name (DRE-6742)
+import proof_and_demo  # noqa: E402 — the one reading of "is this a PROOF card"
+from lane_contract import (  # noqa: E402 — the queue, read under either name (DRE-6742)
+    DISPATCH_LANE,
+    QUEUE_LANES,
+    START_LANES,  # the start lanes, read where Todo was (DRE-7112)
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 RULES_PATH = ROOT / "config" / "groom-readiness.json"
@@ -76,18 +88,22 @@ APPLIED_HERE = "groom_readiness"
 #: Done, Canceled and Duplicate clear it (`standards/card-quality.md`:
 #: "Canceled clears the blocker without claiming delivery"). The queue is read
 #: under every name it carries, so a card the moved writers file in Queued
-#: holds its dependents as one in the old lane did (DRE-6742).
-OPEN_STATES = ("Planning", "Green Light", *QUEUE_LANES, "Todo", "In Progress",
-               "In Review")
+#: holds its dependents as one in the old lane did (DRE-6742). The start lanes
+#: are the contract's (DRE-7112), so a card in the dispatch lane holds them as
+#: one in Todo did.
+OPEN_STATES = ("Planning", "Green Light", *QUEUE_LANES, *START_LANES, "In Review")
 
 #: The lanes whose cards own the files they name, for rule 2. Each is read
 #: once a morning with `groomer.read_population` (`groomer._readiness`).
-IN_FLIGHT_LANES = ("Planning", "Todo", "In Progress", "In Review")
+IN_FLIGHT_LANES = ("Planning", *START_LANES, "In Review")
 
 #: A parent epic in one of these has not started, so its child waits (rule 3).
 #: Intake is the lane itself: an epic in the same population is a member of
-#: the same unit, and the epic card is what the rule leaves in the walk.
-PARENT_NOT_STARTED = ("Intake", "Planning", "Green Light", *QUEUE_LANES, "Todo",
+#: the same unit, and the epic card is what the rule leaves in the walk. Of
+#: the start lanes only those ahead of the dispatch lane count: an epic in the
+#: dispatch lane is activated, which is the rule's own name (DRE-7112).
+PARENT_NOT_STARTED = ("Intake", "Planning", "Green Light", *QUEUE_LANES,
+                      *(lane for lane in START_LANES if lane != DISPATCH_LANE),
                       "Triage")
 
 #: Rule 4 reads a `##` or `###` heading whose text contains this, any case.
@@ -267,10 +283,11 @@ def _state(record: dict) -> str:
 
 
 def read_epics(lops, named: dict) -> dict:
-    """`{id: IN_MOTION_NODE record}` for each named card the light read shows
-    In Progress and an epic, one request each — or `{"unread": why}`. A named
-    epic in any other state costs nothing: one that is not In Progress is not
-    built out, and a Done one needs no read."""
+    """`{id: IN_MOTION_NODE record}` for each card of `named` — a light read,
+    or an in-flight lane's population record (DRE-7814) — that is In Progress
+    and an epic, one request each — or `{"unread": why}`. An epic in any other
+    state costs nothing: one that is not In Progress is not built out, and a
+    Done one needs no read."""
     out: dict = {}
     for identifier, record in named.items():
         if "unread" in record or _state(record) != epic_cap.IN_PROGRESS \
@@ -285,9 +302,21 @@ def read_epics(lops, named: dict) -> dict:
     return out
 
 
+def _blocked_by(record: dict) -> list[str]:
+    """The cards formally blocking `record`: its `inverseRelations` nodes of
+    type `blocks`. Formal relations only — a prose `Blocked by:` line is not
+    read here."""
+    found = {(n.get("issue") or {}).get("identifier")
+             for n in ((record.get("inverseRelations") or {}).get("nodes") or [])
+             if n.get("type") == "blocks"}
+    return sorted((i for i in found if i), key=groomer._card_sort_key)
+
+
 def _lane_rows(cards: list[dict]) -> list[dict]:
     return [{"identifier": c.get("identifier"), "repo": groomer.repo_of(c),
-             "files": sorted(groomer.file_paths(c.get("description")))}
+             "files": sorted(groomer.file_paths(c.get("description"))),
+             "title": c.get("title") or "", "epic": _is_epic(c),
+             "blocked_by": _blocked_by(c)}
             for c in cards or []]
 
 
@@ -304,9 +333,16 @@ def facts(*, lanes: dict | None = None, named: dict | None = None,
 def read(lops, cards: list[dict], verdicts: dict | None, *,
          lanes: dict) -> dict:
     """Read the named cards for `cards`' `depends on` lines and return
-    `facts(...)` with `lanes` — the in-flight lanes, already read."""
+    `facts(...)` with `lanes` — the in-flight lanes, already read. Every
+    in-flight card that is an epic and In Progress is read with the named
+    epics (DRE-7814), so rule 2 can ask whether it is built out; one a line
+    already names is read once."""
     named = read_named(lops, named_ids(cards, verdicts))
     epics = read_epics(lops, named)
+    in_flight = {c.get("identifier"): c for lane in IN_FLIGHT_LANES
+                 for c in (lanes or {}).get(lane) or []
+                 if c.get("identifier") and c.get("identifier") not in epics}
+    epics.update(read_epics(lops, in_flight))
     return facts(lanes=lanes, named=named, epics=epics)
 
 
@@ -377,6 +413,23 @@ def _waits_on_open_card(card: dict, board: dict, record: dict) -> dict | None:
     return _row(record, names, said) if names else None
 
 
+def _writes_none_of_it(card: dict, lane: str, other: dict, board: dict) -> bool:
+    """Does the in-flight `other` leave `card` free to build what both name
+    (DRE-7814)? A PROOF card writes only its record and names files to read
+    them; a built-out epic's only open children are ones nothing builds; and
+    a card formally blocked by `card` is waiting on `card` itself. Holding on
+    any of them is a deadlock. An epic outside In Progress, or one whose
+    record is missing or unread, is not built out. A row written before
+    DRE-7814 carries none of the three fields and reads as an ordinary card."""
+    if proof_and_demo.is_proof(other.get("title") or ""):
+        return True
+    if other.get("epic") and lane == epic_cap.IN_PROGRESS:
+        epic = (board.get("epics") or {}).get(other.get("identifier"))
+        if epic is not None and "unread" not in epic and built_out(epic):
+            return True
+    return card.get("identifier") in (other.get("blocked_by") or ())
+
+
 def _file_named_in_flight(card: dict, board: dict, record: dict) -> dict | None:
     # The same path, never the bare name (DRE-6908): `scripts/runners/README.md`
     # and `console/backend/monitors/README.md` are two files, and a bare
@@ -395,7 +448,7 @@ def _file_named_in_flight(card: dict, board: dict, record: dict) -> dict | None:
                     or other.get("repo") != repo:
                 continue
             shared = sorted(mine & set(other.get("files") or ()))
-            if not shared:
+            if not shared or _writes_none_of_it(card, lane, other, board):
                 continue
             files = ", ".join(f"`{f}`" for f in shared)
             said.append((_say(record, "reason", names=other["identifier"],

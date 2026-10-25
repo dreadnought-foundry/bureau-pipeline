@@ -182,8 +182,8 @@ class TestTheOneOffIsPromoted:
         being built."""
         board = _Board(_card(comments=[ONE_OFF_STAMP, FLEET]))
         assert board.promote() == 1
-        assert board.lane_of("DRE-3018") == "Todo"
-        assert board.advanced == [("DRE-3018", "Todo", reconcile.QUEUE_FROM)]
+        assert board.lane_of("DRE-3018") == "In Progress"
+        assert board.advanced == [("DRE-3018", "In Progress", reconcile.QUEUE_FROM)]
 
     def test_the_receipt_says_a_one_off_was_promoted(self):
         board = _Board(_card(comments=[ONE_OFF_STAMP, FLEET]))
@@ -224,7 +224,7 @@ class TestTheParentlessGateStillDecides:
         card is deliberately inert, and it says so.
 
         This used to use WORKBENCH. DRE-3385 corrected the reading: WORKBENCH
-        names Todo as its destination, so the sweep carries it there for a
+        names a person's lane as its destination, so the sweep carries it there for a
         person — see the test below, and test_operator_card_promotion.py."""
         board = _Board(_card(comments=[ONE_OFF_STAMP, PARKED]))
         assert board.promote() == 0
@@ -310,7 +310,7 @@ class TestAnEpicIsStillSkipped:
                   comments=[ONE_OFF_STAMP, FLEET])
         )
         assert board.promote() == 1
-        assert board.lane_of("DRE-3022") == "Todo"
+        assert board.lane_of("DRE-3022") == "In Progress"
 
 
 # ===========================================================================
@@ -341,7 +341,7 @@ class TestTheLabelDecidesNothing:
                   labels=("repo:bureau-pipeline", PLANNER), comments=[FLEET])
         )
         assert board.promote() == 1
-        assert board.lane_of("DRE-3023") == "Todo"
+        assert board.lane_of("DRE-3023") == "In Progress"
 
 
 # ===========================================================================
@@ -389,9 +389,10 @@ class TestTheWipCapExemptionReadsTheShape:
     promoted into an active lane in the first place."""
 
     def test_a_promoted_one_off_wearing_the_label_is_not_counted_as_an_epic(self):
-        """DRE-3018's shape again, now sitting in Todo. Read as an epic here, it
-        is subtracted from the WIP count — so `MAX_WIP` silently permits more
-        concurrent work than the cap it exists to enforce."""
+        """DRE-3018's shape again, now promoted into an active lane. Read as
+        an epic here, it is subtracted from the WIP count — so `MAX_WIP`
+        silently permits more concurrent work than the cap it exists to
+        enforce."""
         card = _card(identifier="DRE-3018", title="a plain one-off title",
                      comments=[ONE_OFF_STAMP, FLEET])
         with patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"):

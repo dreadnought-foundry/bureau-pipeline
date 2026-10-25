@@ -338,22 +338,31 @@ class TheCliCarriesIt(unittest.TestCase):
                 for name, path in paths.items()}
         return {"outputs": outputs, **read}
 
+    #: Since DRE-7491 a first no-result is read again and only the second in
+    #: a row reaches the CEO, so the escalation-text tests below run on the
+    #: second: the card's newest one-off round record is already a no-result.
+    @staticmethod
+    def _second_in_a_row() -> tuple:
+        return ({"body": pc.marker(pc.STAGE_ONE_OFF, 1, pc.NO_RESULT,
+                                   run_id="35523230304"),
+                 "authored_by_pipeline": True},)
+
     def test_a_run_cut_off_at_its_ceiling_says_so_on_the_card(self):
         run = self._decide("", {"subtype": pc.TURN_CAP_SUBTYPE, "num_turns": 21,
-                                "is_error": True})
+                                "is_error": True}, records=self._second_in_a_row())
         self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
         self.assertEqual("true", run["outputs"]["ran_out"])
         self.assertIn("ran out of turns", run["note"].lower())
         self.assertIn("36", run["note"])
-        self.assertIn("ran out", run["escalation"].lower())
+        self.assertIn("35523230304", run["escalation"])
         self.assertNotIn("did not answer at all", run["escalation"])
 
     def test_a_reader_never_reached_writes_the_words_it_always_wrote(self):
-        run = self._decide("", None)
+        run = self._decide("", None, records=self._second_in_a_row())
         self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
         self.assertEqual("false", run["outputs"]["ran_out"])
         self.assertIn(pc.NO_CRITIC_NOTE, run["note"])
-        self.assertIn("the reader did not answer at all", run["escalation"])
+        self.assertIn("nothing has checked this card", run["escalation"])
 
     def test_a_missing_execution_file_is_not_a_turn_cap(self):
         run = self._decide("", None, ceiling="36")

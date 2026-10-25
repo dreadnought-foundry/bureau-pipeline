@@ -687,6 +687,43 @@ def _drive_agent_blocker_resolved(mp):
         repo="dreadnought-foundry/bureau-pipeline")
 
 
+@site("repo-held-notice", "repo-held-notice")
+def _drive_repo_held_notice(mp):
+    """The held repo's notice (DRE-7754): one approved epic in a repo held at
+    max_wip 0, its one Queued child already held `wip-cap-held`, so the first
+    comment the pass posts is the epic's receipt. Frozen from its first
+    render: there was no earlier wording to read it off."""
+    import repo_held_epics  # noqa: PLC0415 — only this driver needs it
+    import sweep_holds  # noqa: PLC0415
+
+    window = {"pageInfo": {"hasNextPage": False}, "nodes": []}
+    epic = {"id": "uuid-1", "identifier": "DRE-1",
+            "labels": {"nodes": [{"name": "repo:agent-bureau-demo"}]},
+            "children": {"nodes": [{"id": "uuid-2"}]},
+            "history": {"nodes": [{"createdAt": "2026-10-19T10:00:00.000Z",
+                                   "toState": {"name": "In Progress"}}]},
+            "comments": window}
+    stamp = ("🔒 hold: reason=wip-cap-held at=none lifts=cap-restored "
+             "by=scripts/repo_held_epics.py")
+    child = {"id": "uuid-2", "identifier": "DRE-2", "parent": {"identifier": "DRE-1"},
+             "labels": {"nodes": [{"name": "repo:agent-bureau-demo"},
+                                  {"name": "needs-human"}]},
+             "comments": {"pageInfo": {"hasNextPage": False}, "nodes": [
+                 {"body": stamp, "createdAt": "2026-10-19T11:00:00.000Z"}]}}
+
+    def gql(query, _variables=None):
+        nodes = [epic] if query == repo_held_epics.EPICS_QUERY else [child]
+        return {"issues": {"nodes": nodes, "pageInfo": {"hasNextPage": False}}}
+
+    holds = sweep_holds.SweepHolds(
+        cap=0, cap_source="the caller's reconcile stub .github/workflows/reconcile.yml",
+        stub_path=".github/workflows/reconcile.yml",
+        stub_comment="HELD at 0 — this sandbox builds nothing until the CEO lifts it.",
+        intake_hold=None, max_wip_held=True, intake_held=False, held=True)
+    _card_recorder(mp)
+    repo_held_epics.hold_pass("agent-bureau-demo", holds, gql=gql)
+
+
 #: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the

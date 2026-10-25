@@ -212,7 +212,7 @@ def test_a_card_whose_only_unmet_blocker_is_prose_declared_now_promotes():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-900", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-900", "In Progress", reconcile.QUEUE_FROM)
 
 
 def test_a_live_relation_still_holds_the_card():
@@ -261,7 +261,8 @@ def test_an_undeclared_prose_claim_refuses_promotion(capsys):
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 0
-    assert ("DRE-900", "Todo", reconcile.QUEUE_FROM) not in [c.args for c in advance.mock_calls]
+    assert ("DRE-900", "In Progress", reconcile.QUEUE_FROM) not in [
+        c.args for c in advance.mock_calls]
     out = capsys.readouterr().out
     assert prose_blockers.CARD_TAG in out       # the named line
     assert "DRE-900" in out and "DRE-700" in out
@@ -282,7 +283,7 @@ def test_the_refusal_comment_names_both_fixes_and_the_return_lane():
     assert "blockedBy" in body                       # recovery 1: add the relation
     assert "Blocked by" in body and "Depends on" in body and "Serialize after" in body
     assert f"`{lane_contract.QUEUE_LANE}`" in body   # the return lane…
-    assert "Todo" in body                            # …named against the wrong one
+    assert "`In Progress`" in body                   # …named against the wrong one
 
 
 def test_the_return_lane_is_the_queue_the_writers_write():
@@ -292,6 +293,18 @@ def test_the_return_lane_is_the_queue_the_writers_write():
     assert prose_blockers.RETURN_LANE == lane_contract.QUEUE_LANE
     assert prose_blockers.RETURN_LANE in lane_contract.QUEUE_LANES
     assert f"`{lane_contract.QUEUE_LANE}`" in prose_blockers.card_refusal("DRE-900", {"DRE-700"})
+
+
+def test_the_lane_the_notice_warns_off_is_the_dispatch_lane():
+    """DRE-7112: the lane the author must not move the card to is the one
+    whose entry dispatches a run, `lane_contract.DISPATCH_LANE` — `In
+    Progress` on the shipped contract — never a lane spelled here."""
+    assert lane_contract.DISPATCH_LANE == "In Progress"
+    body = prose_blockers.card_refusal("DRE-900", {"DRE-700"})
+    assert (f"**Then move the card back to `{lane_contract.QUEUE_LANE}`, not "
+            f"`{lane_contract.DISPATCH_LANE}`.**") in body
+    assert f"while `{lane_contract.DISPATCH_LANE}` dispatches an agent run" in body
+    assert "Todo" not in body
 
 
 def test_a_defective_card_is_moved_to_triage():
@@ -348,7 +361,8 @@ def test_one_defective_card_does_not_stop_its_siblings():
         patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    assert ("DRE-901", "Todo", reconcile.QUEUE_FROM) in [c.args for c in advance.mock_calls]
+    assert ("DRE-901", "In Progress", reconcile.QUEUE_FROM) in [
+        c.args for c in advance.mock_calls]
 
 
 def test_a_failed_triage_move_goes_in_the_ledger_and_the_sweep_continues():

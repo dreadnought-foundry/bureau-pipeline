@@ -2,18 +2,20 @@
 
 The write layer's two restarts — `unpark` and the building-card reroute
 (DRE-1885, pinned in `test_state_building_not_parked.py`) — write
-`lane_contract.START_LANE` (DRE-7105) and no literal. `Todo` under the shipped
-contract; `In Progress` once the flip card sets `build_start.lane`, and every
-test here drives both through one parametrized fixture, so the flip needs no
-edit to this file.
+`lane_contract.START_LANE` (DRE-7105) and no literal — `In Progress` since the
+flip card set `build_start.lane` (it was `Todo` before), and every test here
+drives the shipped contract and the flipped one through one parametrized
+fixture.
 
 After the flip a card can already be in the start lane when it is restarted,
 and a same-lane write fires no webhook: the relay never sees it and nothing
 starts. So the write layer fires the build dispatch itself, once, and says so —
 the shape `limit_recovery`'s build branch already uses.
 
-The epic refusal stays keyed on `Todo` (DRE-5316): an epic entering
-`In Progress` is the CEO's approval and must stay writable.
+The epic refusal stays keyed on the retiring start lane (DRE-5316): an epic
+entering `In Progress` is the CEO's approval and must stay writable. The
+contract names no retiring start lane since DRE-7660, so the refusal is a
+no-op there and is exercised below against a stand-in `Todo`.
 """
 
 import copy
@@ -185,12 +187,25 @@ def _write(board, lane):
     return linear_ops.guarded_state_write("DRE-2308", issue, sid, stype, lane)
 
 
-def test_an_epic_written_to_todo_is_still_refused():
+def test_an_epic_written_to_todo_is_still_refused(monkeypatch):
+    # The contract names no retiring start lane since DRE-7660, so the rule is
+    # exercised against a stand-in.
+    monkeypatch.setattr(epic_todo_gate, "TODO", "Todo")
     board = _Board("Queued", title=EPIC)
     wrote, out = _run(board, _write, board, "Todo")
     assert wrote is False
     assert not [s for s in board.order if s[0] == "state"], board.order
     assert epic_todo_gate.TAG in out
+
+
+def test_the_shipped_contract_refuses_no_epic_write():
+    """No retiring start lane (DRE-7660): the refusal has nothing to key on."""
+    assert epic_todo_gate.TODO is None
+    board = _Board("Queued", title=EPIC)
+    wrote, out = _run(board, _write, board, "Todo")
+    assert wrote is True
+    assert board.order == [("state", _Board.STATES["Todo"][0])]
+    assert epic_todo_gate.TAG not in out
 
 
 def test_an_epic_written_to_in_progress_is_not_refused():

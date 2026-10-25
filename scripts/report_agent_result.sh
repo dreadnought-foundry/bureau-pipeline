@@ -44,7 +44,7 @@ set -e
 #    - Blocker to Queued: /tmp/agent-blocker.txt is posted as one marker,
 #      `🛑 Agent blocked: class=<class> · <reason> — parked in Queued
 #      until …`, and the card parks in Queued with `state --park`, never
-#      Todo. The clause after the reason says what the sweep does with the
+#      the start lane. The clause after the reason says what the sweep does with the
 #      class. A `question` reaches this branch only when its note left
 #      nothing to ask, and the sweep asks it in Green Light.
 #    - Rescue delivery: the run failed to deliver and its patch exists,
@@ -53,13 +53,18 @@ set -e
 #    - GitHub unreadable: a receipt, no move, nothing counted. The
 #      reconcile sweep re-checks. A run that failed to deliver skips it.
 #    - Otherwise, the dead-run or turn-cap decision. `dead_run.py decide`
-#      reads the budget the death spends and answers requeue (Todo), hold
+#      reads the budget the death spends and answers requeue (Queued with
+#      `state --park`, where the sweep requeues a dead run and its next pass
+#      promotes it again — DRE-7111, DRE-7108), hold
 #      (`dead_run.py park`: Queued and the hold label, both or neither,
 #      then the stamp naming the budget), replan (Planning — a turn-cap death
 #      short of green, or the dead-run cap trying the planner once on a run
 #      that left no PR and no blocker note), infra (a run warning, the card
 #      left where it is)
-#      or defer (a receipt only, for a cancelled run).
+#      or defer (a receipt only, for a cancelled run). An api_death asks
+#      `vendor_wait.py kind` first: `rotation` or `vendor-transient` passes
+#      `--wait-kind <kind> --run-id`, and `decide` answers limit, one marker
+#      and no move; any other answer passes `--is-error` and `--error-model`.
 # 5. A turn-cap death that an escalation, a blocker, a rescue delivery or
 #    the unreadable receipt took still gets its tagged receipt from
 #    `dead_run.py turn-noted`, so the turn-cap count sees it.
@@ -68,6 +73,13 @@ set -e
 #    step shell reads: the lane `Queued` replaces until the planning exit
 #    moves (DRE-6742), then `Queued`. No lane the queue replaces is named
 #    here (DRE-6745).
+# 7. The start lanes, wherever this file reads a card out of its build, are
+#    `lane_contract.START_LANES`, read the same way and joined with commas
+#    for `advance`'s from-list: the dispatch lane, In Progress, and every
+#    lane that still stands in for it. The lane the escalation tells the CEO
+#    to proceed in is `lane_contract.DISPATCH_LANE`, In Progress, as the
+#    build run's own text says. No lane the start lane replaces is named
+#    here (DRE-7111).
 #
 # Inputs, all from the step's `env:`:
 #   CARD                   the card's identifier, from the dispatch payload
@@ -259,11 +271,26 @@ set -e
 #   pipefail. A `printf` write that landed after `head` exited died of
 #   SIGPIPE, `set -e` ended the script and no receipt was posted. It struck
 #   at random in the suite-green job and held the stable channel.
+# 2026-10-24, DRE-7802, DRE-7795, DRE-7800, DRE-7801, DRE-7805. An API-error
+#   death that our own token renewal caused, or the model service refusing for
+#   a moment, is a wait, not a strike. The api_death branch asks
+#   `vendor_wait.py kind` before it spends one; on `rotation` or
+#   `vendor-transient` it passes `--wait-kind` and `--run-id`, never with
+#   `--is-error`, so no strike is spent and no model is switched, and `decide`
+#   answers limit through the receipt-only path. `none`, any other word or a
+#   call that fails passes DRE-1354's `--is-error` and `--error-model` as
+#   before. The same `--comments-file` rides both, which DRE-7801's cap on
+#   waits in a row reads. It waited on DRE-7805: the build still ends red, and
+#   the medic had to read the marker as a wait before this switch could turn
+#   on.
 # The agent's three notes sit where the prompt tells it to write them, /tmp.
 # AGENT_NOTES_DIR moves them, and only a test sets it (DRE-6961).
 NOTES_DIR="${AGENT_NOTES_DIR:-/tmp}"
 # The queue lane a blocker parks in and the escalation offers (DRE-6745).
 QUEUE_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(lane_contract.QUEUE_LANE)')
+# The start lanes a building card leaves from, and the lane the CEO proceeds in (DRE-7111).
+START_LANES=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(",".join(lane_contract.START_LANES))')
+DISPATCH_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import lane_contract; print(lane_contract.DISPATCH_LANE)')
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # The card's own branch first, so the PR lookup reads no other card's (DRE-1343).
 BRANCH=$(git branch -r | grep -o "agent/${CARD}-[^ ]*" | head -1 | sed 's|origin/||' || true)
@@ -346,7 +373,7 @@ if [ "$PR_STATE" = "MERGED" ]; then
 elif [ -n "$PR_URL" ] && [ "$PR_URL" != "null" ]; then
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
-  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress,Todo"
+  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "$START_LANES"
 elif [ "$DEATH_CLASS" != "turn_exhaustion" ] && [ -f "$NOTES_DIR"/agent-handback.txt ] && [ -s "$NOTES_DIR"/agent-handback.txt ]; then
   # Hand-back to Planning; never for a turn-cap death (DRE-2727, DRE-4366, DRE-4370).
   {
@@ -358,7 +385,7 @@ elif [ "$DEATH_CLASS" != "turn_exhaustion" ] && [ -f "$NOTES_DIR"/agent-handback
   } > "${RUNNER_TEMP:-/tmp}/handback-comment.md"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "$(cat "${RUNNER_TEMP:-/tmp}/handback-comment.md")"
-  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "In Progress,Todo" || true
+  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "$START_LANES" || true
 elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalation.txt ]; then
   # Escalation to Green Light, checked before the blocker (DRE-1655, DRE-2776).
   {
@@ -367,15 +394,15 @@ elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalat
     # The three lines; a renderer that cannot run never costs the park (DRE-3911).
     python3 .bureau-pipeline/scripts/console_escalation.py complete "$NOTES_DIR"/agent-escalation.txt --question "Which way should this build go?" --who "the build agent" || cat "$NOTES_DIR"/agent-escalation.txt
     echo ""
-    echo "Answer here, then move this card to **Todo** to proceed (the agent picks up your guidance), or to **$QUEUE_LANE** to drop it. Run: $RUN_URL"
+    echo "Answer here, then move this card to **$DISPATCH_LANE** to proceed (the agent picks up your guidance), or to **$QUEUE_LANE** to drop it. Run: $RUN_URL"
   } > "${RUNNER_TEMP:-/tmp}/escalation-comment.md"
   EXIT_TAKEN="escalation"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"
-  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "In Progress,Todo" || \
+  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "$START_LANES" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Green Light" || true
 elif [ -f "$NOTES_DIR"/agent-blocker.txt ]; then
-  # The queue lane, never Todo: a redispatched blocker hits the same wall (DRE-1286).
+  # The queue lane, never the start lane: a redispatched blocker hits the same wall (DRE-1286).
   EXIT_TAKEN="blocker note"
   # The marker names the class and what the sweep does with it (DRE-6444).
   case "$BLOCKER_CLASS" in
@@ -388,7 +415,7 @@ elif [ -f "$NOTES_DIR"/agent-blocker.txt ]; then
   BLOCKER_REASON=$(python3 .bureau-pipeline/scripts/blocker_class.py reason "$NOTES_DIR"/agent-blocker.txt || cat "$NOTES_DIR"/agent-blocker.txt)
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "🛑 Agent blocked: class=$BLOCKER_CLASS · $BLOCKER_REASON — parked in $QUEUE_LANE until $BLOCKER_UNTIL. Run: $RUN_URL"
-  # --park, or the DRE-1885 building-card guard re-routes this to Todo.
+  # --park, or the DRE-1885 building-card guard re-routes this to the start lane.
   python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "$QUEUE_LANE" --park || true
 elif [ "$FAILED_DELIVERY" = "failed" ] && [ -n "$RESCUE_PATCH" ] && [ -f "$RESCUE_PATCH" ]; then
   # Rescue delivery, deliberately above the unreadable branch (DRE-3262, DRE-3165).
@@ -446,7 +473,13 @@ else
     python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$CARD" \
       > "$COMMENTS_FILE" || ERR_FLAGS=""
     if [ "$DEATH_CLASS" = "api_death" ]; then
-      ERR_FLAGS="$ERR_FLAGS --is-error --error-model $MODEL_USED"
+      # Our renewal's 401 or the vendor's moment is a wait, not a strike;
+      # any other word, or a call that fails, is today's call (DRE-7802).
+      WAIT_KIND=$(python3 .bureau-pipeline/scripts/vendor_wait.py kind "$EXEC_FILE") || WAIT_KIND=none
+      case "$WAIT_KIND" in
+        rotation|vendor-transient) ERR_FLAGS="$ERR_FLAGS --wait-kind $WAIT_KIND --run-id ${RUN_ID:-unknown}" ;;
+        *) ERR_FLAGS="$ERR_FLAGS --is-error --error-model $MODEL_USED" ;;
+      esac
     fi
   fi
   if [ "$CLAUDE_OUTCOME" = "cancelled" ]; then
@@ -467,10 +500,12 @@ else
   if [ "$ACTION" = "hold-unlanded" ]; then
     echo "::error title=Park did not land::$CARD reached a hold cap but Linear refused the writes — the card is NOT parked and carries no label. The reconcile sweep re-attempts it."
   elif [ "$ACTION" = "requeue" ]; then
-    python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Todo" || true
+    # To the queue, as the sweep requeues a dead run; its next pass promotes it
+    # again. --park, or the DRE-1885 guard re-routes it to the start lane (DRE-7111, DRE-7108).
+    python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "$QUEUE_LANE" --park || true
   elif [ "$ACTION" = "replan" ]; then
     # A turn-cap death before green, or the dead-run cap's hand-off: Planning (DRE-4366, DRE-6178).
-    python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "In Progress,Todo" || true
+    python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "$START_LANES" || true
   elif [ "$ACTION" = "infra" ]; then
     # A fault against the run, reported on the run; the card stays where it is.
     echo "::warning title=Infrastructure fault before the agent started::${FAILED_STEP:-a step before the agent} failed; no agent ran and no model was called, so this is NOT charged to $CARD."

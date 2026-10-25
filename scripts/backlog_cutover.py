@@ -309,9 +309,9 @@ def in_promoter_reach(card: dict) -> bool:
     2026-08-23 were held by the phantom-blocker defect and were counted.
 
     `sweep_promotes`, not `is_promotable` (DRE-3385): the promoter carries
-    every card whose verdict is bound for Todo, and only dispatches a run at
-    one of them. A parentless WORKBENCH card is live work the sweep will move,
-    so it is in reach here too.
+    every card whose verdict is bound for the start lane, and only dispatches
+    a run at one of them. A parentless WORKBENCH card is live work the sweep
+    will move, so it is in reach here too.
     """
     labels = _labels(card)
     if "agent:planner" in labels:

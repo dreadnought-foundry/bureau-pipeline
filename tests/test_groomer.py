@@ -509,6 +509,10 @@ def test_the_run_log_names_the_budget_and_what_the_cut_cost(monkeypatch, capsys)
     monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
     monkeypatch.setattr(groom_context, "read_pack", lambda lops: PACK)
     monkeypatch.setattr(groom_judgement, "run", lambda rows, pack: judgement)
+    # Every standing card's thread is read before the census (DRE-7824);
+    # this test reads none of them.
+    monkeypatch.setattr(groomer.linear_ops, "comment_records",
+                        lambda card, whole_thread=False: [])
 
     groomer._build(argparse.Namespace(
         lane="Intake", capacity=10, batch_cycles=1, judgement=True,
@@ -689,6 +693,10 @@ def _patch_build(monkeypatch, cards):
     monkeypatch.setattr(groomer, "read_population", lambda lops, l: list(cards))
     monkeypatch.setattr(groomer, "read_cycles", lambda lops: CYCLES)
     monkeypatch.setattr(groom_priority, "annotate", annotate)
+    # Every standing card's thread is read before the census (DRE-7824);
+    # this test reads none of them.
+    monkeypatch.setattr(groomer.linear_ops, "comment_records",
+                        lambda card, whole_thread=False: [])
     return seen
 
 

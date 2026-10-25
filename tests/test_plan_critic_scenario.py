@@ -386,13 +386,19 @@ class CriticWalk(unittest.TestCase):
         # check is that a round with no seam decides exactly as it always did.
         # send_back_class.py: the finding classifier the one-off exit asks
         # before it routes a QUESTION (DRE-6359), imported at the top.
+        # lane_contract.py and the contract it reads: plan_critic takes its
+        # in-flight lanes and its charter's to-build lanes off the start lanes
+        # (DRE-7113), imported at the top.
         for name in ("plan_critic.py", "design_parity.py", "plan_footprint.py",
                      "checkbox_marks.py", "execution_result.py",
                      "review_rerun.py", "plan_run.py", "sanitize_untrusted.py",
                      "plan_seam_gate.py", "console_escalation.py",
-                     "send_back_class.py"):
+                     "send_back_class.py", "lane_contract.py"):
             shutil.copy(os.path.join(SCRIPTS, name),
                         os.path.join(self.pipeline, "scripts", name))
+        os.makedirs(os.path.join(self.pipeline, "config"), exist_ok=True)
+        shutil.copy(os.path.join(ROOT, "config", "lane-contract.json"),
+                    os.path.join(self.pipeline, "config", "lane-contract.json"))
         self._stub("linear_ops.py", LINEAR_STUB)
         self._stub("hold.py", HOLD_STUB)
         self._stub("reconcile.py", RECONCILE_STUB)

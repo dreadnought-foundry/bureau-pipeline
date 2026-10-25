@@ -598,7 +598,7 @@ def test_a_cancel_superseded_by_a_done_card_stands():
     assert record(got, "DRE-102")["verdict"] == "cancel-stands"
 
 
-@pytest.mark.parametrize("lane", ["Backlog", "Queued", "Todo", "In Progress", "In Review"])
+@pytest.mark.parametrize("lane", ["Backlog", "Queued", "In Progress", "In Review"])
 def test_a_cancel_superseded_by_an_approved_card_in_flight_stands(lane):
     linear = FakeLinear(lanes={"DRE-900": lane})
     got = checked(_lane_with_cancel("DRE-900"), linear=linear)
@@ -642,20 +642,21 @@ def reload_against(monkeypatch, tmp_path):
     importlib.reload(groom_verify)
 
 
-def test_in_flight_on_the_committed_contract_is_the_five_lanes_in_flow_order():
+def test_in_flight_on_the_committed_contract_is_the_four_lanes_in_flow_order():
     # Hand-work went live with DRE-5320, and joined with nothing here edited;
     # Queued followed with DRE-6740, the same way; Backlog left it when it
-    # began retiring (DRE-6753), again with nothing here edited.
+    # began retiring (DRE-6753), again with nothing here edited, and Todo
+    # left it the same way (DRE-7129).
     assert lane_contract.lane("Hand-work")
     assert lane_contract.lane("Queued")
     assert groom_verify.IN_FLIGHT == (
-        "Queued", "Todo", "Hand-work", "In Progress", "In Review")
+        "Queued", "Hand-work", "In Progress", "In Review")
 
 
 def test_a_live_hand_work_lane_joins_in_flight_in_flow_order(reload_against):
     fresh = reload_against(_contract_with(**{"Hand-work": "live"}))
     assert fresh.IN_FLIGHT == (
-        "Queued", "Todo", "Hand-work", "In Progress", "In Review")
+        "Queued", "Hand-work", "In Progress", "In Review")
     assert fresh.lane_says("DRE-1", "Hand-work") == (
         True, "DRE-1 is approved and in Hand-work")
 
@@ -667,7 +668,7 @@ def test_while_hand_work_is_arriving_a_card_there_is_not_approved(reload_against
                  board_action="create the state")
     fresh = reload_against(doc)
     assert fresh.IN_FLIGHT == (
-        "Queued", "Todo", "In Progress", "In Review")
+        "Queued", "In Progress", "In Review")
     assert fresh.lane_says("DRE-1", "Hand-work") == (
         False, "DRE-1 is in Hand-work and has not been approved")
 

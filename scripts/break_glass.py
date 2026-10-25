@@ -7,7 +7,8 @@ one-off → Queued → the promoter, and the escalation route is the CEO's own
 queue — at 2am, the person the wave exists to stop interrupting.
 
 So there is exactly ONE marker, `break-glass`, applied BY HAND by the
-operator, which satisfies the entrance condition for `Todo`. Three properties
+operator, which lets a card past the card-validation gate at the start of a
+build. Three properties
 make it a designed exception rather than a hole:
 
   1. **The guard records it and does not undo it.** A rule that fights an
@@ -40,7 +41,8 @@ never removed by the pipeline.
 NO AGENT MAY APPLY THE MARKER. Since DRE-3172 the relay, reconcile, the planner
 and every agent write as ONE fleet user, `Agent-Bureau`, on the fleet's own key
 — no longer as the operator's own Linear user, which is how it read when this
-module was written and was verified live on DRE-2737, where the Todo gate's own
+module was written and was verified live on DRE-2737, where the card-validation
+gate's own
 `agent:engineer` write reads `actor: Frederick Conklin, botActor: None`. The
 operator's scripts and assistant sessions write as a second non-human user,
 `bureau-tools`. Both are declared in `config/linear-identities.json`.
@@ -210,7 +212,8 @@ def count_line(recorded: int | None, owing: int | None, error: str | None = None
 # --- Linear-touching helpers (the pure core above takes no I/O) --------------
 #
 # Every function here takes the `linear_ops` MODULE as its first argument, the
-# same convention validate_card._bounce uses: the Todo gate imports linear_ops
+# same convention validate_card._bounce uses: the card-validation gate at the
+# start of a build imports linear_ops
 # lazily (so its pure core needs no API key), and passing the module through
 # keeps one instance in play for both.
 

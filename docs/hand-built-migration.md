@@ -90,8 +90,9 @@ operator session reads those summaries.
   and names the pass it read. A Hand-work card then moves to Queued through the
   guarded write layer, only if it is still in Hand-work at that moment. A
   Queued card stays where it is. On its next pass the sweep's `promote_ready`
-  carries the card to Todo, through the one promoter Todo's writers clause
-  names, on the gates every FLEET card passes. This script never writes Todo.
+  carries the card to In Progress, the move the relay dispatches its build on
+  (DRE-7120), on the gates every FLEET card passes. This script never writes
+  In Progress.
 - **In Hand-work or Queued, with no critic pass.** It moves to Planning, only
   if it is still in the lane it was read in. Planning's exit writes it a fresh
   verdict (DRE-4884).

@@ -291,9 +291,10 @@ def apply_repairs(repairs: list[dict]) -> list[dict]:
     """Write the planned labels. Returns the repairs that actually LANDED —
     the report counts those, never the ones it merely intended.
 
-    One 🔧 comment per card, in the Todo gate's own words — the repair has to be
-    visible on the card, not only in a run log nobody keeps. A write failure is
-    reported and the pass continues: one bad card must not strand the rest.
+    One 🔧 comment per card, in the card-validation gate's own words — the
+    repair has to be visible on the card, not only in a run log nobody keeps.
+    A write failure is reported and the pass continues: one bad card must not
+    strand the rest.
     """
     applied: list[dict] = []
     for r in repairs:

@@ -37,6 +37,8 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import build_started  # noqa: E402 — a card whose build started (DRE-7108)
 import routing_verdict  # noqa: E402
 
 
@@ -189,14 +191,23 @@ def _full_sweep_mocks(extra=None):
     return m
 
 
+@pytest.fixture(autouse=True)
+def _entered_its_lane():
+    """The lane-history read `build_started` makes of a card with a receipt."""
+    with build_started.entered():
+        yield
+
+
 def _inprogress_card(labels=None):
-    return {
+    """A build that started and died (DRE-7108): the start receipt is what
+    puts the card on the dead-run path rather than the not-started re-fire."""
+    return build_started.started({
         "identifier": "DRE-1331",
         "description": "**Repo:** agent-bureau\nwork",
         "state": {"name": "In Progress"},
         "labels": {"nodes": labels or []},
         "updatedAt": "2026-06-12T00:00:00Z",
-    }
+    })
 
 
 def test_in_progress_holds_after_cap():
@@ -215,11 +226,11 @@ def test_in_progress_holds_after_cap():
     # building-card reroute (otherwise an In Progress → Queued hold would be
     # re-routed to Todo and loop forever past the cap).
     cmd_state.assert_called_once_with("DRE-1331", "Queued", "--park")
-    assert ("DRE-1331", "Todo") not in [c.args for c in cmd_state.call_args_list]
+    assert ("DRE-1331", reconcile.lane_contract.START_LANE) not in [c.args for c in cmd_state.call_args_list]
 
 
 def test_in_progress_requeues_below_cap():
-    """Below the cap, the dead run still requeues to Todo (existing behaviour)."""
+    """Below the cap, the dead run still requeues — to the queue since DRE-7108."""
     reconcile._write_failures.clear()
     mocks = _full_sweep_mocks({"active_cards": MagicMock(return_value=[_inprogress_card()])})
     with patch.multiple(reconcile, **mocks), patch.object(
@@ -228,7 +239,7 @@ def test_in_progress_requeues_below_cap():
         reconcile.linear_ops, "cmd_state"
     ) as cmd_state, patch.object(reconcile.linear_ops, "cmd_comment"):
         reconcile.main()
-    cmd_state.assert_called_once_with("DRE-1331", "Todo")
+    cmd_state.assert_called_once_with("DRE-1331", reconcile.QUEUE_LANE, "--park")
     add_label.assert_not_called()
 
 
@@ -288,4 +299,4 @@ def test_promote_ready_promotes_unheld_card():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-1331", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-1331", "In Progress", reconcile.QUEUE_FROM)

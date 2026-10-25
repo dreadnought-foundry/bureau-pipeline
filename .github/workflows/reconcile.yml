@@ -440,6 +440,9 @@ jobs:
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
           # DRE-6439: a dry pass names why it is dry — the switch's off line.
           PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+          # DRE-7287: the model a proof shadow runs on, beside each confirmed
+          # real dispatch — unset or empty starts no shadow.
+          PROOF_SHADOW_MODEL: ${{ vars.PROOF_SHADOW_MODEL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG

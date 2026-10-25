@@ -1052,3 +1052,276 @@ def test_fold_function_skips_a_row_with_null_lookups():
     r = target("DRE-3", "", excluded="hand-built")
     r["lookups"] = None
     assert gl.fold([r], [], repo_map=FOLD_MAP)[0]["lookups"] is None
+
+
+# ==========================================================================
+# DRE-7613: Linear refusing a search for speed is waited out, once
+# ==========================================================================
+# Runs 39000792176 and 39004959014 (the replays of the 2026-10-10 groom
+# proposal DRE-7243 reads): on the fourth card, DRE-4415, Linear refused the
+# problem search with "You're trying to search issues too fast", `linear_ops`
+# read it as the hourly quota and refused every later request without sending
+# it — 2,475 of the hour were left — so DRE-4049 went to the verify agent
+# `Not searched` and was judged still-needed. These tests drive the real
+# `linear_ops.gql` through a fake transport, so both halves are held: the
+# refusal no longer stops the process, and `cards` waits once and asks again.
+import io  # noqa: E402
+import urllib.error  # noqa: E402
+
+import linear_ops  # noqa: E402
+
+AB = "dreadnought-foundry/agent-bureau"
+DRE_4049_CREATED = "2026-09-15T22:01:23.504Z"
+DRE_4049_TITLE = (
+    "The runner fail-back moves the workflows but not the jobs already queued "
+    "— a stranded run holds the reconcile concurrency group and costs an "
+    "hour of sweeps after the switch has worked")
+DRE_4049_BODY = (
+    "When the Mac mini pool goes dark, `runner_pool.py` deletes the per-repo "
+    "`BUREAU_RUNS_ON` / `BUREAU_CI_RUNS_ON` variables so new jobs fall through "
+    "to GitHub-hosted runners. That part works. What it does not do is deal "
+    "with the jobs already queued against the pool, and on 2026-09-15 that "
+    "turned a working fail-back into an hour of lost housekeeping.\n\n"
+    "**What happened.** The minis served their last job at 13:32:44 PT and the "
+    "fail-back fired at 13:43:19 PT. Two reconcile sweeps were already queued "
+    "for the pool and simply sat there: `agent-bureau-demo` Reconcile #4531 "
+    "queued 13:23:14, started 14:35:43 — **72.0 minutes**; "
+    "`bureau-harness` Reconcile #3480 queued 13:32:45, started 14:35:42 — "
+    "**62.5 minutes**. Neither started until the minis physically came back.")
+DRE_4049_TERMS = [
+    "DRE-4049", "runner_pool.py", "BUREAU_RUNS_ON", "BUREAU_CI_RUNS_ON",
+    "agent-bureau-demo", "jobs already", "already queued", "stranded run",
+    "run holds", "reconcile concurrency", "concurrency group"]
+DRE_5942_TITLE = (
+    "agent-bureau: stranded runs are re-run once — the runs queued on a "
+    "service when its span opened for down, failing or over budget are "
+    "cancelled and re-run once the order has moved the cell, bounded per span")
+DRE_5942_DONE = "2026-10-07T01:18:52.501Z"
+DRE_5942_PR = "https://github.com/dreadnought-foundry/agent-bureau/pull/3297"
+
+SEARCH_TOO_FAST = json.dumps({"errors": [{
+    "message": "ratelimit exceeded",
+    "extensions": {
+        "type": "ratelimited", "code": "RATELIMITED", "statusCode": 429,
+        "userError": True,
+        "userPresentableMessage": (
+            "You're trying to search issues too fast. Please wait for a "
+            "while before trying again."),
+        "meta": {"rateLimitResult": {"allowed": False}}}}]}).encode()
+
+
+def replay_rows():
+    """The 2026-10-17 shape: the five non-excluded rows, in order."""
+    return [
+        target("DRE-5656", "", repository="dreadnought-foundry/portico"),
+        target("DRE-5657", "", repository="dreadnought-foundry/portico"),
+        target("DRE-4417", "", repository=AB),
+        target("DRE-4415", "", repository=AB),
+        dict(target("DRE-4049", DRE_4049_BODY, repository=AB,
+                    created=DRE_4049_CREATED), title=DRE_4049_TITLE),
+    ]
+
+
+class _Answer:
+    def __init__(self, data):
+        self._body = json.dumps({"data": data}).encode()
+        self.headers = {"x-ratelimit-requests-remaining": "2475"}
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+
+class LinearWire:
+    """Linear's endpoint as `linear_ops.gql` reaches it, behind `urlopen`.
+
+    `too_fast(kind, variables, n)` says whether the n-th request of that
+    `kind` (1-based, per card's first variable) is refused for speed, in the
+    wire shape run 39000792176 recorded. `kind` is `search` for the problem
+    search (`t<i>`), `paths` for the newer-cards lookup (`p<i>`), `match`
+    for the matched cards' read. Every request is kept in `sent`."""
+
+    def __init__(self, found=None, issues=None, *, too_fast=None):
+        self.found = found or {}
+        self.issues = issues or {}
+        self.too_fast = too_fast or (lambda kind, variables, n: False)
+        self.sent: list[tuple[str, dict]] = []
+
+    def __call__(self, req, timeout=None):
+        payload = json.loads(req.data)
+        query, variables = payload["query"], payload["variables"]
+        kind = ("match" if "completedAt" in query
+                else "search" if "t0" in variables else "paths")
+        self.sent.append((kind, variables))
+        first = next(iter(variables.values()), None)
+        n = sum(1 for k, v in self.sent
+                if k == kind and next(iter(v.values()), None) == first)
+        if self.too_fast(kind, variables, n):
+            raise urllib.error.HTTPError(
+                linear_ops.API, 429, "Too Many Requests",
+                {"x-ratelimit-requests-remaining": "2475"},
+                io.BytesIO(SEARCH_TOO_FAST))
+        if kind == "match":
+            return _Answer({alias: self.issues.get(ident)
+                            for alias, ident in variables.items()})
+        source = self.found if kind == "search" else {}
+        return _Answer({alias: {"nodes": list(source.get(term, []))}
+                        for alias, term in variables.items()})
+
+    def searches_of(self, card):
+        return [v for k, v in self.sent if k == "search" and v.get("t0") == card]
+
+
+@pytest.fixture
+def wire(monkeypatch):
+    """The real `linear_ops` holding a key, the door off, and every wait
+    kept in `waits` rather than slept: no test here sleeps."""
+    for name in ("BUREAU_READ", linear_ops.IDENTITY_ENV, linear_ops.FALLBACK_ENV):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LINEAR_API_KEY", "lin-key")
+    monkeypatch.setattr(linear_ops.time, "sleep", _no_sleep)
+    monkeypatch.setattr(gl.time, "sleep", _no_sleep)
+    waits: list[float] = []
+    monkeypatch.setattr(gl, "_wait", waits.append)
+
+    def _install(*args, **kwargs):
+        w = LinearWire(*args, **kwargs)
+        w.waits = waits
+        monkeypatch.setattr(linear_ops.urllib.request, "urlopen", w)
+        return w
+
+    return _install
+
+
+def _no_sleep(seconds):
+    raise AssertionError(f"a test slept {seconds} s")
+
+
+def _dre_5942_found():
+    hit = {"identifier": "DRE-5942", "title": DRE_5942_TITLE,
+           "createdAt": "2026-10-06T02:49:26.858Z", "state": {"name": "Done"}}
+    found = {term: [hit] for term in ("already queued", "stranded run", "run holds")}
+    issues = {"DRE-5942": {
+        "identifier": "DRE-5942", "title": DRE_5942_TITLE,
+        "state": {"name": "Done"}, "completedAt": DRE_5942_DONE,
+        "attachments": {"nodes": [{"url": DRE_5942_PR}]}, "parent": None}}
+    return found, issues
+
+
+def test_the_wait_constants():
+    assert gl.SEARCH_WAIT_SECONDS == 60
+    assert gl.SEARCH_WAIT_BUDGET_SECONDS == 600
+
+
+def test_dre_4049_carries_its_problem_terms_as_the_card_quotes_them():
+    assert gl.problem_terms(replay_rows()[4]) == DRE_4049_TERMS
+
+
+def test_a_search_refused_for_speed_is_asked_again_and_every_row_is_searched(wire):
+    found, issues = _dre_5942_found()
+    w = wire(found, issues, too_fast=lambda kind, v, n: (
+        kind == "search" and v.get("t0") == "DRE-4415" and n == 1))
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+
+    assert [r["card"] for r in rows] == [
+        "DRE-5656", "DRE-5657", "DRE-4417", "DRE-4415", "DRE-4049"]
+    for r in rows:
+        assert r["matched_work"]["searched"] is True, (r["card"], r["matched_work"])
+        assert r["matched_work"]["source"] == "linear"
+    assert len(w.searches_of("DRE-4415")) == 2
+    assert w.waits == [gl.SEARCH_WAIT_SECONDS]
+
+    work = rows[4]["matched_work"]
+    assert work["terms"] == DRE_4049_TERMS
+    [dre_5942] = work["cards"]
+    assert dre_5942["identifier"] == "DRE-5942"
+    assert dre_5942["state"] == "Done"
+    assert dre_5942["completed_at"] == DRE_5942_DONE
+    assert sorted(dre_5942["terms"]) == ["already queued", "run holds", "stranded run"]
+    [pull] = dre_5942["prs"]
+    assert (pull["repo"], pull["number"]) == ("dreadnought-foundry/agent-bureau", 3297)
+    assert pull["url"] == DRE_5942_PR
+    # The newer-cards lookup for DRE-4049's file was sent and answered too.
+    assert rows[4]["lookups"]["newer_cards_why"] is None
+
+
+def test_a_search_refused_twice_is_unanswered_named_and_the_next_row_is_searched(wire):
+    found, issues = _dre_5942_found()
+    w = wire(found, issues, too_fast=lambda kind, v, n: (
+        kind == "search" and v.get("t0") == "DRE-4415"))
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+
+    work = rows[3]["matched_work"]
+    assert work["searched"] is False
+    assert linear_ops.SEARCH_TOO_FAST_CONDITION in work["why"]
+    assert len(w.searches_of("DRE-4415")) == 2, "asked once more, never a third time"
+    assert w.waits == [gl.SEARCH_WAIT_SECONDS]
+    assert rows[4]["matched_work"]["searched"] is True
+    assert rows[4]["matched_work"]["cards"][0]["identifier"] == "DRE-5942"
+
+
+def test_the_newer_cards_lookup_refused_for_speed_is_asked_again(wire):
+    w = wire(too_fast=lambda kind, v, n: kind == "paths" and n == 1)
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+    look = rows[4]["lookups"]
+    assert look["newer_cards_why"] is None
+    assert [k for k, _ in w.sent].count("paths") == 2
+    assert w.waits == [gl.SEARCH_WAIT_SECONDS]
+
+
+def test_the_newer_cards_lookup_refused_twice_is_named_and_the_card_not_failed(wire):
+    wire(too_fast=lambda kind, v, n: kind == "paths")
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+    look = rows[4]["lookups"]
+    assert linear_ops.SEARCH_TOO_FAST_CONDITION in look["newer_cards_why"]
+    assert look["ok"] is None
+
+
+def test_once_the_wait_budget_is_spent_a_refused_search_waits_no_further(wire):
+    """Every card's first problem search is refused. The first
+    `SEARCH_WAIT_BUDGET_SECONDS / SEARCH_WAIT_SECONDS` are waited out and
+    answered; after that a refusal is not waited for, and the next card is
+    still asked."""
+    paid = gl.SEARCH_WAIT_BUDGET_SECONDS // gl.SEARCH_WAIT_SECONDS
+    cards = [f"DRE-{9000 + i}" for i in range(paid + 2)]
+    w = wire(too_fast=lambda kind, v, n: kind == "search" and n == 1)
+    rows = gl.cards([target(c, "") for c in cards], lops=linear_ops,
+                    now="2026-10-17T13:00:00Z")
+
+    assert sum(w.waits) == gl.SEARCH_WAIT_BUDGET_SECONDS
+    assert len(w.waits) == paid
+    for r in rows[:paid]:
+        assert r["matched_work"]["searched"] is True, r["card"]
+    for r in rows[paid:]:
+        work = r["matched_work"]
+        assert work["searched"] is False, r["card"]
+        assert linear_ops.SEARCH_TOO_FAST_CONDITION in work["why"]
+        assert len(w.searches_of(r["card"])) == 1, "not asked again unwaited"
+
+
+def test_the_matched_cards_labels_are_read_in_the_same_request_and_written(wire):
+    """DRE-7485: each matched Done card carries its labels, asked in the
+    request that already reads its lane and attachments — no new one."""
+    assert "labels { nodes { name } }" in gl._match_query(1)
+    assert '"labels"' in gl.cards.__doc__
+    found, issues = _dre_5942_found()
+    issues["DRE-5942"]["labels"] = {"nodes": [{"name": "No-Code"},
+                                              {"name": "agent:ops"}]}
+    w = wire(found, issues)
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+    [dre_5942] = rows[4]["matched_work"]["cards"]
+    assert dre_5942["labels"] == ["No-Code", "agent:ops"]
+    assert [k for k, _ in w.sent].count("match") == 1
+
+
+def test_a_matched_card_with_no_labels_carries_an_empty_list(wire):
+    found, issues = _dre_5942_found()
+    wire(found, issues)
+    rows = gl.cards(replay_rows(), lops=linear_ops, now="2026-10-17T13:00:00Z")
+    [dre_5942] = rows[4]["matched_work"]["cards"]
+    assert dre_5942["labels"] == []

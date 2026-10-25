@@ -203,6 +203,8 @@ WALKED = {
     ("epic_cap", "_child_is_epic"),
     ("epic_todo_gate", "is_epic_card"),
     ("groom_readiness", "_is_epic"),
+    ("dedupe_dispatch", "stamped_one_off"),
+    ("reconcile", "card_relation_blockers"),
 }
 
 
@@ -467,6 +469,17 @@ class TestEveryCallerIsWalked:
         assert epic_todo_gate.is_epic_card(
             PROBE_TITLE, False, [_stamp("epic")]) is True
 
+    def test_the_planner_guard_hands_back_a_planner_owned_one_off(self):
+        """`dedupe_dispatch.stamped_one_off` (DRE-7110) — the planner's guard
+        hands a one-off sent to it on entering In Progress back as a build.
+        Reading the label here would plan every one-off as an approved epic;
+        reading an epic stamp as a one-off would build an epic."""
+        import dedupe_dispatch
+
+        assert dedupe_dispatch.stamped_one_off(PROBE_TITLE, False, "one-off") is True
+        assert dedupe_dispatch.stamped_one_off(PROBE_TITLE, False, "epic") is False
+        assert dedupe_dispatch.stamped_one_off(PROBE_TITLE, False, None) is False
+
     def _named_on_a_depends_on_line(self, title: str, *, children: int = 0):
         """A card whose ranked read waits on DRE-3018, In Progress and read
         as `groom_readiness.NAMED_NODE` returns it — no labels, no comments."""
@@ -510,6 +523,49 @@ class TestEveryCallerIsWalked:
         light, row = self._named_on_a_depends_on_line(PROBE_TITLE, children=1)
         assert groom_readiness._is_epic(light) is True
         assert row["condition"] == "DRE-3018 is built out or Done"
+
+    def _card_blocked_by(self, title: str, *, children: int = 0) -> tuple:
+        """`reconcile.card_relation_blockers` over a card blocked by DRE-3018,
+        In Progress, every child of it Done — read as the gate reads it."""
+        blocker = {
+            "identifier": "DRE-3018", "title": title,
+            "state": {"name": "In Progress"},
+            "labels": {"nodes": [{"name": n} for n in PROBE_LABELS]},
+            "children": {"nodes": [{
+                "identifier": f"DRE-30{19 + n}", "title": "a build card",
+                "state": {"name": "Done"},
+                "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                "children": {"nodes": []},
+            } for n in range(children)], "pageInfo": {"hasNextPage": False}},
+        }
+        card = {"identifier": "DRE-1", "inverseRelations": {"nodes": [{
+            "type": "blocks",
+            "issue": {"identifier": "DRE-3018", "state": {"name": "In Progress"}},
+        }]}}
+        reconcile.reset_sweep_cards()
+        try:
+            with patch.object(linear_ops, "gql", return_value={"issue": blocker}):
+                return reconcile.card_relation_blockers(card)
+        finally:
+            reconcile.reset_sweep_cards()
+
+    def test_the_card_gate_holds_a_card_behind_a_planner_owned_one_off(self):
+        """`reconcile.card_relation_blockers` (DRE-7774) — a card blocked by an
+        epic is released once that epic is built out. A card blocked by a
+        one-off waits for it to be Done, whatever its `agent:planner` label
+        says: read as an epic, it would be held as "not built out" rather than
+        on today's line, and given a Done child it would release the card."""
+        held, released = self._card_blocked_by(PROBE_TITLE)
+        assert held == {"DRE-3018": None}
+        assert released == {}
+
+    def test_the_card_gate_still_releases_a_card_behind_a_built_out_epic(self):
+        held, released = self._card_blocked_by(PROBE_TITLE, children=1)
+        assert held == {}
+        assert list(released) == ["DRE-3018"]
+        held, released = self._card_blocked_by("[EPIC] the intake front door", children=1)
+        assert held == {}
+        assert list(released) == ["DRE-3018"]
 
 
 # ===========================================================================

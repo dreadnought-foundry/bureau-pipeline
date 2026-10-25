@@ -659,10 +659,11 @@ def _newest_after(receipts, needle: str, run_started_at: str) -> dict | None:
 
     "After the run began" is what makes the receipt THIS run's: a park from a
     previous life of the card (since un-parked, the label cleared, the card back
-    in Todo) says nothing about the failure in hand, and reading it as one would
-    freeze every later retry. An unreadable timestamp on either side is treated
-    as in range — the ordering is unknown, and the fact the receipt exists at
-    all is the stronger signal.
+    in a start lane, `lane_contract.START_LANES` — DRE-7111) says nothing about
+    the failure in hand, and reading it as one would freeze every later retry.
+    An unreadable timestamp on either side is treated as in range — the
+    ordering is unknown, and the fact the receipt exists at all is the
+    stronger signal.
     """
     started = _moment(run_started_at)
     found = None

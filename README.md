@@ -70,7 +70,7 @@ a **plain-English question** as a Linear comment and parks the card in the
 `Green Light` lane — the CEO's "needs you" queue, the same lane epics wait in
 for plan approval (DRE-2776; an escalated card is waiting on a judgement, not
 broken, so it does not belong in the broken-card lane); the CEO answers and
-moves it back to `Todo` to proceed or to `Queued` to drop it.
+moves it back to `In Progress` to proceed or to `Queued` to drop it.
 The critic + tests remain the correctness backstop on every merge.
 
 There is **no propose-first hard stop**. An earlier design (a read-only
@@ -95,8 +95,8 @@ choice is not between having an escape hatch and not having one, it is between
 one we designed and one we discover later.
 
 **The marker is `break-glass`**, applied by hand, in Linear, by the operator.
-It satisfies the entrance condition for `Todo` — the Todo-entry gate lets the
-card through instead of returning it. Three properties make it a designed
+It satisfies the entrance condition for a build — the card-validation gate at
+the start of a build lets the card through instead of returning it. Three properties make it a designed
 exception rather than a hole (`scripts/break_glass.py` owns all three):
 
 1. **Recorded, not undone.** A rule that fights an emergency loses the
@@ -325,9 +325,17 @@ only the stub can grant it — the same reason `self-merge-gate.yml` carries it
 for the conflict dispatch.
 
 A stub without it **degrades, it does not break**: the dispatch 403s, the run
-prints a `::warning::`, the PR says so and the card parks for a human — which
-is exactly what happened before this card existed. So the fleet loses the
-automatic second look until its stub is updated, and loses nothing else.
+prints a `::warning::` and the card parks for a human — which is exactly what
+happened before this card existed. The PR says so with a hold
+(`fix-attempt-disputed`, `state: escalated · next: operator`) naming
+`actions: write` and the stub file that grants it. The hold replaces the
+`state: dispatched` receipt posted before the dispatch, which is deleted once
+the hold is up, so no receipt is left promising a second look nobody will
+take (DRE-3576). A refused delete only prints a `::warning::`. The hold keeps
+the commit's `refuted-finding @<sha8>` key, so the review a person starts by
+moving the card back is that commit's one re-review and reads the evidence.
+So the fleet loses the automatic second look until its stub is updated, and
+loses nothing else.
 
 ### The `deliver-rescue` stub (DRE-3262)
 
@@ -457,7 +465,9 @@ Shadow Replay (DRE-7197), whose red run the operator reads from its report,
 where an automatic retry would spend another batch of reviewer runs, and the
 notice door's smoke (DRE-7451), which the operator dispatches and reads, and
 which files no card on any path — a medic watching it would retry it and file
-one.
+one — and Proof Shadow (DRE-7287), a proof run repeated on another model as a
+measurement, whose red run the operator reads, where a retry would spend
+another model run on a card nobody owns.
 Adding any other workflow with no watcher fails CI instead of adding a silent
 failure surface.
 
@@ -560,8 +570,9 @@ jobs:
 
 A stub may also pass nothing at all, and that is how the console sets a
 project's cap with no code push (DRE-6631). `cap_and_source` in
-`scripts/reconcile.py` is the one place the number is resolved, for all three
-paths, from four sources in order:
+`scripts/sweep_holds.py` (which `scripts/reconcile.py` imports, DRE-7750) is
+the one place the number is resolved, for all three paths, from four sources
+in order:
 
 1. **The run's `max_wip` input**, when the stub passes a number.
 2. **The `max_wip:` line of the caller's own reconcile stub**, read off the
@@ -947,9 +958,9 @@ epic's last child:
   merges, so the card produces a written artifact rather than a claim.
 
 There is no second closing card. The CEO decided on 2026-09-12 that there are
-no demo sittings — he reads the proof record and closes the proof card himself
-— so the record IS how he sees it. Epics planned before that date carry a
-second closing child and the gate reads past one rather than bouncing the plan.
+no demo sittings, so there is no demo card. Epics planned before that date
+carry a second closing child and the gate reads past one rather than bouncing
+the plan.
 Since DRE-5919 the proof card closes itself when its record merges on the
 card's own branch with the critic's APPROVE at the merged head
 (`linear_ops.merge_close_ruling`, asked by both `card-done` and the reconcile
@@ -958,8 +969,8 @@ backstop); without that APPROVE it stays open for a person.
 The card is blocked by every other child — the Linear `blocks` relation, never
 the ordering and never a `**Blocked by:**` body line — it **may not carry
 `FLEET`** (a proof the fleet can close by merging its own code is not a proof),
-and its body carries the closing line verbatim: `The CEO reads this record and
-closes this card; there is no demo sitting.` The verdicts that MAY confirm an
+and it names no person to close it: it carries no criterion about merging,
+reading or closing the record (DRE-7773). The verdicts that MAY confirm an
 epic are derived from `config/routing-verdicts.json` (the ones whose
 accountable actor is a human, today `WORKBENCH` and `OPERATOR`), so the rule
 moves when the file does.

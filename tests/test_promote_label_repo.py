@@ -1,7 +1,7 @@
 """Event-driven promotion resolves a card's repo by LABEL, not the stamp (DRE-1879).
 
 When linear-sync closes a card on a merge it immediately runs reconcile's
-`--promote-only` gate so a now-unblocked sibling jumps to Todo right then, rather
+`--promote-only` gate so a now-unblocked sibling jumps to In Progress right then, rather
 than waiting on the ~hourly cron sweep. That promotion only acts on THIS repo's
 cards, and it decided "this repo" with `card_repo_slug`, which reads ONLY the
 deprecated `**Repo:** <slug>` description stamp.
@@ -107,7 +107,7 @@ def _label_only_dependent():
 
 
 def test_label_only_dependent_is_promoted_on_merge():
-    """The fix: a label-only card whose blocker is Done IS promoted to Todo.
+    """The fix: a label-only card whose blocker is Done IS promoted to In Progress.
 
     MUTATION CHECK: swap card_repo back to the stamp-only card_repo_slug and this
     card resolves to None != 'deltasolv' → skipped → promoted == 0 → fails. So the
@@ -122,7 +122,7 @@ def test_label_only_dependent_is_promoted_on_merge():
     ) as advance, patch.object(reconcile.linear_ops, "cmd_comment"):
         promoted = reconcile.promote_ready(active_count=0)
     assert promoted == 1
-    advance.assert_called_once_with("DRE-1811", "Todo", reconcile.QUEUE_FROM)
+    advance.assert_called_once_with("DRE-1811", "In Progress", reconcile.QUEUE_FROM)
 
 
 def test_other_repos_dependent_is_not_promoted_here():

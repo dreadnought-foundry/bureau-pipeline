@@ -55,9 +55,11 @@ THE LINEAR HALF COPIES `repair_card.py`
 ---------------------------------------
 Linear is imported lazily behind an ops object a test replaces, a Linear
 failure is never raised (the record card is owed and the run carries on), and
-the result is `$GITHUB_OUTPUT` lines. The record card lands in `Done` with a
-`WORKBENCH` verdict, never `Todo`: a card entering Todo is dispatched, and the
-write it records is already made by the run that files it. A run that wrote
+the result is `$GITHUB_OUTPUT` lines. The record card is created in `Done`
+with a `WORKBENCH` verdict, never moved there: only a move into `In Progress`
+from a waiting lane is a build dispatch (DRE-7107), a card created in its lane
+has no lane before it, and the write it records is already made by the run
+that files it. A run that wrote
 nothing files its record in `Canceled` instead: Done would claim a change
 nobody made, and the next daily run sorts the candidate again.
 """

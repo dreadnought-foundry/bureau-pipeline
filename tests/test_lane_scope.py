@@ -43,8 +43,10 @@ class TestFlowOrder:
     def test_planning_segment_precedes_the_work_segment(self):
         pos = {lane: i for i, lane in enumerate(lane_scope.LANE_FLOW)}
         assert pos["Intake"] < pos["Planning"] < pos["Green Light"]
-        assert pos["Green Light"] < pos["Queued"] < pos["Todo"]
-        assert pos["Todo"] < pos["In Progress"] < pos["In Review"] < pos["Done"]
+        # Todo left the flow when it began retiring (DRE-7129).
+        assert pos["Green Light"] < pos["Queued"] < pos["In Progress"]
+        assert pos["In Progress"] < pos["In Review"] < pos["Done"]
+        assert "Todo" not in pos
 
     def test_planning_exit_is_named_and_sits_between_green_light_and_the_queue(self):
         # The hazard on the card: the boundary is only as good as the
@@ -80,11 +82,12 @@ class TestPolicedLanes:
         assert lane_scope.is_policed(lane) is False
 
     @pytest.mark.parametrize(
-        "lane", ["Backlog", "Todo", "In Progress", "In Review", "Done"]
+        "lane", ["Backlog", "In Progress", "In Review", "Done"]
     )
     def test_the_original_five_lanes_are_still_policed(self, lane):
-        # DRE-2725's matrix, unchanged. Narrowing the scope must not quietly
-        # unguard the lanes the wave exists to guard.
+        # DRE-2725's matrix, unchanged but for Todo, which is retiring
+        # (DRE-7129). Narrowing the scope must not quietly unguard the lanes
+        # the wave exists to guard.
         assert lane_scope.is_policed(lane) is True
 
     def test_triage_is_not_policed(self):
@@ -132,7 +135,7 @@ class TestPlannerChildrenAreNotBounced:
         # EPIC_ACTIVE_STATES to In Progress alone) and the second critic's
         # verdicts exist by then — so the guard applies from that moment.
         assert lane_scope.is_policed("Backlog", parent_epic_lane="In Progress") is True
-        assert lane_scope.is_policed("Todo", parent_epic_lane="In Progress") is True
+        assert lane_scope.is_policed("In Progress", parent_epic_lane="In Progress") is True
 
     def test_a_parentless_card_in_backlog_is_policed(self):
         # A one-off leaves Planning with its structural check done, so the

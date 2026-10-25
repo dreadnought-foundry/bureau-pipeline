@@ -196,6 +196,17 @@ class LinearRateLimited(LinearError):
     `except LinearError` keeps isolating it exactly as before."""
 
 
+class LinearSearchTooFast(LinearRateLimited):
+    """Linear refused a search as too fast (DRE-7613).
+
+    A `LinearRateLimited` still, so every existing `except LinearRateLimited`
+    catches it as before. Its own type because the hour is NOT spent: on
+    2026-10-17 Linear answered the groom's fourth problem search this way with
+    2,475 of the hour's 2,500 left. Like the comment cap (DRE-3343) it is a
+    fact about one kind of request, so it does not arm the process-wide stop,
+    and a caller that waits may ask again (`groom_lookups`)."""
+
+
 class CommentCapReached(LinearError):
     """This issue holds Linear's maximum of 2,000 comments (DRE-3343).
 
@@ -252,6 +263,34 @@ def rate_limit_condition(body: str) -> str | None:
             f"{quota.group(2).lower()} exhausted"
         )
     return "rate limited: workspace request quota exhausted"
+
+
+# ── The search-speed refusal (DRE-7613) ─────────────────────────────────────
+# Linear refuses a burst of `searchIssues` with the same RATELIMITED code the
+# hourly quota uses, and says which it is only in the presentable message:
+# "You're trying to search issues too fast. Please wait for a while before
+# trying again." Read as the hour, it armed the stop in the groom's `targets`
+# step and every later card went unsearched. The sentence is the whole
+# classification: a RATELIMITED body without it — Linear rewording it included
+# — is the hour, exactly as before.
+_SEARCH_TOO_FAST_MARKER = "search issues too fast"
+
+#: The condition, named once: the groom's `why` for a search left unanswered
+#: carries it.
+SEARCH_TOO_FAST_CONDITION = (
+    "rate limited: Linear refused the search as too fast (search issues too "
+    "fast) — not the hourly quota"
+)
+
+
+def search_too_fast_condition(body: str) -> str | None:
+    """`SEARCH_TOO_FAST_CONDITION` when `body` is a RATELIMITED payload that
+    says searches are too fast, else None. Read over the FULL body, as
+    `rate_limit_condition` is."""
+    text = body or ""
+    if rate_limit_condition(text) is None:
+        return None
+    return SEARCH_TOO_FAST_CONDITION if _SEARCH_TOO_FAST_MARKER in text.lower() else None
 
 
 # ── The comment cap (DRE-3343) ──────────────────────────────────────────────
@@ -612,6 +651,14 @@ def _api_error(code: int | str, body: str) -> LinearError:
     exhaustion, the named condition in front of it so the log says what to do
     instead of `Bad Request`, which reads as a code defect and is not one."""
     detail = f"Linear API returned {code} from {API}"
+    # A search refused as too fast (DRE-7613) is read FIRST, and it does not
+    # arm the stop: the hour is not spent, and the next request is not this
+    # search.
+    speed = search_too_fast_condition(body)
+    if speed:
+        return LinearSearchTooFast(
+            f"{detail}: {speed} — body: {body[:BODY_CHARS]!r}; {_budget_part()}"
+        )
     condition = rate_limit_condition(body)
     if condition:
         _arm_rate_limit_stop(condition)
@@ -1165,6 +1212,10 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # Stop at the first RATELIMITED (DRE-3202): a rate-limited process asks
     # nothing more. Every further request would spend the quota that proves
     # there is none left, against a window that is the whole fleet's.
+    # Linear's search-speed refusal does NOT arm it (DRE-7613): it raises
+    # `LinearSearchTooFast`, a fact about searching that fast, not about the
+    # hour, so the next request is still sent — every other RATELIMITED arms
+    # it exactly as before.
     if _budget["refused_after"] is not None:
         raise _refusal()
     # A token the console has already said is dead is never sent (review item
@@ -1182,6 +1233,14 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
         out = _send(payload, landed)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
+        # The search-speed refusal, same two shapes (DRE-7613): its own type,
+        # and no stop armed.
+        speed = search_too_fast_condition(errors)
+        if speed:
+            raise LinearSearchTooFast(
+                f"linear error from {API}: {speed} — "
+                f"{errors[:BODY_CHARS]}; {_budget_part()}"
+            )
         condition = rate_limit_condition(errors)
         if condition:
             # A quota exhaustion can also arrive as a 200 with an errors
@@ -1415,6 +1474,10 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
     an epic that walks straight past the guard written to stop it (DRE-3119).
     One child answers the question; the count is not needed.
 
+    `project { id }` is selected for `cmd_subissue` (DRE-7675): a child lands
+    in its parent epic's project, and this read of the parent carries it, so
+    the child costs no second read. `null` when the card is in no project.
+
     `fresh=True` bypasses `_card_read_once`'s memo: the caller needs the card
     as it is NOW, not as it was when the command began.
     """
@@ -1425,6 +1488,7 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
              id identifier title team { id } state { id name type }
              labels { nodes { name } }
              children(first: 1) { nodes { id } }
+             project { id }
            } }""",
         {"id": identifier},
     )
@@ -1689,6 +1753,22 @@ def _dispatch_repo(card: dict) -> str:
     return os.environ.get("REPO", "")
 
 
+def _is_epic_issue(identifier: str, issue: dict) -> bool:
+    """`epic_todo_gate.is_epic_card` on a card already read: its title, its
+    children, and its shape stamp. An unreadable thread is no stamp, as the
+    gate has it."""
+    try:
+        bodies = comment_bodies(identifier)
+    except Exception as e:  # noqa: BLE001 — an unreadable stamp is no stamp
+        print(f"{identifier}: could not read its comments ({e})", file=sys.stderr)
+        bodies = []
+    return epic_todo_gate.is_epic_card(
+        issue.get("title") or "",
+        bool(((issue.get("children") or {}).get("nodes")) or []),
+        bodies,
+    )
+
+
 def _redispatch_in_place(identifier: str) -> bool:
     """Fire the build dispatch for a card a restart found already in the start
     lane (DRE-7109). True ONLY on a confirmed dispatch — a failure is printed,
@@ -1864,7 +1944,7 @@ def guarded_state_write(
          but it decided from a read taken BEFORE the caller's own work, so the
          window was seconds wide. DRE-2316 lost it by 280 ms: linear-sync set
          DRE-2316 Done on the PR #137 merge at 22:22:30.349, and the dead-run
-         requeue — which had read "In Review" — wrote Todo at 22:22:30.629.
+         requeue — which had read "In Review" — wrote the start lane at 22:22:30.629.
          The card then dispatched a second agent onto shipped work. After (1)
          the window is one API round trip.
 
@@ -1876,9 +1956,9 @@ def guarded_state_write(
     a concurrent terminal transition can still land. (2) is a compensating
     write, not prevention: the card really does flap Done → ours → Done, and
     anything that reacts to the intermediate state (the relay dispatches on a
-    Todo transition) has already reacted by the time we repair it. What (2)
+    start-lane transition) has already reacted by the time we repair it. What (2)
     buys is that the FINISHED state is the one that survives, instead of a Done
-    card sitting silently in Todo. Closing the window completely needs a
+    card sitting silently in a start lane. Closing the window completely needs a
     primitive Linear does not expose.
 
     The read-back is best effort: it verifies a write that already succeeded,
@@ -1891,11 +1971,12 @@ def guarded_state_write(
     nothing, so its read-back had no entry of its own to find and "restored"
     Done from a person's reopen instead.
 
-    An EPIC is never written into Todo (DRE-5316): on a write to Todo the card's
-    comments are read (one extra read, only then) and `epic_todo_gate.refusal`
-    decides, with the card's current lane as the lane before Todo. On a refusal
-    nothing is sent, the refusal is posted once, and it returns False. The
-    DRE-3621 write — In Progress to Todo — is the one this refuses.
+    An EPIC is never written into the old start lane, `epic_todo_gate.TODO`
+    (DRE-5316): on a write to it the card's comments are read (one extra read,
+    only then) and `epic_todo_gate.refusal` decides, with the card's current
+    lane as the lane before it. On a refusal nothing is sent, the refusal is
+    posted once, and it returns False. The DRE-3621 write — In Progress into
+    that lane — is the one this refuses.
 
     `expect` / `labels_absent` make the write FROM-LANE-CONDITIONAL (Stage 2
     item 33): the pre-write re-read in (1) — the read this pays for anyway —
@@ -1936,7 +2017,9 @@ def guarded_state_write(
     if current.get("id") == target_id:
         print(f"{identifier} is already in {state_name!r} — nothing to write.")
         return True
-    if not terminal_target and state_name.strip().lower() == epic_todo_gate.TODO.lower():
+    if not terminal_target and epic_todo_gate.TODO is not None and (
+        state_name.strip().lower() == epic_todo_gate.TODO.lower()
+    ):
         # An unreadable thread is no shape stamp, exactly as `_stamped_shape`
         # has it: the title and the children still answer.
         try:
@@ -2089,6 +2172,14 @@ def cmd_state(
         and not deliberate_park
         and _HOLD_LABEL not in [n.lower() for n in _label_names(issue)]
     ):
+        # An epic is never rerouted (DRE-7120): the start lane is In Progress
+        # since the flip, so the reroute would either fire a build dispatch at
+        # an epic already there or move one into the lane that approves it.
+        # Before the flip the epic gate refused the same write into Todo.
+        if _is_epic_issue(identifier, issue):
+            print(f"{identifier} is an epic — the building-card reroute to "
+                  f"{lane_contract.START_LANE!r} is refused and nothing is written")
+            return False
         start_id, start_type = state_id_and_type(issue["team"]["id"],
                                                  lane_contract.START_LANE)
         in_place = (issue.get("state") or {}).get("id") == start_id
@@ -2157,6 +2248,11 @@ def _held_state_move(
         # DRE-1885, decided on the live card: a building card is re-queued to
         # the start lane, never parked in the queue lane where nothing
         # re-promotes it — and re-dispatched in place when it is already there.
+        # Never an epic (DRE-7120), as on the unheld path.
+        if _is_epic_issue(identifier, fresh):
+            print(f"{identifier} is an epic — the building-card reroute to "
+                  f"{lane_contract.START_LANE!r} is refused and nothing is written")
+            return False
         in_place = current.get("id") == start[0]
         if not guarded_state_write(identifier, fresh, start[0], start[1],
                                    lane_contract.START_LANE,
@@ -2252,7 +2348,7 @@ def cmd_advance(
 def set_description(identifier: str, body: str) -> None:
     """Overwrite a card's description (generic helper / `set-description` CLI).
 
-    NOTE (DRE-1699): the Todo-entry gate's fix-first repair NO LONGER calls this
+    NOTE (DRE-1699): the start gate's fix-first repair NO LONGER calls this
     to prepend a `**Repo:** <slug>` stamp — the `repo:<slug>` label is now the
     canonical repo signal, so the gate adds only the label and leaves the body
     alone. This remains a general-purpose description setter.
@@ -2763,6 +2859,13 @@ def merged_not_closed_comment(
 #
 # A refused PROOF card's left-open comment names the ruling's gap rather than
 # the `no-code` sentence, which sent DRE-6353 chasing the wrong cause.
+#
+# The record is read with the critic's verdict (DRE-7949): the same comment
+# `_merge_evidence_gap` found APPROVE at the merged head, whose
+# `🔎 proof-row-accepted:` lines accept a `Not met. wording-only:` row. The
+# close names each such row and links that verdict comment. The line in any
+# comment the qa-bot did not write accepts nothing — the proof run posts as
+# the main bureau App, so it cannot accept its own reading.
 
 #: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
 #: `files` names the record the pull request added (DRE-6141).
@@ -2826,16 +2929,19 @@ def proof_evidence_gap(
     gap = _merge_evidence_gap(identifier, pr)
     if gap is not None:
         return gap
-    gap = _record_gap(record)
+    gap = _record_gap(record, pr)
     if gap is not None:
         return gap
     return _holds_gap(voices, pr.get("mergedAt"))
 
 
-def _record_gap(record) -> str | None:
+def _record_gap(record, pr: dict | None = None) -> str | None:
+    """The record's shortfall, read with the critic verdict `_merge_evidence_gap`
+    found APPROVE at the merged head — its acceptance of a wording-only row
+    counts, and one in any other comment is the reading run's own (DRE-7949)."""
     import proof_record  # lazy: the leaf the merge gate reads too
 
-    why = proof_record.shortfall(record)
+    why = proof_record.shortfall(record, _bound_verdict(pr), _other_comments(pr))
     if why is None:
         return None
     import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
@@ -2897,12 +3003,10 @@ def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
         return f"it merged from '{head_ref}', which is not this card's own branch"
     head = pr.get("headRefOid") or ""
     marker = merge_gate.CRITIC_MARKER
-    latest = None
-    for c in pr.get("comments") or []:
-        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), marker):
-            latest = merge_gate.first_line(c.get("body"))
-    if latest is None:
+    critic = _latest_critic(pr)
+    if critic is None:
         return "the critic left no verdict on it"
+    latest = merge_gate.first_line(critic.get("body"))
     token = merge_gate.verdict_token(latest, marker)
     if token != "APPROVE":
         return f"the critic's latest verdict is {token or 'unreadable'}, not APPROVE"
@@ -2910,6 +3014,34 @@ def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
     if not head or sha != head:
         return f"the critic approved {sha or 'no named commit'}, not the merged head {head or '(unknown)'}"
     return None
+
+
+def _latest_critic(pr: dict | None) -> dict | None:
+    """The latest comment by the qa-bot App whose first line opens with the
+    critic marker — the one `_merge_evidence_gap` reads — or None."""
+    import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+    latest = None
+    for c in (pr or {}).get("comments") or []:
+        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), merge_gate.CRITIC_MARKER):
+            latest = c
+    return latest
+
+
+def _bound_verdict(pr: dict | None) -> dict | None:
+    """`_latest_critic` as `proof_record.reading` takes it, `{"body", "url"}`
+    — read only once `_merge_evidence_gap` found it APPROVE at the merged
+    head (DRE-7949)."""
+    critic = _latest_critic(pr)
+    if critic is None:
+        return None
+    return {"body": critic.get("body") or "", "url": critic.get("url")}
+
+
+def _other_comments(pr: dict | None) -> list:
+    """The body of every comment on the pull request the qa-bot did not write:
+    an acceptance line in one is the reading run's own (DRE-7949)."""
+    return [c.get("body") or "" for c in (pr or {}).get("comments") or [] if not _is_qa_bot(c)]
 
 
 def proof_close_note(
@@ -2924,7 +3056,9 @@ def proof_close_note(
     on it still find it; then the PT
     merge time and the sha the critic approved; then what its criterion
     table held — the rows met, and every row the operator accepted by
-    decision, by its criterion (`proof_record.summary`, DRE-6244). It never
+    decision, by its criterion (`proof_record.summary`, DRE-6244), and every
+    row the checker accepted, by its criterion with the verdict comment that
+    accepted it (DRE-7949). It never
     wears a verdict marker itself (standards/untrusted-content.md), and the
     criteria it quotes are the record's untrusted text, so neither do they.
     """
@@ -2936,7 +3070,7 @@ def proof_close_note(
     import proof_record  # lazy: the leaf the merge gate reads too
 
     table = merge_gate.without_verdict_markers(
-        proof_record.summary(proof_record.reading(record.text)))
+        proof_record.summary(proof_record.reading(record.text, _bound_verdict(pr))))
     merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
     return (
         f"✅ Merged: {pr_url}\n\n"
@@ -2978,7 +3112,7 @@ def merge_close_ruling(
     record = voices = None
     if gap is None:
         record = read_proof_record(pr_url, pr)
-        gap = _record_gap(record)
+        gap = _record_gap(record, pr)
     if gap is None:
         voices = read_card_voices(identifier)
     note = proof_close_note(identifier, title, pr_url, pr, record, voices)
@@ -3382,7 +3516,7 @@ def _reject_unless_creatable(kind: str, title: str, description: str,
     AND SO IS THE `needs-human` / `no-code` PAIR (DRE-3512). A card filed as a
     human's to finish carries both or neither; this is the ONE seam that judges
     it, because on the board the same word is the pipeline's hold label — see
-    `validate_card.needs_human_without_no_code` for why the Todo gate and the
+    `validate_card.needs_human_without_no_code` for why the start gate and the
     post-plan sweep deliberately do not."""
     problem = body_problem(description)
     if problem is not None:
@@ -3472,10 +3606,11 @@ def _card_look(title: str, began: datetime, parent_id: str | None = None):
 
 def _create_card(team_id: str, title: str, description: str, labels: list[str],
                  blockers: list[str], *, parent_id: str | None = None,
-                 lane: str = "Planning") -> None:
+                 project_id: str | None = None, lane: str = "Planning") -> None:
     """Create a validated card in `lane` with its labels and blockedBy
     relations, and print the receipt. `parent_id=None` creates a PARENTLESS card
-    — the one-off route has no epic to hang under (DRE-2754).
+    — the one-off route has no epic to hang under (DRE-2754). `project_id=None`
+    sends no `projectId`, and the card lands in no project.
 
     `lane` defaults to Planning, the lane Planning owns (DRE-2858): a card this
     seam mints has not been classified, has no shape stamp and carries no
@@ -3483,7 +3618,7 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     rest of the system reads as ready. The ONE caller that passes something else
     is `cmd_subissue` — see the note there.
 
-    Never an epic in Todo (DRE-5316): a new card can be an epic only by an
+    Never an epic in `epic_todo_gate.TODO` (DRE-5316): a new card can be an epic only by an
     `[EPIC]` title, and one is refused before anything is written. Nor with a
     label no agent may apply (DRE-6361) — `cmd_oneoff` asks first and
     `child_labels_from` drops one, so this is the backstop for a caller that
@@ -3503,6 +3638,8 @@ def _create_card(team_id: str, title: str, description: str, labels: list[str],
     }
     if parent_id is not None:
         card_input["parentId"] = parent_id
+    if project_id is not None:
+        card_input["projectId"] = project_id
     # The card a lost answer made is adopted, not made twice (DRE-6839): the
     # blockers, the operator hold and the receipt below all name it.
     began = datetime.now(UTC)
@@ -3648,8 +3785,15 @@ def cmd_subissue(parent_identifier: str, title: str, description_file: str, *fla
     # just created so it can record the growth on the epic in the same motion
     # (DRE-2739, consumed at mid_epic.py:483). The CLI path ignores the value,
     # so behaviour there is unchanged.
+    #
+    # IN THE PARENT'S PROJECT (DRE-7675): the Initiatives page counts a
+    # project's work by the cards in it, so a child in no project is work that
+    # page never shows. A child epic inherits it too, and its own children in
+    # turn. A parent in no project gives a child in none — nothing guesses one.
+    project = parent.get("project") or {}
     issue = _create_card(parent["team"]["id"], title, description, child_labels,
-                         blockers, parent_id=parent["id"], lane=QUEUE_LANE)
+                         blockers, parent_id=parent["id"],
+                         project_id=project.get("id"), lane=QUEUE_LANE)
     # 6 — AN OPERATOR STEP IS FILED HELD, under a reason the sweep lifts
     # (DRE-6428).
     _file_operator_hold(issue, child_labels)
@@ -3830,7 +3974,7 @@ def cmd_create(title: str, description_file: str, *flags: str) -> None:
     either default (DRE-3533): the red-main repair loop files a card for the
     repair its agent is ALREADY building, so that one needs the role and marks
     the readiness gate reads, and it belongs in a working lane rather than
-    Planning — a card that entered Todo would be dispatched by the relay onto
+    Planning — a card that entered a start lane would be dispatched by the relay onto
     work an agent is already doing."""
     slug = required_repo_slug(flags)
     labels, _ = _parse_flags(flags)
@@ -3870,7 +4014,7 @@ def create_card(title: str, description: str, *, repo_slug: str,
     The `repo:<slug>` label is applied first and always; `labels` ride after it
     in the order given, deduplicated by `_team_label_ids`.
 
-    Never an epic in Todo (DRE-5316), refused as `_create_card` refuses it.
+    Never an epic in `epic_todo_gate.TODO` (DRE-5316), refused as `_create_card` refuses it.
     Never a label no agent may apply (DRE-6361), refused before any request.
     """
     refuse_agent_labels("create", title, labels)

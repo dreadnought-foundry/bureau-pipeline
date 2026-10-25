@@ -364,13 +364,13 @@ def fileable_verdicts() -> tuple:
     the sweep carries out of the queue (`routing_verdict.sweep_promotes`),
     which is where a filed sibling waits — `QUEUE_LANE`, the lane the create
     seam writes (DRE-6746). Until DRE-5321 that was "the verdicts whose
-    destination is Todo"; once WORKBENCH and OPERATOR landed in Hand-work
-    instead, a destination test would have shrunk this to FLEET alone, so the
-    rule changed and the answer did not. PARKED stays in Queued and NEEDS WORK
-    goes back to Planning — either one files a sibling nobody comes for, which
-    is the silent accretion this route replaces wearing a verdict. A route
-    added to `config/routing-verdicts.json` becomes fileable here on its own,
-    or does not, according to whether the sweep carries it.
+    destination is the start lane"; once WORKBENCH and OPERATOR landed in
+    Hand-work instead, a destination test would have shrunk this to FLEET
+    alone, so the rule changed and the answer did not. PARKED stays in Queued
+    and NEEDS WORK goes back to Planning — either one files a sibling nobody
+    comes for, which is the silent accretion this route replaces wearing a
+    verdict. A route added to `config/routing-verdicts.json` becomes fileable
+    here on its own, or does not, according to whether the sweep carries it.
     """
     import routing_verdict
 

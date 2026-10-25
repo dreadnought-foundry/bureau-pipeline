@@ -157,12 +157,13 @@ class TestTheReaders:
     def test_no_lane_is_arriving(self):
         assert lane_contract.lanes("arriving") == ()
 
-    def test_it_flows_between_green_light_and_todo(self):
-        # Backlog sat between them until it began retiring (DRE-6753).
+    def test_it_flows_between_green_light_and_hand_work(self):
+        # Backlog sat between Green Light and it until it began retiring
+        # (DRE-6753), and Todo followed it until it did too (DRE-7129).
         flow = lane_contract.flow_lanes()
-        assert BACKLOG not in flow
+        assert BACKLOG not in flow and "Todo" not in flow
         assert flow[flow.index("Green Light") + 1] == QUEUED
-        assert flow[flow.index(QUEUED) + 1] == "Todo"
+        assert flow[flow.index(QUEUED) + 1] == "Hand-work"
 
 
 # --------------------------------------------------------------------------- #

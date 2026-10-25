@@ -276,7 +276,7 @@ def test_a_blocked_card_with_no_epic_carries_the_notice_itself():
     assert writes.none()
 
 
-@pytest.mark.parametrize("lane", ["Todo", "In Progress", "In Review"])
+@pytest.mark.parametrize("lane", ["In Progress", "In Review"])
 def test_every_work_lane_counts_as_in_flow(lane):
     board = the_board(blocked_lane=lane)
     sweep(board)
@@ -306,7 +306,7 @@ def test_a_second_and_third_sweep_post_nothing_for_the_same_pair():
 def test_a_new_blocked_card_against_the_same_blocker_gets_its_own_notice():
     board = the_board()
     sweep(board)
-    board.add(card("DRE-201", "Todo", parent="DRE-900"))
+    board.add(card("DRE-201", "In Progress", parent="DRE-900"))
     board.relate("DRE-100", "DRE-201")
     sweep(board)
     sweep(board)
@@ -508,7 +508,8 @@ def test_the_read_asks_for_the_lanes_the_rule_names():
     board = the_board()
     sweep(board)
     (_query, variables), = board.queries
-    assert set(variables["states"]) == {"Todo", "In Progress", "In Review"}
+    # Less Todo, retiring since DRE-7129.
+    assert set(variables["states"]) == {"In Progress", "In Review"}
     assert variables["epicStates"] == ["In Progress"]
     assert variables["needle"] == reconcile.REPO_SLUG, "the read is this repo's work"
 

@@ -11,8 +11,9 @@ identities. With the writers stopped, this script takes each of those off once.
 The operator decided on 2026-10-08 that no pipeline-applied `hand-built`
 survives it, so there is no switch that keeps an automatic card out.
 
-This file held DRE-5323's one-time move of person cards out of Todo; it is
-rewritten for this migration rather than a second script written beside it.
+This file held DRE-5323's one-time move of person cards out of the start
+lane; it is rewritten for this migration rather than a second script written
+beside it.
 `docs/hand-work-migration.md` is the record of that first run.
 
 ## Origin first
@@ -47,9 +48,9 @@ in it, could still hold one, so it is not read as "set at creation".
      as the retirer, the `operator-step` a retired verdict put on comes off
      first (the planning exit's `lifted_marks` rule), it is stamped FLEET, and a
      Hand-work card moves to the queue, `lane_contract.QUEUE_LANE`, where the
-     sweep's promotion carries it to Todo. In Hand-work or Queued with no pass
-     it moves to Planning, whose exit writes it a fresh verdict. Anywhere else
-     it only loses the label.
+     sweep's promotion carries it to the start lane. In Hand-work or Queued
+     with no pass it moves to Planning, whose exit writes it a fresh verdict.
+     Anywhere else it only loses the label.
 
 A critic pass is read with `plan_critic`'s own record reader over the fleet's
 own comments: for a parentless card, the newest one-off round on the card is a
@@ -57,7 +58,7 @@ PASS; for a child, the parent epic's second critic released the plan
 (`plan_critic.post_release`).
 
 Every card changed carries one `🧳 hand-built-migration:` comment saying what
-changed and the rule it followed. This script never writes Todo.
+changed and the rule it followed. This script never writes a start lane.
 
 It refuses to run, before any write, when Linear (or the identity declaration)
 cannot be read. No card id appears in its code: selection is by rule.

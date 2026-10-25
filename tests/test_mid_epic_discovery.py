@@ -175,7 +175,7 @@ class TestVerdictBeforePromotion:
         )
         board = _PromotionBoard(created_at=AFTER, comments=[verdict])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2740", "Todo", reconcile.QUEUE_FROM)]
+        assert board.advanced == [("DRE-2740", "In Progress", reconcile.QUEUE_FROM)]
 
     def test_the_sweep_still_promotes_the_planned_roster(self):
         """Guard the guard: the same board with a card the plan anticipated
@@ -239,7 +239,7 @@ class TestPlanningsVerdictIsTheSignOff:
     def test_the_dre_5806_shape_promotes_after_one_planning_pass(self):
         board = _PromotionBoard(created_at=AFTER, comments=[])
         assert board.promote() == 1
-        assert board.advanced == [("DRE-2740", "Todo", reconcile.QUEUE_FROM)]
+        assert board.advanced == [("DRE-2740", "In Progress", reconcile.QUEUE_FROM)]
         assert not any(mid_epic.NO_VERDICT_TAG in b for _, b in board.posted)
 
 
@@ -336,7 +336,7 @@ class TestAdditionNeedsNoGreenLight:
             created_at=AFTER, comments=ops.comments_on("DRE-2740")
         )
         assert board.promote() == 1
-        assert board.visited("DRE-2740") == [lane_contract.QUEUE_LANE, "Todo"]
+        assert board.visited("DRE-2740") == [lane_contract.QUEUE_LANE, "In Progress"]
         for lane in mid_epic.GREEN_LIGHT_LANES:
             assert lane not in board.visited("DRE-2740")
 
@@ -882,15 +882,17 @@ class TestBornWithItsRoutingVerdict:
         for fileable in mid_epic.fileable_verdicts():
             assert fileable in str(err.value)
             # ...and the lane each one lands in, read off the vocabulary
-            # (DRE-5321): FLEET in Todo, WORKBENCH and OPERATOR in Hand-work.
+            # (DRE-5321): FLEET in In Progress since the flip (DRE-7120),
+            # WORKBENCH and OPERATOR in Hand-work.
             assert f"{fileable} → {routing_verdict.destination(fileable)}" in str(err.value)
 
     def test_the_verdicts_a_discovery_may_carry_are_the_ones_that_build(self):
         """Derived from the vocabulary, never restated: the fileable verdicts
         are exactly those the sweep carries out of Backlog (DRE-5321). FLEET
-        lands in Todo and WORKBENCH and OPERATOR in Hand-work, so "the lane a
-        sibling is picked up in" is no longer one lane. PARKED stays in Backlog
-        and NEEDS WORK goes back to Planning; neither is a card anybody builds."""
+        lands in In Progress (DRE-7120) and WORKBENCH and OPERATOR in
+        Hand-work, so "the lane a sibling is picked up in" is no longer one
+        lane. PARKED stays in Backlog and NEEDS WORK goes back to Planning;
+        neither is a card anybody builds."""
         assert mid_epic.fileable_verdicts() == ("FLEET", "WORKBENCH", "OPERATOR")
         assert mid_epic.fileable_verdicts() == tuple(
             v for v in routing_verdict.verdicts() if routing_verdict.sweep_promotes(v))
