@@ -59,6 +59,8 @@ speeds, chosen by the environment:
     side through the helper's thread pool. `BUREAU_SUITE_GREEN_PART=<n>` with
     `BUREAU_SUITE_GREEN_OF=<m>` (both or neither) keeps the cases whose index
     modulo m is n - 1, so a job can split them across runners (DRE-6873).
+    The walks job's shard (`tests/console_change_walk.py`'s `shard`,
+    DRE-7907) narrows that further: a case runs when both pick it.
 
 The inner pytest runs with none of these four set, so this file's heavy cases
 could never nest even if a walk were collected. Each case prints
@@ -254,9 +256,18 @@ def suite_files(tree: Path) -> list[str]:
     return [rel for rel in files if not walk.is_walk(rel)]
 
 
+def kept(case_list, env=None) -> list[tuple[str, dict]]:
+    """The cases this job runs: those its suite-green part (`selected`) AND
+    its walk shard (the helper's `shard`, DRE-7907) both pick, each by its
+    index in the whole `case_list`. Neither pair set, every case. In CI the
+    two never meet: the shard is the `walks` job's, the part `suite-green`'s."""
+    picked = set(walk.shard(walk.case_names(case_list), env))
+    return [case for case in selected(case_list, env) if case[0] in picked]
+
+
 TREE = tree_root()
 CASES = cases(TREE)
-SELECTED = selected(CASES)
+SELECTED = kept(CASES)
 
 
 # --------------------------------------------------------------------------- #

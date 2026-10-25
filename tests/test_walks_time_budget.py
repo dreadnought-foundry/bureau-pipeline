@@ -48,6 +48,7 @@ here by the walk's name, with the shard count that would fit.
 """
 from __future__ import annotations
 
+import functools
 import json
 import math
 import sys
@@ -106,11 +107,13 @@ def limit_seconds() -> int:
     return int(minutes) * 60
 
 
+@functools.cache
 def shard_counts() -> dict[str, int]:
     """Each walk's shard count, as `walks --json` hands it to the matrix."""
     return {e["walk"]: e["shards"] for e in unit_test_parts.walk_shards(REPO)}
 
 
+@functools.cache
 def case_counts() -> dict[str, int]:
     return {rel: len(unit_test_parts.walk_cases(REPO, rel) or [])
             for rel in unit_test_parts.walks(REPO)}

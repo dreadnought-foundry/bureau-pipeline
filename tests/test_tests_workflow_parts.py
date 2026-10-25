@@ -29,6 +29,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_tests_workflow_parts.py 
 from __future__ import annotations
 
 import ast
+import functools
 import importlib
 import json
 import os
@@ -471,7 +472,7 @@ def test_the_walk_clock_is_over_twice_the_slowest_projected_shard():
     seconds in `config/unit-test-durations.json` and its shard count."""
     _, job = _walks_job()
     measured = parts.load_weights(parts.DURATIONS)
-    shards = _shard_counts(parts.walk_shards(ROOT))
+    shards = _shard_counts(_tree_shards())
     projected = {rel: parts.projected_shard_seconds(
         measured[rel], len(parts.walk_cases(ROOT, rel)), shards[rel])
         for rel in parts.walks(ROOT)}
@@ -514,6 +515,12 @@ def _record(tmp_path: Path, seconds: dict[str, float]) -> Path:
 
 def _shard_counts(entries: list[dict]) -> dict[str, int]:
     return {e["walk"]: e["shards"] for e in entries}
+
+
+@functools.cache
+def _tree_shards() -> tuple[dict, ...]:
+    """`walk_shards` on this tree, read once: it imports every walk."""
+    return tuple(parts.walk_shards(ROOT))
 
 
 def test_walks_json_prints_one_entry_per_walk_shard_and_is_red_with_none(tmp_path):
@@ -663,7 +670,7 @@ def test_every_walks_shards_pick_every_case_exactly_once(walk):
     names = _helper().case_names(_module(walk).CASES)
     assert names and len(names) == len(set(names)), names
     assert parts.walk_cases(ROOT, walk) == names
-    of = _shard_counts(parts.walk_shards(ROOT))[walk]
+    of = _shard_counts(_tree_shards())[walk]
     for count in (of, of + 3, len(names) + 1):
         assert _cover(names, count) == [], count
     assert _helper().shard(names, {}) == names
