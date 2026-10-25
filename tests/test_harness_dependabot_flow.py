@@ -45,14 +45,15 @@ REAL_BRANCH = "dependabot/pip/requests-2.32.5"
 PARENT = "0" * 40
 
 
-def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE):
+def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE,
+         gh_qa=None, log=None):
     # Composed the way __main__ composes it: the namespace OPENS the run id,
     # so the run's branches sit in the slice its own sweep owns (DRE-3075).
     run_id = framework.namespaced_run_id(namespace, run_id)
     faketime = _FakeTime()
     return framework.HarnessContext(
         gh=gh,
-        gh_qa=gh,
+        gh_qa=gh_qa or gh,
         repo="dreadnought-foundry/bureau-harness",
         run_id=run_id,
         namespace=namespace,
@@ -63,7 +64,7 @@ def _ctx(gh, run_id="gha-1-1", namespace=framework.DEFAULT_NAMESPACE):
         poll_interval=1,
         clock=faketime.clock,
         sleep=faketime.sleep,
-        log=lambda *_: None,
+        log=log or (lambda *_: None),
     )
 
 
@@ -420,6 +421,169 @@ class MissingPrTest(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.failed_phase, "setup")
         self.assertIn("@dependabot recreate", "\n".join(result.errors))
+
+
+FIXTURE_LABEL = "harness-fixture"
+BANNER = (
+    "HARNESS FIXTURE — the integration harness needs this PR open. "
+    "Do not close or merge."
+)
+FIXTURE_BODY = "Bumps pytest from 7.0.0 to 9.1.1."
+
+
+def _seed_closed_fixture(gh, labeled=True, merged=False):
+    """bureau-harness #1 as operator sessions left it on 2026-09-24 and
+    2026-10-24: closed as a stale major, unmerged, and Dependabot deleted
+    its branch ten seconds later. The closed PR still records its last
+    head sha — that is all the self-heal needs."""
+    number, head = _seed_real_pr(gh)
+    pr = gh.prs[number]
+    pr["body"] = FIXTURE_BODY
+    if labeled:
+        pr["labels"] = [{"name": FIXTURE_LABEL}]
+    pr["state"] = "closed"
+    if merged:
+        pr["merged"] = True
+        pr["merged_at"] = "2026-10-24T00:49:30Z"
+    del gh.branches[REAL_BRANCH]
+    return number, head
+
+
+def _label_names(pr):
+    return [label["name"] for label in pr.get("labels") or []]
+
+
+class FixtureSelfHealTest(unittest.TestCase):
+    """DRE-7957: the sandbox's Dependabot PR is a closable object that looks
+    like stale debt. Closed twice as a semver-major, it turned main red and
+    froze `stable` fleet-wide for four hours on 2026-10-24. setup() now
+    reopens its own labeled fixture instead of failing main."""
+
+    def test_closed_labeled_fixture_is_restored_reopened_and_consumed(self):
+        gh = FakeGitHub()
+        number, head = _seed_closed_fixture(gh)
+        logs = []
+        ctx = _ctx(gh, log=logs.append)
+
+        dependabot_flow.SCENARIO.setup(ctx)
+
+        self.assertEqual(gh.branches.get(REAL_BRANCH), head)
+        self.assertEqual(gh.prs[number]["state"], "open")
+        self.assertIn(f"[dependabot_flow] reopened fixture #{number}", logs)
+        self.assertEqual(ctx.state["number"], number)
+        self.assertEqual(ctx.state["head"], head)
+
+    def test_reopened_fixture_carries_the_label_and_the_banner(self):
+        gh = FakeGitHub()
+        number, _ = _seed_closed_fixture(gh)
+
+        dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        pr = gh.prs[number]
+        self.assertIn(FIXTURE_LABEL, _label_names(pr))
+        self.assertEqual(pr["body"].splitlines()[0], BANNER)
+        self.assertIn(FIXTURE_BODY, pr["body"])
+        self.assertIn(("add_labels", number, (FIXTURE_LABEL,)), gh.writes)
+
+    def test_a_reopened_fixture_runs_the_whole_scenario_green(self):
+        gh = FakeGitHub()
+        number, head = _seed_closed_fixture(gh)
+        _skipped_review_runs(gh, head)
+        gh.comments[number].append(_receipt(head))
+        gh.post_verdict(number, "REQUEST_CHANGES", head)
+
+        result = framework.run_scenario(dependabot_flow.SCENARIO, _ctx(gh))
+
+        self.assertTrue(result.ok, result.errors)
+        self.assertEqual(gh.prs[number]["state"], "open")
+
+    def test_every_fixture_write_goes_out_as_ctx_gh_and_no_other_client(self):
+        # bureau-harness and bureau-pipeline are public: the reopen is the
+        # harness's own identity, never a person's or the qa-bot's.
+        gh, qa = FakeGitHub(), FakeGitHub()
+        number, head = _seed_closed_fixture(gh)
+
+        dependabot_flow.SCENARIO.setup(_ctx(gh, gh_qa=qa))
+
+        ops = [w[0] for w in gh.writes]
+        self.assertIn(("create_ref", REAL_BRANCH, head), gh.writes)
+        self.assertIn(("reopen_pr", number), gh.writes)
+        self.assertIn("add_labels", ops)
+        self.assertLess(ops.index("create_ref"), ops.index("reopen_pr"))
+        self.assertEqual(qa.writes, [])
+
+    def test_a_fixture_whose_branch_survived_is_reopened_without_a_ref_write(self):
+        gh = FakeGitHub()
+        number, head = _seed_closed_fixture(gh)
+        gh.branches[REAL_BRANCH] = head
+
+        dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        self.assertEqual(gh.prs[number]["state"], "open")
+        self.assertNotIn("create_ref", [w[0] for w in gh.writes])
+
+    def test_open_pr_without_the_label_is_labeled(self):
+        gh = FakeGitHub()
+        number, _ = _seed_real_pr(gh)
+
+        dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        self.assertIn(FIXTURE_LABEL, _label_names(gh.prs[number]))
+        self.assertIn(("add_labels", number, (FIXTURE_LABEL,)), gh.writes)
+
+    def test_open_pr_already_labeled_gets_no_label_write(self):
+        gh = FakeGitHub()
+        number, _ = _seed_real_pr(gh)
+        gh.prs[number]["labels"] = [{"name": FIXTURE_LABEL}]
+        gh.prs[number]["body"] = f"{BANNER}\n\n{FIXTURE_BODY}"
+
+        dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        self.assertNotIn("add_labels", [w[0] for w in gh.writes])
+        self.assertEqual(gh.writes, [])
+
+    def test_open_pr_without_the_banner_gets_it_on_top_once(self):
+        gh = FakeGitHub()
+        number, _ = _seed_real_pr(gh)
+        gh.prs[number]["body"] = FIXTURE_BODY
+
+        dependabot_flow.SCENARIO.setup(_ctx(gh))
+        dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        body = gh.prs[number]["body"]
+        self.assertEqual(body.splitlines()[0], BANNER)
+        self.assertEqual(body.count(BANNER), 1)
+        self.assertIn(FIXTURE_BODY, body)
+
+    def test_no_labeled_fixture_still_raises_no_pr_guidance(self):
+        # An unlabeled closed Dependabot PR is not the harness's to reopen.
+        gh = FakeGitHub()
+        number, _ = _seed_closed_fixture(gh, labeled=False)
+
+        with self.assertRaises(framework.ScenarioFailure) as raised:
+            dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        self.assertEqual(str(raised.exception), dependabot_flow.NO_PR_GUIDANCE)
+        self.assertEqual(gh.prs[number]["state"], "closed")
+        self.assertEqual(gh.writes, [])
+
+    def test_a_merged_fixture_is_not_reopened_and_the_failure_names_the_merge(self):
+        gh = FakeGitHub()
+        number, _ = _seed_closed_fixture(gh, merged=True)
+
+        with self.assertRaises(framework.ScenarioFailure) as raised:
+            dependabot_flow.SCENARIO.setup(_ctx(gh))
+
+        self.assertIn("merged", str(raised.exception))
+        self.assertIn(f"#{number}", str(raised.exception))
+        self.assertEqual(gh.prs[number]["state"], "closed")
+        self.assertNotIn(REAL_BRANCH, gh.branches)
+        self.assertEqual(gh.writes, [])
+
+    def test_nothing_the_fixture_marking_writes_contains_a_verdict_marker(self):
+        for marker in ("VERDICT:", "QA Critic", "QA Verifier"):
+            self.assertNotIn(marker, BANNER)
+            self.assertNotIn(marker, dependabot_flow.FIXTURE_BANNER)
 
 
 class RebaseMidFlightTest(unittest.TestCase):
