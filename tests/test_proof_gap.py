@@ -557,3 +557,15 @@ def test_every_comment_proof_gap_posts_is_composed():
     assert found == []
     sites = [s for s in check_act_receipts.sites() if s.path.endswith("proof_gap.py")]
     assert sites, "proof_gap.py posts its receipt through a site the guard can see"
+
+
+def test_the_receipt_is_read_off_who_wrote_each_comment_not_the_voice_kinds():
+    """`linear_ops.comment_records` is the one authorship fact a receipt key
+    reads (`authored_by_pipeline`); the voice kinds are `spoken_thread`'s, and
+    every reader of them must also handle an unchecked console answer."""
+    text = (ROOT / "scripts" / "proof_gap.py").read_text(encoding="utf-8")
+    assert "comment_records" in text
+    assert "spoken_thread" not in text
+    records = [{"body": f"{proof_gap.RECEIPT_MARK} DRE-7 — filed", "authored_by_pipeline": True}]
+    assert proof_gap.filed(records)["identifier"] == "DRE-7"
+    assert proof_gap.filed([{**records[0], "authored_by_pipeline": False}]) is None

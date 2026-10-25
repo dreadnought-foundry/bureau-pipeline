@@ -740,7 +740,7 @@ def _drive_proof_gap_filed(mp):
         "DRE-1", "DRE-2", "https://github.com/dreadnought-foundry/bureau-pipeline/pull/7",
         [("The nightly reads the repo variable", "out-of-reach",
           "Not observed. cause: out-of-reach — `gh variable get` answered 403")],
-        repo_slug="bureau-pipeline", voices=[])
+        repo_slug="bureau-pipeline", records=[])
 
 
 #: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
