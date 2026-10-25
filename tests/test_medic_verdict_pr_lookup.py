@@ -220,7 +220,7 @@ class TheEmptyLookupOnAPullRequestRunTest(unittest.TestCase):
         run = self._empty()
         self.assertIn("--has-open-pr", run.decide)
         self.assertEqual("fix-path", run.outputs["step"])
-        self.assertNotIn("no open pull request for the fix loop", run.log)
+        self.assertNotIn("falls back", run.log)
 
     def test_it_does_not_ask_a_person_on_that_ground(self):
         run = self._empty()
