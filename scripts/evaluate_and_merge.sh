@@ -322,6 +322,11 @@ set -e
 #   rows are not all met, posted as an ordinary decline note once per head.
 #   Off a proof-record branch it reads nothing, so the path to a merge is
 #   still nine reads.
+# DRE-7949. A `Not met. wording-only:` row is accepted by the critic's
+#   verdict alone: condition P reads the `🔎 proof-row-accepted:` lines of
+#   the verdict condition 2 bound, and its `html_url`, out of the same
+#   /tmp/comments.json — no new read. The line in a comment the qa-bot did
+#   not write is the reading run's own, and holds.
 # DRE-6195 (2026-10-07). The gate decided `merge` on #785, green and approved,
 #   and GitHub refused it: "Head branch is out of date". The head had not
 #   moved, so the run went red, and the medic's retry hit the same refusal.

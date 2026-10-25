@@ -2859,6 +2859,13 @@ def merged_not_closed_comment(
 #
 # A refused PROOF card's left-open comment names the ruling's gap rather than
 # the `no-code` sentence, which sent DRE-6353 chasing the wrong cause.
+#
+# The record is read with the critic's verdict (DRE-7949): the same comment
+# `_merge_evidence_gap` found APPROVE at the merged head, whose
+# `🔎 proof-row-accepted:` lines accept a `Not met. wording-only:` row. The
+# close names each such row and links that verdict comment. The line in any
+# comment the qa-bot did not write accepts nothing — the proof run posts as
+# the main bureau App, so it cannot accept its own reading.
 
 #: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
 #: `files` names the record the pull request added (DRE-6141).
@@ -2922,16 +2929,19 @@ def proof_evidence_gap(
     gap = _merge_evidence_gap(identifier, pr)
     if gap is not None:
         return gap
-    gap = _record_gap(record)
+    gap = _record_gap(record, pr)
     if gap is not None:
         return gap
     return _holds_gap(voices, pr.get("mergedAt"))
 
 
-def _record_gap(record) -> str | None:
+def _record_gap(record, pr: dict | None = None) -> str | None:
+    """The record's shortfall, read with the critic verdict `_merge_evidence_gap`
+    found APPROVE at the merged head — its acceptance of a wording-only row
+    counts, and one in any other comment is the reading run's own (DRE-7949)."""
     import proof_record  # lazy: the leaf the merge gate reads too
 
-    why = proof_record.shortfall(record)
+    why = proof_record.shortfall(record, _bound_verdict(pr), _other_comments(pr))
     if why is None:
         return None
     import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
@@ -2993,12 +3003,10 @@ def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
         return f"it merged from '{head_ref}', which is not this card's own branch"
     head = pr.get("headRefOid") or ""
     marker = merge_gate.CRITIC_MARKER
-    latest = None
-    for c in pr.get("comments") or []:
-        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), marker):
-            latest = merge_gate.first_line(c.get("body"))
-    if latest is None:
+    critic = _latest_critic(pr)
+    if critic is None:
         return "the critic left no verdict on it"
+    latest = merge_gate.first_line(critic.get("body"))
     token = merge_gate.verdict_token(latest, marker)
     if token != "APPROVE":
         return f"the critic's latest verdict is {token or 'unreadable'}, not APPROVE"
@@ -3006,6 +3014,34 @@ def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
     if not head or sha != head:
         return f"the critic approved {sha or 'no named commit'}, not the merged head {head or '(unknown)'}"
     return None
+
+
+def _latest_critic(pr: dict | None) -> dict | None:
+    """The latest comment by the qa-bot App whose first line opens with the
+    critic marker — the one `_merge_evidence_gap` reads — or None."""
+    import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+    latest = None
+    for c in (pr or {}).get("comments") or []:
+        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), merge_gate.CRITIC_MARKER):
+            latest = c
+    return latest
+
+
+def _bound_verdict(pr: dict | None) -> dict | None:
+    """`_latest_critic` as `proof_record.reading` takes it, `{"body", "url"}`
+    — read only once `_merge_evidence_gap` found it APPROVE at the merged
+    head (DRE-7949)."""
+    critic = _latest_critic(pr)
+    if critic is None:
+        return None
+    return {"body": critic.get("body") or "", "url": critic.get("url")}
+
+
+def _other_comments(pr: dict | None) -> list:
+    """The body of every comment on the pull request the qa-bot did not write:
+    an acceptance line in one is the reading run's own (DRE-7949)."""
+    return [c.get("body") or "" for c in (pr or {}).get("comments") or [] if not _is_qa_bot(c)]
 
 
 def proof_close_note(
@@ -3020,7 +3056,9 @@ def proof_close_note(
     on it still find it; then the PT
     merge time and the sha the critic approved; then what its criterion
     table held — the rows met, and every row the operator accepted by
-    decision, by its criterion (`proof_record.summary`, DRE-6244). It never
+    decision, by its criterion (`proof_record.summary`, DRE-6244), and every
+    row the checker accepted, by its criterion with the verdict comment that
+    accepted it (DRE-7949). It never
     wears a verdict marker itself (standards/untrusted-content.md), and the
     criteria it quotes are the record's untrusted text, so neither do they.
     """
@@ -3032,7 +3070,7 @@ def proof_close_note(
     import proof_record  # lazy: the leaf the merge gate reads too
 
     table = merge_gate.without_verdict_markers(
-        proof_record.summary(proof_record.reading(record.text)))
+        proof_record.summary(proof_record.reading(record.text, _bound_verdict(pr))))
     merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
     return (
         f"✅ Merged: {pr_url}\n\n"
@@ -3074,7 +3112,7 @@ def merge_close_ruling(
     record = voices = None
     if gap is None:
         record = read_proof_record(pr_url, pr)
-        gap = _record_gap(record)
+        gap = _record_gap(record, pr)
     if gap is None:
         voices = read_card_voices(identifier)
     note = proof_close_note(identifier, title, pr_url, pr, record, voices)

@@ -2006,8 +2006,8 @@
       "anchor": "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look",
       "step": "Report",
       "kind": "undeclared-act",
-      "means": "The re-review dispatch was refused (the repo's agent-fix stub lacks `actions: write`), so the refutation parks for a human instead of promising a look nobody will take.",
-      "why": "The degrade path of `fix-finding-refuted`, and deliberately NOT that act: the act's state is `dispatched` and here nothing was. Giving the failure its own row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — not an emission change. Named here so the debt is countable, and it is expected to be empty in practice: it fires only in a repo whose stub has not been updated, which the README's 'The agent-fix stub's actions: write' section exists to prevent."
+      "means": "The card-side half of `fix-attempt-disputed` on a refused re-review dispatch: GitHub refused the second look (a stub without `actions: write`, a network error, a disabled workflow), so the PR's dispatched receipt is replaced by that hold and the card goes to a person (DRE-3576).",
+      "why": "The CARD-SIDE half of `fix-attempt-disputed`, which this branch composes on the PR side just above it and keeps the `refuted-finding @<sha8>` key in — the registry pins ONE `emits` site per act and that act's card half is already named here for the ordinary dispute. Reusing the act asks the console for nothing new; a row of its own would need a tag of its own, which agent-bureau's console would have to learn first. Two card wordings for one act is a wording question, not a registry one; admitting either as a second `emits` surface is the registry change this row defers."
     },
     {
       "file": ".github/workflows/agent-fix.yml",
