@@ -146,7 +146,22 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    writes no model-attempt receipt: it prints the page to the log and the
    step summary, then `groom_replay.py report`'s one `groom-replay:` line per
    card. A `drain` with `replay` set refuses before any write. The scheduled
-   morning never sets it. The page carries a
+   morning never sets it.
+
+   **The replay cases** (DRE-7971) are the stored proposals a replay is
+   meant for. `scripts/groom_replay_cases.py build` reads every decision a
+   person recorded about a card on a proposal — the console's record and the
+   markers on every standing card's thread, uncollapsed
+   (`groom_memory.all_decisions`) — and keeps one case per proposal and card
+   a person removed with a reason in
+   `tests/fixtures/groom-replay-cases/cases.json`: a Planning card taken off
+   is `off-planning`, a Cancel card kept is `off-cancel`. It writes
+   `replay-set.json` beside it, every case card, and `gate-set.json`, only
+   the cards of cases that pass on `main`, at most 50. A case is never
+   dropped, and its `main` block is written only by the replay gate. One
+   seed case, DRE-7239, ships so the set is never empty.
+
+   The page carries a
    `## Verified against main` section after the Cancel list, and its
    `Verify step:` line is the verify total — cards, dollars and wall clock —
    so the verify total is on the proposal page, never in a separate comment.
