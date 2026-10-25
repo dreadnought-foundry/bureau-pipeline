@@ -474,6 +474,19 @@ def test_an_unsearched_row_is_search_none(tmp_path, capsys):
     assert " search=none " in _line(lines, "c-planning")
 
 
+def test_an_unreadable_targets_file_is_search_none_and_the_same_verdict(tmp_path, capsys):
+    proposal = _proposal(tmp_path, {"DRE-101": "planning", "DRE-102": "planning"})
+    bad = tmp_path / "verify-targets.json"
+    bad.write_text("{", encoding="utf-8")
+    out = tmp_path / "judged.json"
+    code = gate.main(["judge", "--proposal", str(proposal), "--targets", str(bad),
+                      "--cases", str(_cases_file(tmp_path)), "--out", str(out)])
+    said = capsys.readouterr()
+    assert code == 1
+    assert "could not be read" in said.err and said.err.startswith(TAG)
+    assert [c["search"] for c in json.loads(out.read_text())["cases"]] == ["none"] * 3
+
+
 def test_an_unreadable_proposal_is_exit_2(tmp_path, capsys):
     bad = tmp_path / "proposal-verified.json"
     bad.write_text("{", encoding="utf-8")
