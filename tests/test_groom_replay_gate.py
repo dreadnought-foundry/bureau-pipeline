@@ -58,6 +58,17 @@ def test_the_contract_constants():
         assert (ROOT / path).is_file(), f"{path} is listed and does not exist"
 
 
+def test_naming_groomer_as_a_path_is_not_running_it():
+    """`VERIFY_STEP_PATHS` names `groomer.py` and never runs it, so the gate
+    reads no model home and must not be held to carry its token (DRE-6940's
+    `check_model_home_scope.py` reads a list or tuple literal holding a
+    declaring script's `.py` name as a command that runs it)."""
+    import check_model_home_scope as scope
+    found, _ = scope.readers(ROOT / "scripts")
+    assert "groom_replay_gate.py" not in found, found.get("groom_replay_gate.py")
+    assert not hasattr(gate, "READS_MODEL_HOME")
+
+
 def test_the_expected_modules_are_not_replayed_each_with_a_reason():
     for name in ("groom_context", "groom_judgement", "groom_memory",
                  "groom_priority", "groom_readiness"):
