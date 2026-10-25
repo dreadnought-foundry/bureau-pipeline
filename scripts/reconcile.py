@@ -2831,6 +2831,10 @@ def _held_for_operator(card: dict, *, press_only: bool = False) -> tuple[dict | 
 PROOF_WAITING_TAG = "proof-waiting"
 #: The Hand-work clock's late list's tag (DRE-7965).
 HAND_WORK_OVERDUE_TAG = "hand-work-overdue"
+#: The lanes the board read carries beyond `mine`'s (SWEEP_STATES) — Hand-work
+#: — whose `PROOF:` cards `main` also hands `alarm_held_proofs` for its late
+#: list, from the same snapshot (DRE-7965). Its 24-hour alarm keeps `mine`'s.
+LATE_PROOF_LANES = tuple(lane for lane in WATCHDOG_LANES if lane not in SWEEP_STATES)
 #: Who the window's comments are read as when no read named the key's own
 #: user: `open_holds_at` takes the pipeline's note and a person's alike, so
 #: only a comment with no Linear user — an integration's — discharges nothing.
@@ -2937,9 +2941,12 @@ def alarm_held_proofs(cards: list[dict], *, board_read: bool = True) -> None:
     held` when no card is held for the operator.
 
     The late list (DRE-7965). That alarm is the chase, once per hold; what
-    comes after it is `hold_deadline`'s `proof-waiting` due date. Every
-    `PROOF:` card of this repo in `cards`, in any lane but Green Light, is
-    judged on `_proof_wait_clock` — the earliest clock among its qualifying
+    comes after it is `hold_deadline`'s `proof-waiting` due date. `main`
+    hands this `mine` plus this repo's `LATE_PROOF_LANES` cards (Hand-work)
+    off the same snapshot, and the alarm above reads only a card in
+    `SWEEP_STATES`, the lanes `mine` carries, so it reaches what it always
+    did. Every `PROOF:` card of this repo in `cards`, in any lane but Green
+    Light, is judged on `_proof_wait_clock` — the earliest clock among its qualifying
     holds, operator's and event waits alike — and is late when
     `hold_deadline.phase` says so on that clock. A standing card and a
     hand-built card are never listed. After the loop `settle` is called once
@@ -2980,6 +2987,8 @@ def alarm_held_proofs(cards: list[dict], *, board_read: bool = True) -> None:
                 complete = False
                 _write_failures.append(f"{ident} {PROOF_WAITING_TAG} reading: {e}")
                 print(f"ERROR: {PROOF_WAITING_TAG} reading of {ident}: {e}", file=sys.stderr)
+        if lane not in SWEEP_STATES:
+            continue  # read for the late list alone: the alarm keeps `mine`'s lanes
         clock, kind, note = _held_for_operator(card, press_only=lane != REVIEW_LANE)
         if clock is None:
             if note:
@@ -15715,12 +15724,18 @@ def main(
         # Light, which the return branch never reads (DRE-7741). AFTER `board_read` and over `mine`, so the pass reads only
         # the cards that read already narrowed to this repo, with their comment
         # windows, and spends no request: the one shared read stays charged to
-        # `board_read`, and a held or idle read hands it an empty list.
+        # `board_read`, and a held or idle read hands it an empty list. Its
+        # late list (DRE-7965) pays one paged read for a `PROOF:` card whose
+        # window is not its whole thread, from the pass's cache when
+        # `flag_stranded` already paid for it.
         try:
             with _phase("alarm_held_proofs"):
-                # A board that was not read settles no late list (DRE-7965).
+                # The late list reads this repo's Hand-work cards too, off the
+                # same snapshot; a board that was not read settles none (DRE-7965).
                 if board_was_read:
-                    alarm_held_proofs(mine)
+                    alarm_held_proofs(mine + [
+                        c for c in active_cards(LATE_PROOF_LANES)
+                        if card_repo(c) == REPO_SLUG and not automation_card(c)])
                 else:
                     alarm_held_proofs(mine, board_read=False)
         except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep

@@ -47,7 +47,8 @@ comment exactly as before — that comment is the chase — and each now hands
 `settle` its late list once per pass, after its loop:
 
 - **`proof-waiting`** — `alarm_held_proofs`, over this repo's `PROOF:` cards
-  in any lane but Green Light. `_proof_wait_clock` reads a card's open holds
+  the board read carries — In Progress, In Review and Hand-work; Queued is
+  not in that read. `_proof_wait_clock` reads a card's open holds
   over its whole thread: the board read's comment window when it is the whole
   thread, at no request, and one paged read when it is not. A window that is
   not the whole thread is never judged on its own, and a read that fails
