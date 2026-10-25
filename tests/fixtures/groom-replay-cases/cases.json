@@ -1,0 +1,26 @@
+{
+  "schema": "groom-replay-cases/1",
+  "built_at": null,
+  "cases": [
+    {
+      "case": "seed-DRE-7239",
+      "card": "DRE-7239",
+      "proposal_id": null,
+      "standing_card": null,
+      "list": "planning",
+      "decision": null,
+      "reason": null,
+      "reason_label": "seed: known-good — the card's work is merged, so the verify step takes it off the Planning list",
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "source": "seed",
+      "expect": "off-planning",
+      "title": "bureau-pipeline: groom_replay.py turns a stored groom proposal into a run's input and reports where each card ended",
+      "repo": "bureau-pipeline",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    }
+  ]
+}

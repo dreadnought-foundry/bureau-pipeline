@@ -146,7 +146,22 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    writes no model-attempt receipt: it prints the page to the log and the
    step summary, then `groom_replay.py report`'s one `groom-replay:` line per
    card. A `drain` with `replay` set refuses before any write. The scheduled
-   morning never sets it. The page carries a
+   morning never sets it.
+
+   **The replay cases** (DRE-7971) are the stored proposals a replay is
+   meant for. `scripts/groom_replay_cases.py build` reads every decision a
+   person recorded about a card on a proposal — the console's record and the
+   markers on every standing card's thread, uncollapsed
+   (`groom_memory.all_decisions`) — and keeps one case per proposal and card
+   a person removed with a reason in
+   `tests/fixtures/groom-replay-cases/cases.json`: a Planning card taken off
+   is `off-planning`, a Cancel card kept is `off-cancel`. It writes
+   `replay-set.json` beside it, every case card, and `gate-set.json`, only
+   the cards of cases that pass on `main`, at most 50. A case is never
+   dropped, and its `main` block is written only by the replay gate. One
+   seed case, DRE-7239, ships so the set is never empty.
+
+   The page carries a
    `## Verified against main` section after the Cancel list, and its
    `Verify step:` line is the verify total — cards, dollars and wall clock —
    so the verify total is on the proposal page, never in a separate comment.
@@ -667,6 +682,15 @@ and the next card in order takes its slot. The check walks the slots in order,
 so a spare with evidence that no slot reaches is recorded and **not** cancelled
 early — a card outside the morning's set waits its turn (DRE-4727).
 
+**The sweep (DRE-7969), off by default.** `groom_verify.check(…, sweep=True)`
+also reads every other card on offer — the `not-now`, `not-ready` and
+`rewrite` lists less the Planning list, the spares and the Cancel list
+(`sweep_window`) — the same three ways, after the spares. A swept card holds no
+slot: one with evidence goes to the Cancel list whatever the walk's slots did,
+which reverses "waits its turn" for the check's own evidence only, and one
+with an unread source is `unread` and never moved. The groomer does not turn
+it on yet.
+
 **A source it could not read is said, never passed off as clean.** Each card's
 record names the sources that were unread for it; a card with no evidence and
 an unread source is `unread`, never `clean`; a Planning card past the cards the
@@ -683,7 +707,8 @@ every card unread on every source.
 **The record.** `proposal["verification"]` carries, per card, `verdict`
 (`cancel`, `clean`, `unread`, `cancel-stands`, `cancel-rejected`,
 `cancel-kept`), `source` and `evidence`, beside `unread`, `moved_to_cancel`,
-`cancels_rejected` and `not_checked` — so the proof and the audit read them
+`cancels_rejected` and `not_checked`, and `swept` and `swept_to_cancel` (both
+`[]` with the sweep off) — so the proof and the audit read them
 rather than repeating the reads. The record is not in the id's digest; the
 lists it changed are.
 
