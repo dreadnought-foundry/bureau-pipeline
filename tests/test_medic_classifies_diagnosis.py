@@ -132,7 +132,8 @@ class TheVerdictStepTest(unittest.TestCase):
         self.assertEqual("${{ steps.claude.outcome }}", self.env["AGENT_OUTCOME"])
 
     def test_it_carries_the_tokens_its_two_lookups_need(self):
-        self.assertEqual("${{ github.token }}", self.env["GH_TOKEN"])
+        # The bot's: no medic stub grants GITHUB_TOKEN `pull-requests` read (DRE-8004).
+        self.assertEqual("${{ steps.app.outputs.token }}", self.env["GH_TOKEN"])
         self.assertEqual("${{ github.repository }}", self.env["REPO"])
         self.assertEqual("${{ secrets.LINEAR_API_KEY }}", self.env["LINEAR_API_KEY"])
 
@@ -254,7 +255,8 @@ sys.exit(subprocess.call([sys.executable, os.environ["REAL_NEXT_STEP"], *sys.arg
 def _run_verdict(*, verdict="bad-code", report="The tests fail on the branch.",
                  outcome="success", kind="card", target=CARD, attempt="2",
                  retry="true", find_out="", find_rc=0, dump_out="[]",
-                 dump_rc=0, planning_spent=None, decide_rc=None):
+                 dump_rc=0, planning_spent=None, decide_rc=None,
+                 head_branch=f"agent/{CARD}-x"):
     step = _step("verdict")
     values = {
         "steps.claude.outcome": outcome,
@@ -264,9 +266,10 @@ def _run_verdict(*, verdict="bad-code", report="The tests fail on the branch.",
         "needs.classify.outputs.retry": retry,
         # Not a pull-request run, so an empty lookup still reads as no open
         # pull request here (DRE-7925, tests/test_medic_verdict_pr_lookup.py).
-        "github.event.workflow_run.head_branch": f"agent/{CARD}-x",
+        "github.event.workflow_run.head_branch": head_branch,
         "github.event.workflow_run.event": "workflow_dispatch",
         "github.token": "test-token",
+        "steps.app.outputs.token": "test-bot-token",
         "github.repository": "dreadnought-foundry/atlas",
         "secrets.LINEAR_API_KEY": "test-linear-key",
     }
@@ -329,13 +332,25 @@ class TheOpenPullRequestTest(unittest.TestCase):
                       f"--branch agent/{CARD}-x", calls)
 
     def test_merged_empty_and_unreadable_pass_no_flag(self):
-        for find_out, find_rc in ((f"MERGED\t{PR_URL}", 0), ("", 0), ("", 3)):
-            with self.subTest(find_out=find_out, find_rc=find_rc):
-                proc, outputs, calls = _run_verdict(find_out=find_out, find_rc=find_rc)
+        # Unreadable passes no flag only off an agent or repair head (DRE-8004).
+        for find_out, find_rc, head in ((f"MERGED\t{PR_URL}", 0, f"agent/{CARD}-x"),
+                                        ("", 0, f"agent/{CARD}-x"),
+                                        ("", 3, "feature/x")):
+            with self.subTest(find_out=find_out, find_rc=find_rc, head=head):
+                proc, outputs, calls = _run_verdict(find_out=find_out, find_rc=find_rc,
+                                                    head_branch=head)
                 self.assertEqual(0, proc.returncode, proc.stderr)
                 self.assertNotIn("--has-open-pr", _decide_call(calls))
                 self.assertEqual("bad-code", outputs["class"])
                 self.assertEqual("ask-person", outputs["step"])
+
+    def test_unreadable_on_an_agent_or_repair_head_passes_the_flag(self):
+        for head in (f"agent/{CARD}-x", "repair/main-ci"):
+            with self.subTest(head=head):
+                proc, outputs, calls = _run_verdict(find_rc=3, head_branch=head)
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertIn("--has-open-pr", _decide_call(calls))
+                self.assertEqual("fix-path", outputs["step"])
 
     def test_an_unreadable_lookup_warns_with_its_exit_code(self):
         proc, _, _ = _run_verdict(find_rc=3)
