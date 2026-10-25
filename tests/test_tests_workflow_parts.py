@@ -663,7 +663,7 @@ def _cover(names: list[str], of: int, pick=None) -> list[str]:
     return found
 
 
-@pytest.mark.parametrize("walk", _walks())
+@pytest.mark.parametrize("walk", parts.walks(ROOT))
 def test_every_walks_shards_pick_every_case_exactly_once(walk):
     """At the count `walks --json` gives the walk, at a larger planted count,
     and at one shard more than it has cases."""
