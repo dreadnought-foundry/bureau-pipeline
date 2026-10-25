@@ -332,7 +332,9 @@ Since DRE-3651 that read is made as the `bureau-sandbox` seat, not as the fleet:
   dependency that keeps a genuine Dependabot PR filed — chosen
   major-stale so the gate parks it and the fixture persists between
   runs. `@dependabot rebase` / `@dependabot recreate` comments
-  regenerate activity when needed.
+  regenerate activity when needed. The fixture (bureau-harness #1 today)
+  is labeled `harness-fixture` and carries a do-not-close banner, both
+  written by the scenario itself — nobody labels the sandbox by hand.
 
 * For the DRE-2490 adversarial scenarios: **Issues enabled** on the
   sandbox (the carrier the seeded card points the agent at) and this
@@ -393,6 +395,22 @@ untouched head = the receipted route was bypassed — DRE-2049/2071).
 Coverage limits (no conjurable Dependabot PR, no on-demand critic crash,
 App-bot `@dependabot` commands not vendor-guaranteed) are documented in
 the scenario module itself.
+
+**The fixture reopens itself (DRE-7957).** The PR is a semver-major bump
+nobody means to merge, so it reads as stale debt: operator sessions closed
+it on 2026-09-24 and 2026-10-24, and the second close turned `main` red
+and froze `stable` for four hours. Setup now labels the PR it consumes
+`harness-fixture` (only when the label is missing) and puts the banner
+"HARNESS FIXTURE — the integration harness needs this PR open. Do not
+close or merge." at the top of its body. When no Dependabot PR is open it
+finds the closed, unmerged PR carrying that label, restores its head
+branch at the last head sha the PR records, reopens it, re-applies the
+label and logs `[dependabot_flow] reopened fixture #<n>` — every write as
+the worker identity on `ctx.gh`, never a person's. Closing it as a stale
+major is harmless now: the next run brings it back without Dependabot
+re-filing anything. Setup still fails with the `@dependabot recreate`
+guidance when no labeled fixture exists, and names the merge when the
+fixture was merged, since a merged PR cannot reopen.
 
 ## Scenario `lane_contract` (DRE-2726)
 
