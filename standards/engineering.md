@@ -245,15 +245,20 @@ promotes", CEO sign-off recorded on DRE-1925). Agent-authored PRs to this repo
 are the DESIGNED path: cards dispatch, engineer agents build, the critic
 reviews, the gate merges to `main`. The trust boundary is NOT authorship — it
 is (1) the authenticated critic + gate (sha-bound verdicts, author ≠ merger
-enforced by separate App identities), and (2) HUMAN RELEASE PROMOTION: the
-fleet consumes tagged releases (`vN`, paired `pipeline_ref`), never this
-repo's live `main`; only agent-bureau and bureau-pipeline ride `@main` as the
-canary channel. A bad merge here stages a bad NEXT release — it cannot
-silently reprogram the fleet; cutting/re-pointing the release tag is a human
-act and the permanent gate. DRE-2551 added `stable`, a moving tag this repo
-advances by itself on every harness-proven commit on `main` — no product repo
-pins it, and the `vN` cut it stages is still the human act described here
-(`docs/self-hosting.md`).
+enforced by separate App identities), and (2) THE PROVEN CHANNEL: the fleet
+consumes `@stable` (paired `pipeline_ref: stable`, required since DRE-2689),
+never this repo's live `main` — only agent-bureau and bureau-pipeline ride
+`@main` as the canary channel. `stable` is a moving tag this repo advances by
+itself (DRE-2551), only to a commit on `main` carrying a green
+`integration-harness` stamp and only once agent-bureau's mirror tests accept
+it (DRE-6496), and `release-gate.yml` validates every move. The fleet has
+ridden it since DRE-2553 (2026-08-23), so a bad merge here reaches the fleet
+only by passing that proof. What stays a human act is `CHANNEL_HOLD`, the
+repository variable that pauses the channel, and the `vN` cut, which nothing
+rides. Which repo is on which ref is computed by agent-bureau's
+`make check-channel-fleet`, never written here (`docs/self-hosting.md`).
+Until DRE-2553 this section named the hand-cut tag as the fleet's gate, and
+that held while the fleet rode it (DRE-2709).
 
 Reviewers: verify the verdict binds the head sha and the gate identities held.
 Do NOT block on agent authorship — that convention is retired.
