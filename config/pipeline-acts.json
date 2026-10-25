@@ -1593,6 +1593,13 @@
       "why": "Nothing moved and nothing was recovered, so there is no state change for a trailer to announce. The batch is exactly as the CEO left it and the reason sits in the thread beside the approval it refused, which is where the person who wrote that approval reads it. One writer at the one place every refusal passes through, so a refusal cannot arrive in a shape the console does not read."
     },
     {
+      "file": "scripts/groom_scorecard.py",
+      "anchor": "lops.cmd_comment(card, body)",
+      "kind": "not-an-act",
+      "means": "The groomer's week counted, on the standing groom card in one comment: the cards the week's answered proposals put in front of a person, the ones that person removed by reason, and what became of every Cancel row, with a fenced JSON block a reader parses (DRE-7970).",
+      "why": "A scorecard is a count of decisions people already made, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `📊 groom-scorecard: <start>..<end>`, which no decision reader matches. One call site, once per week."
+    },
+    {
       "file": "scripts/linear_ops.py",
       "anchor": "agent_marker.actor_line(role)",
       "kind": "not-an-act",

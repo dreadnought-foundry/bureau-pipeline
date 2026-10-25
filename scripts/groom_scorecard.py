@@ -50,10 +50,16 @@ Every read goes through a reader that already exists, and none is copied:
     `removed_by_reason` groups the removals by reason, count first.
   * `removed_share` is `removed / proposed` to four places, or null when
     nothing was proposed.
-  * `cancel` reads every Cancel row of every proposal in the week: `agreed`
-    when its proposal's drained record reads the row `cancelled`, `kept` when
-    it reads `held back`, `unanswered` when no drained record names the
-    proposal. `rows` is the three together.
+  * `cancel` reads every Cancel row of every proposal in the week, and puts
+    each in exactly one of three: `agreed` when its proposal's drained record
+    reads the row `cancelled` or `already gone` (nothing held it back; the
+    drain found it out of the lane already); `kept` when the record reads it
+    any other way (`held back`, `added`, `refused`) or names no row for it,
+    or when the proposal is answered and no record exists (declined, or
+    decided card by card and not drained); `unanswered` when the proposal is
+    not answered, so `unanswered` is the Cancel rows of exactly the proposals
+    marked `answered: false`. `rows` is every Cancel row, so the three always
+    sum to it.
 
 ## Posting
 
@@ -61,6 +67,9 @@ Every read goes through a reader that already exists, and none is copied:
 pipeline's own Linear identity. The thread it scored is read first: a comment
 for the same week is never written twice, and a second run prints
 `groom-scorecard: already posted <start>..<end>` on stdout and writes nothing.
+When the card's thread is full, `cmd_comment` returns Linear's comment-cap
+condition rather than raising: the run prints a `not posted:` line naming it
+on stderr and exits 1.
 The comment opens with `📊 groom-scorecard:`, which no decision reader in
 `groomer.py` matches, so it can never be read as a decision.
 
@@ -106,8 +115,11 @@ REMOVING_DECISIONS = {"planning": ("not-doing", "hold", "cancel"),
 #: The markers that take a row off, on either list.
 REMOVING_MARKERS = ("excluded", "held")
 
-AGREED = "cancelled"
-KEPT = "held back"
+#: The drained outcomes of a Cancel row the person agreed with: nothing held
+#: it back, and the drain cancelled it or found it out of the lane already.
+#: Every other outcome — `held back`, `added`, `refused`, or no row — left the
+#: card uncancelled: kept.
+AGREED = ("cancelled", "already gone")
 
 # A row of a drained record's table: `| <order or —> | DRE-N | <outcome> |
 # <why> |`, as `groomer.drained_record` writes it. The header and the divider
@@ -208,15 +220,17 @@ def read_thread(records: list[dict], standing_card: str) -> dict:
 # --------------------------------------------------------------------------- #
 
 def score(records: list[dict], *, standing_card: str, week_ending: str,
-          door: dict | None, door_problem: str | None = None) -> dict:
+          door: dict | None, door_problem: str | None = None,
+          thread: dict | None = None) -> dict:
     """The week's scorecard, the dict the contract names.
 
     `records` is the standing card's whole thread, vouched; `door` is
     `bureau_read.groom_removals()`'s answer, or None when `door_problem` says
-    why it could not be read.
+    why it could not be read. `thread` is `read_thread(records,
+    standing_card)` when the caller has read it already.
     """
     start, end = week_of(week_ending)
-    thread = read_thread(records, standing_card)
+    thread = thread or read_thread(records, standing_card)
     week = [p for p in thread["proposals"] if p["posted_at"]
             and start <= groomer.pacific_day(p["posted_at"]) <= end]
     ids = {p["id"] for p in week}
@@ -274,13 +288,11 @@ def score(records: list[dict], *, standing_card: str, week_ending: str,
     for p in week:
         outcomes = thread["drained"].get(p["id"])
         for r in p["cancel"]:
-            if outcomes is None:
-                cancel["unanswered"] += 1
-            elif outcomes.get(r["identifier"]) == AGREED:
-                cancel["agreed"] += 1
-            elif outcomes.get(r["identifier"]) == KEPT:
-                cancel["kept"] += 1
-    cancel["rows"] = cancel["agreed"] + cancel["kept"] + cancel["unanswered"]
+            cancel[_cancel_bucket(outcomes, r["identifier"],
+                                  p["id"] in answered)] += 1
+    cancel["rows"] = sum(len(p["cancel"]) for p in week)
+    assert cancel["agreed"] + cancel["kept"] + cancel["unanswered"] \
+        == cancel["rows"], cancel
 
     return {
         "schema": SCHEMA, "week_start": start, "week_end": end,
@@ -295,6 +307,15 @@ def score(records: list[dict], *, standing_card: str, week_ending: str,
         "memory_source": "fallback" if door_problem else "record",
         "door_problem": door_problem,
     }
+
+
+def _cancel_bucket(outcomes: dict | None, card: str, answered: bool) -> str:
+    """Which of `agreed`, `kept` and `unanswered` one Cancel row is. An
+    answered proposal with no drained record — declined, or decided card by
+    card and not drained — cancelled nothing: kept."""
+    if outcomes is None:
+        return "kept" if answered else "unanswered"
+    return "agreed" if outcomes.get(card) in AGREED else "kept"
 
 
 def _reason(taking: list[dict], labels: dict, keys: dict) -> tuple[str | None, str]:
@@ -423,22 +444,29 @@ def run(lops, *, card: str, week_ending: str, post: bool = False,
     since = datetime.combine(date.fromisoformat(start), datetime.min.time(),
                              tzinfo=_pacific_zone()).astimezone(timezone.utc)
     answer, problem = read_door(since.strftime("%Y-%m-%dT%H:%M:%SZ"))
-    result = score(records, standing_card=card, week_ending=week_ending,
-                   door=answer, door_problem=problem)
     thread = read_thread(records, card)
+    result = score(records, standing_card=card, week_ending=week_ending,
+                   door=answer, door_problem=problem, thread=thread)
     body = render_comment(result, approved=thread["approved"])
     if out:
         with open(out, "w", encoding="utf-8") as fh:
             json.dump(result, fh, indent=2, ensure_ascii=False)
             fh.write("\n")
+    # `cmd_comment` returns the comment-cap condition rather than raising
+    # (DRE-3343): a scorecard that did not land is a failed run.
+    refused = None
     if post:
         if header(start, end) in thread["scorecards"]:
             print(f"{LINE_TAG} already posted {start}..{end}")
         else:
-            lops.cmd_comment(card, body)
+            refused = lops.cmd_comment(card, body)
     else:
         print(body)
     print(score_line(result), file=sys.stderr)
+    if refused:
+        print(f"not posted: the scorecard for {start}..{end} could not be "
+              f"written on {card} — {refused}", file=sys.stderr)
+        return 1
     return 0
 
 
