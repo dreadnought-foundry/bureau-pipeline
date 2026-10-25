@@ -179,6 +179,7 @@ class DependabotFlow(framework.Scenario):
     # ── setup: a clean sandbox + the vendor's PR located ─────────────────
     def setup(self, ctx):
         ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
+        ctx.state["reopened"] = False
         pr = find_real_dependabot_pr(ctx.gh.list_open_prs(ctx.repo))
         if pr is None:
             pr = self._reopen_fixture(ctx)
@@ -202,6 +203,12 @@ class DependabotFlow(framework.Scenario):
         `ctx.gh`, the harness's own identity — the sandbox is public, so a
         person's name must never appear on it. Raises NO_PR_GUIDANCE when no
         labeled fixture exists, and names the merge when it was merged.
+
+        The reopen is itself a `pull_request` event (the sandbox stub lists
+        `reopened`) whose actor is the worker bot, not dependabot[bot], so
+        the reusable reviews it for real. `ctx.state["reopened"]` is how
+        verify() knows to wait that review out and to accept the verdict it
+        posts with no dispatch receipt before it.
         """
         fixture = find_closed_fixture(ctx.gh.list_prs(ctx.repo, state="closed"))
         if fixture is None:
@@ -216,6 +223,7 @@ class DependabotFlow(framework.Scenario):
         if ref not in ctx.gh.matching_refs(ctx.repo, ref):
             ctx.gh.create_ref(ctx.repo, ref, sha)
         ctx.gh.reopen_pr(ctx.repo, number)
+        ctx.state["reopened"] = True
         # Re-applied although the fixture was found by it: the reopen is the
         # moment it was just closed as debt, so it is marked again then.
         ctx.gh.add_labels(ctx.repo, number, [FIXTURE_LABEL])
@@ -268,8 +276,19 @@ class DependabotFlow(framework.Scenario):
     # ── verify: self-skip clean → receipted route → bounded receipts ─────
     def verify(self, ctx):
         number = ctx.state["number"]
+        reopened = ctx.state.get("reopened", False)
         qa_gh = ctx.gh_qa or ctx.gh
         tracker = {"head": ctx.state["head"], "state": "none", "detail": ""}
+        checks_timeout = CHECKS_TIMEOUT
+        if reopened:
+            # The reopen started a real review as the worker bot (see
+            # _reopen_fixture): one of the runs below takes a critic's time,
+            # not a self-skip's seconds.
+            checks_timeout += ctx.verdict_timeout
+            ctx.log(
+                f"[{self.name}] fixture reopened this run — waiting out the "
+                "review the reopen started (worker-bot actor, normal secrets)"
+            )
 
         # 1. SELF-SKIP: the dependabot-actor pull_request review run on
         # this head must have concluded — skipped, never red.
@@ -283,7 +302,7 @@ class DependabotFlow(framework.Scenario):
             review_runs = ctx.wait(
                 f"the review check runs on {tracker['head']} to conclude",
                 poll_review_runs,
-                timeout=CHECKS_TIMEOUT,
+                timeout=checks_timeout,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -380,6 +399,13 @@ class DependabotFlow(framework.Scenario):
                     "head — expected: its verdict came from the qa-actor "
                     "synchronize review (DRE-2037 path), not the dispatch "
                     "route"
+                )
+            elif reopened:
+                ctx.log(
+                    f"[{self.name}] no dispatch receipt on the reopened "
+                    "fixture's head — expected: its verdict came from the "
+                    "review the harness's own reopen started, not the "
+                    "dispatch route (DRE-7957)"
                 )
             else:
                 raise ScenarioFailure(

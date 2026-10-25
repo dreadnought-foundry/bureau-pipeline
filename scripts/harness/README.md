@@ -412,6 +412,16 @@ re-filing anything. Setup still fails with the `@dependabot recreate`
 guidance when no labeled fixture exists, and names the merge when the
 fixture was merged, since a merged PR cannot reopen.
 
+The reopen is itself a `pull_request` event. The sandbox's review stub
+fires on `reopened`, and the reusable skips only actor `dependabot[bot]`,
+so a heal costs one real review run as the worker bot. Verify waits that
+run out — the self-skip check gets the critic's budget on top of its own
+— and accepts the verdict it posts with no dispatch receipt before it.
+That tolerance holds only on the run that reopened the fixture; on any
+other run a receipt-less verdict still fails. A heal interrupted between
+the branch restore and the reopen is retried on the next run, which finds
+the branch already there and skips straight to the reopen.
+
 ## Scenario `lane_contract` (DRE-2726)
 
 The only scenario that looks at the LINEAR board rather than the sandbox, and
