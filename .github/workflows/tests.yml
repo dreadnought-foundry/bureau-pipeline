@@ -321,16 +321,21 @@ jobs:
           FAILED: ${{ steps.logs.outputs.failed }}
           HEAD_SHA: ${{ github.sha }}
         run: |
+          # Every log first, then every `--job` in the same order: `refresh`'s
+          # logs are one positional run, so a `--job` between two logs ends
+          # it and the next log is an unrecognized argument (DRE-8026).
+          logs=()
           args=()
           for job in $JOBS; do
-            args+=("$RUNNER_TEMP/part-logs/job-$job.log" --job "$job")
+            logs+=("$RUNNER_TEMP/part-logs/job-$job.log")
+            args+=(--job "$job")
           done
           # The parts `coverage-only` let through red: the record's `method`
           # names them instead of saying every part was green (DRE-7726).
           for job in $FAILED; do
             args+=(--coverage-failed-job "$job")
           done
-          python3 scripts/unit_test_parts.py refresh "${args[@]}" --run "$RUN_ID" --head "$HEAD_SHA"
+          python3 scripts/unit_test_parts.py refresh "${logs[@]}" "${args[@]}" --run "$RUN_ID" --head "$HEAD_SHA"
           git diff --stat
       # The record and no other path, proved before the commit, onto this
       # run's commit of main. Forced, so the branch is always one commit on
