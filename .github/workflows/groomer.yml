@@ -818,7 +818,8 @@ jobs:
       # `target/`. At `main` — the ref `target/` is read at — and never
       # `.bureau-pipeline/`, which is at `pipeline_ref` (the pull request's
       # own head on the replay gate) and holds the scripts that judge the
-      # answer. No `token:`: the job's own `github.token` is bureau-pipeline's,
+      # answer — the one checkout here `scripts/check_pipeline_ref.py` lets
+      # skip `pipeline_ref` (`READ_AT_MAIN`). No `token:`: the job's own `github.token` is bureau-pipeline's,
       # since every caller of this workflow is a workflow here granting
       # `contents: read`, so no token is minted for it. Only once the card's
       # repo checked out, and never for a bureau-pipeline card, which already
