@@ -1365,8 +1365,9 @@ jobs:
       # when `card_pr.py find` exits 0 and its state is exactly OPEN: `find`
       # counts MERGED too, and a merged pull request leaves the fix loop
       # nothing to work on. A lookup that fails warns with its exit code; on
-      # which heads it passes the flag is DRE-8004's, below. `find` is given the failed run's head branch, so the
-      # exact `--head` lookup runs before the search index's `head:agent/DRE-N`,
+      # which heads it passes the flag is DRE-8004's, below. `find` is given
+      # the failed run's head branch, so the exact `--head` lookup runs before
+      # the search index's `head:agent/DRE-N`,
       # and the step logs what `find` printed (DRE-7925: on 2026-10-24 the
       # search came back empty for DRE-7910's and DRE-7847's open pull
       # requests, and both cards were asked of a person). An empty answer on a
