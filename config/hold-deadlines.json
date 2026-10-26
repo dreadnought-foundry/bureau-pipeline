@@ -17,7 +17,7 @@
     "chase_after_hours": null,
     "due_hours": 24,
     "chase": "None of its own: the chase is the sweep's existing work-never-landed notice, on that notice's own clock.",
-    "clock": "The clock starts at the newest commit on the branch that no pull request has ever been opened for, the same time the work-never-landed notice measures its idle minutes from.",
+    "clock": "The clock starts at the newest commit on the branch that no pull request has ever been opened for, the same time the work-never-landed notice measures its idle minutes from, and for a person's card with no branch at all at the createdAt of its work-never-landed no-branch notice (DRE-7966).",
     "why": "Work with no pull request passes no gate and closes no card, and it stood still for 1,060.6 hours in one week (DRE-7960); a day is long enough to open the pull request for work somebody meant to land."
   }
 }
