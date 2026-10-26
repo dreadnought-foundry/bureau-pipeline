@@ -146,7 +146,22 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    writes no model-attempt receipt: it prints the page to the log and the
    step summary, then `groom_replay.py report`'s one `groom-replay:` line per
    card. A `drain` with `replay` set refuses before any write. The scheduled
-   morning never sets it.
+   morning never sets it. A replay's `groom` and `post` jobs queue in
+   concurrency groups of their own run, so a replay never displaces the
+   morning's run in `groomer` or `groomer-post`, nor the morning a replay
+   (DRE-7974).
+
+   **The replay gate** (DRE-7974), `.github/workflows/groom-replay-gate.yml`,
+   runs on every pull request. Its `reach` job runs `groom_replay_gate.py
+   reach` over the pull request's base and head. When the change touches the
+   verify step and `gate-set.json` holds cards, `replay` calls this repo's
+   own `groomer.yml` with `replay` set to the gate set and `pipeline_ref` the
+   pull request's merge ref, and `judge` runs `groom_replay_gate.py judge`
+   over the verified proposal. A case that passes on `main` and fails on the
+   change turns `judge` red, so the merge gate holds the pull request. Every
+   other pull request gets a green `reach` and two skipped jobs. The read door
+   refuses a pull request's token, so the gate's problem search is Linear's,
+   and each `judge` line says `search=linear`.
 
    **The replay cases** (DRE-7971) are the stored proposals a replay is
    meant for. `scripts/groom_replay_cases.py build` reads every decision a

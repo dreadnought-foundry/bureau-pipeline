@@ -1,0 +1,154 @@
+# The replay gate (DRE-7974): a change to the verify step that fails a replay
+# case is not merged.
+#
+# Every pull request runs `reach`. When the change touches the verify step
+# (`groom_replay_gate.VERIFY_STEP_PATHS`) and the gate set
+# (`tests/fixtures/groom-replay-cases/gate-set.json`, DRE-7971: the cards of
+# the cases that pass on `main`) holds cards, `replay` calls this repo's own
+# `groomer.yml` over that set — the change's own scripts and brief, DRE-2689's
+# rule — and `judge` says where each case ended. A case that passes on `main`
+# and fails on the change turns `judge` red, and the merge gate merges only
+# when every check run on the head is green (`GREEN_CONCLUSIONS` in
+# `scripts/merge_gate.py`), so that pull request is held with no
+# branch-protection change. A pull request that does not touch the verify
+# step gets a green `reach` and two skipped jobs, which the gate counts as
+# green.
+#
+# NO `paths:` FILTER, on purpose: a filtered-out pull request gets no check
+# run at all (standards/engineering.md, CI rule 1). `reach` decides instead.
+#
+# THE DOOR IS NEVER ASKED HERE. The console's read door refuses a
+# `pull_request` run's OIDC token by design, and `bureau_read._get` refuses
+# every read on this event before a token is minted (`REFUSED_EVENTS`). So
+# the Groom job's problem search goes to Linear and says so three times: the
+# row's `matched_work.source: "linear"` in `verify-targets.json`, the
+# `read-door:` exit line in the Groom log, and `search=linear` on each of
+# `judge`'s lines. The Sunday replay on `main` (DRE-7975) searches through the
+# door; both search the same Linear cards.
+#
+# THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
+#   Q1 — a person or the bot pool opens or pushes the pull request; the
+#        verify legs' `allowed_bots` in groomer.yml already admits the pool,
+#        the qa-bot and `github-actions`. A Dependabot pull request touches no
+#        verify-step path, so `reach` is false and nothing calls a model.
+#   Q2 — a same-repo pull request gets the repository's secrets, so the
+#        credentials are the ones `CLAUDE_AUTH_MODE` selects, through
+#        `claude-code-action`, as on the morning run.
+#   Q3 — a push makes a new run on the new head and cancels the stale one
+#        (`concurrency` below); reopening runs again.
+#   Q4 — one reusable call per run, so the artifact names do not collide; one
+#        verify leg per gate-set card, at most `GATE_MAX_CARDS` (50), below
+#        the 256-leg matrix ceiling.
+#   Q5 — a crashed verify leg leaves its card with no verify record, which
+#        `judge` reads as `not judged`, never a pass; the leg's job is red and
+#        a re-run re-runs it. A replay writes no receipt and posts nothing
+#        (DRE-7239, DRE-7242), so nothing blocks the re-run.
+#
+# COST: about $0.36 a gate-set card (docs/groomer-verify-proof-2026-10.md),
+# only on a pull request that touches the verify step — at most about $18 a
+# run at the 50-card ceiling.
+#
+# tests/test_groom_replay_gate_wiring.py pins this file.
+name: Groom Replay Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Exactly what self-groomer.yml grants: groomer.yml is a reusable workflow
+# whose permissions live in the calling stub. `id-token: write` lets its
+# `check-ref` step mint a token and compare its ref rather than skip the
+# comparison; it never lets a verify leg read the door (above). No job widens
+# these.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: groom-replay-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Does the change reach the verify step, and how many cards does the gate
+  # set hold? No `if`, so every pull request gets this check run. A diff or a
+  # gate set it cannot read is `reached=true` with the reason (fail open).
+  reach:
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    outputs:
+      reached: ${{ steps.reach.outputs.reached }}
+      cases: ${{ steps.reach.outputs.cases }}
+    steps:
+      # The whole history: `git diff <base>...<head>` needs both commits and
+      # their merge base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Does the change reach the verify step?
+        id: reach
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/groom_replay_gate.py reach --base "$BASE" --head "$HEAD"
+
+  # The replay, through the change's own groomer.yml. `pipeline_ref` is
+  # `github.ref` — `refs/pull/<n>/merge` — and never `github.sha`: for a local
+  # call on a `pull_request` run the OIDC token's `job_workflow_ref` names the
+  # caller's ref, and groomer.yml's `check-ref` refuses a `pipeline_ref` that
+  # differs from it. That ref names the same merge commit `github.sha` does.
+  #
+  # `mode: propose` with `replay` set re-checks the stored gate set, posts to
+  # no card and writes no receipt; `judgement: "off"` asks no ranked read.
+  # QUOTED: YAML 1.1 reads a bare `off` as the boolean False.
+  replay:
+    needs: reach
+    if: needs.reach.outputs.reached == 'true' && needs.reach.outputs.cases != '0'
+    uses: ./.github/workflows/groomer.yml
+    with:
+      pipeline_ref: ${{ github.ref }}
+      mode: propose
+      judgement: "off"
+      capacity: "20"
+      replay: tests/fixtures/groom-replay-cases/gate-set.json
+      intake_hold: ${{ vars.INTAKE_HOLD }}
+    secrets: inherit
+
+  # The verdict. `!cancelled()` beside the same condition: a verify leg that
+  # crashed fails the replay, but the post job still writes the verified
+  # proposal, and its card is judged `not judged` here rather than left
+  # unsaid. Exits as `judge` exits, so a regressed case fails this job and
+  # nothing else does.
+  judge:
+    needs: [reach, replay]
+    if: ${{ !cancelled() && needs.reach.outputs.reached == 'true' && needs.reach.outputs.cases != '0' }}
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download the verified proposal
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: groom-proposal-verified
+          path: replay/verified
+
+      # The targets as the Groom job wrote them: each row's
+      # `matched_work.source` is the search that card was judged on.
+      - name: Download the proposal and its targets
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: groom-proposal
+          path: replay/proposal
+
+      - name: Judge the replay
+        run: python3 scripts/groom_replay_gate.py judge --proposal replay/verified/proposal-verified.json --targets replay/proposal/verify-targets.json --out result.json
+
+      - name: Keep the result
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: groom-replay-gate
+          path: result.json
+          if-no-files-found: warn
+          retention-days: 30
