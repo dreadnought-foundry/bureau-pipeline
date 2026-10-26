@@ -1364,9 +1364,10 @@ jobs:
       # say `false` — the resume step's own condition. `--has-open-pr` only
       # when `card_pr.py find` exits 0 and its state is exactly OPEN: `find`
       # counts MERGED too, and a merged pull request leaves the fix loop
-      # nothing to work on. A lookup that fails warns with its exit code and
-      # passes no flag. `find` is given the failed run's head branch, so the
-      # exact `--head` lookup runs before the search index's `head:agent/DRE-N`,
+      # nothing to work on. A lookup that fails warns with its exit code; on
+      # which heads it passes the flag is DRE-8004's, below. `find` is given
+      # the failed run's head branch, so the exact `--head` lookup runs before
+      # the search index's `head:agent/DRE-N`,
       # and the step logs what `find` printed (DRE-7925: on 2026-10-24 the
       # search came back empty for DRE-7910's and DRE-7847's open pull
       # requests, and both cards were asked of a person). An empty answer on a
@@ -1374,9 +1375,24 @@ jobs:
       # pull-request run always has a pull request, so the lookup missed it
       # and the card is not put in front of a person on that ground. `find`
       # drops a pull request closed without merging, so the step first asks
-      # the exact head for one: a closed pull request, or a read that fails,
-      # passes no flag. Any other run's empty answer still means no open pull
-      # request. Pinned by tests/test_medic_verdict_pr_lookup.py.
+      # the exact head for one: a closed pull request passes no flag. Any other
+      # run's empty answer still means no open pull request.
+      #
+      # A lookup that FAILS is "could not tell", never "none" (DRE-8004). On
+      # 2026-10-25 medic run 40212007014 moved DRE-2657 to Green Light while
+      # its PR #4175 was open: the reads ran on the workflow's own
+      # GITHUB_TOKEN, which holds only what the product repo's medic stub
+      # grants, and no stub grants `pull-requests` read, so `gh pr list
+      # --head` answered "Resource not accessible by integration", `find`
+      # exited 3, and the step decided as if there were no pull request. Its
+      # pull-request reads now run on the bot token this job mints (`steps.app`),
+      # as the `fix-path` receipt's does. And on an `agent/*` or `repair/*`
+      # head, a `find` that exits non-zero, or a closed read that fails,
+      # warns and passes the flag: those branches are the fix loop's, it
+      # already reaches a red agent pull request, and a person is not asked on
+      # a lookup that never answered. Any other head's failed lookup still
+      # warns with its exit code and passes no flag. Pinned by
+      # tests/test_medic_verdict_pr_lookup.py.
       # `--planning-spent` only for `bad-card`, read off the card's whole
       # thread in Linear (`dump-comments`, then `planning-spent`)
       # — not the snapshot, which sat in the agent's workspace. `true`,
@@ -1418,7 +1434,8 @@ jobs:
           TARGET: ${{ steps.target.outputs.target }}
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RETRY: ${{ needs.classify.outputs.retry }}
-          GH_TOKEN: ${{ github.token }}
+          # The bot, not GITHUB_TOKEN: no medic stub grants `pull-requests` read (DRE-8004).
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # env, not inline (DRE-1996): the branch name is agent-influenced text.
@@ -1445,7 +1462,12 @@ jobs:
             FIRST=${FOUND%%$'\n'*}
             echo "card_pr.py find ${TARGET} --branch ${HEAD_BRANCH:-(none)} exited ${RC} and printed: ${FIRST:-(nothing)}"
             if [ "$RC" -ne 0 ]; then
-              echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET}, so the medic decides as if the card has no open pull request."
+              if [[ "$HEAD_BRANCH" == agent/* || "$HEAD_BRANCH" == repair/* ]]; then
+                echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET} on ${HEAD_BRANCH}, so the lookup failed and the medic does not decide that the card has no open pull request."
+                FLAGS+=(--has-open-pr)
+              else
+                echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET}, so the medic decides as if the card has no open pull request."
+              fi
             elif [ "${FIRST%%$'\t'*}" = OPEN ]; then
               FLAGS+=(--has-open-pr)
             elif [ -z "$FOUND" ] && [ "$TRIGGER_EVENT" = pull_request ] && [[ "$HEAD_BRANCH" == agent/* ]]; then
@@ -1458,7 +1480,8 @@ jobs:
                 echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, but the failed run is a pull_request run on ${HEAD_BRANCH}, and a pull-request run always has a pull request, so the medic does not decide that the card has no open pull request."
                 FLAGS+=(--has-open-pr)
               elif [ "$CLOSED" = unread ]; then
-                echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, and the medic could not read whether the pull request on ${HEAD_BRANCH} was closed, so it decides as if the card has no open pull request."
+                echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, and the read of whether the pull request on ${HEAD_BRANCH} was closed failed, so the medic does not decide that the card has no open pull request."
+                FLAGS+=(--has-open-pr)
               fi
             fi
             if [ "$CLASS" = bad-card ]; then
@@ -1792,7 +1815,8 @@ jobs:
           steps.waiting.outputs.waiting != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
+          # The bot, for the `fix-path` pull-request read (DRE-8004).
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           TARGET: ${{ steps.target.outputs.target }}
           CLASS: ${{ steps.verdict.outputs.class }}
