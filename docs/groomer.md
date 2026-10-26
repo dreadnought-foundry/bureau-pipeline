@@ -1719,7 +1719,7 @@ digests the batch alone, so answering a decline never retires an approval.
 
 ## The cadence, and its stated cost
 
-Three decisions, in order, and the one rule they leave standing: **a clock may
+Four decisions, in order, and the one rule they leave standing: **a clock may
 reach `propose`, and nothing but the CEO's Approve reaches `drain`.**
 
 - **D5 (DRE-2683, approved 2026-08-23):** on demand, until the groomer's
@@ -1739,6 +1739,18 @@ reach `propose`, and nothing but the CEO's Approve reaches `drain`.**
   target, and the verify step its epic adds to the groom puts another four to
   six minutes on the run. The crons moved from a quarter past the hour to the
   hour; the 06:30 briefing target is unchanged.
+- **The weekly replay (DRE-6648, green-lit 2026-10-25, built by DRE-7975):**
+  D5 is widened by exactly one more run — the Sunday job,
+  `.github/workflows/groom-week.yml` ([groom-week.md](groom-week.md)), whose
+  `replay-main` job replays the stored replay set on `main` once a week. It
+  calls the groomer with the literals `mode: propose`, `judgement: "off"`,
+  `pipeline_ref: main` and
+  `replay: tests/fixtures/groom-replay-cases/replay-set.json`, and with no
+  `card`. A replay posts to no card, writes no receipt, moves no card and
+  drains nothing: the `post` job posts to no card whatever `card` says, and a
+  drain with `replay` set refuses before any write (DRE-7239, DRE-7242). The
+  CEO's green light of DRE-6648, the day it entered In Progress, is that
+  decision.
 
 So `.github/workflows/self-groomer.yml` carries three triggers:
 
@@ -1771,7 +1783,9 @@ So `.github/workflows/self-groomer.yml` carries three triggers:
   Every input of the scheduled job is a literal or a repository variable, so
   nothing a person or a payload sets can reach it, and `mode` is the literal
   `propose`. `tests/test_groomer_wiring.py` walks every scheduled workflow in
-  the repo and fails if any other scheduled job calls `groomer.yml`.
+  the repo and fails if any other scheduled job calls `groomer.yml` — but the
+  weekly replay, `groom-week.yml`'s `replay-main`, held to its four literals
+  and to passing no `card`.
 
 The cost D5 stated — on demand means it runs when someone remembers, and
 anything relying on remembering eventually does not happen — no longer applies
