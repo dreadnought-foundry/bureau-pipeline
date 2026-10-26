@@ -24,9 +24,12 @@ What this file holds shut:
   * the `week` step's shell, driven with stub scripts: a skipped or failed
     replay still scores, never records, and a failed one says so;
   * the pull request step, driven against a throwaway origin and a stub `gh`:
-    only the cases' paths are staged, the branch is `groom-week/<week_end>`, a
-    branch left by a crash is reused, and an open pull request is updated,
-    never duplicated.
+    only the cases' paths are staged, the branch is
+    `agent/groom-week-<week_end>`, a branch left by a crash is reused, and an
+    open pull request is updated, never duplicated;
+  * that branch is one the pipeline owns: `reconcile.pipeline_owns` and
+    `fix_eligible` say yes, and `evaluate_and_merge.sh`'s branch case matches
+    it, so the merge gate and the fix loop act on the week's pull request.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_week_wiring.py -q
 """
@@ -46,8 +49,10 @@ import yaml
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 sys.path.insert(0, str(ROOT / "scripts"))
+os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import groom_replay_gate  # noqa: E402
+import reconcile  # noqa: E402
 
 WEEK = "groom-week.yml"
 CRON = "11 10 * * 0"
@@ -482,13 +487,38 @@ def test_the_pull_request_step_stages_only_the_cases_and_looks_before_it_creates
     run = step["run"]
     adds = re.findall(r"git add\b[^\n]*", run)
     assert adds == [f"git add -- {CASES_DIR}/"]
-    assert 'BRANCH="groom-week/$WEEK_END"' in run
+    assert 'BRANCH="agent/groom-week-$WEEK_END"' in run
     listed = run.index('gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open')
     assert listed < run.index("gh pr create")
     assert listed < run.index("gh pr edit")
     assert "--base main" in run
     assert "git push origin HEAD:main" not in run
     assert re.search(r"git push\b[^\n]*refs/heads/\$BRANCH", run)
+
+
+
+def _week_branch() -> str:
+    """The branch the pull request step creates, for the week ending 2026-10-24."""
+    run = _step(_job("week"), PR_STEP)["run"]
+    found = re.search(r'^\s*BRANCH="([^"$]*)\$WEEK_END"\s*$', run, re.M)
+    assert found, "the pull request step assigns no BRANCH from $WEEK_END"
+    return found.group(1) + "2026-10-24"
+
+
+def test_the_week_s_branch_is_one_the_pipeline_owns():
+    # A branch outside the pipeline's set is skipped by the merge gate and
+    # ignored by the fix loop, so the week's pull request would never merge.
+    branch = _week_branch()
+    assert reconcile.pipeline_owns(branch), branch
+    assert reconcile.fix_eligible(branch), branch
+    script = (ROOT / "scripts" / "evaluate_and_merge.sh").read_text()
+    case = re.search(r'^case "\$BRANCH" in ([^\n]*?)\) ;; \*\) echo "not an agent branch',
+                     script, re.M)
+    assert case, "evaluate_and_merge.sh's branch case moved"
+    done = subprocess.run(
+        ["bash", "-c", f'case "$1" in {case.group(1)}) echo owned;; *) echo skip;; esac',
+         "_", branch], capture_output=True, text=True)
+    assert done.stdout.strip() == "owned", branch
 
 
 GH_STUB = """#!/usr/bin/env python3
@@ -583,7 +613,7 @@ def test_a_week_with_changes_opens_one_pull_request_from_its_branch(tmp_path):
     assert done.returncode == 0, done.stderr
     assert [c[:2] for c in calls] == [["pr", "list"], ["pr", "create"]]
     create = calls[1]
-    assert _arg(create, "--head") == "groom-week/2026-10-24"
+    assert _arg(create, "--head") == "agent/groom-week-2026-10-24"
     assert _arg(create, "--base") == "main"
     assert _arg(create, "--title") == TITLE
     body = Path(_arg(create, "--body-file")).read_text()
@@ -592,7 +622,7 @@ def test_a_week_with_changes_opens_one_pull_request_from_its_branch(tmp_path):
     assert "seed-DRE-7239" in body and "Cancel" in body
     # Pushed to the branch, never to main, and only the cases' paths.
     changed = _git(origin, "diff", "--name-only", "main",
-                   "groom-week/2026-10-24").split()
+                   "agent/groom-week-2026-10-24").split()
     assert changed and all(p.startswith(f"{CASES_DIR}/") for p in changed)
     assert _git(origin, "log", "--format=%s", "-1", "main").strip() == "main"
 
@@ -610,12 +640,12 @@ def test_an_open_pull_request_is_updated_never_duplicated(tmp_path):
 def test_a_branch_a_crash_left_with_no_pull_request_is_reused(tmp_path):
     origin, work = _repo(tmp_path)
     # A crashed run pushed the branch and opened nothing.
-    _git(work, "checkout", "--quiet", "-b", "groom-week/2026-10-24")
+    _git(work, "checkout", "--quiet", "-b", "agent/groom-week-2026-10-24")
     (work / CASES_DIR / "gate-set.json").write_text("{}\n")
     _git(work, "add", ".")
     _git(work, "-c", "user.name=t", "-c", "user.email=t@t", "commit",
          "--quiet", "-m", "crashed run")
-    _git(work, "push", "--quiet", "origin", "groom-week/2026-10-24")
+    _git(work, "push", "--quiet", "origin", "agent/groom-week-2026-10-24")
     crashed = _git(work, "rev-parse", "HEAD").strip()
     _git(work, "checkout", "--quiet", "main")
     _git(work, "clean", "-fdq")
@@ -625,9 +655,9 @@ def test_a_branch_a_crash_left_with_no_pull_request_is_reused(tmp_path):
     assert "reusing it" in done.stdout
     assert [c[:2] for c in calls] == [["pr", "list"], ["pr", "create"]]
     # Built on the crashed run's commit, never forced over it.
-    _git(origin, "merge-base", "--is-ancestor", crashed, "groom-week/2026-10-24")
+    _git(origin, "merge-base", "--is-ancestor", crashed, "agent/groom-week-2026-10-24")
     cases = json.loads(_git(origin, "show",
-                            f"groom-week/2026-10-24:{CASES_DIR}/cases.json"))
+                            f"agent/groom-week-2026-10-24:{CASES_DIR}/cases.json"))
     assert [c["card"] for c in cases["cases"]] == ["DRE-7239", "DRE-9001"]
 
 
