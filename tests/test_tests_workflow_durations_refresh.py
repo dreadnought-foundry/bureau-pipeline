@@ -43,6 +43,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -243,6 +244,55 @@ def test_the_refresh_is_told_which_parts_were_red():
     step = _step("unit_test_parts.py refresh")
     assert "--coverage-failed-job" in step["run"]
     assert step["env"]["FAILED"] == "${{ steps.logs.outputs.failed }}"
+
+
+def _measure_tree(tmp_path: Path) -> Path:
+    """A throwaway repository holding this tree's `unit_test_parts.py`, three
+    test files and a record that has seconds for one of them — so the
+    script's own `ROOT` and record are the throwaway ones, never this tree's."""
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy(SCRIPT, repo / "scripts" / SCRIPT.name)
+    for name in ("test_alpha.py", "test_beta.py", "test_gamma.py"):
+        (repo / "tests").mkdir(exist_ok=True)
+        (repo / "tests" / name).write_text("def test_x():\n    pass\n")
+    (repo / "config").mkdir()
+    (repo / RECORD).write_text(json.dumps({
+        "method": "CI run 1, jobs 1 and 2: the suite in four parts",
+        "provenance": {}, "seconds": {"tests/test_alpha.py": 9.9}}) + "\n")
+    _git(tmp_path, "init", "-q", str(repo))
+    return repo
+
+
+@pytest.mark.parametrize("failed", ["", "702"])
+def test_the_re_measure_step_runs_the_refresh_it_names(tmp_path, failed):
+    """The step's `run`, in bash, over two part logs: the argv it builds must
+    be one `refresh` accepts. Run 40310480396 died here on 2026-10-26 with
+    `unrecognized arguments:` naming every log after the first — the step put
+    a `--job` between the logs, and the `logs` positional takes one run."""
+    repo = _measure_tree(tmp_path)
+    logs = tmp_path / "part-logs"
+    logs.mkdir()
+    (logs / "job-701.log").write_text(
+        "2026-10-19T10:50:00.0000000Z tests/test_alpha.py::test_a PASSED [  0%]\n"
+        "2026-10-19T10:50:02.0000000Z tests/test_alpha.py::test_b PASSED [ 50%]\n"
+        "2026-10-19T10:50:05.5000000Z tests/test_beta.py::test_c PASSED [100%]\n")
+    (logs / "job-702.log").write_text(
+        "2026-10-19T10:51:00.0000000Z tests/test_gamma.py::test_d PASSED [  0%]\n"
+        "2026-10-19T10:51:04.2500000Z tests/test_gamma.py::test_e PASSED [100%]\n")
+    proc = _bash(_step("unit_test_parts.py refresh"), repo, {
+        "RUNNER_TEMP": str(tmp_path), "RUN_ID": "40310480396",
+        "JOBS": "701 702", "FAILED": failed, "HEAD_SHA": "6f66363b"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    record = json.loads((repo / RECORD).read_text())
+    assert record["seconds"] == {"tests/test_alpha.py": 2.0,
+                                 "tests/test_beta.py": 3.5,
+                                 "tests/test_gamma.py": 4.25}, record
+    assert "40310480396" in record["method"], record["method"]
+    assert "701 and 702" in record["method"], record["method"]
+    if failed:
+        assert "job 702 red only on the durations-coverage tests" in \
+            record["method"], record["method"]
 
 
 # The fetch step, run in bash over a fake `gh` that serves this run's jobs
