@@ -85,11 +85,17 @@
 # terms. Retrying it is safe because a replay posts to no card and writes no
 # receipt (DRE-7239, DRE-7242): a re-run replays the same gate set over the
 # same head, and a case the change regressed fails `judge` again.
+#
+# Groom Week (DRE-7975) is the Sunday job, watched on the same terms. Retrying
+# it is safe: `groom_scorecard.py score` reads the card's thread first and
+# never posts a week's scorecard twice, the replay posts to no card, and the
+# pull request step reuses the week's branch and updates its open pull request
+# rather than opening another.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Model config change, Model home carry, Triage Repair, Groom Replay Gate]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Model config change, Model home carry, Triage Repair, Groom Replay Gate, Groom Week]
     types: [completed]
 
 permissions:

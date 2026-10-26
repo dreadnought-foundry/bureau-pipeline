@@ -1,0 +1,347 @@
+# The Sunday job (DRE-7975): once a week, before the 06:30 PT Sunday
+# briefing, it
+#
+#   * replays the replay set on `main` and records where each case ended
+#     (`replay-main`, then `groom_replay_gate.py record-main`, DRE-7972);
+#   * posts the week's groomer scorecard on the standing groom card
+#     (`groom_scorecard.py score --post`, DRE-7970);
+#   * adds the week's recorded removals to the replay set
+#     (`groom_replay_cases.py build`, DRE-7971).
+#
+# The cases and their results on `main` reach the repo through ONE pull
+# request from `agent/groom-week-<week_end>`, so the replay set grows by
+# review, like any other change. The branch is a card-less `agent/` one, as
+# model-adoption.yml's pin branches are: the merge gate, the fix loop and
+# reconcile act only on the pipeline's own branches
+# (reconcile.PIPELINE_BRANCH_PREFIXES), and a new prefix there is never added
+# for one job. Nothing is pushed to `main`. This is the only scheduled runner
+# of `score`, `build` and `record-main`.
+#
+# WHEN: `11 10 * * 0` — Sunday 03:11 PT in daylight time, 02:11 PT in standard
+# time. Off the hour, more than an hour clear of the train stubs' 12:00 and
+# 13:00 UTC crons, and on a minute no other workflow in this repo fires on at
+# any hour (standards/engineering.md, CI rule 2). A `workflow_dispatch` from
+# `main`, with an optional `week_ending` (a Saturday, YYYY-MM-DD), re-runs a
+# week.
+#
+# D5, WIDENED BY ONE RUN (DRE-6648, green-lit 2026-10-25): `replay-main` is a
+# second clock reaching `groomer.yml`, beside the morning proposal. It replays
+# the stored set and nothing else: `mode: propose`, `judgement: "off"`,
+# `pipeline_ref: main` and `replay` are literals, and it passes no `card`.
+# With `replay` set the reusable posts to no card, writes no receipt, moves no
+# card and refuses a drain before any write (DRE-7239, DRE-7242).
+# tests/test_groomer_wiring.py allows exactly this call and the morning one.
+#
+# THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
+#   Q1 — `schedule` runs as the actor who last changed this file on `main`
+#        (the qa-bot); a dispatch initiates as the person or as
+#        `github-actions`. `replay-main`'s verify legs already admit both
+#        (tests/test_scheduled_claude_allowed_bots.py). The pull request is
+#        opened with the App token minted below, as model-adoption.yml's
+#        `pin-pr` does, never with `GITHUB_TOKEN` — so the critic and the
+#        merge gate run on it like any other.
+#   Q2 — the repository's secrets store; the model credentials reach only the
+#        reusable's `claude-code-action` steps, chosen by `CLAUDE_AUTH_MODE`;
+#        `id-token: write` lets the score and the build read the console's
+#        door with this run's token.
+#   Q3 — a second run for the same week posts no second scorecard (`score`
+#        reads the thread first), reuses the branch and updates the open pull
+#        request rather than opening another. `concurrency` keeps two runs
+#        from racing on the branch.
+#   Q4 — one reusable call, so the artifact names do not collide. It costs one
+#        verify leg per case card a week, about $0.36 each
+#        (docs/groomer-verify-proof-2026-10.md), with no ceiling: this run is
+#        what records every case's result on `main`, the seed's included.
+#   Q5 — a crash before the score posts leaves nothing written; after it and
+#        before the pull request, the score stands and the branch, if pushed,
+#        is reused by the next run. A dispatch re-runs the week.
+#
+# docs/groom-week.md says what it writes where; tests/test_groom_week_wiring.py
+# pins this file.
+name: Groom Week
+
+on:
+  schedule:
+    - cron: "11 10 * * 0"
+  workflow_dispatch:
+    inputs:
+      week_ending:
+        description: >-
+          the Saturday the week ends on, YYYY-MM-DD; empty = the Saturday
+          before today, Pacific
+        type: string
+        default: ""
+
+# Exactly what self-groomer.yml grants: groomer.yml is a reusable workflow
+# whose permissions live in the caller. Every write below is the App token's.
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: groom-week
+  cancel-in-progress: false
+
+jobs:
+  # How many cases the replay set holds. The seed case means it is never
+  # empty, so `replay-main` runs from the first Sunday. `started_at` is the
+  # instant `record-main` stamps each case's `main` block with.
+  count:
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    outputs:
+      cases: ${{ steps.count.outputs.cases }}
+      started_at: ${{ steps.count.outputs.started_at }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+
+      - name: How many replay cases
+        id: count
+        run: |
+          set -euo pipefail
+          CASES=$(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))["cases"]))' \
+            tests/fixtures/groom-replay-cases/cases.json)
+          echo "cases=$CASES" >> "$GITHUB_OUTPUT"
+          echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "groom-week: $CASES cases to replay on main"
+
+  # The replay on `main`. Every input is a LITERAL or a repository variable,
+  # the secrets and the pen's switch are the ones self-groomer.yml's `call`
+  # job passes, and there is no `card`. With `replay` set, groomer.yml's
+  # `groom` and `post` jobs queue in the run's own replay groups (DRE-7974),
+  # so this never waits behind the 06:00 PT morning run. QUOTED `"off"`: YAML
+  # 1.1 reads a bare `off` as the boolean False.
+  replay-main:
+    needs: count
+    if: needs.count.outputs.cases != '0'
+    uses: ./.github/workflows/groomer.yml
+    with:
+      pipeline_ref: main
+      mode: propose
+      judgement: "off"
+      capacity: "20"
+      replay: tests/fixtures/groom-replay-cases/replay-set.json
+      intake_hold: ${{ vars.INTAKE_HOLD }}
+    secrets: inherit
+
+  # The week. `always()`, so a replay that failed or was skipped still lets
+  # the score post; only a replay that succeeded is recorded.
+  week:
+    needs: [count, replay-main]
+    if: always()
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
+    steps:
+      # Minted before checkout, as model-adoption.yml's pin jobs mint it: the
+      # checkout keeps it, so the branch push below is the App's.
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+
+      - name: Download the main replay's verified proposal
+        if: needs.replay-main.result == 'success'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: groom-proposal-verified
+          path: replay/verified
+
+      # The Saturday the week ends on, read by `groom_scorecard.py`'s own
+      # functions: the dispatch's `week_ending`, normalized, or the Saturday
+      # before today, Pacific. A value that is not a Saturday stops the run
+      # here, before anything is written.
+      - name: Which week
+        id: week
+        env:
+          WEEK_ENDING: ${{ inputs.week_ending }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+
+          sys.path.insert(0, "scripts")
+          import groom_scorecard
+
+          given = os.environ.get("WEEK_ENDING", "").strip()
+          try:
+              end = (groom_scorecard.week_of(given)[1] if given
+                     else groom_scorecard.default_week_ending())
+          except ValueError as e:
+              sys.exit(f"groom-week: week_ending {given!r} is not a Saturday "
+                       f"written YYYY-MM-DD — {e}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+              fh.write(f"end={end}\n")
+          print(f"groom-week: the week ending {end}")
+          PY
+
+      # The three commands, in order. A score that did not post stops the
+      # run before anything else is written (Q5). The read door's settings
+      # are the Groom step's, as DRE-7821 handed them to `propose` — the
+      # address, the audience and the ref, never the mode — and the same ones
+      # serve `build`'s read of the console's removals.
+      - name: Score the week, record main, build the cases
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          GROOM_PROPOSAL_CARD: ${{ vars.GROOM_PROPOSAL_CARD }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: main
+          REPLAY_RESULT: ${{ needs.replay-main.result }}
+          REPLAY_AT: ${{ needs.count.outputs.started_at }}
+          WEEK_ENDING: ${{ inputs.week_ending }}
+          WEEK_END: ${{ steps.week.outputs.end }}
+        run: |
+          set -euo pipefail
+          WEEK=()
+          if [ -n "$WEEK_ENDING" ]; then WEEK=(--week-ending "$WEEK_END"); fi
+          # 1. The score.
+          python3 scripts/groom_scorecard.py score --card "${{ vars.GROOM_PROPOSAL_CARD }}" --post "${WEEK[@]}"
+          # 2. The results on main — only from a replay that finished.
+          case "$REPLAY_RESULT" in
+            success)
+              python3 scripts/groom_replay_gate.py record-main --proposal replay/verified/proposal-verified.json --at "$REPLAY_AT"
+              ;;
+            skipped)
+              echo "groom-replay-gate: main replay was skipped — results not recorded"
+              ;;
+            *)
+              echo "groom-replay-gate: main replay did not finish — results not recorded"
+              ;;
+          esac
+          # 3. The new cases; also rewrites replay-set.json and gate-set.json
+          # from the main blocks just recorded.
+          python3 scripts/groom_replay_cases.py build
+
+      # Copied from model-adoption.yml's pin jobs: the App token, a branch a
+      # crash left behind reused as it stands, and an open pull request
+      # looked for before one is created — updated, never duplicated. Only
+      # `tests/fixtures/groom-replay-cases/` is staged: test paths, so the TDD
+      # check asks nothing of the commit, and no verify-step path, so the
+      # replay gate's `reach` is false for it.
+      - name: Open or update the week's pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          WEEK_END: ${{ steps.week.outputs.end }}
+        run: |
+          set -euo pipefail
+          if [ -z "$(git status --porcelain -- tests/fixtures/groom-replay-cases/)" ]; then
+            echo "groom-week: nothing under tests/fixtures/groom-replay-cases/ changed — no pull request"
+            exit 0
+          fi
+          BRANCH="agent/groom-week-$WEEK_END"
+          TITLE_FILE="$RUNNER_TEMP/groom-week-title.txt"
+          BODY_FILE="$RUNNER_TEMP/groom-week-body.md"
+          # The title and the body: main's cases against this run's.
+          python3 - "$TITLE_FILE" "$BODY_FILE" <<'PY'
+          import json
+          import os
+          import subprocess
+          import sys
+
+          PATH = "tests/fixtures/groom-replay-cases/cases.json"
+
+
+          def cases(text):
+              try:
+                  return {c["case"]: c for c in json.loads(text).get("cases") or []}
+              except (ValueError, AttributeError, KeyError, TypeError):
+                  return {}
+
+
+          def cell(value):
+              text = " ".join(str("—" if value in (None, "") else value).split())
+              return text.replace("|", "\\|")
+
+
+          def result(main):
+              main = main or {}
+              passes = {True: "pass", False: "fail"}.get(main.get("passes"), "not judged")
+              return f"{main.get('ended') or 'none'}, {passes}"
+
+
+          shown = subprocess.run(["git", "show", f"HEAD:{PATH}"],
+                                 capture_output=True, text=True)
+          before = cases(shown.stdout) if shown.returncode == 0 else {}
+          with open(PATH, encoding="utf-8") as fh:
+              after = cases(fh.read())
+          new = [c for key, c in after.items() if key not in before]
+          recorded = [c for key, c in after.items() if key in before
+                      and (c.get("main") or {}) != (before[key].get("main") or {})]
+          changed = [(before[key], c) for key, c in after.items() if key in before
+                     and result(c.get("main")) != result(before[key].get("main"))]
+          end = os.environ["WEEK_END"]
+          title = (f"groom-week: replay cases for the week ending {end} — "
+                   f"{len(new)} new, {len(recorded)} recorded on main")
+          lines = ["What's new: none", "",
+                   f"The Sunday job's replay cases for the week ending {end} "
+                   f"(DRE-7975): {len(new)} new, {len(recorded)} recorded on main. "
+                   "Only `tests/fixtures/groom-replay-cases/` changes, so the "
+                   "replay gate's `reach` is false for this pull request.", "",
+                   "## New cases", ""]
+          if new:
+              lines += ["| case | card | expect | reason |", "| --- | --- | --- | --- |"]
+              lines += [f"| {cell(c.get('case'))} | {cell(c.get('card'))} | "
+                        f"{cell(c.get('expect'))} | {cell(c.get('reason_label'))} |"
+                        for c in new]
+          else:
+              lines.append("No new case this week.")
+          lines += ["", "## Results on main that changed", ""]
+          if changed:
+              lines += ["| case | card | was | now |", "| --- | --- | --- | --- |"]
+              lines += [f"| {cell(c.get('case'))} | {cell(c.get('card'))} | "
+                        f"{cell(result(old.get('main')))} | {cell(result(c.get('main')))} |"
+                        for old, c in changed]
+          else:
+              lines.append("No case's result on main changed.")
+          run = (f"{os.environ.get('GITHUB_SERVER_URL', '')}/"
+                 f"{os.environ.get('GITHUB_REPOSITORY', '')}/actions/runs/"
+                 f"{os.environ.get('GITHUB_RUN_ID', '')}")
+          lines += ["", f"Run: {run}"]
+          with open(sys.argv[1], "w", encoding="utf-8") as fh:
+              fh.write(title + "\n")
+          with open(sys.argv[2], "w", encoding="utf-8") as fh:
+              fh.write("\n".join(lines) + "\n")
+          print(title)
+          PY
+          TITLE=$(cat "$TITLE_FILE")
+          # This run's files, carried onto the branch.
+          rm -rf "$RUNNER_TEMP/groom-replay-cases"
+          cp -R tests/fixtures/groom-replay-cases "$RUNNER_TEMP/groom-replay-cases"
+          git checkout --quiet -- tests/fixtures/groom-replay-cases/
+          git clean -fdq -- tests/fixtures/groom-replay-cases/
+          if git ls-remote --exit-code --heads origin "$BRANCH" > /dev/null; then
+            echo "$BRANCH already exists — reusing it"
+            git fetch --quiet origin "refs/heads/$BRANCH"
+            git checkout --quiet -B "$BRANCH" FETCH_HEAD
+          else
+            git checkout --quiet -B "$BRANCH"
+          fi
+          rm -rf tests/fixtures/groom-replay-cases
+          cp -R "$RUNNER_TEMP/groom-replay-cases" tests/fixtures/groom-replay-cases
+          git add -- tests/fixtures/groom-replay-cases/
+          if git diff --cached --quiet; then
+            echo "$BRANCH already holds this week's files — nothing to commit"
+          else
+            git -c user.name="agent-bureau-bot[bot]" \
+              -c user.email="agent-bureau-bot[bot]@users.noreply.github.com" \
+              commit --quiet -m "$TITLE"
+            git push --quiet origin "HEAD:refs/heads/$BRANCH"
+          fi
+          EXISTING=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open \
+            --json number --jq '.[0].number // ""')
+          if [ -n "$EXISTING" ]; then
+            gh pr edit "$EXISTING" --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$BODY_FILE"
+            echo "already open as #$EXISTING — updated, not duplicated"
+          else
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title "$TITLE" --body-file "$BODY_FILE"
+          fi
