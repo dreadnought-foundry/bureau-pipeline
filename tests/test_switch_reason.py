@@ -542,7 +542,9 @@ class TestStep:
     def test_it_is_the_last_step_of_the_sweep_job_on_a_full_pass(self):
         step = _read_step()
         assert _steps()[-1]["name"] == READ_STEP
-        assert step["if"] == "inputs.sweep_reason == ''"
+        # DRE-8000: it also runs after a failed Sweep
+        # (tests/test_reconcile_workflow_phase_independence.py).
+        assert "inputs.sweep_reason == ''" in step["if"]
 
     def test_it_carries_the_sweeps_env(self):
         sweep = next(s for s in _steps() if s.get("name") == "Sweep")
