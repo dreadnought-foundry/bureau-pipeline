@@ -9,9 +9,13 @@
 #     (`groom_replay_cases.py build`, DRE-7971).
 #
 # The cases and their results on `main` reach the repo through ONE pull
-# request from `groom-week/<week_end>`, so the replay set grows by review,
-# like any other change. Nothing is pushed to `main`. This is the only
-# scheduled runner of `score`, `build` and `record-main`.
+# request from `agent/groom-week-<week_end>`, so the replay set grows by
+# review, like any other change. The branch is a card-less `agent/` one, as
+# model-adoption.yml's pin branches are: the merge gate, the fix loop and
+# reconcile act only on the pipeline's own branches
+# (reconcile.PIPELINE_BRANCH_PREFIXES), and a new prefix there is never added
+# for one job. Nothing is pushed to `main`. This is the only scheduled runner
+# of `score`, `build` and `record-main`.
 #
 # WHEN: `11 10 * * 0` — Sunday 03:11 PT in daylight time, 02:11 PT in standard
 # time. Off the hour, more than an hour clear of the train stubs' 12:00 and
@@ -233,7 +237,7 @@ jobs:
             echo "groom-week: nothing under tests/fixtures/groom-replay-cases/ changed — no pull request"
             exit 0
           fi
-          BRANCH="groom-week/$WEEK_END"
+          BRANCH="agent/groom-week-$WEEK_END"
           TITLE_FILE="$RUNNER_TEMP/groom-week-title.txt"
           BODY_FILE="$RUNNER_TEMP/groom-week-body.md"
           # The title and the body: main's cases against this run's.

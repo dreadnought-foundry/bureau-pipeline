@@ -51,7 +51,7 @@ Three jobs:
      `gate-set.json` from the `main` blocks just recorded.
    - **the pull request** — when any file under
      `tests/fixtures/groom-replay-cases/` changed, one pull request to `main`
-     from `groom-week/<week_end>`, titled `groom-week: replay cases for the
+     from `agent/groom-week-<week_end>`, titled `groom-week: replay cases for the
      week ending <week_end> — <k> new, <n> recorded on main`. Its body lists
      each new case with its card, `expect` and reason, and each case whose
      result on `main` changed.
@@ -63,9 +63,11 @@ any other. The commit holds only test paths, so the TDD check asks nothing of
 it, and no verify-step path, so the replay gate's `reach` is false for it.
 
 The pull request is opened with the bureau App's token, as
-`model-adoption.yml`'s pin jobs open theirs. A branch a crashed run left
-behind is reused; a pull request already open for the branch is updated,
-never duplicated.
+`model-adoption.yml`'s pin jobs open theirs, and from a card-less `agent/`
+branch as theirs are: the merge gate, the fix loop and reconcile act only on
+the pipeline's own branches, so a `groom-week/` branch would never merge.
+A branch a crashed run left behind is reused; a pull request already open
+for the branch is updated, never duplicated.
 
 ## Re-running a week
 
