@@ -47,7 +47,9 @@ that is on while its companion is still set is reported as stale.
 
 `Read the switches` is the last step of the `sweep` job in
 `.github/workflows/reconcile.yml`. It runs on every full pass, which means
-every scheduled Reconcile run, and never on a narrowed one. The caller passes
+every scheduled Reconcile run, and never on a narrowed one. A failed `Sweep`
+or a failed phase before it does not skip it; a gate before `Sweep` that
+stops the job does (DRE-8000). The caller passes
 in each switch and its companion. The step runs `python3
 .bureau-pipeline/scripts/switch_reason.py`, which prints one line per switch in
 the catalog, in the catalog's order, on every pass. A switch with nothing set

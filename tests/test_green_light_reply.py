@@ -835,7 +835,10 @@ def test_the_step_follows_the_proof_dispatch_and_runs_only_on_a_full_pass():
     names = [s.get("name") for s in _steps()]
     assert names.index(STEP) == names.index("Dispatch proof runs") + 1
     proof = next(s for s in _steps() if s.get("name") == "Dispatch proof runs")
-    assert _step()["if"] == proof["if"] == "inputs.sweep_reason == ''"
+    # DRE-8000: one gate for both, and it also runs after a failed Sweep
+    # (tests/test_reconcile_workflow_phase_independence.py).
+    assert _step()["if"] == proof["if"]
+    assert "inputs.sweep_reason == ''" in _step()["if"]
 
 
 def test_the_step_carries_the_proof_steps_env_and_its_own_switch():
