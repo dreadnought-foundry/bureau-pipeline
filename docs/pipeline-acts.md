@@ -413,7 +413,8 @@ block.
 A PROOF card routes OPERATOR and waits in `Hand-work`, a lane the sweep's nudge
 loop never reads, so every finished epic's proof waited for a person to start
 it — on 2026-10-05, thirteen of the seventeen epics counted against the epic cap.
-The `Dispatch proof runs` step of `reconcile.yml` runs right after `Sweep`, on
+The `Dispatch proof runs` step of `reconcile.yml` runs right after `Sweep`,
+whether `Sweep` passed or failed (DRE-8000), on
 full passes only and only in a repo that carries a proof-run stub
 (`self-proof-task.yml` or `proof-task.yml`), and starts one proof run a pass
 when the card's seven conditions hold: a `PROOF:` card of this repo in

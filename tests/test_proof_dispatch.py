@@ -1585,7 +1585,9 @@ def _step() -> dict:
 def test_the_step_follows_the_sweep_and_runs_only_on_a_full_pass():
     names = [s.get("name") for s in _steps()]
     assert names.index(STEP) == names.index("Sweep") + 1
-    assert _step()["if"] == "inputs.sweep_reason == ''"
+    # Full passes only; that it also runs after a failed Sweep is DRE-8000's
+    # rule, read in tests/test_reconcile_workflow_phase_independence.py.
+    assert "inputs.sweep_reason == ''" in _step()["if"]
 
 
 def test_the_step_carries_the_sweeps_env_and_the_switch():
