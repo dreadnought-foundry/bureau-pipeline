@@ -114,10 +114,16 @@ blockers, its children and its lane history, and writes `wait=true` with
 In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it to Queued
 and dispatches no planner. Any read that fails writes `wait=false`.
 
+The planner can add the blocker itself, after `decide` read none (DRE-7283,
+2026-10-25). So `wait` makes the same reading again at the planner's
+escalation, and `plan.yml`'s escalation step parks the epic in Queued under
+the same receipt instead of asking (DRE-8001).
+
 CLI:
 
     python3 scripts/planning_route.py check          # validate the routes
     python3 scripts/planning_route.py decide DRE-N [--github-output F]
+    python3 scripts/planning_route.py wait DRE-N [--github-output F]  # the epic wait, re-read
     python3 scripts/planning_route.py exit DRE-N      # the one-off / roll-up exit
 """
 
@@ -953,6 +959,29 @@ def _cmd_decide(identifier: str, github_output: str | None) -> int:
     return 0
 
 
+def _cmd_wait(identifier: str, github_output: str | None) -> int:
+    """`decide`'s epic wait, read again at the planner's escalation (DRE-8001).
+
+    `decide` reads an epic's blockers once, before the planner starts, and the
+    planner can add one itself: on 2026-10-25 DRE-7283's planner added DRE-7290
+    as a formal blocker and its escalation reached Green Light 49 seconds
+    later. `plan.yml`'s escalation step calls this only on the epic route — a
+    one-off never waits — and parks the epic in Queued on `wait=true` instead
+    of asking. Same reading, same guard and same fail-open as `decide`: it is
+    `_read_epic_wait`, and it writes the same two outputs.
+    """
+    import linear_ops
+
+    waiting = _read_epic_wait(linear_ops, identifier)
+    said = f"waits in {lane_contract.QUEUE_LANE}" if waiting.wait else "is asked"
+    print(f"planning route: at the escalation, {identifier} {said} — {waiting.reason}")
+    _write_outputs(github_output, [
+        ("wait", "true" if waiting.wait else "false"),
+        ("waits_on", waiting.waits_on),
+    ])
+    return 0
+
+
 def _read_person_verdict(lops, identifier: str) -> str:
     """`person_verdict` for a live one-off, read WHOLE the way `_cmd_exit`
     reads it — the list API truncates a description without saying so.
@@ -1085,6 +1114,11 @@ def main(argv=None) -> int:
     exit_cmd = sub.add_parser("exit")
     exit_cmd.add_argument("identifier")
 
+    # DRE-8001: the epic wait, re-read at the planner's escalation.
+    wait_cmd = sub.add_parser("wait")
+    wait_cmd.add_argument("identifier")
+    wait_cmd.add_argument("--github-output", default=None)
+
     args = parser.parse_args(argv)
     command = args.command or "check"
 
@@ -1103,6 +1137,9 @@ def main(argv=None) -> int:
 
     if command == "exit":
         return _cmd_exit(args.identifier)
+
+    if command == "wait":
+        return _cmd_wait(args.identifier, args.github_output)
 
     parser.print_usage(sys.stderr)
     return 2

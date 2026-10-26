@@ -2844,11 +2844,21 @@ jobs:
       # gating this on a count of zero sent DRE-7318's question down the plan
       # path to die. A count of zero with no reason still lands here, as
       # above.
+      #
+      # An epic re-reads its formal blockers here, before anything is asked
+      # (DRE-8001): `decide` read them before the planner started, and the
+      # planner can add one itself — DRE-7283's did, and its question reached
+      # Green Light 49 seconds later. `planning_route.py wait` is `decide`'s
+      # own reading (children or an earlier move to In Progress never wait, a
+      # failed read holds nothing). On `wait=true` the epic gets the wait
+      # step's receipt and moves to Queued, and nothing is asked. A one-off
+      # never waits and is never read.
       - name: Planner escalation — hand-planning parks for the CEO
         if: steps.route.outputs.mode == 'plan' && (steps.escalated.outputs.escalated == 'true' || steps.kids.outputs.count == '0')
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          ROUTE: ${{ steps.shape.outputs.route }}
           RETURNED_CHILD: ${{ steps.shape.outputs.returned_child }}
           PARENT: ${{ steps.shape.outputs.parent }}
           # DRE-5564: the attempt that counted — the re-run on the next rung
@@ -2871,6 +2881,21 @@ jobs:
             echo "returned child was not split or canceled: it is a child of $PARENT, no escalation reason was written, and it reads '${STATE:-unreadable}' in Linear rather than Canceled" > "$REASON"
             # This step wrote the reason, not the planner, so it is prose only.
             rm -f "$CHOICES"
+          fi
+          if [ "$ROUTE" = "epic" ]; then
+            RECHECK="$RUNNER_TEMP/epic-wait-recheck.txt"
+            : > "$RECHECK"
+            python3 .bureau-pipeline/scripts/planning_route.py wait "$CARD" --github-output "$RECHECK" \
+              || echo "the epic's blockers could not be re-read — it is escalated as before"
+            if grep -qx 'wait=true' "$RECHECK"; then
+              WAITS_ON=$(sed -n 's/^waits_on=//p' "$RECHECK" | tail -n 1)
+              WAITS="⏸️ epic-waits: $CARD waits in Queued on its formal blocker(s) $WAITS_ON. It is planned when every one is Done — nothing is asked of anyone until then."
+              python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$WAITS" --act=epic-waits-on-blocker
+              python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Queued"
+              echo "$WAITS"
+              echo "$WAITS" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
           fi
           python3 .bureau-pipeline/scripts/planning_escalation.py escalate \
             "$CARD" \
