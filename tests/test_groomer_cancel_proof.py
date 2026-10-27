@@ -221,12 +221,18 @@ def test_a_likely_done_whose_pointer_the_guard_withholds_is_not_canceled():
 
 
 def test_a_withheld_pointer_outside_the_batch_keeps_its_wait():
+    """Refused wherever it stands since DRE-7973: it keeps its place outside
+    the batch and is said under `cancels_refused`. DRE-201 carries no line
+    here, so it holds the one slot: a Cancel row holds none."""
     cards = _lane()
+    cards[0]["description"] = ""
     prop = groomer.propose(cards, cycles=CYCLES, capacity=1, now=NOW,
                            judgement=judged(cards, _answer(cards, TECHNICAL)))
     later = {r["identifier"]: r for r in prop["outcomes"]["not-now"]}
     assert JUDGED in later and later[JUDGED]["reconsidered_in"] is not None
     assert JUDGED not in _dead(prop)
+    assert {r["identifier"]: r["refusal"] for r in prop["cancels_refused"]}[
+        JUDGED] == groomer.NO_CANCEL_PROOF
 
 
 def test_cancel_proof_refusal_refuses_an_empty_proof_from_every_source():
