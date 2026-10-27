@@ -166,6 +166,8 @@ class _PostRun(unittest.TestCase):
         Path("/tmp/qa-verdict.md").write_text(APPROVE)
         self.log = td / "stub.log"
         self.posted = td / "posted.md"
+        self.output = td / "github-output"
+        self.output.write_text("")
         env = dict(os.environ)
         env.pop("NAME_GUARD_LIVE", None)
         env["PATH"] = f"{bin_dir}:{env['PATH']}"
@@ -178,6 +180,7 @@ class _PostRun(unittest.TestCase):
             "REAL": "true", "REVIEWED_SHA": SHA, "CONTENT_ID": CONTENT,
             "MODEL_ID": "claude-opus-5", "MODEL_WHY": "advisory ladder top",
             "GITHUB_REPOSITORY": "acme-org/widgets",
+            "GITHUB_OUTPUT": str(self.output),
             "A1_OUTCOME": "ok",
         })
         if live is not None:
@@ -224,6 +227,10 @@ class LiveAndCleanTest(_PostRun):
         self.run_post(live="true")
         self.assertEqual(self.calls("sync_review_state"), [["acme-org/widgets", "985"]])
 
+    def test_the_step_does_not_say_held(self):
+        self.run_post(live="true")
+        self.assertNotIn("held=true", self.output.read_text().splitlines())
+
 
 class _Held:
     """The guard refused: a held neutral status, never the composed text."""
@@ -248,6 +255,12 @@ class _Held:
     def test_the_formal_review_is_left_alone(self):
         self.run_post(live="true", guard=self.GUARD)
         self.assertEqual(self.calls("sync_review_state"), [])
+
+    def test_the_step_says_held_so_the_review_check_fails_closed(self):
+        # The composed /tmp/qa-verdict.md still reads APPROVE; the publish
+        # step reads this output, or the head's check goes green.
+        self.run_post(live="true", guard=self.GUARD)
+        self.assertIn("held=true", self.output.read_text().splitlines())
 
     def test_the_card_copy_is_the_held_status_too(self):
         self.run_post(live="true", guard=self.GUARD)
