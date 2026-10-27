@@ -19,7 +19,9 @@ document built with `with_project`, judged by `model_home.home_errors` on the
 frozen code-side facts and prices, and a walk it makes is read off a fixture
 tree's selector that has read it (`fixture_module(..., doc=...)`). A rule about
 the rest of the frozen `models.yaml` — its keys' shapes, rule 10 — is still
-`policy_errors` on a copy of it. What holds for any saved state — the
+`policy_errors` on a copy of it, the frozen document's choices written into it
+in the file's own shape (`fixture()`): a choice is read off the document, never
+the file, whose choices DRE-6983 takes out (DRE-8018). What holds for any saved state — the
 committed `projects` block validates with the committed repo map, `ungrouped`
 and `agents` are disjoint and every name in them has an `about` line — keeps
 reading the committed file and derives what it expects from it.
@@ -59,7 +61,6 @@ sys.path.insert(0, str(ROOT / "tests"))
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
 import model_home  # noqa: E402
-from model_config_text import with_session_agents_ungrouped  # noqa: E402
 from model_fixture import fixture_home, ladder, with_project  # noqa: E402
 
 CONFIG_PATH = ROOT / "config" / "models.yaml"
@@ -100,7 +101,25 @@ def committed() -> dict:
 
 
 def fixture() -> dict:
-    return model_fixture.fixture_config()
+    """The frozen `models.yaml` as a file of today's shape: its code-side
+    facts, and the frozen document's choices written the way the file writes
+    them — each group a kind with its label and purpose on a ladder of its
+    key, and every name with an `about` line and no group ungrouped. A fresh
+    copy, for a test that edits a key to break a rule `policy_errors` holds
+    about its shape."""
+    side = {key: value for key, value in model_fixture.fixture_config().items()
+            if key not in mf._CHOICE_KEYS}
+    doc = fixture_home()
+    return {
+        **side,
+        "default_ladder": mf.WORKHORSE_KIND,
+        "kinds": {key: {"ladder": key, "label": group["label"], "purpose": group["purpose"]}
+                  for key, group in doc["groups"].items()},
+        "ladders": {key: list(group["models"]) for key, group in doc["groups"].items()},
+        "agents": dict(doc["agents"]),
+        "ungrouped": [name for name in side["about"] if name not in doc["agents"]],
+        "projects": {slug: dict(entry) for slug, entry in doc["projects"].items()},
+    }
 
 
 def slugs() -> set[str]:
@@ -155,7 +174,8 @@ def excluded_sentence(model: str) -> str:
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory):
     """Today's scripts on the frozen model files, shared by the walk tests."""
-    return model_fixture.fixture_tree(tmp_path_factory.mktemp("frozen") / "tree")
+    return model_fixture.fixture_tree(tmp_path_factory.mktemp("frozen") / "tree",
+                                      regenerate=False)
 
 
 def selector(tree, doc):
@@ -239,9 +259,10 @@ class TestNormalizedShape:
         assert cfg["projects"] == committed()["projects"]
 
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
-        # From a file with no session-run agent in a group: with
-        # `session_agents` popped, one the CEO grouped would be a stranger.
-        raw = yaml.safe_load(with_session_agents_ungrouped(model_fixture.fixture_text()))
+        # From a file with no session-run agent in a group — the frozen
+        # document groups none: with `session_agents` popped, one the CEO
+        # grouped would be a stranger.
+        raw = fixture()
         for spec in raw["kinds"].values():
             spec.pop("label")
             spec.pop("purpose")
@@ -259,7 +280,7 @@ class TestNormalizedShape:
         assert cfg["projects"] == {"atlas": {"workhorse": REORDER}}
 
     def test_the_degrade_mirror_gives_the_same_four_keys(self):
-        mirror = mf._normalize_config(mf._FALLBACK_MODEL_CONFIG)
+        mirror = mf.code_defaults()
         for key in ("groups", "ungrouped", "about", "projects"):
             assert mirror[key] == mf.CONFIG[key], key
 

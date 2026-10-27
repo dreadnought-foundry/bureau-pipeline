@@ -825,7 +825,7 @@ jobs:
           # Through env, never interpolated into the shell line.
           WAITS_ON: ${{ steps.shape.outputs.waits_on }}
         run: |
-          WAITS="⏸️ epic-waits: $EPIC waits in Queued on its formal blocker(s) $WAITS_ON. It is planned when every one is Done — nothing is asked of anyone until then."
+          WAITS="⏸️ epic-waits: $EPIC waits in Queued on its formal blocker(s) $WAITS_ON. It is planned once every one is Done, an In Progress epic that is built out, or the proof of an epic that is Done or built out — nothing is asked of anyone until then."
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$WAITS" --act=epic-waits-on-blocker
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Queued"
           echo "$WAITS"
@@ -2850,9 +2850,10 @@ jobs:
       # planner can add one itself — DRE-7283's did, and its question reached
       # Green Light 49 seconds later. `planning_route.py wait` is `decide`'s
       # own reading (children or an earlier move to In Progress never wait, a
-      # failed read holds nothing). On `wait=true` the epic gets the wait
-      # step's receipt and moves to Queued, and nothing is asked. A one-off
-      # never waits and is never read.
+      # failed read of the epic holds nothing, a failed read of a blocker holds
+      # that blocker — the sweep's strict rule, DRE-7962). On `wait=true` the
+      # epic gets the wait step's receipt and moves to Queued, and nothing is
+      # asked. A one-off never waits and is never read.
       - name: Planner escalation — hand-planning parks for the CEO
         if: steps.route.outputs.mode == 'plan' && (steps.escalated.outputs.escalated == 'true' || steps.kids.outputs.count == '0')
         env:
@@ -2889,7 +2890,7 @@ jobs:
               || echo "the epic's blockers could not be re-read — it is escalated as before"
             if grep -qx 'wait=true' "$RECHECK"; then
               WAITS_ON=$(sed -n 's/^waits_on=//p' "$RECHECK" | tail -n 1)
-              WAITS="⏸️ epic-waits: $CARD waits in Queued on its formal blocker(s) $WAITS_ON. It is planned when every one is Done — nothing is asked of anyone until then."
+              WAITS="⏸️ epic-waits: $CARD waits in Queued on its formal blocker(s) $WAITS_ON. It is planned once every one is Done, an In Progress epic that is built out, or the proof of an epic that is Done or built out — nothing is asked of anyone until then."
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$WAITS" --act=epic-waits-on-blocker
               python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Queued"
               echo "$WAITS"

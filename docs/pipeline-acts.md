@@ -436,14 +436,19 @@ record at the head and never off the note (DRE-6488). The two triggers share
 two re-runs per record pull request, then one more per re-arm event, and never
 another without one; after the two with no event, or after a re-run that
 finished with the decline still at the head, one `🔬 proof-waiting` hold for
-an operator. The re-arm events are two, and only two (DRE-7740): every card an
-unmet row names by `fix: DRE-<n>` is Done, labelled for this repo, merged and
-live — the set re-arms once — or the operator posts a new `🔬 proof-observed`
-after the card's newest receipt, never one the pipeline wrote itself. When the
-record read at the head names no fix, the budget's hold ends `— the record at
-<sha7> names no fix`, and while nothing follows that hold and the record stays
-at that head the card is named on its line every pass and never read, so it
-spends none of the pass's candidate reads (DRE-7787). A record
+an operator. The re-arm events are two, and only two (DRE-7740): every named
+fix is Done, merged and live — the set re-arms once — or the operator posts a
+new `🔬 proof-observed` after the card's newest receipt, never one the
+pipeline wrote itself. A named fix is a card an unmet row names by
+`fix: DRE-<n>`, or a card related to the proof as blocking it after its
+newest receipt (DRE-8156); a fix labelled for another repo in
+`config/repo-map.json` is read in that repo — its pull request and its
+release there. When neither names a fix — and the relations were read, each
+with its time, against receipts that all carry theirs — the budget's hold ends `— the record
+at <sha7> names no fix`, and while nothing follows that hold, no blocker is
+related after it and the record stays at that head, the card is named on its
+line every pass and never read, so it spends none of the pass's candidate
+reads (DRE-7787). A record
 whose unmet rows are all `Not met. history: …` rows (or cause rows) is held for
 the operator's decision at once and never re-run. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to
@@ -715,6 +720,44 @@ stamp read as a receipt.
 
 The console learned the tag first (DRE-7751). The `act registry consumers` job
 refuses a row the console does not carry.
+
+## The row that files a PROOF's gaps — `🩹 proof-gap-card` (DRE-7952)
+
+| Field | Value |
+| -- | -- |
+| tag | `proof-gap-card` |
+| act name | `proof-gap-filed` |
+| kind · state · next actor | `recovery` · `unchanged` · `groomer.py` |
+| discharges | nothing |
+| cadence | `null` — the fix card waits in Intake for the groomer's batch and the CEO's approval, and nothing bounds when that happens |
+| emitted by | `scripts/proof_gap.py`, at the `pipeline_act.receipt(ACT, …)` call in `file_fix_card` |
+
+A proof record whose every unmet row is a gap — a `Not observed. cause:
+<word> — …` row naming one of the four cause words in
+`config/proof-reach.json`, or a `Not met. history: …` row
+(`proof_record.gap_rows`) — passes the merge gate and closes its PROOF card on
+its approved merge (epic DRE-7944). A re-run would read those rows the same
+again, so they go where the real work goes: ONE fix card in Intake,
+parentless, labeled `repo:<the PROOF's repo>`, titled `<slug>: the gaps PROOF
+<DRE-n> closed with — <k> row(s) not observable as worded`, one line per row
+with its criterion, its kind, the record's cell and the kind of fix. The PROOF
+close (`linear_ops.merge_close_ruling`, asked by card-done and the reconcile
+backstop) files it before the card moves, and posts on the PROOF card:
+
+    🩹 proof-gap-card: <DRE-n> — the gaps it closed with are filed in Intake: <url>
+
+**The receipt key is live**: a pipeline-authored comment whose first line opens
+`🩹 proof-gap-card:` on the PROOF card names its one fix card, so a second close
+reads it and files nothing. A comment of that shape from any other author
+counts for nothing. A receipt that failed to post after the create is caught by
+the title: an open card with exactly that title is reused and receipted.
+`proof_gap.file_fix_card(..., kind="defect")` is the same filer for a spent
+re-run budget on a build that fails its rows, and words the card as a defect
+in the build.
+
+The console must learn this act before this row merges. The `act registry
+consumers` job refuses a row the console does not carry, and it knows an act
+by its tag or its name.
 
 ## Why this exists
 

@@ -49,7 +49,7 @@ import reconcile  # noqa: E402
 from test_groomer_cancel_drain import (  # noqa: E402
     KEEP_CANCEL, KEEP_PLANNING, PROPOSAL_CARD, FakeOps, _cancel, _decision,
     _fifteen_and_five, _planning, _thread)
-from test_groomer_two_lists import two_lists  # noqa: E402
+from test_groomer_two_lists import fifteen_and_five_morning  # noqa: E402
 from test_groom_queue import (  # noqa: E402
     STANDING, Queue, _card, _pin, _release)
 
@@ -237,7 +237,7 @@ class _FailingState(FakeOps):
 
 
 def test_a_failed_state_write_still_finds_the_note_and_no_moved_card_lacks_one():
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     fail = _planning(proposal)[4]
     ops = _FailingState(comments=_thread(proposal), fail=fail)
     with pytest.raises(linear_ops.LinearError):
@@ -287,7 +287,7 @@ def _drained_then_queued(monkeypatch, *, free=2, added=None):
     and hand back the thread the sweep reads afterwards: the proposal, the
     approval and every record the drain wrote on the card."""
     monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: (free, 3))
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     comments = _thread(proposal)
     if added:
         comments.append(_decision(groomer.ADD_TAG, proposal, card=added))

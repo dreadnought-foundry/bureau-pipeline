@@ -517,9 +517,10 @@ def test_the_line_around_the_three_sections_is_unchanged(pack, sections):
 # and cycles, so a new column in the comment does not retire a CEO approval.
 # Re-pinned by DRE-4725, and again by DRE-4965, which moved the batch itself
 # to newest first; with the read no longer ordering the batch, the two ids
-# are one.
-FIXTURE_RULES_ONLY_ID = "a85999f18b18"
-FIXTURE_JUDGED_ID = "a85999f18b18"
+# are one. Re-pinned by DRE-7973, whose Cancel list takes DRE-107 from
+# outside the batch.
+FIXTURE_RULES_ONLY_ID = "991592d78894"
+FIXTURE_JUDGED_ID = "991592d78894"
 
 
 def _fixture(judgement=None):
