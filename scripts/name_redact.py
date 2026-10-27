@@ -37,7 +37,7 @@ A roster that cannot be read is never passed when live.
 
 THE LINES. Every line opens with `name-guard:` (`TAG`, declared in
 `config/proof-reach.json`) and names a file, a line and a kind, or a read that
-failed — never a name:
+failed — never a name. A file whose path carries a form is printed redacted:
 
     name-guard: refused — <file>:<line> carries a <kind> form            exit 1
     name-guard: refused — roster unreadable: <reason>                    exit 2
@@ -139,25 +139,27 @@ def redact(text: str, roster) -> str:
 def findings(lines: Iterable[tuple[str, int, str]], roster) -> list[Finding]:
     """Each form remaining in `(file, line, text)` triples, once per kind per line, in order."""
     found: list[Finding] = []
+    seen: set[Finding] = set()
     for file, number, text in lines:
         for _, _, form in _claims(text, roster):
             f = Finding(file, number, form.kind)
-            if f not in found:
+            if f not in seen:
+                seen.add(f)
                 found.append(f)
     return found
 
 
 def _git(args: list[str], cwd) -> str:
+    # Bytes, decoded here: text mode would turn a bare `\r` into a line break and split a line.
     try:
         done = subprocess.run(["git", "-c", "core.quotepath=off", *args], cwd=cwd,
-                              capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=GIT_TIMEOUT)
+                              capture_output=True, timeout=GIT_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
         raise InputUnreadable(f"range unreadable: git {args[0]} did not run") from None
     if done.returncode != 0:
         # git's own message names the ref it could not read; only the code is kept.
         raise InputUnreadable(f"range unreadable: git {args[0]} exited {done.returncode}")
-    return done.stdout
+    return done.stdout.decode("utf-8", "replace")
 
 
 def _path(target: str) -> str | None:
@@ -220,6 +222,7 @@ def _text_lines(path: str) -> list[tuple[str, int, str]]:
 
 def _pre_push_lines(stdin, default_ref: str, cwd) -> list[tuple[str, int, str]]:
     out: list[tuple[str, int, str]] = []
+    seen: set[tuple[str, int, str]] = set()
     for n, raw in enumerate(stdin, start=1):
         if not raw.strip():
             continue
@@ -230,7 +233,8 @@ def _pre_push_lines(stdin, default_ref: str, cwd) -> list[tuple[str, int, str]]:
         if set(local_sha) == {"0"}:
             continue  # a deletion adds nothing
         for row in added_lines(default_ref, local_sha, cwd=cwd):
-            if row not in out:
+            if row not in seen:
+                seen.add(row)
                 out.append(row)
     return out
 
@@ -300,10 +304,11 @@ def _guard(args, reader, is_live, stdin, say) -> int:
         return 2 if is_live else 0
     found = findings(lines, roster)
     for f in found:
+        where = redact(f.file, roster)  # a path can carry a name too
         if is_live:
-            say(f"{TAG} refused — {f.file}:{f.line} carries a {f.kind} form")
+            say(f"{TAG} refused — {where}:{f.line} carries a {f.kind} form")
         else:
-            say(f"{TAG} dry — would refuse {f.file}:{f.line} ({f.kind})")
+            say(f"{TAG} dry — would refuse {where}:{f.line} ({f.kind})")
     if not found:
         say(f"{TAG} ok — {len(lines)} lines read, nothing to refuse")
     return 1 if found and is_live else 0
