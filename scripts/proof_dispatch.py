@@ -1538,11 +1538,17 @@ class _Pass:
         if until is not None and until <= self.now:
             return None  # a time that has passed: the thread read may lift it
         partial = linear_ops.window_is_partial(card.get("comments"))
-        if self._chase(proof_record.open_holds_at(voices), voices, unseen=partial):
+        # No viewer, so every voice is UNKNOWN — the pipeline's or a person's.
+        # Read as either, a `🔬 proof-observed` discharges and a receipt
+        # counts: the holds left open are never older than the thread read's.
+        either = (spoken_thread.PIPELINE, spoken_thread.PERSON, spoken_thread.UNKNOWN)
+        if self._chase(proof_record.open_holds_at(voices, discharge=either), voices,
+                       unseen=partial, kinds=either):
             return None  # a chase the window shows owed: the thread read decides
         return f"held by {line}{_lifts_at(until)}"
 
-    def _chase(self, held: list, voices: list, *, unseen: bool = False) -> tuple | None:
+    def _chase(self, held: list, voices: list, *, unseen: bool = False,
+               kinds: tuple = (spoken_thread.PIPELINE,)) -> tuple | None:
         """`(line, at)` of the card's OLDEST open event hold when a chase is
         owed on it (DRE-7967), else None. Owed when every open hold is an
         event hold, the oldest has stood the `proof-waiting` row's
@@ -1552,7 +1558,10 @@ class _Pass:
         be read is never owed. The lane read asks the same over its window,
         so it names held only a card the thread read would refuse too; with
         `unseen` — a window that may hide an older hold — the age is not read,
-        and the thread read weighs it."""
+        and the thread read weighs it. A receipt counts only from a voice of
+        `kinds`, the pipeline's alone unless told otherwise: the lane read's
+        voices are all UNKNOWN, and it counts those too, so a chased card
+        stays named held at no read (DRE-6464)."""
         if not held or not all(_is_event_hold(line) for line, _ in held):
             return None
         times = [_when(at) for _, at in held]
@@ -1563,7 +1572,7 @@ class _Pass:
             return None
         for voice in voices:
             got = (proof_run_state.receipt(voice.body or "")
-                   if voice.kind == spoken_thread.PIPELINE else None)
+                   if voice.kind in kinds else None)
             if got is None:
                 continue
             when = _when(voice.created_at)
