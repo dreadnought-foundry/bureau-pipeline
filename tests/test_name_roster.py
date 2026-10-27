@@ -379,6 +379,10 @@ UNREADABLE = {
     "members": (dict(fail_members=True), "github members"),
     "profile": (dict(fail_profile=PERSON_LOGIN), "github profile 2"),
     "no-people": (dict(users=_non_humans(), members=[BOT_LOGIN]), "people: 0"),
+    # A token without `members: read` is answered 200 with an empty list, not
+    # an error: an organization always has a member, so none is unreadable.
+    "no-members": (dict(members=[]), "github members"),
+    "only-bots": (dict(members=[BOT_LOGIN]), "github members"),
     "no-admin": (dict(users=[{**CEO, "admin": False}, PERSON]), "admins: 0"),
     "two-admins": (dict(users=[CEO, {**PERSON, "admin": True}]), "admins: 2"),
 }
