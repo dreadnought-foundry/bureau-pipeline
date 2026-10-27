@@ -428,7 +428,7 @@ def test_a_malformed_answer_is_unreadable():
         _read(gql, gh)
 
     def gh(path):
-        return {"message": "Not Found"}
+        return {"message": "missing"}
     gh.page_size = 2
     with pytest.raises(name_roster.RosterUnreadable, match="github members"):
         _read(_world()[0], gh)
