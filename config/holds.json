@@ -116,6 +116,25 @@
       ]
     },
     {
+      "file": "scripts/planning_route.py",
+      "scope": "_refuse_no_repo",
+      "anchor": "NO_REPO_TAG",
+      "note": "The planning exit (DRE-8145). A card none of whose repo: labels is a key of config/repo-map.json is refused before it is routed: no verdict, no mark, parked in Triage beside a refusal naming the fix.",
+      "reasons": [
+        {
+          "reason": "no-route",
+          "lifts": "repo-on-rail",
+          "tried_first": "none — the exit never guesses a repo from the card's text; the label is a person's to add, and the hold lifts on it"
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
+      ]
+    },
+    {
       "file": "scripts/reconcile.py",
       "scope": "hand_review_nudge_to_person",
       "anchor": "REVIEW_NUDGE_CAP_KEY",
