@@ -403,7 +403,7 @@ def _choices_paragraph(text: str) -> str:
     """The choices instruction, path replaced and whitespace collapsed, so the
     six copies can be compared word for word."""
     flat = " ".join(_PATH.sub("PATH", text).split())
-    last = "is parked in Triage for the operator, not put to the CEO."
+    last = "is parked for the operator, not put to the CEO."
     start = flat.index("Then write the choices as JSON")
     return flat[start:flat.index(last, start) + len(last)]
 

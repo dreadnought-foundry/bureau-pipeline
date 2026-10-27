@@ -147,6 +147,22 @@ REASON = (
     "plan now?"
 )
 
+#: The choices the planner writes beside its reason. Since DRE-7961 the step's
+#: escalation is screened, and a question with no choices file is housekeeping
+#: for the operator — so "escalates as today" needs the planner's real pair.
+CHOICES = {
+    "question": "Should we wait for the full counts or plan now?",
+    "context": "The epic's own question was answered, but the planner could not tell whether the answer still holds.",
+    "choices": [
+        {"id": "wait", "label": "Wait for the counts", "effect": "The epic is planned once the full counts are in.",
+         "outcome": "close"},
+        {"id": "plan-now", "label": "Plan now", "effect": "The epic is planned on the answer as it stands.",
+         "outcome": "replan"},
+    ],
+    "recommended": "plan-now",
+    "why": "the answer is recent enough to plan on",
+}
+
 
 def _visible(relations, at: str) -> list[dict]:
     """The relation rows the board held at `at` — a row exists from the time
@@ -347,6 +363,8 @@ def run_escalation(tmp_path, *, route="epic", at=REPLAY["escalate_at"],
     runner.mkdir()
     if reason is not None:
         (runner / "planner-escalation.txt").write_text(reason, encoding="utf-8")
+        (runner / "planner-escalation-choices.json").write_text(
+            json.dumps(CHOICES), encoding="utf-8")
     scenario = {
         "card": REPLAY["card"], "lane": "Planning", "at": at, "posted": [],
         "relations": REPLAY["relations"], "children": REPLAY["children"],
