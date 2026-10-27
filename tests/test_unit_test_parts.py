@@ -572,9 +572,10 @@ def _merge_file(tmp_path: Path, base: str, ours: str, theirs: str
 
 
 #: Two test files two open pull requests might each add; their paths sort to
-#: different places in `provenance`.
+#: different places in `provenance`, with test files of the record between
+#: them.
 NEW_A = "tests/test_console_b_dre7508_alpha_probe.py"
-NEW_Z = "tests/test_console_f_dre7508_zeta_probe.py"
+NEW_Z = "tests/test_d_dre7508_zeta_probe.py"
 
 
 def _assert_the_new_files_land_apart(provenance: dict) -> None:
@@ -587,7 +588,7 @@ def _assert_the_new_files_land_apart(provenance: dict) -> None:
 def _with_neighbours(record: dict) -> dict:
     """`record` once pull requests have added test files since its last
     re-measure, each with its own `provenance` line: one file of `seconds`
-    before NEW_A, one between the two and one after NEW_Z.
+    before NEW_A, two between the two and one after NEW_Z.
 
     A re-measure leaves `provenance` empty (DRE-7577), since every file it
     keeps carries `method`'s run; the walks' lines, which it used to keep,
@@ -596,8 +597,8 @@ def _with_neighbours(record: dict) -> dict:
     add a test file can still conflict here — the per-file lines are what
     every later pair merges on."""
     keys = sorted(record["seconds"])
-    picked = [max(k for k in keys if k < NEW_A),
-              next(k for k in keys if NEW_A < k < NEW_Z),
+    between = [k for k in keys if NEW_A < k < NEW_Z]
+    picked = [max(k for k in keys if k < NEW_A), *between[:2],
               min(k for k in keys if k > NEW_Z)]
     provenance = {**record["provenance"],
                   **{k: f"{k}, added by a pull request since the re-measure"
