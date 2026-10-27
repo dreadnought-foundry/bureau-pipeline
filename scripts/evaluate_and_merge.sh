@@ -109,6 +109,15 @@ set -e
 #     real failure, explained and red, unless GitHub's text says the head
 #     branch is out of date: then the branch is updated from the base once per
 #     base tip, one note says so, and the step exits 0 without merging.
+#
+# The merge method is read off the head branch, once, into MERGE_METHOD, and
+# both merge calls (the first try and the one retry) use it. A proof
+# record's branch, `agent/DRE-<n>-proof-record` as proof_record.proof_record_branch
+# reads it, merges with --squash, so no commit on the branch, and no name in
+# one, lands on the base: only the squash commit does. Every other branch
+# merges with --merge, so the TDD split commits stay visible on the base.
+# The script asks that reader and restates no branch rule.
+#
 # No note carries verdict-shaped text, so none passes for an approval or wakes
 # the gate's own comment trigger.
 #
@@ -425,6 +434,17 @@ set -e
 #   read once, and merge_gate.py asks verify_scope.decide with the compare
 #   record's files and that card. Out of scope merges with a note; in scope,
 #   or an input it could not read, holds and says which.
+# DRE-8171 (2026-10-27). Every pull request merged with --merge, so the last
+#   four proof records (#1263, #1202, #1191, #1178) landed as two-parent merge
+#   commits carrying every commit of their branch, and a record branch whose
+#   commits named a person would have put that name on `main` for good. A
+#   proof-record branch now merges with --squash (MERGE_METHOD, decided by
+#   proof_record.proof_record_branch); the squash commit's message is the
+#   branch's messages concatenated, which is why the epic's guard reads
+#   commit messages too. The readers that bind to the record still hold on a
+#   squash: the proof close binds the APPROVE to headRefOid and reads the
+#   record there (DRE-5919, DRE-6141), and proof_release compares the tag with
+#   mergeCommit.oid, the squash commit on `main`.
 
 set -euo pipefail
 
@@ -800,10 +820,14 @@ fi
 [ "$REFRESH" = "proceed" ] || { echo "fork refresh: waiting — ${REFRESH_REASON:-no decision read}"; exit 0; }
 
 # Both gates green: advance card, merge as qa-bot.
+# A proof record squashes, every other branch keeps its merge commit (DRE-8171).
+# Asked of the one reader, never restated; a failed ask kills the step unmerged.
+MERGE_METHOD=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_record; print("--squash" if proof_record.proof_record_branch(sys.argv[1]) else "--merge")' "$BRANCH")
+echo "merge method: $MERGE_METHOD"
 [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress" || true
 # Pinned to the evaluated head; a moved head is benign (DRE-2117, DRE-1990).
 # GitHub's refusal text is kept for the out-of-date arm and still logged (DRE-6195).
-if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt; then
+if ! gh pr merge "$PR" "$MERGE_METHOD" --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt; then
   cat /tmp/merge-error.txt >&2
   NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
   if [ -n "$NOW" ] && [ "$NOW" = "$SHA" ]; then
@@ -812,7 +836,7 @@ if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp
     if grep -qF 'Something went wrong while executing your query' /tmp/merge-error.txt; then
       echo "GitHub answered the merge with its own server error, the head still at $SHA — trying once more"
       sleep "${MERGE_RETRY_SECONDS:-15}"
-      gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt && merged
+      gh pr merge "$PR" "$MERGE_METHOD" --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt && merged
       cat /tmp/merge-error.txt >&2
     fi
     # GitHub's up-to-date rule, which this gate does not enforce: one update
