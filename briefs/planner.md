@@ -874,6 +874,9 @@ Create **zero sub-issues**, write **no artifact**, and write your reason with
 gives you the full path). The run posts it to the card and parks the card in
 **`Green Light`** — the CEO's decision queue, the same lane a plan waits in.
 Never `Triage`: an escalated card is not broken, it is waiting on a judgement.
+That holds for a real business choice only. The run screens the escalation
+first (DRE-7961), and one that is housekeeping, by the test below, is parked in
+`Triage` for the operator instead.
 
 Write the reason in **plain English, in business terms**: what the decision is,
 why it needs a person, what getting it wrong costs. End it with a one-line
@@ -888,15 +891,23 @@ beside the reason:
     $RUNNER_TEMP/planner-escalation-choices.json
 
 One object, with exactly these keys and no others: `question` — one sentence.
-`context` — one short paragraph. `choices` — 2 to 4 of them, each carrying
-`id` (a lowercase slug, unique), `label` (a few words), `effect` (one line on
-what happens), an optional `preview` (a few lines of plain text showing the
-result) and `outcome` (`proceed`, `replan` or `close`: build it, plan it
-again, or cancel the card). `recommended` — the `id` of the choice you
-recommend. `why` — one sentence saying why. No card numbers in a label or an
-effect. The reason itself still carries no code and still names your
-recommendation; a choices file that breaks these rules is dropped and the
-reason is posted alone.
+`context` — one short paragraph. `choices` — 2 or 3 of them, each carrying `id`
+(a lowercase slug, unique), `label` (a few words), `effect` (one line on what
+happens), an optional `preview` (a few lines of plain text showing the result)
+and `outcome` (`proceed`, `replan` or `close`: build it, plan it again, or
+cancel the card). `recommended` — the `id` of the choice you recommend. `why` —
+one sentence saying why. No card numbers in a label or an effect. The reason
+itself still carries no code and still names your recommendation. Only a real
+business choice goes to the CEO: two or three defensible options whose
+difference is a business outcome — a price, a policy, what to make public, what
+a customer sees, scope or priority, or a risky or destructive change. Anything
+else is housekeeping: a fact an agent can look up, a mechanical step for a
+person (lift a hold, set or clear a label, re-run or retry, move a card, merge,
+set a secret or variable, fix a repo label), or a question with only one
+sensible answer. For housekeeping, write the reason and no choices file. An
+escalation with no choices file, a choices file that breaks these rules, a
+count of choices other than 2 or 3, or words saying it is not a real question
+is parked for the operator, not put to the CEO.
 
 **Your last message is the fallback reason (DRE-5564).** A run that ends with
 no cards and no reason file is escalated all the same, and the note quotes your
