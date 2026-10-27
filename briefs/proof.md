@@ -184,8 +184,8 @@ asks for a reading the declaration does not hold is a cause row, below.
   `Not observed. cause: out-of-reach — <the command's reason>`. A press on the
   list that the command sends and the live console refuses (`outcome` `failed`
   with the console's `FORBIDDEN`) is written
-  `Not observed. waiting for the operator's press: <the press> — the console refused the proof-reader: <reason>`,
-  so the dispatcher holds the card for the operator exactly as it does today
+  `Not observed. cause: out-of-reach — the console refused the proof-reader: <reason>`:
+  no person presses in the run's place, so the record closes with a fix card
   (see "When the console is not ready", below).
 - **Never:** never a person's account, never the CEO's account, never a
   sign-in typed into a web page by the run itself. Hosted sign-ins are rationed
@@ -234,9 +234,9 @@ The board is `Intake` → `Planning` → `Green Light` → `Queued` →
 `Hand-work` beside `In Progress` as the lane where a person's work waits. A proof card
 is dispatched from `Hand-work` and you never move it. The workflow does, in
 three moves and no other (DRE-5925): your escalation file parks it in
-`Green Light`, the CEO's "needs you" queue, only when it names a press or a
-decision — a file of cause rows leaves the card `In Review` for the operator
-(DRE-6840); the run his signed answer dispatches returns it to `Hand-work`
+`Green Light`, the CEO's "needs you" queue, only when it names the CEO's press
+or a decision — a cause row asks nobody, and the card stays `In Review` for
+the gate (DRE-6840, DRE-7953); the run his signed answer dispatches returns it to `Hand-work`
 before you start; and an open record pull request carries it to `In Review`. `Triage` is the broken-card lane, and a
 proof card reaches it only through a step that is not yours — the escalation
 file is the one thing you write that asks for anything. Read a lane in
@@ -303,9 +303,10 @@ shape is the one `scripts/hygiene_done.py` reads, in this order:
 1. **A title naming the card and the epic** —
    `# PROOF record — DRE-<n>: <card title> (epic DRE-<epic>)`.
 2. **A status line**, exactly one of `**Status: PASS | PARTIAL | FAIL.**` —
-   `**Status: PASS.**` when every judged row is `Met.` (or accepted by the
-   operator, below), `**Status: FAIL.**`
-   when any row is `Not met.`, `**Status: PARTIAL.**` otherwise.
+   `**Status: PASS.**` when every judged row is `Met.`, `**Status: FAIL.**`
+   when any row is `Not met.` — a wording-only row included, because the
+   critic's acceptance (below) comes after you write the record —
+   `**Status: PARTIAL.**` otherwise.
 3. **`## How this was recorded`** — the run id and its URL, the commit and
    release you observed, and every time in Pacific (`2026-10-06 14:05 PT`),
    never UTC.
@@ -338,15 +339,18 @@ for it (DRE-6488).** When the criterion can be observed once something happens
 that no one on this card has to cause — a release not yet cut, a date not yet
 reached, a scheduled run that has not fired — the Result reads
 
-    Not observed. waiting for <the event>: <what it would show>
+    Not observed. waiting for <the event> [not-before=<ISO 8601 time with UTC offset>]: <what it would show>
 
 and names the event. A capability the run lacks — no browser on a local run,
 `aws: none`, a spent sign-in ration, the Linear request cap, a repository the
-read token cannot reach — is written as above, never as `waiting for`. The
-sweep reads this shape and nothing else: a record with a waiting row is held
-with `🔬 proof-waiting` naming the event, whether the critic sent it back or
-the gate declined it (DRE-6814), and is re-run once the operator records that
-it happened; a record whose unmet rows are all of another kind is re-run.
+read token cannot reach — is written as above, never as `waiting for`. A
+person's press is never an event: it is the CEO's press or an OPERATOR card,
+below. The sweep reads this shape and nothing else: a record with a waiting
+row is held with `🔬 proof-waiting` naming the event, whether the critic sent
+it back or the gate declined it (DRE-6814). The `🔬 proof-waiting` hold is the
+pipeline's own: it waits for a time and never a person, and the pipeline lifts
+it and re-runs the record (DRE-7951). A record whose unmet rows are all of another kind is
+re-run.
 
 **A row that read history says so, and a row with a known fix names it
 (DRE-7740).** Only the proof dispatcher reads these two markers, and it reads
@@ -377,28 +381,41 @@ nothing else for them — never a fix or a closed window out of prose.
   one fix card for the defect in the build, and its shipping gets the proof
   that one more run the same way (DRE-7953).
 
-**Stamp a waiting row whose event happens at or by a known time (DRE-7316).**
-A window that closes at a stated time, a weekly report filed on a stated day,
-the next morning's scheduled run: the row carries the time right after the
-event, in square brackets,
-
-    Not observed. waiting for <the event> [not-before=<ISO 8601 time with UTC offset>]: <what it would show>
-
-for example
+**Every waiting row is stamped (DRE-7316, DRE-7951).** Every waiting row
+carries `[not-before=<T>]`, right after the event: the earliest time its event
+can have happened. A window that closes at a stated time, a weekly report
+filed on a stated day, the next morning's scheduled run — for example
 
     Not observed. waiting for the weekly report for the week ending 2026-10-17 [not-before=2026-10-18T09:00-07:00]: the report names every stop
 
 Stamp the earliest time the event can be read, not the time it is due: add
-margin for a scheduled run's normal lateness. Write the offset, always — a
-time with none, or one that does not parse, is read as no stamp. When every
-waiting row in the record is stamped, the sweep's hold waits for the latest of
-their times and nothing else, and once that time passes the sweep re-runs the
-record itself, with no one posting anything. The re-run reads every row again;
-a row whose event still has not happened gets a later stamp. At most two such
-timed re-runs per record pull request, then the record is held for the
-operator. A row whose event has no knowable time — a person's press, a release
-nobody has scheduled — stays prose, exactly as above, and the operator's
-`🔬 proof-observed` is what lets that record re-run.
+margin for a scheduled run's normal lateness. An event no one has dated — a
+release nobody has scheduled — is stamped with the earliest time it can have
+come, read off what brings it, such as the release train's next run. Write
+the offset, always — a time with none, or one that does not parse, is read as
+no stamp. When every waiting row in the record is stamped, the sweep's hold
+waits for the latest of their times and nothing else, and once that time
+passes the sweep re-runs the record itself, with no one posting anything — at
+most two such timed re-runs per record pull request. A waiting row left
+unstamped is not waited on either: its hold lifts itself twelve hours after it
+is posted, and the pipeline re-runs the record to stamp it. Your prompt's
+`Dispatched because:` line says which of these runs you are:
+
+- **A re-check.** A reason that opens
+  `re-check of the waiting rows at <sha7>` is the run a lift starts when a
+  waiting row was not stamped. Re-observe every waiting row, and stamp every
+  row still waiting.
+- **A timed re-run.** Read every row again; a row whose event still has not
+  happened gets a later stamp.
+- **The last timed re-run.** A reason that opens
+  `last timed re-run after not-before <PT> at <sha7>` is the second of the
+  two. A row whose event still has not come is never waiting again — the card
+  described an event that does not come when it says — and reads
+
+      Not observed. cause: misdescribed — the event <event> had not come by <PT>
+
+  so the record closes its card on its approved merge with one fix card
+  (DRE-7952).
 
 **A log read is a quoted phrase, and an empty one needs a control
 (DRE-6778).** A CloudWatch Logs filter pattern for a literal phrase is written
@@ -428,69 +445,79 @@ have written "none was raised" on an empty list that was wrong.
 **A record with any row not met does not merge (DRE-6141).** The merge gate
 reads the table at your pull request's head and holds it open while any judged
 row reads `Not observed.` or `Not met.` — the record has no closing row, and an
-older record's closing row is not judged. The card cannot close either: its
-close reads the same table, and it also refuses while a `🔬 proof-waiting` hold
-stands that nothing discharged.
-An approved, all-met record that merged overrides an operator's
-`🔬 proof-waiting` hold posted before the merge — the proof dispatcher's own
-holds and one typed with `linear_ops.py proof-waiting` — because the merged
-record is the observation the hold was waiting for (DRE-6489). Two holds
-still stand: one naming the CEO's press, until his signed console answer,
-and one posted after the merge. Write the
-record exactly as you saw it anyway, open its pull request, and let the gate
-hold it. The hold is the right outcome for a proof that saw nothing. A held
-record is amended in place by the next run (resume, below), and the gate reads
-it again on every new head, so a record whose rows are all met merges with
-nobody involved. For a press only the CEO can make, the park below is what
-brings that next run. For any other row, the sweep sends the record back to a
-proof run when the critic sends it back, or once the critic has approved it
-and the gate has declined it at its head — twice per record pull request, whichever trigger spent them, then one more run per re-arm event, and never
-another without one (DRE-5931, DRE-6488, DRE-7740). After the two the card is
-held for an operator; a re-arm event is a card a row names by `fix:` shipping
-— or a card filed against the proof as a blocker since its last run, in this
-repo or another (DRE-8156) — or a new `🔬 proof-observed` from the operator. On either trigger, a record with a row waiting for an event is held
-until the operator records the event instead — or, when every waiting row is
-stamped, until the latest stamp passes (DRE-7316) — even beside a row a re-run could
+older record's closing row is not judged. Two kinds of unmet row do not hold
+it: a wording-only row the critic accepted (below), and a gap — a record whose
+unmet rows are all cause rows or history rows merges on its approved record,
+and its card closes with one fix card (DRE-7952). The card cannot close
+otherwise: its close reads the same table, and it also refuses while a
+`🔬 proof-waiting` hold stands that nothing discharged.
+An approved, all-met record that merged overrides a `🔬 proof-waiting` hold
+posted before the merge — the proof dispatcher's own holds and one typed with
+`linear_ops.py proof-waiting` — because the merged record is the observation
+the hold was waiting for (DRE-6489). Two holds still stand: one naming the
+CEO's press, until his signed console answer, and one posted after the merge.
+Write the record exactly as you saw it anyway, open its pull request, and let
+the gate hold it. The hold is the right outcome for a proof that saw nothing.
+A held record is amended in place by the next run (resume, below), and the
+gate reads it again on every new head, so a record whose rows are all met
+merges with nobody involved. For a press only the CEO can make, the park below
+is what brings that next run. For any other row, the sweep sends the record
+back to a proof run when the critic sends it back, or once the critic has
+approved it and the gate has declined it at its head — twice per record pull
+request, whichever trigger spent them, then one more run per re-arm event, and
+never another without one (DRE-5931, DRE-6488, DRE-7740). When the two are
+spent and every unmet row is a plain `Not met.` naming no fix, the dispatcher
+files one fix card for the defect in the build and waits for it to ship
+(DRE-7953). A re-arm event is a card a row names by `fix:` shipping — the
+dispatcher's own fix card among them — or a card filed against the proof as a
+blocker since its last run, in this repo or another (DRE-8156), or a new
+`🔬 proof-observed`. On either trigger, a record with a row waiting for an
+event is held until the latest stamp passes, or for twelve hours when a waiting
+row is unstamped (DRE-7316, DRE-7951) — even beside a row a re-run could
 answer: no run before the event can make it merge, and the one re-run after it
-re-observes every row (DRE-6814). A record the gate declined whose unmet rows
-all carry a cause word is never sent back — it is parked for the operator's
-decision on those rows (DRE-6610). Never reword a row to get it merged.
+re-observes every row (DRE-6814). Every one of these holds is the pipeline's
+own: it waits for a time or a fix card shipping, never a person, and the
+pipeline lifts it. A record the gate declined whose unmet rows are all gaps is
+never sent back — a re-run reads the same thing — and nobody is asked about it
+(DRE-7952, DRE-7953). Never reword a row to get it merged.
 
-**A row shown working but not as the card words it is accepted by the
-operator, never by you (DRE-6244, DRE-6773).** The CEO decided on 2026-10-10
-which unmet rows the operator may accept:
+**A row shown working but not as the card words it is a wording-only row, and
+the record's critic accepts it (DRE-6244, DRE-6773, DRE-7949).** The CEO
+decided on 2026-10-10 which unmet rows may be accepted:
 
-- A row may be accepted by operator decision only where the mechanism was
-  actually observed working and just the card's wording, quoted text, timing,
-  count or method of observing differs. A criterion overtaken by a later
-  shipped decision is one case of this.
-- The acceptance names what was seen, quoted from the record, says what
-  differs from the card's words, and links the written decision. The operator
-  writes the decision and the row — never the builder and never the proof
-  run.
+- A row may be accepted only where the mechanism was actually observed
+  working and just the card's wording, quoted text, timing, count or method
+  of observing differs. A criterion overtaken by a later shipped decision is
+  one case of this.
+- The acceptance names what was seen, quoted from the record, and says what
+  differs from the card's words. The record's critic writes it, in its
+  verdict — never the builder and never the proof run.
 - A row where the thing itself was not seen is never accepted: it stays unmet
   and waits for a new run or a reworded card. That covers a value that is only
   a default, a reader with no access, an event that has not happened, a
   missing positive control, and indirect evidence. A row that is part shown
   and part not seen is not acceptable either.
 
+Where you saw the mechanism working and only the card's wording, quoted text,
+timing, count or method of observing differs, the Result reads
+
+    Not met. wording-only: seen “<quote>” — differs: <what>
+
+where the quote is what you saw, word for word and in curly quotes — the
+output line, the value, the title — and what differs says how it differs from
+the card's words. A row that was not seen, or was part seen, is never
+wording-only: it is `Not observed.` or a plain `Not met.`.
+
 You never write an accepted row on your own judgment, however plainly the
 design has moved on or the mechanism plainly worked: record `Not observed.` or
-`Not met.` with what you saw, and let the gate hold. Where you saw the
-mechanism working but not as the card words it, write what you saw after the
-`Not met.` in that row's Result, exactly — it is what the operator's acceptance
-will quote. The operator's row reads
-
-    ACCEPTED by operator decision — <reason> (<link>)
-
-where the reason is what was seen and what differs, and the link, in the same
-cell, is a Linear comment
-(`linear.app/<workspace>/issue/DRE-<n>/<slug>#comment-<id>`) or a GitHub pull
-request comment (`github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>`). The
-row without the link is held as not met. A record whose judged rows are all
-`Met.` or accepted is `**Status: PASS.**`, and the card's close names every
-accepted row. The gate checks only that a link of the right shape is present —
-it does not open it, so the critic is the reader who follows it.
+`Not met.` with what you saw, and let the gate hold. That covers the
+acceptance itself — never a Result opening `ACCEPTED by checker`, and never a
+`🔎 proof-row-accepted:` line in the record or in any comment: the gate reads
+either as the reading run's own and holds the row. The record's critic writes
+that line in its verdict, one per wording-only row it accepts, and the gate
+and the card's close read it there only, bound to the head. A record whose
+judged rows are all `Met.` or accepted merges, and the card's close names
+every accepted row and links the verdict that accepted it.
 
 ## A press only the CEO can make, and his answer
 **Which press is his.** A press is the CEO's only when it is a business decision
@@ -501,49 +528,54 @@ is never his. On 2026-10-10 two proofs reached his list on presses that were
 the operator's: DRE-6638 (one project's Builders set to Sonnet 5.5, on the
 sandbox project) and DRE-6663 (Not doing pressed on one groom card).
 
-**The operator's press.** A `Sandbox press:` row is pressed by the run, as the
+**Every other press.** A `Sandbox press:` row is pressed by the run, as the
 console proof-reader (Identities, above), and reads `Met.` with the ids made
-and what was closed or left on the sandbox — never as the operator's row.
-DRE-7711's six sandbox tasks (`createTask`), which waited on the operator from
-2026-10-19, are a press the run now makes. The operator's row stays for the
-presses `standards/card-quality.md` leaves the operator's, and its list, under
-`The sandbox presses, the one list (DRE-7772):`, is read there and never
-restated here. When a criterion names one — a press outside the sandbox, a
-console press the card's words say the operator may make under the operator's
-standing permission of 2026-10-07, a press on the sandbox that is not on the
-list, or the recording of a removal or decision the CEO has already made —
-record it as an event row, even when the card words it `needs the CEO's press:`:
+and what was closed or left on the sandbox. DRE-7711's six sandbox tasks
+(`createTask`), which waited on a person from 2026-10-19, are a press the run
+now makes. Which presses are the run's is the list in
+`standards/card-quality.md`, under
+`The sandbox presses, the one list (DRE-7772):`, read there and never
+restated here.
 
-    Not observed. waiting for the operator's press: <the press>
+A press outside the sandbox is never a row in the record. A press only a
+person can make — a press outside the sandbox, a console press under the
+operator's standing permission of 2026-10-07, a press on the sandbox that is
+not on the list, or the recording of a removal or decision the CEO has already
+made — is its own OPERATOR card the proof is blocked by (DRE-7950), and the
+criterion reads that card's result: the value it set, the run that went green
+after it, what the system answers now. You read that result like any other
+row, and write no escalation file for it. DRE-6638's press (one project's
+Builders set to Sonnet 5.5, on the sandbox project) is such a card: a model
+setting is not on the list.
 
-and write no escalation file for it. The dispatcher holds the card for the
-operator under a `🔬 proof-waiting` hold naming the press (DRE-6814); its
-first half says `the press named on the card` where the criterion says the
-CEO's (DRE-6837), so the operator's `🔬 proof-observed` discharges it, and the
-next pass re-runs the proof to observe the result. It never reaches
-`Green Light`. DRE-6638's press (one project's Builders set to Sonnet 5.5, on
-the sandbox project) stays the operator's: a model setting is not on the list.
+**A card filed before DRE-7944.** An older card may still word a person's
+press as something its proof waits on — the operator's, or the CEO's where
+the press is no business decision of his. Nothing waits on it. Its row reads
 
-**When the console is not ready.** Two things lag this rule. The proof run's
-own prompt gives a press on the sandbox project to the operator until DRE-7781
-rewrites it to this rule, and where the two disagree the prompt wins: the
-press is the operator's row, as it was before. The console release carrying
-DRE-7776, which lets the proof-reader press, ships on the console's own release
-train, and until it ships the press command reaches a console that still
-refuses the proof-reader. A press on the list that the live console refuses is
-written as the operator's row with the console's reason:
+    Not observed. cause: operator-step-unblocked — <what the run saw instead>
 
-    Not observed. waiting for the operator's press: <the press> — the console refused the proof-reader: <reason>
+— what you saw instead is the press not made, or its result not there, with
+no OPERATOR card the proof is blocked by — so the record closes its card on
+its approved merge with one fix card (DRE-7952). Write no escalation file for
+it.
 
-so a proof in that window waits for the operator exactly as it does today, and
-is never left with a cause row nobody holds. A press the command itself
-refuses — a press not on the list, or another project — is a criterion written
-wrong, and stays the cause row,
+**When the console is not ready.** The console release carrying DRE-7776,
+which lets the proof-reader press, ships on the console's own release train,
+and until it reaches the console the press command reaches a console that
+still refuses the proof-reader. A press on the list that the live console
+refuses is a reading the proof identity cannot make, written with the
+console's reason:
+
+    Not observed. cause: out-of-reach — the console refused the proof-reader: <reason>
+
+No person presses in the run's place, so the record closes with a fix card. A
+press the command itself refuses — a press not on the list, or another
+project — is a criterion written wrong, and stays the cause row,
 `Not observed. cause: out-of-reach — <the command's reason>`.
 
 **The CEO's press.** Only when the card's words name a business decision of his
-is the press his. You do not sign in as him and you do not infer it. The row
-reads
+is the press his, and it goes to him in `Green Light` as a decision. You do not
+sign in as him and you do not infer it. The row reads
 
     Not observed. needs the CEO's press: <the press>
 
@@ -583,8 +615,8 @@ this brief says only how the answer is read.
 ## A row you cannot observe as worded
 Some criteria cannot be observed as the card words them however often the run
 is repeated: no event is coming and no press will change it, so a re-run reads
-the same thing again. Such a row names its cause in one of four words, and the
-run asks one question. The words are declared once, in `config/proof-reach.json`,
+the same thing again. Such a row names its cause in one of four words, and it
+asks nobody. The words are declared once, in `config/proof-reach.json`,
 and each has a card of 2026-10-10 as its example:
 
 - `out-of-reach` — a reading the proof identity cannot make: DRE-6543's `gh variable get` row, DRE-6431 row 6.
@@ -605,39 +637,17 @@ the run a reach it was not declared.
 
 You never reword a row — not the criterion copied in, and not a cause row so
 that the gate reads it some other way — and you never write an accepted row.
-DRE-6244's operator acceptance stands: the question below is how the operator
-is asked for it.
+A row you saw working but not as the card words it is the wording-only row,
+above, and the record's critic accepts it.
 
-**The question, once.** When the record carries at least one cause row, first
-push the record and open its pull request, then write
-`/tmp/agent-escalation.txt` once for the card. It holds the three lines
-`console_escalation.py` renders, then one line per cause row:
-
-    🔎 Finding: <how many rows, and which causes>
-    ❓ Question: Accept each row as out of date, reword it on a new card, or drop it?
-    💡 Recommendation: <your pick> — <why>
-    cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>
-
-The Finding says how many rows and which causes, the Question is that sentence
-word for word, and the Recommendation names your own pick and why. That
-Question line, word for word, is what tells the workflow a cause file from a
-decision: a file whose Question is any other is the CEO's decision, its
-`cause:` lines set under it. Each
-`cause:` line copies the criterion from its row, cut to 70 characters, and the
-text after the row's dash. For example:
-
-    🔎 Finding: 2 rows of the proof record cannot be observed as worded (cause: out-of-reach, misdescribed).
-    ❓ Question: Accept each row as out of date, reword it on a new card, or drop it?
-    💡 Recommendation: Reword both on a new card — the read token is not granted variables, and the pool has three slots.
-    cause: out-of-reach — “The repo variable PROOF_POOL_SIZE reads 5” — 403 on gh variable get, Resource not accessible by integration
-    cause: misdescribed — “All five repos run in the shared pool” — a pool of three slots, two of the five repos outside it
-
-A cause row and a press row in one record are one file, written once: the
-press lines keep their shape, as the section above has them, beside the three
-lines and the `cause:` lines. Once the record pull request is open, the
-workflow holds the card `In Review` for the operator and posts the operator's
-question from a file of cause rows; only a press or a decision parks the card
-in `Green Light`. You never post either, and never move the card.
+**Nothing is asked.** A cause row, like a history row, is a gap: a record
+whose unmet rows are all gaps merges on its approved record, its card closes,
+and the close files one fix card in `Intake` carrying each row (DRE-7952).
+Nobody decides anything about the rows first, so write no escalation file for
+a cause row — the workflow would only print its lines to the log (DRE-7953).
+A record that carries the CEO's press beside cause rows writes the press
+sentence alone, as the section above says. You never post anything about the
+rows, and never move the card.
 
 ## Heartbeats
 One line each on the card, never skipping 1/5 — it is your "alive" signal:

@@ -20,6 +20,15 @@ operator's row, and only a business decision of his keeps the CEO's.
 Each test below fails, naming the file, when a document drops the rule, drops
 the list or its line, gives a press on the list as the operator's row, or
 teaches a grammar the dispatcher does not read.
+
+DRE-7954 (epic DRE-7944) took the operator's row out of the proof run's own
+instructions — `briefs/proof.md` and `proof-task.yml`'s prompt. A press
+outside the sandbox is an OPERATOR card the proof is blocked by, and the run
+reads its result; an older card still wording a person's press as a wait gets
+`operator-step-unblocked`, so its record closes with a fix card. Only the CEO's
+press stays, for his business decisions. The planner's brief and the standard
+keep the operator's row until the sibling card that rewrites them, so the
+operator's-row tests below read those two documents only.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ sys.path.insert(0, str(ROOT / "tests"))
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 
 import linear_ops  # noqa: E402
+import plan_proof_reach  # noqa: E402 — the person rows the plan critic reads
 import proof_dispatch  # noqa: E402 — the operator's-press event the hold is written for
 import proof_record  # noqa: E402
 from test_american_english_standard import BRITISH  # noqa: E402
@@ -101,9 +111,28 @@ REACH_SENTENCE = (
     "On the sandbox project `agent-bureau-demo`, and only there, the run "
     "presses as the console proof-reader, through agent-bureau's "
     "`scripts/console_proof_reader.py press`.")
-#: A listed press the live console refuses — the dispatcher holds it as today.
-REFUSED_ROW = ("Not observed. waiting for the operator's press: <the press> — "
-               "the console refused the proof-reader: <reason>")
+#: A listed press the live console refuses — a cause row, never a person's
+#: wait (DRE-7954): no person presses in the run's place.
+REFUSED_ROW = ("Not observed. cause: out-of-reach — the console refused the "
+               "proof-reader: <reason>")
+#: The row an older card's person's press gets (DRE-7954): the cause word
+#: `proof_reach.causes()` declares for an operator step the proof is not
+#: blocked by, so the record closes with a fix card (DRE-7952).
+UNBLOCKED = "Not observed. cause: operator-step-unblocked —"
+#: The phrases no proof-run instruction may say after DRE-7954, matched
+#: case-insensitively with backticks removed and whitespace collapsed. The
+#: sibling card that rewrites `briefs/planner.md` and the standard greps all
+#: three documents for the same list.
+NO_PERSON_WAIT = (
+    "waiting for the operator's press",
+    "accepted by operator decision",
+    "put to the operator",
+    "held for the operator",
+    "the operator writes the decision",
+    "for the operator's decision",
+    "holds the card for the operator",
+    "the operator runs a proof",
+)
 #: A shadow run's sandbox row, word for word as the prompt card says it.
 SHADOW_ROW = ("Not observed. cause: out-of-reach — a shadow run makes no "
               "sandbox press")
@@ -198,6 +227,22 @@ PASSAGES = {
     "standards/card-quality.md": lambda: _section(STANDARD, PROOF_CARD_HEADING),
 }
 BRIEFS = ("briefs/planner.md", "briefs/proof.md")
+#: The documents that still teach the operator's row, until the sibling card
+#: of DRE-7954 rewrites them. `briefs/proof.md` left the list with DRE-7954.
+OPERATOR_PASSAGES = {name: PASSAGES[name]
+                     for name in ("briefs/planner.md", "standards/card-quality.md")}
+
+
+def _plain(text: str) -> str:
+    """Lowercased, backticks removed, whitespace collapsed — how the phrase
+    list is matched (DRE-7954)."""
+    return _flat(text.replace("`", "")).lower()
+
+
+def _blocks(text: str) -> list[str]:
+    """The text cut before each `## ` heading and each paragraph that opens
+    with a bold lead (`**…**`) — a block is one rule and its code lines."""
+    return re.split(r"(?m)^(?=## |\*\*)", text)
 
 
 class EveryDocumentSaysWhosePressTest(unittest.TestCase):
@@ -229,7 +274,7 @@ class EveryDocumentSaysWhosePressTest(unittest.TestCase):
                                      f"the operator's row: {row!r}")
 
     def test_a_sandbox_press_not_on_the_list_is_the_operators_row(self):
-        for name, passage in PASSAGES.items():
+        for name, passage in OPERATOR_PASSAGES.items():
             with self.subTest(name):
                 self.assertTrue(_says_together(passage(), "not on the list", "operator's"),
                                 f"{name} no longer says a sandbox press not on the list "
@@ -238,7 +283,7 @@ class EveryDocumentSaysWhosePressTest(unittest.TestCase):
                               f"{name} no longer names DRE-6638, the press not on the list")
 
     def test_the_operators_row_stays_for_a_press_outside_the_sandbox(self):
-        for name, passage in PASSAGES.items():
+        for name, passage in OPERATOR_PASSAGES.items():
             text = _flat(passage())
             with self.subTest(name):
                 self.assertTrue(_says_together(passage(), "outside the sandbox", "operator"),
@@ -258,7 +303,9 @@ class EveryDocumentSaysWhosePressTest(unittest.TestCase):
     def test_the_operators_row_is_quoted_in_the_waiting_grammar(self):
         """Quoted inline in backticks, or as an indented code line the way
         `briefs/proof.md` quotes its other rows."""
-        for name in BRIEFS:
+        for name in OPERATOR_PASSAGES:
+            if name not in BRIEFS:
+                continue
             raw = PASSAGES[name]()
             quoted = (f"`{OPERATOR_GRAMMAR}`" in _flat(raw)
                       or f"\n    {OPERATOR_GRAMMAR}\n" in raw)
@@ -443,13 +490,17 @@ class TheGrammarIsTheOneTheDispatcherReadsTest(unittest.TestCase):
             OPERATOR_GRAMMAR.replace("<the press>", SANDBOX_PRESS))
         self.assertTrue(event.startswith(proof_dispatch.OPERATOR_PRESS), event)
 
-    def test_the_console_refused_row_is_held_for_the_operator(self):
-        """In the window before the console release, a listed press the live
-        console refuses waits for the operator exactly as it does today."""
-        cell = (REFUSED_ROW.replace("<the press>", "make six tasks on the sandbox")
-                .replace("<reason>", "FORBIDDEN"))
-        event = proof_record.row_waiting(cell)
-        self.assertTrue(event and event.startswith(proof_dispatch.OPERATOR_PRESS), cell)
+    def test_the_console_refused_row_is_a_cause_row_never_a_wait(self):
+        """A listed press the live console refuses waits on nobody (DRE-7954):
+        it is an `out-of-reach` cause row, a gap its record closes with."""
+        cell = REFUSED_ROW.replace("<reason>", "FORBIDDEN")
+        self.assertIsNone(proof_record.row_waiting(cell), cell)
+        self.assertEqual("out-of-reach", proof_record.row_cause(cell), cell)
+
+    def test_an_older_cards_persons_press_is_a_cause_row(self):
+        cell = f"{UNBLOCKED} no OPERATOR card blocks the proof, and the press was not made"
+        self.assertIsNone(proof_record.row_waiting(cell), cell)
+        self.assertEqual("operator-step-unblocked", proof_record.row_cause(cell), cell)
 
     def test_a_met_sandbox_row_and_the_shadow_row_get_no_hold(self):
         self.assertIsNone(proof_record.row_waiting("Met. made task t-1, marked done"))
@@ -487,8 +538,25 @@ class TheWorkflowPromptTest(unittest.TestCase):
 
     def test_item_4_says_whose_press_it_is(self):
         text = _flat(_item_4())
-        for phrase in (SANDBOX, CEO_ROW, BUSINESS, OPERATOR_GRAMMAR, "briefs/proof.md"):
+        for phrase in (SANDBOX, CEO_ROW, BUSINESS, UNBLOCKED, "briefs/proof.md"):
             self.assertIn(phrase, text, f"{self.NAME}: item 4 no longer says {phrase!r}")
+
+    def test_no_arm_waits_on_the_operators_press(self):
+        """DRE-7954: every arm's prompt — the three copies of the press
+        passage — gives no press to the operator to wait on."""
+        for i, prompt in enumerate(_prompts()):
+            with self.subTest(arm=i):
+                self.assertFalse("waiting for the operator's press" in _plain(prompt),
+                                 f"{self.NAME}: arm {i} still words a press as the operator's wait")
+
+    def test_item_4_reads_an_operator_card_the_proof_is_blocked_by(self):
+        text = _flat(_item_4())
+        self.assertTrue(_says_together(_item_4(), "outside the sandbox", "OPERATOR card",
+                                       "blocked by"),
+                        f"{self.NAME}: item 4 does not say a press outside the sandbox is an "
+                        "OPERATOR card the proof is blocked by")
+        self.assertIn(REFUSED_ROW.split(" — the console")[0], text,
+                      f"{self.NAME}: item 4 does not write a refused press as a cause row")
 
 
 class WhatHasNotLandedIsSaidToBePendingTest(unittest.TestCase):
@@ -500,11 +568,13 @@ class WhatHasNotLandedIsSaidToBePendingTest(unittest.TestCase):
     PROMPT_CARD = "DRE-7781"
     REACH_CARD = "DRE-7779"
 
-    def test_the_prompt_lags_the_brief_and_wins_until_it_is_rewritten(self):
+    def test_the_prompt_no_longer_lags_the_brief(self):
+        """DRE-7781 rewrote the prompt, so the brief no longer says the prompt
+        wins until it does (DRE-7954)."""
         press = _section(PROOF, PRESS_HEADING)
-        self.assertTrue(_says_together(press, self.PROMPT_CARD, "prompt wins"),
-                        "briefs/proof.md does not say the prompt wins until "
-                        f"{self.PROMPT_CARD} rewrites it")
+        self.assertFalse(_says_together(press, self.PROMPT_CARD, "prompt wins"),
+                         "briefs/proof.md still says the prompt wins until "
+                         f"{self.PROMPT_CARD} rewrites it")
         self.assertNotIn("reached every proof run", _flat(press),
                          "briefs/proof.md still says the rule reached every proof run "
                          "at the merge")
@@ -523,6 +593,73 @@ class WhatHasNotLandedIsSaidToBePendingTest(unittest.TestCase):
                                        "plan critic refuses", self.REACH_CARD),
                         "briefs/planner.md says the plan critic refuses a listed press "
                         f"without the card that adds the check, {self.REACH_CARD}")
+
+
+class TheProofBriefNamesNoPersonARowWaitsOnTest(unittest.TestCase):
+    """DRE-7954: the proof run's brief names no person a row, a hold or a
+    card waits on, but the CEO for a business decision of his."""
+
+    NAME = "briefs/proof.md"
+
+    def setUp(self):
+        self.raw = PROOF.read_text(encoding="utf-8")
+        self.press = _section(PROOF, PRESS_HEADING)
+
+    def test_none_of_the_phrases_appears(self):
+        text = _plain(self.raw)
+        for phrase in NO_PERSON_WAIT:
+            with self.subTest(phrase):
+                self.assertFalse(phrase.lower() in text, f"{self.NAME} still says {phrase!r}")
+
+    def test_the_ceos_press_is_named_only_for_his_business_decisions(self):
+        ceo = plan_proof_reach.PERSON_ROWS[1]
+        self.assertIn(ceo, _flat(self.press), f"{self.NAME} no longer quotes `{ceo}`")
+        blocks = [b for b in _blocks(self.raw) if ceo in _flat(b)]
+        self.assertTrue(blocks)
+        for block in blocks:
+            with self.subTest(block[:60]):
+                self.assertIn(block, self.press,
+                              f"{self.NAME} quotes `{ceo}` outside the CEO's press section")
+                self.assertTrue(BUSINESS in _flat(block)
+                                or block.startswith("**When you are dispatched again"),
+                                f"{self.NAME} quotes `{ceo}` in a block that is not about "
+                                f"{BUSINESS}: {_flat(block)[:120]!r}")
+        self.assertTrue(_says_together(self.press, BUSINESS, "Green Light"),
+                        f"{self.NAME} no longer says the CEO's business decision goes to "
+                        "him in Green Light")
+
+    def test_a_press_outside_the_sandbox_is_an_operator_card(self):
+        self.assertTrue(_says_together(self.press, "outside the sandbox", "OPERATOR card",
+                                       "blocked by"),
+                        f"{self.NAME} does not say a press outside the sandbox is an "
+                        "OPERATOR card the proof is blocked by")
+        self.assertTrue(_says_together(self.press, "never a row"),
+                        f"{self.NAME} does not say such a press is never a row in the record")
+        self.assertTrue(_says_together(self.press, "reads", "result"),
+                        f"{self.NAME} does not say the run reads the OPERATOR card's result")
+
+    def test_an_older_cards_persons_press_closes_with_a_fix_card(self):
+        press = _flat(self.press)
+        self.assertIn(UNBLOCKED, press,
+                      f"{self.NAME} does not record an older card's person's press "
+                      f"as `{UNBLOCKED} …`")
+        self.assertIn("DRE-7944", press, f"{self.NAME} no longer names DRE-7944")
+        self.assertTrue(_says_together(self.press, "fix card"),
+                        f"{self.NAME} does not say that row closes with a fix card")
+        self.assertIn(STANDING, press, f"{self.NAME} no longer names the {STANDING}")
+        self.assertTrue(_says_together(self.press, "DRE-6638", "not on the list"),
+                        f"{self.NAME} no longer gives DRE-6638's reason: not on the list")
+
+    def test_the_holds_are_the_pipelines_own(self):
+        flat = _flat(self.raw)
+        self.assertTrue(_says_together(self.raw, "`🔬 proof-waiting`", "the pipeline lifts"),
+                        f"{self.NAME} does not say the pipeline lifts its own waiting hold")
+        self.assertTrue(_says_together(self.raw, "time", "never a person"),
+                        f"{self.NAME} does not say a hold waits for a time, never a person")
+        self.assertNotIn("once the operator records", flat,
+                         f"{self.NAME} still re-runs a waiting row once the operator records it")
+        self.assertNotIn("held for an operator", flat,
+                         f"{self.NAME} still holds a card for an operator")
 
 
 class TheIdentitiesBulletKeepsItsParagraphsTest(unittest.TestCase):

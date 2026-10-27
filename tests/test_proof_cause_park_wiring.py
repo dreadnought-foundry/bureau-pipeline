@@ -18,7 +18,9 @@ The step's script is EXECUTED here the way `tests/test_proof_task_workflow.py`
 executes it — its `_StepHarness`, imported — with an argv-recording stub of
 `proof_cause_park.py` (the real one's `park` would write) beside the stubbed
 `linear_ops.py`, so a call the step makes is seen. The prompt's cause step is
-read off every agent arm.
+read off every agent arm: since DRE-7954 it tells the run to write no
+escalation file for a cause row, so the step above is the backstop for a run
+that writes one anyway.
 """
 
 from __future__ import annotations
@@ -403,15 +405,13 @@ class CauseParkStepSourceTest(unittest.TestCase):
         self.assertIn(ptw.RESULT_STEP, park_rows[0])
 
 
-#: The cause step's own phrases, whitespace collapsed.
+#: The cause step's own phrases, whitespace collapsed. Since DRE-7954 a cause
+#: row asks nobody: the record closes its card with one fix card (DRE-7952).
 CAUSE_STEP_PHRASES = (
     "`Not observed. cause: <cause-word> — <what the run saw instead>`",
     "one of the four words briefs/proof.md gives",
-    "AFTER the pull request is open, when the record carries at least one such row",
-    "write /tmp/agent-escalation.txt once for the card in the three declared lines",
-    "`cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>`",
-    "A press and cause rows share the one file",
-    "Never ask twice.",
+    "It asks nobody: write no escalation file for it.",
+    "closes its card on its approved merge, and one fix card is filed for them",
 )
 
 
@@ -420,7 +420,8 @@ def _prompts() -> list:
 
 
 class PromptCauseStepTest(unittest.TestCase):
-    """Every arm tells the run to write its cause rows, in the module's grammar."""
+    """Every arm tells the run to write its cause rows, in the module's
+    grammar, and to ask nobody about them (DRE-7954)."""
 
     def test_every_arm_carries_the_cause_step_and_the_arms_are_equal(self):
         prompts = _prompts()
@@ -442,13 +443,13 @@ class PromptCauseStepTest(unittest.TestCase):
         prompt = _prompts()[0]
         row = re.search(r"`(Not observed\. cause: <cause-word> — [^`]*)`", prompt).group(1)
         self.assertTrue(row.startswith(proof_record.CAUSE_OPENING), row)
-        template = re.search(r"`(cause: <cause-word> — [^`]*)`", prompt).group(1)
-        filled = (template.replace("<cause-word>", "state-gone")
-                  .replace("<criterion, cut to 70>", "The release page names v3")
-                  .replace("<what was seen instead>", "the page answered 404"))
-        self.assertEqual([proof_cause_park.CauseRow(
-            "The release page names v3", "state-gone", "the page answered 404")],
-            proof_cause_park.rows_from_lines([filled]))
+        filled = row.replace("<cause-word>", "state-gone")
+        self.assertEqual("state-gone", proof_record.row_cause(filled))
+
+    def test_no_arm_asks_the_cause_question(self):
+        for prompt in _prompts():
+            self.assertNotIn(proof_cause_park.QUESTION, prompt)
+            self.assertNotIn("`cause: <cause-word> —", prompt)
 
     def test_the_phrases_the_arms_test_pins_are_still_there(self):
         for prompt in (step["with"]["prompt"] for _i, step in ptw._agent_steps()):
