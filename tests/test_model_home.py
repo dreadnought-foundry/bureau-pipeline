@@ -490,13 +490,10 @@ def test_a_hostile_written_by_never_reaches_the_tagged_line(tmp_path, capsys):
 # A home newer than the run's release                                          #
 # --------------------------------------------------------------------------- #
 
-def frozen_defaults() -> dict:
-    """The defaults in the code of the older tree below: the frozen files'."""
-    return mf._normalize_config(model_fixture.fixture_config())
-
-
 def newer_doc(builders: list[str], base: dict | None = None) -> dict:
-    doc = lead(defaults_doc(base), "advisory", "claude-opus-5-5")
+    """The home document `base` — the defaults in the code written as one
+    when None — as a newer `main` might write it."""
+    doc = lead(defaults_doc() if base is None else base, "advisory", "claude-opus-5-5")
     doc["groups"]["workhorse"]["models"] = list(builders)
     doc["agents"]["scout"] = "workhorse"
     doc["projects"]["portico"] = {"workhorse": builders[-1]}
@@ -506,8 +503,10 @@ def newer_doc(builders: list[str], base: dict | None = None) -> dict:
 @pytest.fixture(scope="module")
 def older_tree(tmp_path_factory) -> Path:
     """Today's scripts on the frozen files, in a release that prices no
-    `claude-opus-5-6` and routes to no `portico`."""
-    tree = model_fixture.fixture_tree(tmp_path_factory.mktemp("older-release"))
+    `claude-opus-5-6` and routes to no `portico`. Its homes below are built
+    on the frozen document (DRE-8018)."""
+    tree = model_fixture.fixture_tree(tmp_path_factory.mktemp("older-release"),
+                                      regenerate=False)
     repo_map = json.loads((tree / "config" / "repo-map.json").read_text())
     repo_map.pop("portico", None)
     (tree / "config" / "repo-map.json").write_text(json.dumps(repo_map))
@@ -516,7 +515,7 @@ def older_tree(tmp_path_factory) -> Path:
 
 def test_a_home_newer_than_the_release_is_still_in_force(older_tree, tmp_path):
     builders = [NEWER_MODEL, "claude-sonnet-5-5"]
-    doc = newer_doc(builders, frozen_defaults())
+    doc = newer_doc(builders, model_fixture.fixture_home())
     home = write(tmp_path / "home.json", doc)
     selector = older_tree / "scripts" / "model_fallback.py"
     model, note, err = select_cli("engineer", tmp=tmp_path, selector=selector,
@@ -538,19 +537,20 @@ def test_a_home_newer_than_the_release_is_still_in_force(older_tree, tmp_path):
 
 
 def test_a_group_left_empty_by_setting_aside_is_unreadable(older_tree, tmp_path):
-    home = write(tmp_path / "home.json", newer_doc([NEWER_MODEL], frozen_defaults()))
+    home = write(tmp_path / "home.json", newer_doc([NEWER_MODEL], model_fixture.fixture_home()))
     selector = older_tree / "scripts" / "model_fallback.py"
     model, note, err = select_cli("engineer", tmp=tmp_path, selector=selector,
                                   BUREAU_MODEL_HOME_FILE=home)
-    frozen = model_fixture.fixture_config()
-    assert model == model_fixture.ladder(frozen, "workhorse")[0]
+    # Unreadable: the older tree's own defaults in the code.
+    defaults = model_fixture.fixture_module(older_tree).code_defaults()
+    assert model == defaults["ladders"][defaults["kinds"]["workhorse"]][0]
     assert note.startswith("DEGRADED model-policy:")
     assert UNREADABLE_CLAUSE.search(note), note
     assert any(line.startswith("model-home: unreadable — ") for line in err)
 
 
 def test_home_errors_and_check_refuse_all_three_entries(older_tree, tmp_path):
-    doc = newer_doc([NEWER_MODEL, "claude-sonnet-5-5"], frozen_defaults())
+    doc = newer_doc([NEWER_MODEL, "claude-sonnet-5-5"], model_fixture.fixture_home())
     slugs = set(mf.declared_repo_slugs()) - {"portico"}
     found = mh.home_errors(doc, mf.declared_prices(), mh.code_side(), slugs)
     assert len(found) == 3, found

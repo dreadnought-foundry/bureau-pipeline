@@ -31,10 +31,13 @@ are pinned in tests/test_model_policy.py — this file is about the ladder WALK.
 Which model leads which ladder, and which group an agent is in, is the
 console's to change (DRE-6862). So every rule of the walk runs against the
 frozen fixture (`tests/model_fixture.py`) — the selector loaded from a
-throwaway tree of the frozen files, or that tree's CLI — and reads every rung
-it expects off the fixture's ladders. Only AgentsRegistryAlignment's `model:`
-check and CommittedStateTest read the committed files, for what must hold for
-any saved state.
+throwaway tree of the frozen files on the frozen home document, or that tree's
+CLI handed the same document — and reads every rung it expects off the
+document's groups (DRE-8018). The tree is built without the generator, and the
+one test of the defaults in the code reads what it expects off the tree's own
+`code_defaults()`. Only AgentsRegistryAlignment's `model:` check and
+CommittedStateTest read the committed files, for what must hold for any saved
+state.
 
 These tests drive the ladder walk with a STUBBED availability function — no real
 network. The is_error heartbeat helpers (attempt_marker/error_marker) and the
@@ -67,23 +70,31 @@ FABLE = "claude-fable-5"
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_FIX_WF = ROOT / ".github" / "workflows" / "agent-fix.yml"
 
-# The frozen config every rule test reads its expected rungs off.
+# The frozen config, read for its code-side facts only, and the frozen home
+# document every rule test reads its expected rungs off.
 FIXTURE = model_fixture.fixture_config()
 SESSION_AGENTS = set(FIXTURE.get("session_agents") or ())
+HOME = model_fixture.fixture_home()
 
-# The selector loaded from a throwaway tree of the frozen files, and that
-# tree's CLI — set by setUpModule.
+# The selector loaded from a throwaway tree of the frozen files on HOME, that
+# tree's CLI, and the tree itself — set by setUpModule.
 fx = None
 FIXTURE_CLI = None
+TREE = None
 _TREE = None
 
 
 def setUpModule():
-    global fx, FIXTURE_CLI, _TREE
+    global fx, FIXTURE_CLI, TREE, _TREE
     _TREE = tempfile.TemporaryDirectory()
-    tree = model_fixture.fixture_tree(Path(_TREE.name) / "tree")
-    fx = model_fixture.fixture_module(tree)
-    FIXTURE_CLI = str(tree / "scripts" / "model_fallback.py")
+    TREE = model_fixture.fixture_tree(Path(_TREE.name) / "tree", regenerate=False)
+    # Reading HOME imports the tree's `model_home`, which puts the tree's
+    # scripts on the path; put it back, so `import dead_run` below is the
+    # repo's.
+    path = list(sys.path)
+    fx = model_fixture.fixture_module(TREE, doc=HOME)
+    sys.path[:] = path
+    FIXTURE_CLI = str(TREE / "scripts" / "model_fallback.py")
 
 
 def tearDownModule():
@@ -91,14 +102,14 @@ def tearDownModule():
 
 
 def walk(role):
-    """The rungs `role` walks in the frozen config: its group's ladder."""
-    return model_fixture.ladder(FIXTURE, FIXTURE["agents"][role])
+    """The rungs `role` walks on the frozen document: its group's models."""
+    return model_fixture.ladder(HOME, HOME["agents"][role])
 
 
 def roles_in(kind):
-    """The pipeline roles the frozen config puts in group `kind`."""
+    """The pipeline roles the frozen document puts in group `kind`."""
     return [
-        role for role, group in FIXTURE["agents"].items()
+        role for role, group in HOME["agents"].items()
         if group == kind and role not in SESSION_AGENTS
     ]
 
@@ -108,8 +119,8 @@ def rung_ids(rungs):
 
 
 def default_ladder():
-    """The frozen config's `default_ladder`, the walk of an unknown role."""
-    return rung_ids(FIXTURE["ladders"][FIXTURE["default_ladder"]])
+    """The walk of an unknown role on a home: the Builders group's models."""
+    return model_fixture.ladder(HOME, fx.WORKHORSE_KIND)
 
 
 EXCLUDED = rung_ids(FIXTURE.get("excluded"))
@@ -130,9 +141,10 @@ def down_to(rung, ladder):
 
 
 def cli_select(*args, available):
-    env = dict(os.environ)
-    # JSON map model->bool consumed by the CLI's test hook.
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available)
+    # The CLI reads HOME, as `fx` did; the JSON map model->bool is consumed
+    # by its test hook.
+    env = model_fixture.home_env(TREE, HOME, BUREAU_FAKE_AVAILABLE=available)
+    env.pop("BUREAU_MODEL_HOME_TOKEN", None)
     return subprocess.run(
         [sys.executable, FIXTURE_CLI, "select", *args],
         capture_output=True, text=True, env=env,
@@ -142,13 +154,13 @@ def cli_select(*args, available):
 class LadderShapeTest(unittest.TestCase):
     def test_the_walk_is_the_configs_ladder_in_the_configs_order(self):
         # The ladder is the contract: what the selector walks is what the
-        # config writes, in the order it writes it. Which model leads is the
-        # config's decision, not this file's; each role's own walk is
+        # home writes, in the order it writes it. Which model leads is the
+        # home's decision, not this file's; each role's own walk is
         # AgentsRegistryAlignment's.
         self.assertEqual(fx.LADDER, default_ladder())
-        for name, rungs in FIXTURE["ladders"].items():
+        for name in HOME["groups"]:
             with self.subTest(ladder=name):
-                self.assertEqual(fx.LADDERS[name], rung_ids(rungs))
+                self.assertEqual(fx.LADDERS[name], model_fixture.ladder(HOME, name))
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(fx.LADDER) <= fx.KNOWN_MODELS)
@@ -207,7 +219,7 @@ class SelectLadderTest(unittest.TestCase):
         # No role hardcodes a model — each walks its group's ladder. Fable
         # probes available too (Anthropic enabled it, 2026-08-09) and is still
         # not chosen: it is not on the walk. See FableIsNotABuildModelTest.
-        for role in FIXTURE["agents"]:
+        for role in HOME["agents"]:
             if role in SESSION_AGENTS:
                 continue
             with self.subTest(role=role):
@@ -261,7 +273,7 @@ class CachingTest(unittest.TestCase):
 
     def test_probe_not_called_repeatedly_within_ttl(self):
         ladder = walk("engineer")
-        peers = [r for r in roles_in(FIXTURE["agents"]["engineer"]) if r != "engineer"]
+        peers = [r for r in roles_in(HOME["agents"]["engineer"]) if r != "engineer"]
         self.assertTrue(peers, "no second role shares the engineer's ladder")
         avail = down_to(ladder[-1], ladder)
         calls = []
@@ -606,7 +618,7 @@ class AgentsRegistryAlignment(unittest.TestCase):
         # DRE-3015: a role is resolved through its group, not handed the build
         # ladder — the planner's group names a different ladder, and that is
         # the one it walks.
-        for role in FIXTURE["agents"]:
+        for role in HOME["agents"]:
             if role in SESSION_AGENTS:
                 continue
             with self.subTest(role=role):
@@ -811,7 +823,10 @@ class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
 
     def test_the_selector_cli_answers_from_the_code_not_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tree = model_fixture.fixture_tree(Path(tmp) / "tree")
+            tree = model_fixture.fixture_tree(Path(tmp) / "tree", regenerate=False)
+            # What the tree's own code says the engineer walks with no home.
+            defaults = model_fixture.fixture_module(tree).code_defaults()
+            top = defaults["ladders"][defaults["kinds"][defaults["agents"]["engineer"]]][0]
             path = tree / "config" / "models.yaml"
             raw = self._edited(yaml.safe_load(path.read_text()))
             path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -822,7 +837,7 @@ class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
                 [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
                  "engineer"], capture_output=True, text=True, env=env)
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertEqual(proc.stdout.strip(), default_ladder()[0])
+        self.assertEqual(proc.stdout.strip(), top)
         self.assertNotIn("REFUSING", proc.stderr)
 
     def test_code_defaults_is_a_fresh_copy_of_the_literal(self):

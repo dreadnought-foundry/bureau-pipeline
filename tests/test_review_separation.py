@@ -64,7 +64,10 @@ model id and role a walk names is read off that document's groups and
 `agents:` map. The `review_separation` block is a fact of the CODE, not a
 choice, so it is read off the frozen `models.yaml` (`fixture_config`), and a
 scenario without a rule changes that block alone (`_on_home`,
-`_write_code_side`). Each name below says what its model IS in the frozen
+`_write_code_side`). A policy scenario that edits a choice edits the
+document's (`_with_home_choices`), and a tree is built without the generator,
+so what the defaults in the code say is read off the tree's own
+`code_defaults()` (DRE-8018). Each name below says what its model IS in the frozen
 document, and `TheFixtureHoldsTheOverlapTest` pins that it still is. What must
 hold for any saved state — the committed file passes `policy_errors`, its
 overlaps are reviewed off their build model, its reviewer roles are advisory,
@@ -78,6 +81,7 @@ how far DOWN a ladder we walk, and nothing here puts a model on a ladder.
 
 from __future__ import annotations
 
+import copy
 import json
 import subprocess
 import sys
@@ -179,7 +183,7 @@ fmf = None
 def setUpModule():
     global _TREE_DIR, TREE, fmf
     _TREE_DIR = tempfile.TemporaryDirectory()
-    TREE = model_fixture.fixture_tree(Path(_TREE_DIR.name) / "tree")
+    TREE = model_fixture.fixture_tree(Path(_TREE_DIR.name) / "tree", regenerate=False)
     fmf = model_fixture.fixture_module(TREE, doc=HOME)
 
 
@@ -189,7 +193,7 @@ def tearDownModule():
 
 def _copy_tree(tmp: Path) -> Path:
     """A fresh fixture tree, for a test that rewrites its code-side facts."""
-    return model_fixture.fixture_tree(tmp / "tree")
+    return model_fixture.fixture_tree(tmp / "tree", regenerate=False)
 
 
 def _choices(cfg: dict) -> dict:
@@ -203,6 +207,13 @@ def _write_code_side(tree: Path, cfg: dict) -> None:
     is changed on a document."""
     assert _choices(cfg) == _choices(_fixture()), "a choice is changed on a document"
     (tree / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
+
+
+def _with_home_choices(cfg: dict) -> dict:
+    """`cfg`, a copy of the frozen `models.yaml`, with the choices the
+    module's selector read off the frozen document in place of the file's —
+    a fresh copy, for a policy scenario that edits a choice."""
+    return {**cfg, **{key: copy.deepcopy(fmf.CONFIG[key]) for key in mf._CHOICE_KEYS}}
 
 
 def _on_home(cfg: dict) -> dict:
@@ -281,7 +292,8 @@ class TheFixtureHoldsTheOverlapTest(unittest.TestCase):
 
     def test_the_code_side_writer_refuses_a_changed_choice(self):
         cfg = _fixture()
-        cfg["ladders"][cfg["kinds"][ADVISORY]["ladder"]].reverse()
+        # A choice the document says, where the file keeps its own.
+        cfg["agents"] = model_fixture.move_agent(HOME, BUILDER, ADVISORY)["agents"]
         with tempfile.TemporaryDirectory() as td:
             tree = Path(td)
             (tree / "config").mkdir()
@@ -419,10 +431,8 @@ class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):
         # The planner's model on the build ladder is a person's choice since
         # 2026-10-10; a rule for it describes no overlap (it is not a reviewer
         # rung), so the RULE is refused as stale, and naming the model.
-        cfg = _fixture()
-        cfg["ladders"][cfg["kinds"][WORKHORSE]["ladder"]].append(
-            {"model": PLAN_TOP, "reason": "the CEO's choice"}
-        )
+        cfg = _with_home_choices(_fixture())
+        cfg["ladders"][cfg["kinds"][WORKHORSE]].append(PLAN_TOP)
         cfg["review_separation"]["rules"].append(
             {"built_on": PLAN_TOP, "reviewers_use": BUILD_ONLY, "reason": "stale"}
         )
@@ -456,23 +466,18 @@ class BelowTheFallbackTest(unittest.TestCase):
         self.assertEqual(fmf.policy_errors(_fixture()), [])
 
     def test_a_dearer_model_below_the_workhorse_fallback_is_a_persons_choice(self):
-        cfg = _fixture()
-        cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
-            {"model": BUILD_ONLY, "reason": "the build model first"},
-            {"model": PLAN_TOP, "reason": "…and the premium one below it"},
-        ]
+        cfg = _with_home_choices(_fixture())
+        # The build model first, and the premium one below it.
+        cfg["ladders"][cfg["kinds"][JUDGEMENT]] = [BUILD_ONLY, PLAN_TOP]
         self.assertEqual(fmf.policy_errors(cfg), [])
 
     def test_an_unpriced_rung_is_refused_in_plain_words(self):
         # A price is never guessed — fail closed, on any rung of any ladder.
-        cfg = _fixture()
-        cfg["ladders"][cfg["kinds"][JUDGEMENT]["ladder"]] = [
-            {"model": PLAN_TOP, "reason": "the planner's model"},
-            {"model": BUILD_ONLY, "reason": "the loud fallback"},
-            {"model": SONNET6, "reason": "priced nowhere"},
-        ]
+        cfg = _with_home_choices(_fixture())
+        # The planner's model, the loud fallback, and one priced nowhere.
+        cfg["ladders"][cfg["kinds"][JUDGEMENT]] = [PLAN_TOP, BUILD_ONLY, SONNET6]
         self.assertEqual(fmf.policy_errors(cfg), [
-            f"ladders.{cfg['kinds'][JUDGEMENT]['ladder']}: {SONNET6} has no "
+            f"ladders.{cfg['kinds'][JUDGEMENT]}: {SONNET6} has no "
             "declared price, so it cannot be chosen."
         ])
 
@@ -763,15 +768,17 @@ class TheDegradePathKeepsTheRuleTest(unittest.TestCase):
     ran on and look exactly like a healthy run."""
 
     def test_the_mirror_carries_the_separation(self):
-        mirror = mf._FALLBACK_MODEL_CONFIG["review_separation"]
+        mirror = mf.code_defaults()["review_separation"]
         cfg = _committed()
         self.assertEqual(sorted(mirror["roles"]), sorted(_separation(cfg)["roles"]))
         self.assertEqual(mirror["rules"], _rules(cfg))
 
     def test_a_truncated_checkout_still_separates(self):
-        instead = _rules(_fixture())[LOWER]
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
+            # With its file unreadable, the tree runs on its code's own rules.
+            defaults = model_fixture.fixture_module(tree).code_defaults()
+            instead = defaults["review_separation"]["rules"][LOWER]
             (tree / "config" / "models.yaml").write_text("{{ not yaml\n")
             model, _ = _cli_select(
                 tree, REVIEWER_ROLES[0], "--built-on", LOWER,
@@ -792,17 +799,16 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
 
     def _adopt(self, cfg, new_id):
         """Swap the lower overlap for a newer one on BOTH ladders, the way an
-        adoption would — and touch nothing else."""
+        adoption would — and touch nothing else. `cfg` carries the frozen
+        document's choices (`_with_home_choices`)."""
         for name, rungs in cfg["ladders"].items():
-            for rung in rungs:
-                if rung["model"] == LOWER:
-                    rung["model"] = new_id
+            rungs[:] = [new_id if model == LOWER else model for model in rungs]
         return cfg
 
     def test_adopting_the_rung_without_the_rule_is_refused(self):
         # Still refused, on the stale rule left behind and the unpriced rung
         # (an unpriced rung is refused on every ladder since DRE-6785).
-        cfg = self._adopt(_fixture(), SONNET6)
+        cfg = self._adopt(_with_home_choices(_fixture()), SONNET6)
         errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "an adoption that drops the rule must be refused")
         self.assertTrue(
@@ -812,7 +818,7 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
 
     def test_adopting_the_rung_WITH_the_rule_is_accepted(self):
         # The adoption declares the candidate's price, so price it here too.
-        cfg = self._adopt(_fixture(), SONNET6)
+        cfg = self._adopt(_with_home_choices(_fixture()), SONNET6)
         for rule in cfg["review_separation"]["rules"]:
             if rule["built_on"] == LOWER:
                 rule["built_on"] = SONNET6
@@ -837,18 +843,17 @@ class CarriedForwardToDre3892Test(unittest.TestCase):
         ]
         prices = dict(model_adoption.load_prices())
         prices[SONNET6] = {"input": 2.0, "output": 10.0}
-        records = model_adoption.classify_catalog(catalog, _fixture(), prices)
+        records = model_adoption.classify_catalog(
+            catalog, model_adoption.home_config(HOME), prices)
         adopted = [r for r in records if r["candidate"] == SONNET6]
         self.assertEqual(len(adopted), 1, records)
-        cfg = _fixture()
         self.assertEqual(adopted[0]["rule"], model_adoption.RULE_ADOPT)
+        # On a home each group's models are the ladder of its key.
         self.assertEqual(
             sorted(
                 r["ladder"] for r in adopted[0]["replaces"] if r["model"] == LOWER
             ),
-            sorted(
-                {cfg["kinds"][ADVISORY]["ladder"], cfg["kinds"][WORKHORSE]["ladder"]}
-            ),
+            sorted({ADVISORY, WORKHORSE}),
         )
 
 
@@ -962,10 +967,11 @@ class TwoSonnetsOnBothLaddersTest(unittest.TestCase):
                 self.assertEqual(sorted(decision["separated"]), sorted([UPPER, LOWER]))
 
     def test_the_mirror_carries_both_rules(self):
-        # The generated mirror equals the file it was generated from.
+        # The defaults in the code equal the file they were generated from:
+        # the committed one, whose scripts the tree carries.
         self.assertEqual(
-            fmf._FALLBACK_MODEL_CONFIG["review_separation"]["rules"],
-            _rules(_fixture()),
+            fmf.code_defaults()["review_separation"]["rules"],
+            _rules(_committed()),
         )
         self.assertEqual(len(_rules(_fixture())), 2)
 
@@ -993,7 +999,7 @@ class AnUnknownBuildKeepsTheProjectsReviewersExceptionTest(unittest.TestCase):
         # The sandbox's lever (bureau-pipeline #1121): the planners' last
         # resort, which no build walk names, first on the project's reviewers.
         cls.doc = model_fixture.with_project(HOME, DEMO, ADVISORY, PLAN_LAST)
-        tree = model_fixture.fixture_tree(Path(cls.tmp.name) / "tree")
+        tree = model_fixture.fixture_tree(Path(cls.tmp.name) / "tree", regenerate=False)
         cls.mod = model_fixture.fixture_module(tree, doc=cls.doc)
 
     @classmethod
@@ -1055,7 +1061,8 @@ class AnUnknownBuildKeepsTheProjectsReviewersExceptionTest(unittest.TestCase):
             doc = model_fixture.with_project(HOME, DEMO, ADVISORY, exception)
             with tempfile.TemporaryDirectory() as td:
                 mod = model_fixture.fixture_module(
-                    model_fixture.fixture_tree(Path(td) / "tree"), doc=doc)
+                    model_fixture.fixture_tree(Path(td) / "tree", regenerate=False),
+                    doc=doc)
                 project_builds = mod._build_models(
                     mod.KINDS, mod.effective_ladders(mod.CONFIG, DEMO))
                 self.assertEqual(sorted(project_builds), builds)

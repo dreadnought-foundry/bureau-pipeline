@@ -721,27 +721,47 @@ def frozen_choice_reads(text: str) -> list[tuple[int, str]]:
     a `ladder(...)` whose first argument is frozen, and a subscript (or `.get`)
     of a frozen value by one of `CHOICE_KEYS`.
 
-    Frozen is a call of `fixture_config()`/`fixture_text()`, of a function that
-    returns one, or a name bound to a value built from any of those — looked up
-    in the function it is used in, then in the module."""
+    Frozen is a call of `fixture_config()`/`fixture_text()` or of a function
+    of this file that returns a frozen value, and a name bound to a frozen
+    value — looked up in the function it is used in, then in the module. A
+    value is frozen when it is one of those, a subscript of one, or a call of
+    a function this file does not define (`yaml.safe_load`, `copy.deepcopy`)
+    with one inside its first argument or the value it is called on. A helper of this file that takes the frozen
+    file and returns something else (one that swaps in a document's choices)
+    is judged by what it returns, and only a read counts: writing a key is no
+    read of the choice the file holds."""
     tree = ast.parse(text)
     functions = [n for n in ast.walk(tree)
                  if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    local = {fn.name for fn in functions}
     readers = set(FROZEN_READERS)
     scopes = {None: tree.body, **{fn: fn.body for fn in functions}}
     frozen: dict = {scope: set() for scope in scopes}
     bound = {scope: {name for name, _ in _bindings(body)} for scope, body in scopes.items()}
 
-    def is_frozen(node, scope) -> bool:
-        for sub in ast.walk(node):
-            if _called(sub, readers):
-                return True
-            if isinstance(sub, ast.Name):
-                if scope is not None and sub.id in bound[scope]:
-                    if sub.id in frozen[scope]:
-                        return True
-                elif sub.id in frozen[None]:
-                    return True
+    def head(node, scope) -> bool:
+        """`node` itself is frozen: a reader's call or a frozen name."""
+        if _called(node, readers):
+            return True
+        if isinstance(node, ast.Name):
+            if scope is not None and node.id in bound[scope]:
+                return node.id in frozen[scope]
+            return node.id in frozen[None]
+        return False
+
+    def derived(node, scope) -> bool:
+        if head(node, scope):
+            return True
+        if isinstance(node, ast.Subscript):
+            return derived(node.value, scope)
+        if isinstance(node, ast.Call) and not _called(node, local):
+            # What the call is made on: its first argument, or the value a
+            # method is called on. A frozen id handed to an editor of a
+            # document further along makes no frozen document.
+            args = node.args[:1]
+            if isinstance(node.func, ast.Attribute):
+                args.append(node.func.value)
+            return any(head(sub, scope) for arg in args for sub in ast.walk(arg))
         return False
 
     changed = True
@@ -750,12 +770,12 @@ def frozen_choice_reads(text: str) -> list[tuple[int, str]]:
         for fn in functions:
             if fn.name not in readers and any(
                     isinstance(r, ast.Return) and r.value is not None
-                    and is_frozen(r.value, fn) for r in ast.walk(fn)):
+                    and derived(r.value, fn) for r in ast.walk(fn)):
                 readers.add(fn.name)
                 changed = True
         for scope, body in scopes.items():
             for name, value in _bindings(body):
-                if name not in frozen[scope] and is_frozen(value, scope):
+                if name not in frozen[scope] and derived(value, scope):
                     frozen[scope].add(name)
                     changed = True
 
@@ -767,29 +787,19 @@ def frozen_choice_reads(text: str) -> list[tuple[int, str]]:
                     inner = fn
         return inner
 
-    def head(node, scope) -> bool:
-        """`node` itself is frozen: a reader's call or a frozen name, not an
-        expression that merely contains one."""
-        if _called(node, readers):
-            return True
-        if isinstance(node, ast.Name):
-            if scope is not None and node.id in bound[scope]:
-                return node.id in frozen[scope]
-            return node.id in frozen[None]
-        return False
-
     found = []
     for node in ast.walk(tree):
         scope = scope_of(node) if hasattr(node, "lineno") else None
-        if _called(node, {"ladder"}) and node.args and head(node.args[0], scope):
+        if _called(node, {"ladder"}) and node.args and derived(node.args[0], scope):
             found.append((node.lineno, "ladder"))
-        elif (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
-              and node.slice.value in CHOICE_KEYS and head(node.value, scope)):
+        elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
+              and isinstance(node.slice, ast.Constant)
+              and node.slice.value in CHOICE_KEYS and derived(node.value, scope)):
             found.append((node.lineno, node.slice.value))
         elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
               and node.func.attr == "get" and node.args
               and isinstance(node.args[0], ast.Constant)
-              and node.args[0].value in CHOICE_KEYS and head(node.func.value, scope)):
+              and node.args[0].value in CHOICE_KEYS and derived(node.func.value, scope)):
             found.append((node.lineno, node.args[0].value))
     return sorted(found)
 
@@ -857,10 +867,17 @@ def test_the_choice_scan_finds_each_way_a_choice_is_read_off_the_frozen_file():
         "    return raw['default_ladder']\n"                         # 17
         "I = FROZEN['review_separation']['rules']\n"                 # 18
         "J = _canonical()['ungrouped']\n"                            # 19
+        "def _swapped(cfg):\n"                                       # 20
+        "    return {**cfg, 'agents': fixture_home()['agents']}\n"   # 21
+        "K = _swapped(FROZEN)['agents']\n"                           # 22
+        "FROZEN['agents'] = {}\n"                                    # 23
+        "L = copy.deepcopy(FROZEN)['projects']\n"                    # 24
+        "M = with_project(fixture_home(), 'x', 'workhorse', A[0])\n" # 25
+        "N = M['projects']\n"                                        # 26
     )
     assert frozen_choice_reads(text) == [
         (2, "ladder"), (3, "ladder"), (4, "agents"), (7, "ladders"), (10, "kinds"),
-        (11, "projects"), (17, "default_ladder"), (19, "ungrouped")]
+        (11, "projects"), (17, "default_ladder"), (19, "ungrouped"), (24, "projects")]
 
 
 def test_the_literal_scan_finds_the_name():

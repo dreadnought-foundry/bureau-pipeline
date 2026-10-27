@@ -71,6 +71,7 @@ state, and derives whatever it expects from that file.
 These tests are the pin. Every one of them fails if its behaviour is removed.
 """
 
+import copy
 import re
 import subprocess
 import sys
@@ -148,7 +149,7 @@ fmh = None
 def setUpModule():
     global _SHARED, fmf, fmh
     _SHARED = tempfile.TemporaryDirectory()
-    tree = model_fixture.fixture_tree(Path(_SHARED.name) / "tree")
+    tree = model_fixture.fixture_tree(Path(_SHARED.name) / "tree", regenerate=False)
     fmf = model_fixture.fixture_module(tree, doc=fixture_home())
     fmh = model_fixture.fixture_module(tree, "model_home")
 
@@ -161,6 +162,14 @@ def _canonical() -> dict:
     """The frozen `models.yaml`, parsed afresh — a test may edit its copy to
     break a rule `policy_errors` holds about a code-side fact."""
     return model_fixture.fixture_config()
+
+
+def _on_the_home() -> dict:
+    """The fixture selector's config, having read the frozen home document:
+    the frozen file's code-side facts and the document's choices. A fresh
+    copy, which a test may edit to break a rule `policy_errors` holds about a
+    choice (DRE-8018)."""
+    return copy.deepcopy(fmf.CONFIG)
 
 
 def _home_errors(doc: dict, side: dict | None = None) -> list[str]:
@@ -180,7 +189,7 @@ def _committed() -> dict:
 
 def _copy_tree(tmp: Path) -> Path:
     """A throwaway tree of today's scripts on the frozen model files."""
-    return model_fixture.fixture_tree(tmp / "tree")
+    return model_fixture.fixture_tree(tmp / "tree", regenerate=False)
 
 
 def _all_up() -> dict:
@@ -1023,7 +1032,7 @@ class DocumentedPolicyTest(unittest.TestCase):
         # sentence is the part a reader believes — "every role is workhorse or
         # advisory" tells them `judgement` was removed, not that they
         # misspelled it.
-        cfg = _canonical()
+        cfg = _on_the_home()
         cfg["kinds"]["judgment"] = cfg["kinds"].pop(JUDGEMENT)  # the typo itself
         errors = fmf.policy_errors(cfg)
         self.assertTrue(errors, "a misspelled kind must be rejected")
