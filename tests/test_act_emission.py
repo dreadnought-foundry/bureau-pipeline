@@ -724,6 +724,25 @@ def _drive_repo_held_notice(mp):
     repo_held_epics.hold_pass("agent-bureau-demo", holds, gql=gql)
 
 
+@site("proof-gap-filed", "proof-gap-filed")
+def _drive_proof_gap_filed(mp):
+    """The PROOF close's fix card (DRE-7952): a closed PROOF card with one
+    out-of-reach row and no receipt on its thread, so the first comment the
+    filer posts is the receipt naming the card it filed. Frozen from its
+    first render: there was no earlier wording to read it off."""
+    import proof_gap  # noqa: PLC0415 — only this driver needs it
+
+    mp.setattr(proof_gap.linear_ops, "find_open", lambda _title: None)
+    mp.setattr(proof_gap.linear_ops, "create_card", lambda *_a, **_k: {
+        "identifier": "DRE-3", "url": "https://linear.app/dreadnoughtfoundry/issue/DRE-3/x"})
+    _card_recorder(mp)
+    proof_gap.file_fix_card(
+        "DRE-1", "DRE-2", "https://github.com/dreadnought-foundry/bureau-pipeline/pull/7",
+        [("The nightly reads the repo variable", "out-of-reach",
+          "Not observed. cause: out-of-reach — `gh variable get` answered 403")],
+        repo_slug="bureau-pipeline", records=[])
+
+
 #: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the

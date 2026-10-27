@@ -29,7 +29,9 @@ checking out an empty ref. THIS checker, plus agent-bureau's
 
 This checker FAILS (exit 1) when:
   * any `actions/checkout` of dreadnought-foundry/bureau-pipeline lacks a
-    `ref:`, or carries any ref other than the canonical threading expression;
+    `ref:`, or carries any ref other than the canonical threading expression
+    — but for the one site `READ_AT_MAIN` names, which must carry exactly
+    `ref: main` and `persist-credentials: false` instead (DRE-8028);
   * any reusable workflow (one with a `workflow_call` trigger) fails to
     declare the `pipeline_ref` input as `type: string` / `required: true`,
     or declares a default for it.
@@ -52,6 +54,18 @@ PIPELINE_REPO = "dreadnought-foundry/bureau-pipeline"
 INPUT_NAME = "pipeline_ref"
 REQUIRED_REF_EXPR = "${{ inputs.pipeline_ref || 'main' }}"
 WORKFLOWS_DIR = Path(__file__).resolve().parent.parent / ".github" / "workflows"
+#: The checkouts of bureau-pipeline that are EVIDENCE an agent reads, never
+#: code the job runs, keyed `(workflow file, job, path)`, each with its
+#: reason. The channel pin is about the scripts a run executes, so it does not
+#: reach these; each must carry exactly `ref: main` and
+#: `persist-credentials: false`. One site, named, and never a pattern.
+READ_AT_MAIN = {
+    ("groomer.yml", "verify", "pipeline"): (
+        "DRE-8028: the groom verify agent reads bureau-pipeline beside the "
+        "card's repo, judged against main as target/ is; at pipeline_ref a "
+        "replay would judge cards against the change under review"),
+}
+READ_AT_MAIN_REF = "main"
 
 
 def _on_block(doc):
@@ -83,6 +97,12 @@ def internal_checkouts(doc):
         if with_.get("repository") == PIPELINE_REPO:
             found.append((job_id, i, step))
     return found
+
+
+def read_at_main(name, job_id, step):
+    """Is this checkout the one `READ_AT_MAIN` names?"""
+    path = (step.get("with") or {}).get("path")
+    return (name, job_id, path) in READ_AT_MAIN
 
 
 def is_reusable(doc):
@@ -122,9 +142,21 @@ def check_workflow(doc, name):
                 )
 
     for job_id, i, step in internal_checkouts(doc):
-        ref = (step.get("with") or {}).get("ref")
+        with_ = step.get("with") or {}
+        ref = with_.get("ref")
         where = f"{name}: jobs.{job_id}.steps[{i}]"
-        if ref is None:
+        if read_at_main(name, job_id, step):
+            if ref != READ_AT_MAIN_REF:
+                violations.append(
+                    f"{where}: a checkout an agent reads (READ_AT_MAIN) must "
+                    f"be read at {READ_AT_MAIN_REF!r}; got {ref!r}"
+                )
+            if with_.get("persist-credentials") is not False:
+                violations.append(
+                    f"{where}: a checkout an agent reads (READ_AT_MAIN) must "
+                    f"carry persist-credentials: false"
+                )
+        elif ref is None:
             violations.append(
                 f"{where}: internal {PIPELINE_REPO} checkout has no ref: "
                 f"— it floats to the default branch and escapes any pin"
@@ -171,7 +203,8 @@ def main(argv):
         for v in violations:
             print(f"FAIL {v}")
         return 1
-    print("ok: every internal checkout threads pipeline_ref; "
+    print("ok: every internal checkout threads pipeline_ref, but the "
+          f"{len(READ_AT_MAIN)} an agent reads at main (READ_AT_MAIN); "
           "every reusable workflow declares it")
     return 0
 

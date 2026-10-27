@@ -110,14 +110,40 @@ DRE-6589 reached Planning with a formal `blockedBy` relation on an In Progress
 card, and the planner could only ask the CEO "wait, or plan now?" — a question
 the board already answered. So `decide`, on an epic, also reads its formal
 blockers, its children and its lane history, and writes `wait=true` with
-`waits_on` when a blocker is open, it has no children and it was never moved to
-In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it to Queued
-and dispatches no planner. Any read that fails writes `wait=false`.
+`waits_on` when a blocker still holds, it has no children and it was never
+moved to In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it
+to Queued and dispatches no planner. A failed read of the epic's relations,
+children or history writes `wait=false`.
+
+A blocker holds by the sweep's own strict rule (DRE-7962), the one its return
+pass sends a waiting epic back to Planning on —
+`reconcile.epic_blockers_unmet(..., release_at_build_done=False)`, asked of
+the helpers it is built from (`strict_blockers`). A blocker that is Done, an
+In Progress epic that is built out, or the proof of an epic that is Done or
+built out does not hold. One whose built-out check or title-and-parent read
+fails does, as the sweep holds it. The wait used to read only
+`prose_blockers.TERMINAL`, and DRE-7831 widened the sweep's rule past it: the
+return pass sent DRE-7283 back behind built-out DRE-7282, the wait parked it
+again, and the two lanes bounced it 148 times in two weeks, each bounce a new
+receipt and a planner slot.
 
 The planner can add the blocker itself, after `decide` read none (DRE-7283,
 2026-10-25). So `wait` makes the same reading again at the planner's
 escalation, and `plan.yml`'s escalation step parks the epic in Queued under
 the same receipt instead of asking (DRE-8001).
+
+## A card with no repo never leaves for the build queue (DRE-8145)
+
+DRE-7961 and DRE-7962 reached Planning with no labels at all. The relay sent
+both planning runs to its default repo, the critic passed both, and this exit
+stamped FLEET on each and parked it in Queued, where no sweep promotes a card
+with no repo. The exit read the role label, the title and the criteria, and
+never the repo. So `_cmd_exit` now asks `validate_card` first — the gate's own
+reading, never a second one here — and a card none of whose `repo:` labels is
+a key of `config/repo-map.json` is refused before anything else is written: no
+verdict, no mark, no escalation. It is told why, held `no-route` through
+`hold.py` and parked in Triage; the hold lifts when the label names a repo on
+the rail, and the card comes back to this exit, which routes it afresh.
 
 CLI:
 
@@ -171,6 +197,17 @@ ONE_OFF_SHAPE = "one-off"
 #: critic on it being empty and the exit on it being set, so it never names a
 #: verdict itself — who is a person is `person_verdict`'s to derive.
 PERSON_OUTPUT = "person"
+
+#: The refusal a card with no repo gets at the exit, and where it parks
+#: (DRE-8145). The lane is a literal, as `planning_escalation.UNREAD_LANE` is,
+#: so `ready_lane_writers` and `triage_reasons` can read the destination.
+NO_REPO_TAG = "planning-exit-no-repo"
+NO_REPO_LANE = "Triage"
+#: The hold the refused card carries: the sweep's stranded watchdog writes the
+#: same reason for the same defect (DRE-6177), and it lifts on `repo-on-rail`.
+NO_ROUTE_REASON = "no-route"
+#: The writer file the hold stamp names.
+WRITER = "planning_route.py"
 
 
 class Unroutable(Exception):
@@ -497,6 +534,55 @@ def _no_wait(reason: str) -> EpicWait:
     return EpicWait(wait=False, waits_on="", reason=reason)
 
 
+def _reconcile():
+    """The sweep, imported for its strict blocker rule (DRE-7962). Late:
+    reconcile imports modules that import this one. It reads `REPO` at import
+    and raises without it, deliberately (DRE-3042); the rule's reads never use
+    it and a plan run's steps do not set it, so it is defaulted for the import
+    — the board snapshot does the same."""
+    os.environ.setdefault(
+        "REPO", os.environ.get("GITHUB_REPOSITORY") or "dreadnought-foundry/bureau-pipeline")
+    import reconcile
+
+    return reconcile
+
+
+def strict_blockers(card: dict) -> tuple[dict[str, str | None], dict[str, str]]:
+    """The sweep's strict reading of `card`'s open formal blockers (DRE-7962):
+    `(held, released)`.
+
+    It is `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`'s
+    reading, asked of the helpers that rule is built from, never restated:
+    `card_relation_blockers` releases an In Progress blocker EPIC that is built
+    out, and `_proof_blocker` releases a PROOF card whose epic is Done or built
+    out (DRE-7831). Every other open blocker is `held` — to None when it waits
+    for Done, else to why it holds, a read that failed included: the sweep
+    holds a blocker it cannot read. `released` names why each was cleared, in
+    the return pass's own words.
+    """
+    reconcile = _reconcile()
+    unbuilt, built_out = reconcile.card_relation_blockers(card)
+    held: dict[str, str | None] = {}
+    released = {blocker: f"is built out (open: {open_children})"
+                for blocker, open_children in built_out.items()}
+    for blocker, why in unbuilt.items():
+        if why is not None:
+            held[blocker] = f"not built out: {why}"
+            continue
+        parent, why = reconcile._proof_blocker(blocker)
+        if parent is not None:
+            released[blocker] = f"is a proof of built-out epic {parent}"
+        else:
+            held[blocker] = why
+    return held, released
+
+
+#: When a waiting epic is planned, in the receipt's words: the sweep's strict
+#: rule, which the return pass brings it back on.
+RELEASE_RULE = ("once every one is Done, an In Progress epic that is built out, "
+                "or the proof of an epic that is Done or built out")
+
+
 def epic_wait(card: dict, history) -> EpicWait:
     """Does an epic still to be PLANNED wait on an open formal blocker?
 
@@ -504,17 +590,23 @@ def epic_wait(card: dict, history) -> EpicWait:
     is `linear_ops.lane_history`'s list, newest first. It waits only when all
     three say it has not been planned yet:
 
-      * at least one `blocks` relation is not in `prose_blockers.TERMINAL` —
-        the reading `reconcile.epic_blockers_unmet(...,
-        release_at_build_done=False)` makes for an epic still to be planned;
-      * it has no children;
       * no entry of its history moves it to `In Progress` — that move is its
-        green light.
+        green light;
+      * it has no children;
+      * at least one open `blocks` relation still holds under the sweep's
+        strict rule (`strict_blockers`) — the one
+        `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`
+        returns a waiting epic to Planning on (DRE-7962). A blocker that is
+        Done, a built-out In Progress epic, or the proof of an epic that is
+        Done or built out does not hold it. A blocker whose built-out check or
+        title-and-parent read fails does: it is named in `waits_on` and the
+        reason says the read failed.
 
     An epic with children or an earlier green light is one DRE-6407 released
     at its blocker's build-done and `mid_epic.py discovery --kind amendment`
     sent back to be re-planned. Holding it in Queued would park running work
-    with nothing to bring it back, so it is planned and the reason says why.
+    with nothing to bring it back, so it is planned and the reason says why —
+    and none of its blockers is read.
     """
     import prose_blockers
 
@@ -533,16 +625,24 @@ def epic_wait(card: dict, history) -> EpicWait:
     if any(((row.get("toState") or {}).get("name")) == "In Progress"
            for row in history or ()):
         planned.append("its lane history moves it to In Progress (an earlier green light)")
-    waits_on = ", ".join(f"{i} ({states[i]})" for i in open_ids)
     if planned:
         return _no_wait(
             f"{' and '.join(planned)}, so it was planned before and is re-planned "
-            f"rather than held on {waits_on}"
+            f"rather than held on {', '.join(f'{i} ({states[i]})' for i in open_ids)}"
         )
+    held, released = strict_blockers(card)
+    if not held:
+        cleared = "; ".join(f"{b} {why}" for b, why in sorted(released.items()))
+        return _no_wait(
+            f"every open blocker is cleared under the sweep's rule — {cleared} — "
+            "so it is planned rather than held"
+        )
+    waits_on = ", ".join(f"{i} ({states[i]})" for i in sorted(held))
+    whys = "".join(f"; {b} holds — {why}" for b, why in sorted(held.items()) if why)
     return EpicWait(
         wait=True,
         waits_on=waits_on,
-        reason=f"it waits on {waits_on} and is planned when every one is Done",
+        reason=f"it waits on {waits_on} and is planned {RELEASE_RULE}{whys}",
     )
 
 
@@ -559,9 +659,11 @@ _WAIT_QUERY = """query($id: String!) { issue(id: $id) {
 
 
 def _read_epic_wait(lops, identifier: str) -> EpicWait:
-    """`epic_wait` for a live epic. Fails open: a relation, children or history
-    read that fails holds nothing, so an unreadable board never parks an epic
-    the planner could plan."""
+    """`epic_wait` for a live epic. Fails open on the epic's own reads: a
+    relation, children or history read that fails holds nothing, so an
+    unreadable board never parks an epic the planner could plan. A blocker's
+    reads are the sweep's (`strict_blockers`, through `linear_ops`), and those
+    fail closed for that one blocker, as the sweep's do (DRE-7962)."""
     try:
         issue = (lops.gql(_WAIT_QUERY, {"id": identifier}) or {}).get("issue") or {}
     except Exception as exc:  # noqa: BLE001 — an unread board holds nothing
@@ -825,6 +927,67 @@ def _roll_up_note(route: Route) -> str:
     ])
 
 
+def unrouted_repo(card: dict) -> list | None:
+    """None when the card names a repo the pipeline routes; otherwise the
+    `repo:` slugs it carries that name none, empty when it carries no label
+    (DRE-8145).
+
+    Read through `validate_card`, never here: `_has_repo` is the card-quality
+    gate's own test — a `repo:` label that is a key of `config/repo-map.json`,
+    or the deprecated `**Repo:**` body line it still accepts — and
+    `unknown_repo_slugs` names the labels that are not. Imported late because
+    `validate_card` imports this module for the one-off shape's name.
+    """
+    import validate_card
+
+    labels = list(card.get("labels") or ())
+    if validate_card._has_repo(card.get("description") or "", labels):
+        return None
+    return validate_card.unknown_repo_slugs(labels)
+
+
+def no_repo_note(identifier: str, unknown) -> str:
+    """The refusal the card carries: what is missing, the fix, and that it was
+    not routed. Plain English — the person who filed the card reads it."""
+    import validate_card
+
+    if unknown:
+        named = ", ".join(f"`repo:{slug}`" for slug in unknown)
+        label = "label names" if len(unknown) == 1 else "labels name"
+        why = (f"Its {named} {label} no repo in `config/repo-map.json`, so "
+               "no repo's run can build it.")
+    else:
+        why = "It carries no `repo:` label, so no repo's run can build it."
+    slugs = ", ".join(f"`{slug}`" for slug in sorted(validate_card.VALID_SLUGS))
+    return "\n".join([
+        f"🚫 {NO_REPO_TAG}: {identifier} was not routed.",
+        "",
+        why,
+        "",
+        ("**The fix:** add the `repo:<slug>` label for the repo this card's "
+         "files live in. The slugs are the keys of `config/repo-map.json`: "
+         f"{slugs}."),
+        "",
+        (f"It is parked in {NO_REPO_LANE} with no routing verdict, under a "
+         f"`{NO_ROUTE_REASON}` hold. The hold lifts once the label names one of "
+         "those repos, and the card goes back to Planning, whose exit routes it "
+         "afresh."),
+    ])
+
+
+def _no_route_at(unknown) -> str:
+    """The hold stamp's qualifier: the first slug the card carries, or none.
+    A slug the stamp cannot carry is stamped as none, as the watchdog does."""
+    import hold
+
+    at = f"repo:{unknown[0] if unknown else 'none'}"
+    try:
+        hold.stamp_line(NO_ROUTE_REASON, at, WRITER)
+    except ValueError:
+        return "repo:none"
+    return at
+
+
 def exit_plan(card: dict, comment_bodies, doc: dict | None = None) -> Exit:
     """How this card leaves Planning, for the two routes that leave here.
 
@@ -1024,6 +1187,27 @@ def _retirement(lops, identifier: str, nodes) -> tuple:
     return retired, note
 
 
+def _refuse_no_repo(lops, identifier: str, card: dict, unknown, bodies) -> int:
+    """Refuse a card with no repo at the exit (DRE-8145): the reason, the
+    hold, then the lane — and no verdict, no mark, no route note.
+
+    The note is said once, keyed on its tag. The hold is applied unless the
+    card already wears it on a live `no-route` stamp, so a retry of a run that
+    died before the move posts nothing twice. The label is on before the move:
+    the plan run a move into Triage fires is refused by the plan-gate for it.
+    """
+    import hold
+
+    _say_once(lops, identifier, NO_REPO_TAG, no_repo_note(identifier, unknown))
+    if hold.reason_of(card.get("labels"), bodies) != NO_ROUTE_REASON:
+        hold.apply(identifier, NO_ROUTE_REASON, _no_route_at(unknown), WRITER)
+    lops.cmd_state(identifier, NO_REPO_LANE)
+    named = ", ".join(f"repo:{slug}" for slug in unknown) or "no repo: label"
+    print(f"{identifier} does not leave Planning on a route — it carries {named}, "
+          f"so it is held {NO_ROUTE_REASON} and parked in {NO_REPO_LANE}")
+    return 0
+
+
 def _cmd_exit(identifier: str) -> int:
     import critic_score
     import linear_ops
@@ -1037,6 +1221,11 @@ def _cmd_exit(identifier: str) -> int:
     # window that the exit did not see would stay live beside the new one.
     nodes = linear_ops.comment_timeline(identifier, whole_thread=True)
     bodies = [node.get("body") or "" for node in nodes]
+    # DRE-8145: a card no repo's run can build is refused before anything is
+    # retired, stamped, marked, escalated or moved on its route.
+    unknown = unrouted_repo(card)
+    if unknown is not None:
+        return _refuse_no_repo(linear_ops, identifier, card, unknown, bodies)
     retired, retirement = _retirement(linear_ops, identifier, nodes)
     if retirement is not None:
         # The exit decides on the card as it will read once the note is
