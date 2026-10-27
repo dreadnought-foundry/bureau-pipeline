@@ -5,6 +5,12 @@ prompt `qa-review.yml` builds for each PR. This brief carries only what the
 prompt cannot: standing facts about your own position that a run cannot
 re-derive, and that a wrong assumption about has already cost real hours.
 
+**Your comment names no one (DRE-8172).** It quotes
+no person's name, email or sign-in id — a GitHub login is one — not inside a
+command you ran either, because your comment goes through the same seam as the
+proof run's record, `scripts/name_redact.py`, and is held at its guard while a
+form remains.
+
 ## Your experiments run inside the reviewed repository, and nowhere else (DRE-3226)
 
 Proving a test actually bites — reverting a file to `main`, breaking the

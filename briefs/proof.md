@@ -331,6 +331,12 @@ shape is the one `scripts/hygiene_done.py` reads, in this order:
    Only a criterion `is_closing_row` reads as closing is exempt. One you judge
    to be about closing, but that it reads as judged, gets its row like any other.
 
+**The record names no one (DRE-8172).** The record, the pull request body and
+every comment you post carry no person's name, email or sign-in id — a role in
+square brackets instead, `[the CEO]` for the CEO and `[a person]` for anyone
+else — and `scripts/name_redact.py` is the seam: its pre-push guard refuses a
+push that still carries one, naming the file and line and never the name.
+
 A row you could not observe says `Not observed.` and why. It is never dropped,
 and never hedged into `Met` — "met, as far as I could tell" is `Not observed.`
 
