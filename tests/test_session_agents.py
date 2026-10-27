@@ -1,5 +1,5 @@
-"""DRE-6833 — an agent the pipeline does not run can be put in a group, and the
-published file says which moves are allowed.
+"""DRE-6833 — an agent the pipeline does not run can be put in a group, and a
+refused move says why in plain words.
 
 THE INCIDENT. On 2026-10-10 the CEO dragged Designer into Builders on Settings ›
 Agents & models. bureau-pipeline run 38114763170 failed at "Validate the change
@@ -23,8 +23,8 @@ THE FIX, as this file pins it:
   * Rule 10 (only the planner is `judgement`) exempts session-run agents and
     nobody else.
   * Every line the change script prints for a refused `move_agent` or
-    `add_agent` is a plain sentence, and the generator publishes the same
-    sentence as the move's `reason`.
+    `add_agent` is a plain sentence. The generator published the same
+    sentence as the move's `reason` until its file went (DRE-8020).
 
 WHERE THE FILE STANDS (DRE-6889). The CEO saves moves and new agents from the
 page, so the committed file holds the session-run agents wherever he last put
@@ -57,7 +57,6 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.yaml"
 AGENTS = ROOT / "agents.yaml"
-CHOICES = ROOT / "config" / "model-choices.json"
 SCRIPT = ROOT / "scripts" / "model_config_change.py"
 
 sys.path.insert(0, str(ROOT / "scripts"))
@@ -424,13 +423,12 @@ def _a_builder() -> str:
 
 
 def _a_proof_move() -> dict:
-    """A move of `proof` the console allows today, read off the committed
-    `config/model-choices.json` — so a save that moves `proof` into the
-    Reviewers (DRE-7284 gave it a group of its own) moves this choice with
-    it."""
-    choices = json.loads(CHOICES.read_text(encoding="utf-8"))
-    agent = next(a for a in choices["agents"] if a["name"] == "proof")
-    return _move("proof", next(m["group"] for m in agent["moves"] if m["allowed"]))
+    """A move of `proof` into a group of the frozen home document other than
+    the one `proof` is in there — read off the document, never a file a save
+    rewrites (DRE-8020)."""
+    home = fixture_home()
+    return _move("proof", next(group for group in home["groups"]
+                               if group != home["agents"]["proof"]))
 
 
 FAMILIES = [
@@ -493,53 +491,3 @@ def test_the_registry_line_still_refuses_a_name_that_is_in_neither(tmp_path):
     for line in errors:
         assert_plain(line)
 
-
-# --------------------------------------------------------------------------- #
-# 5. The published file and the change script agree, move for move            #
-# --------------------------------------------------------------------------- #
-
-def _choices() -> dict:
-    return json.loads(CHOICES.read_text(encoding="utf-8"))
-
-
-def test_every_agent_carries_runs_in_in_the_contract_order():
-    session = yaml.safe_load(_text())["session_agents"]
-    for agent in _choices()["agents"]:
-        assert list(agent) == ["name", "label", "about", "group", "runs_in", "moves"]
-        expected = "session" if agent["name"] in session else "pipeline"
-        assert agent["runs_in"] == expected, agent["name"]
-
-
-def test_every_agent_has_a_move_for_every_group_it_is_not_in():
-    raw = yaml.safe_load(_text())
-    groups = list(raw["kinds"])
-    for agent in _choices()["agents"]:
-        others = [g for g in groups if g != agent["group"]]
-        assert [m["group"] for m in agent["moves"]] == others, agent["name"]
-        assert agent["moves"], agent["name"]
-    for name in raw["session_agents"]:
-        agent = next(a for a in _choices()["agents"] if a["name"] == name)
-        assert agent["group"] == raw["agents"].get(name), agent
-        assert len(agent["moves"]) == len(groups) - (agent["group"] is not None)
-        assert all(m["allowed"] for m in agent["moves"]), agent
-
-
-def test_every_published_move_is_what_apply_check_answers(tmp_path):
-    """The full grid, through the real CLI against the real file: `allowed` is
-    its exit code, and a refused move's `reason` is the line it prints."""
-    checked = 0
-    for agent in _choices()["agents"]:
-        for move in agent["moves"]:
-            proc, errors, _ = _cli_apply(tmp_path, _move(agent["name"], move["group"]))
-            assert proc.returncode in (0, 2), proc.stdout + proc.stderr
-            assert move["allowed"] is (proc.returncode == 0), (agent["name"], move)
-            if move["allowed"]:
-                assert move["reason"] is None
-            else:
-                assert move["reason"] == " ".join(_refusal_lines(errors)), (
-                    agent["name"], move)
-                assert_plain(move["reason"])
-            checked += 1
-    raw = yaml.safe_load(_text())
-    groups = len(raw["kinds"])
-    assert checked == len(raw["agents"]) * (groups - 1) + len(raw["ungrouped"]) * groups

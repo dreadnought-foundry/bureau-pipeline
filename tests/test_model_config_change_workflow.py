@@ -46,8 +46,9 @@ import model_fixture  # noqa: E402
 import whats_new  # noqa: E402
 
 NAME = "Model config change"
-CONFIG_FILES = ("config/models.yaml", "agents.yaml", "scripts/model_fallback.py",
-                "config/model-choices.json")
+# The edit and the generator's two targets; its third, the console's
+# choices file, went in DRE-8020.
+CONFIG_FILES = ("config/models.yaml", "agents.yaml", "scripts/model_fallback.py")
 
 
 def _doc() -> dict:
@@ -133,13 +134,11 @@ def _change_set(*changes: dict) -> str:
 
 
 def _a_proof_move() -> dict:
-    """A move of `proof` the console allows today, read off the committed
-    `config/model-choices.json` — so a save that moves `proof` into the
-    Reviewers (DRE-7284 gave it a group of its own) moves this choice with
-    it."""
-    choices = json.loads((ROOT / "config" / "model-choices.json").read_text())
-    agent = next(a for a in choices["agents"] if a["name"] == "proof")
-    group = next(m["group"] for m in agent["moves"] if m["allowed"])
+    """A move of `proof` into a group of the frozen home document other than
+    the one `proof` is in there — read off the document, never a file a save
+    rewrites (DRE-8020)."""
+    home = model_fixture.fixture_home()
+    group = next(g for g in home["groups"] if g != home["agents"]["proof"])
     return {"op": "move_agent", "agent": "proof", "group": group}
 
 
@@ -324,7 +323,7 @@ def test_the_branch_is_cut_from_origin_main_or_reused_after_a_crash():
 def test_the_model_tests_run_and_their_result_reaches_the_pull_request():
     step = _step("tests")
     assert "python3 -m pytest tests/test_model_policy.py tests/test_model_config.py" in step["run"]
-    assert "tests/test_model_choices.py" in step["run"]
+    assert "test_model_choices" not in step["run"], "the file it tested is gone (DRE-8020)"
     assert "result=" in step["run"]
     pr = _steps()[_index("gh pr create")]
     assert pr["env"]["TESTS"] == "${{ steps.tests.outputs.result }}"
@@ -652,13 +651,20 @@ def test_a_refused_change_set_ends_the_run_with_no_branch_and_no_pull_request(tm
 
 
 def _another_builders_choice() -> str:
-    """A Builders model the console offers that is not today's default, read
-    off the committed `config/model-choices.json` — the scenario runs the
-    workflow against today's files, so it can name no literal model."""
-    choices = json.loads((ROOT / "config" / "model-choices.json").read_text())
-    group = next(g for g in choices["groups"] if g["key"] == "workhorse")
-    return next(c["model"] for c in group["choices"]
-                if c["allowed"] and c["model"] != group["default_model"])
+    """A priced model the change script takes as the Builders' default that is
+    not today's default, derived off the committed files — the scenario runs
+    the workflow against them, so it can name no literal model."""
+    text = (ROOT / "config" / "models.yaml").read_text()
+    default = model_fixture.ladder(yaml.safe_load(text), "workhorse")[0]
+    for model in mcc.declared_prices():
+        if model == default:
+            continue
+        change = {"op": "set_default_model", "group": "workhorse", "model": model}
+        _, refusals = mcc.apply_change_set(
+            text, json.loads(_change_set(change)), today="2026-10-27")
+        if not refusals:
+            return model
+    raise AssertionError("no priced model but today's default is taken for the Builders")
 
 
 def test_a_valid_change_set_opens_one_pull_request_and_a_rerun_opens_none(tmp_path):

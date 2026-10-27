@@ -150,7 +150,7 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_caution.py::test_a_standing_exception_is_current_when_given":
         _FROZEN_CAUTIONS,
     "tests/test_model_caution.py::test_dearer_on_one_side_is_dearer": _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_model_label_moved_and_the_generator_imports_it":
+    "tests/test_model_caution.py::test_model_label_is_family_and_version":
         _OWN_INPUT,
     "tests/test_model_caution.py::test_set_aside_date_is_the_first_date_in_the_excluded_reason":
         _FROZEN_CAUTIONS,
