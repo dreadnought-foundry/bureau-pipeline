@@ -220,6 +220,11 @@ old verdict put on comes off unless the new verdict puts it on too. No verdict
 applies `hand-built` (DRE-6227), so a `hand-built` on the card is a person's
 own, and stays. Two live verdicts on one card are still refused.
 
+**A card with no repo leaves with no verdict (DRE-8145).** The planning exit
+refuses a card none of whose `repo:` labels is a key of `config/repo-map.json`
+to `Triage`, and stamps no verdict on it: the refusal names the fix, and a
+`no-route` hold lifts when the label is added.
+
 | Verdict | Means | Where it goes / who picks it up |
 | -- | -- | -- |
 | **FLEET** | Buildable unattended in one PR | `In Progress` — the sweep promotes it, and that move dispatches the run that builds it (DRE-7120). The ONLY verdict that is dispatched. |

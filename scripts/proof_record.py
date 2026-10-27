@@ -38,12 +38,15 @@ or read the hold. Both now do, through this module:
    lets that hold be one a time lifts.
    `row_cause` (DRE-6607) names the cause a `Not observed. cause: …` row
    carries — one of `proof_reach.causes()` — and `all_unmet_caused` says
-   every unmet row carries one, which the dispatcher reads; the row stays
-   unmet, and `shortfall` still holds the record on it. Two markers only the
-   proof dispatcher reads (DRE-7740): `row_history` reads a `Not met.
-   history: …` row — observed, failed, and on a window or run that cannot
-   change, so it is not a cause — and `row_fixes` the `fix: DRE-<n>` that
-   closes an unmet row's cell. Nothing reads a fix out of free prose.
+   every unmet row carries one, which the dispatcher reads. Two markers
+   (DRE-7740): `row_history` reads a `Not met. history: …` row — observed,
+   failed, and on a window or run that cannot change, so it is not a cause
+   — and `row_fixes` the `fix: DRE-<n>` that closes an unmet row's cell.
+   Nothing reads a fix out of free prose. A cause row and a history row are
+   both GAP rows (`gap_rows`, DRE-7952): unmet, but a re-run would read the
+   same again, so `all_unmet_gaps` — every unmet row one of them — lets
+   `shortfall` pass the record, and the PROOF close files the gaps as one
+   fix card (`proof_gap`).
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
    `open_holds_at` is the same reading with each hold's time, for the PROOF
    close (DRE-6489). `time_only` (DRE-7228) reads one of those holds as
@@ -511,8 +514,36 @@ def reading(text: str, verdict=None, others=()) -> Reading:
 
 def all_unmet_caused(read: Reading) -> bool:
     """Is there an unmet row, and does every unmet row carry a cause word?
-    The dispatcher reads it (DRE-6607); the record is still held on them."""
+    The dispatcher reads it (DRE-6607)."""
     return bool(read.unmet) and len(read.caused) == len(read.unmet)
+
+
+#: The kind `gap_rows` names a `Not met. history:` row with — beside the four
+#: cause words, never one of them (DRE-7740).
+HISTORY_KIND = "history"
+
+
+def gap_rows(read: Reading) -> list:
+    """`(criterion, kind)` for each unmet row that carries one of the four
+    cause words or is a history row (DRE-7952): `kind` is the cause word, or
+    `HISTORY_KIND`. A re-run reads either the same again, so such a row is a
+    gap the PROOF close files as a fix card, never a hold. A row the checker
+    accepted is accepted, so it is never here."""
+    gaps = []
+    for criterion, result in read.unmet:
+        word = row_cause(result)
+        if word is None and row_history(result) is not None:
+            word = HISTORY_KIND
+        if word is not None:
+            gaps.append((criterion, word))
+    return gaps
+
+
+def all_unmet_gaps(read: Reading) -> bool:
+    """Is there at least one judged row, and is every unmet row a gap row
+    (`gap_rows`)? Such a record closes its PROOF card, gaps and all (DRE-7952)."""
+    judged = bool(read.met or read.accepted or read.unmet)
+    return judged and len(gap_rows(read)) == len(read.unmet)
 
 
 def _cut(text: str, n: int) -> str:
@@ -764,9 +795,10 @@ def fetch(repo: str, files, ref: str, gh=None) -> Record:
 
 def shortfall(record: Record, verdict=None, others=()) -> str | None:
     """Why this record does not prove its card, or None when every judged row
-    is met or accepted — the one judgment the merge gate and the PROOF close
-    make. `verdict` and `others` are `reading`'s: the bound critic verdict
-    and every other comment's body (DRE-7949)."""
+    is met or accepted, or every unmet row is a gap row (`all_unmet_gaps`,
+    DRE-7952) — the one judgment the merge gate and the PROOF close make.
+    `verdict` and `others` are `reading`'s: the bound critic verdict and
+    every other comment's body (DRE-7949)."""
     if record is None or record.text is None:
         detail = getattr(record, "detail", None) or "nothing was read"
         return f"no proof record could be read — {_one_line(detail)}"
@@ -774,12 +806,12 @@ def shortfall(record: Record, verdict=None, others=()) -> str | None:
     read = reading(record.text, verdict, others)
     if read.rows is None:
         return f"{path} has no criterion table"
-    if read.unmet:
+    if read.unmet and not all_unmet_gaps(read):
         refused = dict(read.refused)
         rows = "; ".join(f"{_row(c, r)} — {refused[(c, r)]}" if (c, r) in refused
                          else unmet_row(c, r) for c, r in read.unmet)
         return f"{path} has {len(read.unmet)} row(s) not met: {rows}"
-    if not read.met and not read.accepted:
+    if not read.met and not read.accepted and not read.unmet:
         return f"{path} has a criterion table with no row but its closing step"
     return None
 

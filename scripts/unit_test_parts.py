@@ -74,7 +74,7 @@ seconds for 90% of the test files (`tests/test_unit_test_parts.py`), and every
 pull request that adds one moves the tree toward that floor; on 2026-10-18 a
 docs-only pull request failed on files others had added. `due` answers whether
 the record is under `REMEASURE_MARGIN`, a margin above the floor, and
-`refresh` rebuilds it from the nightly's own four part logs through `measure`.
+`refresh` rebuilds it from the nightly's own part logs through `measure`.
 The walks run in no part, so `refresh` keeps each walk's seconds and
 `provenance` line as they were — `tests/test_walks_time_budget.py` reads both
 — and its `method` names the run and the jobs it measured. `tests.yml`'s

@@ -33,6 +33,12 @@
       "note": "The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug."
     },
     {
+      "unit": "planning_route.py#_refuse_no_repo",
+      "reason_at": "planning_route.py#_refuse_no_repo",
+      "anchor": "no_repo_note(identifier, unknown)",
+      "note": "The planning exit's refusal says the card carries no repo: label, or one naming no repo in config/repo-map.json, that it was not routed, and the fix — add the label for the repo its files live in — beside a no-route hold stamp (DRE-8145)."
+    },
+    {
       "unit": "rereview_watch.py#_fire",
       "reason_at": "rereview_watch.py#_fire",
       "anchor": "epic-rereview-twice",

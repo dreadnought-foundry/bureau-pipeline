@@ -228,6 +228,17 @@
       "reason": "work: the flaky test's fix card (DRE-6870)"
     },
     {
+      "id": "proof-gap-fix",
+      "repo": "bureau-pipeline",
+      "file": "scripts/proof_gap.py",
+      "title": [
+        "<repo>: the gaps PROOF <card> closed with — <k> row(s) not observable as worded",
+        "<repo>: the defect in the build PROOF <card> found — <k> row(s) not met"
+      ],
+      "disposition": "kept",
+      "reason": "work: the one fix card a PROOF card's gaps, or a spent re-run budget on a build that fails its rows, are filed as in Intake for the groomer to propose (file_fix_card, DRE-7952)"
+    },
+    {
       "id": "fix-result-stranded",
       "repo": "bureau-pipeline",
       "file": "scripts/report_fix_result.sh",

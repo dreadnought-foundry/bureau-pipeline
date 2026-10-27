@@ -812,6 +812,30 @@ jobs:
           path: target
           persist-credentials: false
 
+      # BUREAU-PIPELINE BESIDE IT, READ-ONLY (DRE-8028). Every repo runs the
+      # pipeline through thin stubs, so the code behind a card about a build,
+      # a review, the medic or a death receipt is often here, not in
+      # `target/`. At `main` — the ref `target/` is read at — and never
+      # `.bureau-pipeline/`, which is at `pipeline_ref` (the pull request's
+      # own head on the replay gate) and holds the scripts that judge the
+      # answer — the one checkout here `scripts/check_pipeline_ref.py` lets
+      # skip `pipeline_ref` (`READ_AT_MAIN`). No `token:`: the job's own `github.token` is bureau-pipeline's,
+      # since every caller of this workflow is a workflow here granting
+      # `contents: read`, so no token is minted for it. Only once the card's
+      # repo checked out, and never for a bureau-pipeline card, which already
+      # has it under `target/`. `continue-on-error`, and the agent's `if`
+      # does not read it: a failed checkout leaves the leg on `target/` alone.
+      - name: Check out bureau-pipeline beside it
+        id: pipeline
+        if: ${{ matrix.repository != '' && matrix.repository != 'dreadnought-foundry/bureau-pipeline' && steps.target.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: main
+          path: pipeline
+          persist-credentials: false
+
       - uses: ./.bureau-pipeline/.github/actions/install-claude-code
         id: install_claude
         if: ${{ matrix.repository != '' && steps.target.outcome == 'success' }}
@@ -901,11 +925,13 @@ jobs:
             --allowedTools "Read,Glob,Grep,Write"
           prompt: |
             Read the file verify-input.md at the workspace root and do what it
-            says. The repository to check is checked out under target/.
+            says. The repository to check is checked out under target/. When
+            that repository is not bureau-pipeline, bureau-pipeline is checked
+            out at main under pipeline/ beside it; pipeline/ may be absent.
 
             Write only the one answer file verify-input.md names. Change
-            nothing under target/, run no commands, and do not commit, push or
-            open a pull request.
+            nothing under target/ or pipeline/, run no commands, and do not
+            commit, push or open a pull request.
 
       # ALWAYS, and it never trusts the step above: on an unmapped repo the
       # agent step reads `skipped` and `--targets` forces `unverified` naming
