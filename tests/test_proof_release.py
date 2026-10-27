@@ -231,6 +231,53 @@ class TagSurface(unittest.TestCase):
         self.assertIn("#870 (9999999) for DRE-5591", got.lines[1])
 
 
+#: A squash merge (DRE-8171): the commit on the default branch is new, and
+#: the branch head the critic reviewed is not on it at all.
+SQUASH_SHA = "5c0a5b1" + "e" * 33
+BRANCH_HEAD = "b7a2c9d" + "a" * 33
+
+
+class SquashedMerge(unittest.TestCase):
+    """The merge gate squashes a proof-record branch, so the merge's sha is a
+    squash commit on the default branch. The dispatcher hands the reader
+    `mergeCommit.oid` — that commit — with no file list, and the tag is
+    compared with it, never with the branch head."""
+
+    def squashed(self, compare: str) -> tuple:
+        read, _ = portals(compare)
+        del read.table[f"repos/{REPO}/compare/portico-portals-v1.0.107...{SHA}"]
+        read.table[f"repos/{REPO}/compare/portico-portals-v1.0.107...{SQUASH_SHA}"] = {
+            "status": compare}
+        read.table[f"repos/{REPO}/pulls/866/files?per_page=100&page=1"] = [
+            {"filename": "portals/src/app.ts"}]
+        # The pull request as proof_dispatch reads it, and the Merge it builds.
+        pr = {"number": 866, "headRefOid": BRANCH_HEAD,
+              "mergeCommit": {"oid": SQUASH_SHA}}
+        merge = proof_release.Merge("DRE-5590", pr["number"],
+                                    (pr.get("mergeCommit") or {}).get("oid"), [])
+        return read, merge
+
+    def test_a_tag_carrying_the_squash_commit_reads_ready(self):
+        self.assertIn("behind", proof_release.CARRIED)
+        read, merge = self.squashed("behind")
+        got = proof_release.reading(REPO, [merge], read=read)
+        self.assertEqual(got.state, "ready", got.lines)
+        self.assertEqual(got.lines, [
+            "ready — portals: newest portico-portals-v1.0.107 carries #866 "
+            "(5c0a5b1) for DRE-5590"])
+        self.assertIn(f"repos/{REPO}/compare/portico-portals-v1.0.107...{SQUASH_SHA}",
+                      read.asked)
+        self.assertFalse(any(BRANCH_HEAD in path for path in read.asked), read.asked)
+
+    def test_a_tag_that_predates_the_squash_commit_reads_waiting(self):
+        read, merge = self.squashed("ahead")
+        got = proof_release.reading(REPO, [merge], read=read)
+        self.assertEqual(got.state, "waiting", got.lines)
+        self.assertEqual(got.lines, [
+            "waiting — portals: newest portico-portals-v1.0.107 does not "
+            "carry #866 (5c0a5b1) for DRE-5590"])
+
+
 class ChannelSurface(unittest.TestCase):
     """(d) A `record: channel` surface is compared against the moving tag."""
 
