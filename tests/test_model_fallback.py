@@ -45,7 +45,6 @@ hold-cap regression (dead_run.py) are preserved and re-asserted here.
 """
 
 import io
-import json
 import os
 import re
 import subprocess
