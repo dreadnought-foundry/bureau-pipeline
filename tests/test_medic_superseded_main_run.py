@@ -430,10 +430,12 @@ def _flat(text: str) -> str:
 
 
 class TheRuleIsWrittenDownTest(unittest.TestCase):
-    def test_the_module_docstring_lists_it_as_rule_5(self):
+    def test_the_module_docstring_lists_it_as_rule_4(self):
+        # Rule 5 until DRE-8021 deleted rule 4, the refused change set.
         doc = medic_retry.__doc__
-        self.assertIn("5. **", doc)
-        rule = doc.split("5. **", 1)[1].split("\n\n", 1)[0]
+        self.assertIn("4. **", doc)
+        self.assertNotIn("5. **", doc)
+        rule = doc.split("4. **", 1)[1].split("\n\n", 1)[0]
         flat = " ".join(rule.split())
         self.assertIn("DRE-6882", flat)
         self.assertIn("not retried", flat)
