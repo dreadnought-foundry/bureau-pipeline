@@ -26,9 +26,13 @@ instructions — `briefs/proof.md` and `proof-task.yml`'s prompt. A press
 outside the sandbox is an OPERATOR card the proof is blocked by, and the run
 reads its result; an older card still wording a person's press as a wait gets
 `operator-step-unblocked`, so its record closes with a fix card. Only the CEO's
-press stays, for his business decisions. The planner's brief and the standard
-keep the operator's row until the sibling card that rewrites them, so the
-operator's-row tests below read those two documents only.
+press stays, for his business decisions.
+
+DRE-7955 did the same for the planner's brief and the standard. Every press
+not on the list, and every press outside the sandbox, is an OPERATOR card the
+PROOF is blocked by in all three documents, and none of them quotes the
+operator's row any more. The dispatcher still reads that row on an older
+card's record, so the grammar tests below still hold its reader.
 """
 
 from __future__ import annotations
@@ -120,9 +124,9 @@ REFUSED_ROW = ("Not observed. cause: out-of-reach — the console refused the "
 #: blocked by, so the record closes with a fix card (DRE-7952).
 UNBLOCKED = "Not observed. cause: operator-step-unblocked —"
 #: The phrases no proof-run instruction may say after DRE-7954, matched
-#: case-insensitively with backticks removed and whitespace collapsed. The
-#: sibling card that rewrites `briefs/planner.md` and the standard greps all
-#: three documents for the same list.
+#: case-insensitively with backticks removed and whitespace collapsed.
+#: `tests/test_no_person_a_proof_waits_on.py` (DRE-7955) greps all three
+#: documents for the same list.
 NO_PERSON_WAIT = (
     "waiting for the operator's press",
     "accepted by operator decision",
@@ -227,10 +231,6 @@ PASSAGES = {
     "standards/card-quality.md": lambda: _section(STANDARD, PROOF_CARD_HEADING),
 }
 BRIEFS = ("briefs/planner.md", "briefs/proof.md")
-#: The documents that still teach the operator's row, until the sibling card
-#: of DRE-7954 rewrites them. `briefs/proof.md` left the list with DRE-7954.
-OPERATOR_PASSAGES = {name: PASSAGES[name]
-                     for name in ("briefs/planner.md", "standards/card-quality.md")}
 
 
 def _plain(text: str) -> str:
@@ -273,24 +273,24 @@ class EveryDocumentSaysWhosePressTest(unittest.TestCase):
                                      f"{name} gives DRE-7711's press, on the list, as "
                                      f"the operator's row: {row!r}")
 
-    def test_a_sandbox_press_not_on_the_list_is_the_operators_row(self):
-        for name, passage in OPERATOR_PASSAGES.items():
+    def test_a_sandbox_press_not_on_the_list_is_an_operator_card(self):
+        for name, passage in PASSAGES.items():
             with self.subTest(name):
-                self.assertTrue(_says_together(passage(), "not on the list", "operator's"),
+                self.assertTrue(_says_together(passage(), "not on the list", "OPERATOR card"),
                                 f"{name} no longer says a sandbox press not on the list "
-                                "is the operator's row")
+                                "is an OPERATOR card")
                 self.assertIn("DRE-6638", _flat(passage()),
                               f"{name} no longer names DRE-6638, the press not on the list")
 
-    def test_the_operators_row_stays_for_a_press_outside_the_sandbox(self):
-        for name, passage in OPERATOR_PASSAGES.items():
+    def test_a_press_outside_the_sandbox_is_an_operator_card_never_the_operators_row(self):
+        for name, passage in PASSAGES.items():
             text = _flat(passage())
             with self.subTest(name):
-                self.assertTrue(_says_together(passage(), "outside the sandbox", "operator"),
-                                f"{name} no longer teaches the operator's row for a press "
-                                "outside the sandbox")
+                self.assertTrue(_says_together(passage(), "outside the sandbox", "OPERATOR card"),
+                                f"{name} does not say a press outside the sandbox is an "
+                                "OPERATOR card")
                 self.assertIn(STANDING, text, f"{name} no longer names the {STANDING}")
-                self.assertIn(OPERATOR_ROW, text, f"{name} no longer quotes `{OPERATOR_ROW}`")
+                self.assertNotIn(OPERATOR_ROW, text, f"{name} still quotes `{OPERATOR_ROW}`")
 
     def test_the_ceos_row_is_for_a_business_decision_only(self):
         for name, passage in PASSAGES.items():
@@ -300,18 +300,13 @@ class EveryDocumentSaysWhosePressTest(unittest.TestCase):
                 self.assertIn(BUSINESS, text,
                               f"{name} no longer says the CEO's press is a {BUSINESS}")
 
-    def test_the_operators_row_is_quoted_in_the_waiting_grammar(self):
-        """Quoted inline in backticks, or as an indented code line the way
-        `briefs/proof.md` quotes its other rows."""
-        for name in OPERATOR_PASSAGES:
-            if name not in BRIEFS:
-                continue
-            raw = PASSAGES[name]()
-            quoted = (f"`{OPERATOR_GRAMMAR}`" in _flat(raw)
-                      or f"\n    {OPERATOR_GRAMMAR}\n" in raw)
+    def test_no_document_teaches_the_operators_row(self):
+        """DRE-7954 and DRE-7955: no document a proof is written from quotes
+        the operator's row, inline or as an indented code line."""
+        for name, passage in PASSAGES.items():
             with self.subTest(name):
-                self.assertTrue(quoted,
-                                f"{name} does not quote the operator's row as `{OPERATOR_GRAMMAR}`")
+                self.assertNotIn(OPERATOR_GRAMMAR, _flat(passage()),
+                                 f"{name} still quotes the operator's row `{OPERATOR_GRAMMAR}`")
 
     def test_the_passages_are_american_english(self):
         for name, passage in PASSAGES.items():
@@ -463,7 +458,14 @@ class ThePlannerBriefTest(unittest.TestCase):
 
     def test_dre_7711_is_a_press_the_run_now_makes(self):
         self.assertIn("DRE-7711", self.text, f"{self.NAME} no longer names DRE-7711")
-        self.assertIn("DRE-6663", self.text, f"{self.NAME} no longer names DRE-6663")
+
+    def test_the_operators_row_paragraph_is_gone(self):
+        """DRE-7955: the DRE-6638/DRE-6663 paragraph that taught the
+        operator's row is gone, and DRE-6638 is named as an OPERATOR card."""
+        self.assertNotIn("DRE-6663", self.text,
+                         f"{self.NAME} still carries the DRE-6638/DRE-6663 paragraph")
+        self.assertTrue(_says_together(self.raw, "DRE-6638", "OPERATOR card"),
+                        f"{self.NAME} does not name DRE-6638's press as an OPERATOR card")
 
     def test_a_press_not_on_the_list_adds_two_cards(self):
         self.assertTrue(_says_together(self.raw, "two cards"),
