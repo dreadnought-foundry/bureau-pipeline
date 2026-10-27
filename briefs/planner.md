@@ -555,8 +555,8 @@ are no demo sittings, so there is no demo card. Epics planned before that date
 carry a second closing child and the check reads past it — that is history, not
 a shape to copy.
 
-**Proofs never wait on the CEO's sign-in (DRE-5391).** The operator runs a
-proof as soon as its build cards finish, so never write a step that needs the
+**Proofs never wait on the CEO's sign-in (DRE-5391).** The pipeline dispatches
+a proof as soon as its build cards finish, so never write a step that needs the
 CEO to sign in first — not "the CEO signs in and adds a document". Write live
 facts (what the deployed system answers, records or refuses) as observed
 through the scripted proof-reader identity. Write every on-screen step as two
@@ -605,29 +605,33 @@ the run makes it as the console proof-reader on the sandbox project
 The record quotes the command's JSON object, never a tagged line, because the
 command's printer lives in agent-bureau and `config/proof-reach.json` keeps
 only lines printed in this repo. DRE-7711's six sandbox tasks, which waited on
-the operator from 2026-10-19, are a press the run now makes. Once the epic's
-reach card, DRE-7779, lands its check, the plan critic refuses a PROOF card
-labeled `repo:agent-bureau` that writes a press on the list, on the sandbox, as
-`waiting for the operator's press:` or `needs the CEO's press:`.
+a person from 2026-10-19, are a press the run now makes. The plan critic
+refuses a PROOF card labeled `repo:agent-bureau` that sends a press on the
+list, on the sandbox, to a person (DRE-7779).
 
-Every other press the operator can make is the operator's row and never his: a
-press outside the sandbox, a press from the operator's signed-in session under
-the operator's standing permission of 2026-10-07, a press on the sandbox that
-is not on the list, a press on the sandbox on a PROOF labeled for any other
-repo, or the recording of a removal or decision the CEO has already made. A
-plan that wants the run to make a sandbox press not on the list adds the two
-cards the standard names, blocked in front of the PROOF, and until then the
-press is the operator's row.
-Write it as an event row, the criterion's own words opening
-`waiting for the operator's press:` and naming the press, so the run records
-`Not observed. waiting for the operator's press: <the press>` and the dispatcher
-holds the card for the operator under a `🔬 proof-waiting` hold naming the press
-(DRE-6814); the operator makes the press and records `🔬 proof-observed`, and the
-next pass re-runs the proof to observe the result. No escalation is written for
-it, so it never reaches `Green Light`. DRE-6638 (one project's Builders set to
-Sonnet 5.5, on the sandbox project) and DRE-6663 (Not doing pressed on one groom
-card) reached the CEO's list on 2026-10-10 worded as his press, and both were
-the operator's. DRE-6638 still is: a model setting is not on the list.
+**A step only a person can make after merge is its own OPERATOR card
+(DRE-7950).** Every other press — a press outside the sandbox, a press from
+the operator's signed-in session under the operator's standing permission of
+2026-10-07, a press on the sandbox that is not on the list, such as DRE-6638's
+model setting, a press on the sandbox on a PROOF labeled for any other repo, or
+the recording of a removal or decision the CEO has already made — and every
+other step only a person can take after merge is written as its own OPERATOR
+card, labeled `needs-human` + `no-code` + `agent:devops`. The PROOF carries a
+`**Blocked by:**` naming that card, and its criterion is the reading of its
+result: the value it set, the run that went green after it, what the system
+answers now. A plan that wants the run to make a sandbox press not on the list
+adds the two cards the standard names, blocked in front of the PROOF, and until
+then the press is such an OPERATOR card. The plan critic refuses a PROOF
+criterion that waits on a person's press (`FINDING_PERSON_PRESS`), naming the
+OPERATOR card to file instead. `standards/card-quality.md` states the rule.
+
+**Never write a waiting row on a person.** A row waits only for an event no
+one on this card has to cause — a release not yet cut, a date not yet reached,
+a scheduled run that has not fired. Every waiting row the run writes is
+stamped with the earliest time its event can have happened,
+`[not-before=<T>]` (DRE-7316, DRE-7951), so name the event with the time it
+comes. The `🔬 proof-waiting` hold the sweep posts for it waits for that time
+and never a person, and the pipeline lifts it and re-runs the record.
 Everything else in the card is written so a run with read access
 can observe it. The card closes on the approved merge of the record (DRE-5919,
 the hygiene agent).
@@ -723,8 +727,8 @@ as a reading the run can make:
 
 A row the run still cannot observe as worded comes back with one of four
 causes — `out-of-reach`, `state-gone`, `misdescribed` or
-`operator-step-unblocked` — and is put to the operator once, in In Review,
-under a hold (DRE-6837).
+`operator-step-unblocked` — and a record whose unmet rows all carry one closes
+its card with one fix card in `Intake` (DRE-7952).
 Every one of them is a criterion written wrong when the plan was written.
 
 ## The plan artifact (what the CEO green-lights) — and the roll-up split
@@ -818,8 +822,8 @@ back at the first critic, whatever the critic wrote — the check appends a
 `held-repo:` line to the structural file the seam gate reads. So is a plan
 whose child needs the CEO and is not named by its identifier in a `Step that
 needs the CEO:` paragraph (DRE-7523): an open child that is an operator card,
-or that carries a criterion on a person's row (`needs the CEO's press:` or
-`waiting for the operator's press:`). The check appends a `ceo-step:` line
+or that carries a criterion on a person's row (`needs the CEO's press:`, or the
+operator's row an older card may still carry). The check appends a `ceo-step:` line
 naming the card and the step. Write one paragraph per such child, opening with
 the opener and naming its identifier, for example `Step that needs the CEO:
 DRE-1234 — the CEO republishes the document from his own session`. **What is
