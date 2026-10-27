@@ -49,6 +49,17 @@ set -e
 # is not woken for findings nobody made. When REFUTED is true a footer under
 # any of the ten says why this head carries two verdicts.
 #
+# The name guard. When NAME_GUARD_LIVE is `true`, the composed comment goes
+# through name_redact.py's one redaction seam (`redact --in-place`), which
+# replaces each form of a person's name with its role, and then its guard
+# (`guard --text-file`). The verdict line is untouched: a sha and a content
+# id are never a form. When the guard refuses — a form remains, or the
+# roster is unreadable — the composed text is not posted: it is replaced by
+# a neutral status opening `🔎 QA Critic — held at the name guard`, carrying
+# the guard's own `name-guard:` line (a file, line and kind, or the roster's
+# reason — never a name) and no "VERDICT:" line, and the formal review is
+# left alone. The card's copy is built from the same file, after the seam.
+#
 # The comment is posted with `gh pr comment`, tried four times, because the
 # merge gate reads it. When the pull request has a card, the same text plus
 # a last line naming the selected model goes to the card through
@@ -118,6 +129,9 @@ set -e
 #                     when not measured
 #   BACKOFF_OUTCOME   the back-off sleep's outcome; `failure` means the
 #                     machine was ending new processes
+#   NAME_GUARD_LIVE   `true` turns the name guard on; anything else is off
+#   OWNER             the GitHub organization whose roster the guard reads;
+#                     when empty, the owner half of REPO
 #
 # From the runner: PIPELINE_DIR (the pipeline checkout, outside the working
 # tree), GITHUB_REPOSITORY (for the description's last-edit time) and
@@ -232,6 +246,12 @@ set -e
 #   explains says the cause could not be read and names no credential. The
 #   job's red line says the same word. Branch 9 sits after branch 8, so an
 #   attempt stopped mid-review is still told it was stopped.
+#
+# 2026-10-27 · DRE-8170. On 2026-10-20 the critic's approval on
+#   bureau-pipeline #985 quoted the `grep` it had run, and that command
+#   carried a person's surname. Every composed comment now goes through the
+#   redaction seam and the name guard DRE-8166 built before it posts, under
+#   "The name guard" above; a comment the guard refuses is held.
 # Is the pipeline checkout still there? It decides branch 2 (DRE-3226).
 if [ -n "${PIPELINE_DIR:-}" ] \
    && [ -r "${PIPELINE_DIR}/scripts/check_critic_result.py" ]; then
@@ -412,6 +432,27 @@ if [ "${REFUTED:-}" = "true" ]; then
   printf '\n%s\n' "♻️ re-review after refutation — the fixing agent contested this reviewer's previous finding on this same commit with evidence, so the pipeline ordered one more look. Nothing was pushed between the two verdicts; this one is the answer." \
     >> /tmp/qa-comment.md
 fi
+# The name guard (DRE-8170), once the comment is composed and before
+# anything posts it: the one redaction seam, then the guard. A comment the
+# guard refuses is held — replaced by a neutral status that carries the
+# guard's own line and never the composed text.
+HELD=""
+if [ "${NAME_GUARD_LIVE:-}" = "true" ]; then
+  GUARD_OWNER="${OWNER:-${REPO%%/*}}"
+  python3 "$PIPELINE_DIR"/scripts/name_redact.py redact --file /tmp/qa-comment.md --in-place --owner "$GUARD_OWNER" || true
+  if GUARD_SAID=$(python3 "$PIPELINE_DIR"/scripts/name_redact.py guard --text-file /tmp/qa-comment.md --owner "$GUARD_OWNER"); then
+    printf '%s\n' "$GUARD_SAID"
+  else
+    printf '%s\n' "$GUARD_SAID"
+    HELD=true
+    GUARD_LINE=$(printf '%s\n' "$GUARD_SAID" | awk '/^name-guard:/ { printf "%s%s", sep, $0; sep = "; " }')
+    echo "::warning::the critic's comment was held at the name guard — posting a neutral status instead"
+    printf '%s\n\n%s\n' \
+      "🔎 QA Critic — held at the name guard — the critic's comment was not posted, this is NOT a code rejection." \
+      "The critic's comment on this head was composed and then held at the name guard before it was posted: after the redaction seam ran, the guard still refused the text, because a form of a person's name remained in it or the roster of names could not be read. The guard said: ${GUARD_LINE:-nothing — it printed no line}. The composed comment is posted nowhere, so no verdict stands on this head and no findings go to the fix agent. Merge is held until a critic's comment passes the guard; this is not a request for changes." \
+      > /tmp/qa-comment.md
+  fi
+fi
 # Tried four times: the merge gate reads this comment.
 for i in 1 2 3 4; do
   gh pr comment "$PR" --body-file /tmp/qa-comment.md && break
@@ -426,6 +467,7 @@ if [ -n "$CARD" ]; then
 fi
 
 # On a real APPROVE, bring the formal review into line (DRE-1874).
-if [ "$REAL" = "true" ] && head -1 /tmp/qa-verdict.md | grep -q "VERDICT: APPROVE"; then
+# A comment held at the name guard posted no APPROVE, so nothing is synced.
+if [ -z "$HELD" ] && [ "$REAL" = "true" ] && head -1 /tmp/qa-verdict.md | grep -q "VERDICT: APPROVE"; then
   python3 "$PIPELINE_DIR"/scripts/sync_review_state.py "$REPO" "$PR" || true
 fi

@@ -26,6 +26,17 @@
 #      CEO: the press's hold, the question under the decision's own opening
 #      (a park mark of `spoken_thread.PROOF_PARK_MARKS`) and the move to
 #      `Green Light`.
+#
+# The name seam (DRE-8170). The park's comment quotes the escalation file,
+# which quotes criteria and what the run saw, so it can carry a person's
+# name. When NAME_GUARD_LIVE is `true` the comment file goes through
+# `name_redact.py redact --in-place` before it posts, with the roster of
+# OWNER (the owner half of BUREAU_REPOSITORY when OWNER is empty). When it
+# cannot be redacted — the roster is unreadable — the comment posted is the
+# fixed sentence `🔬 the escalation could not be redacted (name guard:
+# roster unreadable) — read the run` and the run, and the park still
+# happens, so a decision is never lost over a redaction. The receipts are
+# fixed strings and a URL, and do not go through it.
 set -e
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # Exits 1 and 2: the one PR-existence predicate (DRE-2316). Exit 3
@@ -181,6 +192,20 @@ PY
     echo ""
     echo "Run: $RUN_URL"
   } > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
+  # The name seam (DRE-8170): the comment quotes the agent's own file, so
+  # it can carry a person's name. Live, it is redacted in place before it
+  # posts; when it cannot be, the fixed sentence and the run post instead,
+  # and the park below still happens.
+  if [ "${NAME_GUARD_LIVE:-}" = "true" ]; then
+    if ! python3 .bureau-pipeline/scripts/name_redact.py redact \
+         --file "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md" --in-place \
+         --owner "${OWNER:-${BUREAU_REPOSITORY%%/*}}"; then
+      printf '%s\n\n%s\n' \
+        "🔬 the escalation could not be redacted (name guard: roster unreadable) — read the run" \
+        "Run: $RUN_URL" > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
+      echo "proof park: the escalation could not be redacted for $CARD — the fixed sentence is posted" >> "$GITHUB_STEP_SUMMARY"
+    fi
+  fi
   echo "proof park: $PARK" >> "$GITHUB_STEP_SUMMARY"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "$(cat "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md")"
