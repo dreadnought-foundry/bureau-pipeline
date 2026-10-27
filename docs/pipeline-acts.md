@@ -443,7 +443,8 @@ pipeline wrote itself. A named fix is a card an unmet row names by
 `fix: DRE-<n>`, or a card related to the proof as blocking it after its
 newest receipt (DRE-8156); a fix labelled for another repo in
 `config/repo-map.json` is read in that repo — its pull request and its
-release there. When neither names a fix, the budget's hold ends `— the record
+release there. When neither names a fix — and the relations were read, each
+with its time, against receipts that all carry theirs — the budget's hold ends `— the record
 at <sha7> names no fix`, and while nothing follows that hold, no blocker is
 related after it and the record stays at that head, the card is named on its
 line every pass and never read, so it spends none of the pass's candidate

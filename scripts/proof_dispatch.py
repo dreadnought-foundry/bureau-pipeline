@@ -294,8 +294,9 @@ ready proof waited two to three hours for a slot.
 
 So the budget's hold carries what the refusal was read off. When the record
 was read at the head and neither source names a fix (`_fixes` — no unmet
-row's `fix:` cell and no blocker related since the newest receipt), its needs
-half ends `SPENT_AT` — ` — the record at <sha7> names no fix` — and a new
+row's `fix:` cell and no blocker related since the newest receipt, with the
+relations and every receipt's time read — unread is never "names none"), its
+needs half ends `SPENT_AT` — ` — the record at <sha7> names no fix` — and a new
 head with no fix named posts it again, through the same `_hold_once`. A
 record that names a fix is never marked, nor one a blocker names: a fix ships
 with nothing on the proof card, so only the reads can say it has. Then, off
@@ -1855,10 +1856,11 @@ class _Pass:
             if rearmed:
                 needs = (f"{needs} — the re-armed run of {rearmed[-1].at} was "
                          "its event's one run")
-            if read is not None and not named:
+            if read is not None and not named and not unread:
                 # Neither source names a fix (DRE-7787, DRE-8156): the head it
                 # was read at lets a later pass's lane read spare the read,
                 # until a new head or a fix filed against it after the hold.
+                # Relations not read never say "names none".
                 needs += SPENT_AT.format(sha7=head[:7])
             self._hold_once(ident, voices, observed, needs, open_only=True)
             raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
@@ -1948,8 +1950,11 @@ class _Pass:
         `blocks` relations whose relation was made after its newest
         `🔬 proof-run` receipt, oldest relation first (DRE-8156). The cut
         keeps the epic's own build cards out: they block every proof and
-        were related long before its runs. `unread` is what the line says of
-        relations that added nothing they might have, else ""."""
+        were related long before its runs. A blocker Canceled or replaced
+        stays in the set while it is newer than that receipt, as a `fix:` cell
+        does, so the operator's note is the route past it. `unread` is what
+        the line says of relations that added nothing they might have, else
+        ""."""
         cells = _named_fixes(read) if read is not None else []
         filed, unread = self._filed_against(ident, receipts)
         return list(dict.fromkeys(cells + filed)), unread
