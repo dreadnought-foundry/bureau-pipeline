@@ -35,6 +35,8 @@ suite left children that never exited, `run` waited on them with no limit,
 and the cancel threw away the output that would have named the test. Now
 `run_all` gives a shard's cases one deadline, `CASE_LIMIT_SECONDS` from when
 they start, and `run` starts every subprocess in a process group of its own.
+The limit is the walks job's (`case_limit`): with no shard named, as in
+`suite-green`'s hour of the change walk's cases, there is none.
 At the deadline the group is killed — the children it left too, which would
 otherwise hold its pipes open — and the case's lookup in the results raises
 `CaseOverLimit`, naming the walk, the shard and the case, with the end of
@@ -282,14 +284,24 @@ def _where(run_case: Callable) -> str:
                               else "every case (no shard named)")
 
 
+def case_limit(env=None) -> float | None:
+    """The walks job's case limit: `CASE_LIMIT_SECONDS` when its shard is
+    named, and None — no limit — when it is not. `suite-green` runs the
+    change walk's cases through this helper with no shard named, for up to
+    an hour on its own 90-minute clock."""
+    env = os.environ if env is None else env
+    named = env.get(SHARD_ENV) is not None and env.get(SHARDS_ENV) is not None
+    return CASE_LIMIT_SECONDS if named else None
+
+
 def run_all(names, run_case: Callable[[str, Path], dict], base: Path,
             limit: float | None = None) -> Results:
     """`run_case(name, base / name)` for every case, side by side, as many at
     once as the machine has cores — every case done within `limit` seconds
-    of the first starting (`CASE_LIMIT_SECONDS` unless a test names less).
-    A case past it is stopped and named in the results (`Results`)."""
-    limit = CASE_LIMIT_SECONDS if limit is None else limit
-    deadline = time.monotonic() + limit
+    of the first starting (`case_limit()` unless a test names one). A case
+    past it is stopped and named in the results (`Results`)."""
+    limit = case_limit() if limit is None else limit
+    deadline = None if limit is None else time.monotonic() + limit
     where = _where(run_case)
 
     def over(name: str, why: str) -> str:
@@ -306,7 +318,8 @@ def run_all(names, run_case: Callable[[str, Path], dict], base: Path,
 
     pool = ThreadPoolExecutor(max_workers=os.cpu_count() or 2)
     futures = {name: pool.submit(one, name) for name in names}
-    wait(futures.values(), timeout=limit + CASE_GRACE_SECONDS)
+    wait(futures.values(),
+         timeout=None if limit is None else limit + CASE_GRACE_SECONDS)
     pool.shutdown(wait=False, cancel_futures=True)
     done, late = {}, {}
     for name, future in futures.items():

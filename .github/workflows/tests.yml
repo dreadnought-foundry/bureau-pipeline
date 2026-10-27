@@ -567,7 +567,8 @@ jobs:
   # (`tests/console_change_walk.py`'s `CASE_LIMIT_SECONDS`, twice the
   # target); a case past it is killed with every child it left, and its
   # tests fail naming the walk, the shard, the case and the inner test it
-  # was in. `run-walks` stops a walk's pytest at 1,020 s (`WALK_LIMIT_SECONDS`),
+  # was in. The limit holds only where this job's shard is named, so
+  # `suite-green`'s hour of change-walk cases keeps its own clock. `run-walks` stops a walk's pytest at 1,020 s (`WALK_LIMIT_SECONDS`),
   # the backstop for a hang outside any subprocess, and names the shard's
   # cases. Both leave the job red rather than canceled;
   # `tests/test_walks_time_budget.py` holds the order.
