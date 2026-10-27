@@ -17,8 +17,6 @@
 #                                  degrade path when this file is unreadable)
 #   * agents.yaml                — each agent's `model:` / `kind:` lines (the
 #                                  console roster's contract)
-#   * config/model-choices.json  — what the console's Settings page reads;
-#                                  never read on the dispatch path
 #
 # Regenerate with:  python3 scripts/sync_model_config.py
 # CI fails red on drift (`--check`, pinned by tests/test_model_config.py).

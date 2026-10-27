@@ -1027,7 +1027,8 @@ def _cannot_run(model: str, floors, installed) -> tuple[list[str], dict, str | N
         floors, installed = _claude_code_floors(floors, installed)
     except SystemExit as exc:
         raise Refused(str(exc)) from exc
-    return cannot_run(model, floors, installed), floors, installed
+    return (cannot_run(model, floors, installed, model_choice.model_label(model)),
+            floors, installed)
 
 
 def apply_change_set(text: str, change_set, *, today: str, prices=None,

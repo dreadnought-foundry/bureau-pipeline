@@ -942,35 +942,15 @@ healthy run. And it carries the console's `groups`, `ungrouped`, `about` and
 `projects` (DRE-6633), and `session_agents` beside `ungrouped` (DRE-6833), so
 the degrade path gives the same answer as a healthy checkout.
 
-The third target is a whole generated file, `config/model-choices.json`
-(DRE-6635) — what the console's Settings › Agents & models page reads instead
-of parsing this file and re-deriving the policy: every model with a declared
-price in `model-prices.yaml` (label, price, and its `excluded` reason or
-`null`), one group per kind with its ladder and a choice per model, every agent
-— in a group or not — with a move per group it is not in and `runs_in`
-(`pipeline` or `session`, off `session_agents`), and the per-project
-exceptions. Every `allowed` and `reason` is `model_fallback.policy_errors`'
-answer on a copy of this file carrying that one option as a real entry — for a
-group's choice, the change the console would make: the model lifted from
-`excluded` and set as a project exception under `projects`; for a move, the
-edit the change script below would make (`model_config_change.edit_data`),
-after its own pre-flight checks — so the page is read off the same gate a pull
-request meets. A refused move's `reason` is the plain sentence the change
-script prints for it (DRE-6833).
-
-Since DRE-6786 every priced model is allowed for every group, and each choice is
-`{model, allowed, reason, caution}`: `caution` is one plain-English sentence
-with both prices where there is something to say — a model we set aside, or one
-dearer than the group's current model — and `null` otherwise or when the choice
-is refused. The sentences live once, in `scripts/model_choice.py`, which the
-console's change-writer imports too. The one choice still refused is a model the
-pinned Claude Code cannot run (`Our pinned Claude Code cannot run <model>
-yet.`), read off the floor tables in `tests/test_model_cli_support.py` through
-`claude_code_pin.model_floors`. A missing or stale file is `STALE` under `--check`,
-exactly like the two mirrors; `tests/test_model_choices.py` pins its content
-and recomputes every verdict through a real repo slug. The daily
-`.github/workflows/model-adoption.yml` no longer writes it: an adoption writes
-the home and edits no file (DRE-6943).
+Until DRE-8020 the generator had a third target, a whole generated file the
+console's Settings › Agents & models page read. Nothing reads it now — the
+console reads the home and the pipeline's own facts (DRE-7876) — so the file is
+gone, and the generator no longer judges the moves and choices the page could
+offer. The plain-English caution a choice carries lives in
+`scripts/model_choice.py`, which the change script below imports; the one
+choice it still refuses is a model the pinned Claude Code cannot run (`Our
+pinned Claude Code cannot run <model> yet.`), read off the floor tables in
+`tests/test_model_cli_support.py` through `claude_code_pin.model_floors`.
 
 The console WRITES this file too, without ever editing YAML itself (DRE-6624).
 Save changes on Settings › Agents & models dispatches

@@ -23,10 +23,10 @@
 #      request;
 #   3. applies the changes to config/models.yaml as a text edit that keeps
 #      every comment, regenerates every generated file
-#      (`scripts/sync_model_config.py`: agents.yaml, scripts/model_fallback.py,
-#      config/model-choices.json) and holds them to `--check`;
+#      (`scripts/sync_model_config.py`: agents.yaml and
+#      scripts/model_fallback.py) and holds them to `--check`;
 #   4. opens ONE pull request as the bureau App, the way model-adoption.yml
-#      opens its own: an `agent/` branch, a commit of only the four model-config
+#      opens its own: an `agent/` branch, a commit of only the three model-config
 #      files, and a body that opens with the `What's new:` line the merge gate
 #      reads and says who asked and what changes, one line per change.
 #
@@ -210,7 +210,7 @@ jobs:
         if: steps.open.outputs.existing == ''
         run: |
           set +e
-          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py tests/test_model_choices.py -q \
+          python3 -m pytest tests/test_model_policy.py tests/test_model_config.py -q \
             > "$RUNNER_TEMP/model-tests.txt" 2>&1
           rc=$?
           set -e
@@ -220,20 +220,21 @@ jobs:
           echo "model tests: $result"
 
       # The staged set is PROVED before the commit: config/models.yaml,
-      # agents.yaml, the generated region of scripts/model_fallback.py and the
-      # generated config/model-choices.json, and nothing else — the four paths
-      # the TDD gate reads as data and a generated region (DRE-3896).
+      # agents.yaml and the generated region of scripts/model_fallback.py, and
+      # nothing else — the three paths the TDD gate reads as data and a
+      # generated region (DRE-3896). The generator's third target went in
+      # DRE-8020.
       - name: Commit and push the branch
         if: steps.open.outputs.existing == '' && steps.branch.outputs.reuse != 'true'
         env:
           BRANCH: ${{ steps.read.outputs.branch }}
           DIGEST: ${{ steps.read.outputs.digest }}
         run: |
-          git add -- config/models.yaml agents.yaml scripts/model_fallback.py config/model-choices.json
+          git add -- config/models.yaml agents.yaml scripts/model_fallback.py
           STAGED=$(git diff --cached --name-only)
           for path in $STAGED; do
             case "$path" in
-              config/models.yaml|agents.yaml|scripts/model_fallback.py|config/model-choices.json) ;;
+              config/models.yaml|agents.yaml|scripts/model_fallback.py) ;;
               *) echo "::error::refusing to commit $path — a model config change touches only the model config"; exit 1 ;;
             esac
           done
@@ -262,7 +263,7 @@ jobs:
             echo
             echo "## Model tests"
             echo
-            echo "\`tests/test_model_policy.py\`, \`tests/test_model_config.py\` and \`tests/test_model_choices.py\` on this branch: **${TESTS:-not run}**."
+            echo "\`tests/test_model_policy.py\` and \`tests/test_model_config.py\` on this branch: **${TESTS:-not run}**."
             echo
             echo "No model test pins a choice the console can change: a rule is tested against the frozen fixture at \`tests/fixtures/model-config-frozen/\` (\`model_fixture.FIXTURE_DIR\`), and \`tests/test_console_change_keeps_the_suite_green.py\` is written to prove every operation leaves every model-reading test green (its per-case runs skip in the unit parts and run in the \`console change keeps the suite green\` job of Pipeline Tests) — so a red result on a change pull request is a defect in the change or in a test, never the expected cost of a change the console allows."
           } >> "$RUNNER_TEMP/pr-body.md"

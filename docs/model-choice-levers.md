@@ -47,9 +47,9 @@ This record belongs to DRE-7184, the first child of the model-cost epic.
 `ladder_for` (`scripts/model_fallback.py:1585`) and `_project_exception` (`scripts/model_fallback.py:1568`) then read whichever choices are in place.
 `selection_note` (`scripts/model_fallback.py:2116`) ends the note with the home's clause (`status_clause`, `scripts/model_home.py:508`).
 
-**`config/model-choices.json` is read by the console's Settings › Agents & models page only, never on the dispatch path.**
-It is the generator's third target, a whole generated file.
-No selecting script opens it.
+**`config/model-choices.json` is gone (DRE-8020).**
+It was the generator's third target, a whole generated file read by the console's Settings › Agents & models page and never on the dispatch path.
+The console reads the home and the pipeline's own facts instead (DRE-7876).
 
 ## How to tell which regime a run is on
 
