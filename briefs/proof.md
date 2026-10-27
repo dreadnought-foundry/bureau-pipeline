@@ -360,9 +360,10 @@ nothing else for them — never a fix or a closed window out of prose.
       Not met. history: <the closed window or the finished run, with its PT time> — <what it recorded>
 
   The row was observed and failed, so it is not a cause. A record whose unmet
-  rows are all history rows (or cause rows) is held for the operator's
-  decision at once — reword each on a new card, or drop the record — and is
-  never re-run to read the same thing.
+  rows are all history rows (or cause rows) is a gap record: it is never
+  re-run to read the same thing, nobody is asked about it, and it merges on
+  its approved record, its PROOF closing with one fix card that carries each
+  row (DRE-7952, DRE-7953).
 - When the proof card's thread, its epic or your own evidence names an open
   card as the fix for that row's failure, end the unmet row's Result with
 
@@ -371,7 +372,10 @@ nothing else for them — never a fix or a closed window out of prose.
   or `fix: DRE-<n>, DRE-<m>`. Once the re-runs are spent, each named card
   that ships — Done, this repo's, merged and live — gets the proof one more
   run. A DRE id anywhere else in the cell is evidence, not a fix, and a
-  history row's `fix:` is not read.
+  history row's `fix:` is not read. When the gate's re-runs are spent and
+  every unmet row is a plain `Not met.` naming no fix, the dispatcher files
+  one fix card for the defect in the build, and its shipping gets the proof
+  that one more run the same way (DRE-7953).
 
 **Stamp a waiting row whose event happens at or by a known time (DRE-7316).**
 A window that closes at a stated time, a weekly report filed on a stated day,
