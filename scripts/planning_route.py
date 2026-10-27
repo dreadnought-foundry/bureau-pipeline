@@ -875,7 +875,8 @@ def no_repo_note(identifier: str, unknown) -> str:
 
     if unknown:
         named = ", ".join(f"`repo:{slug}`" for slug in unknown)
-        why = (f"Its {named} label names no repo in `config/repo-map.json`, so "
+        label = "label names" if len(unknown) == 1 else "labels name"
+        why = (f"Its {named} {label} no repo in `config/repo-map.json`, so "
                "no repo's run can build it.")
     else:
         why = "It carries no `repo:` label, so no repo's run can build it."
@@ -885,14 +886,14 @@ def no_repo_note(identifier: str, unknown) -> str:
         "",
         why,
         "",
-        "**The fix:** add the `repo:<slug>` label for the repo this card's "
-        "files live in. The slugs are the keys of `config/repo-map.json`: "
-        f"{slugs}.",
+        ("**The fix:** add the `repo:<slug>` label for the repo this card's "
+         "files live in. The slugs are the keys of `config/repo-map.json`: "
+         f"{slugs}."),
         "",
-        f"It is parked in {NO_REPO_LANE} with no routing verdict, under a "
-        f"`{NO_ROUTE_REASON}` hold. The hold lifts once the label names one of "
-        "those repos, and the card goes back to Planning, whose exit routes it "
-        "afresh.",
+        (f"It is parked in {NO_REPO_LANE} with no routing verdict, under a "
+         f"`{NO_ROUTE_REASON}` hold. The hold lifts once the label names one of "
+         "those repos, and the card goes back to Planning, whose exit routes it "
+         "afresh."),
     ])
 
 
