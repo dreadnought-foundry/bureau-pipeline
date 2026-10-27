@@ -541,9 +541,11 @@ def test_a_group_left_empty_by_setting_aside_is_unreadable(older_tree, tmp_path)
     selector = older_tree / "scripts" / "model_fallback.py"
     model, note, err = select_cli("engineer", tmp=tmp_path, selector=selector,
                                   BUREAU_MODEL_HOME_FILE=home)
-    # Unreadable: the older tree's own defaults in the code.
+    # Unreadable: the older tree's own defaults in the code, on the
+    # engineer's group there, whichever one a save left it in.
     defaults = model_fixture.fixture_module(older_tree).code_defaults()
-    assert model == defaults["ladders"][defaults["kinds"]["workhorse"]][0]
+    group = defaults["agents"]["engineer"]
+    assert model == defaults["ladders"][defaults["kinds"][group]][0]
     assert note.startswith("DEGRADED model-policy:")
     assert UNREADABLE_CLAUSE.search(note), note
     assert any(line.startswith("model-home: unreadable — ") for line in err)

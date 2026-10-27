@@ -267,9 +267,11 @@ def test_the_builders_led_with_the_reviewers_first_model_select_it_for_the_engin
     on_defaults, _ = cli(tree, None, "engineer")
     assert on_doc == first
     assert note.endswith(READ), note
-    # With no home, the tree's own defaults in the code.
+    # With no home, the tree's own defaults in the code: the engineer's group
+    # there, whichever one a save left it in.
     defaults = fixture_module(tree).code_defaults()
-    assert on_defaults == defaults["ladders"][defaults["kinds"]["workhorse"]][0]
+    group = defaults["agents"]["engineer"]
+    assert on_defaults == defaults["ladders"][defaults["kinds"][group]][0]
 
 
 def test_the_reviewers_choice_needs_no_declared_rule():
