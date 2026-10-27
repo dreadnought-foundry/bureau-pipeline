@@ -849,7 +849,11 @@ class AProofRecordIsReadOnceAtTheHeadTest(unittest.TestCase):
         self.assertEqual(len(run.views), 1, run.explain())
         self.assertIn(f"repos/{REPO}/contents/{RECORD_PATH}?ref={HEAD}",
                       run.api_paths())
-        self.assertEqual(len(run.before_merge()), 10, run.explain())
+        # The tenth and eleventh: the record, and the repository's squash
+        # setting the record's merge method follows (DRE-8195).
+        self.assertIn(["api", f"repos/{REPO}", "--jq", ".allow_squash_merge"],
+                      run.before_merge())
+        self.assertEqual(len(run.before_merge()), 11, run.explain())
 
     def test_off_a_proof_record_branch_the_record_is_never_read(self):
         fx = green_fixture(files=RECORD_FILES)
