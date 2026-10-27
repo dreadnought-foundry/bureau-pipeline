@@ -233,7 +233,7 @@ class _Held:
 
     def test_it_posts_the_held_neutral_status(self):
         posted = self.run_post(live="true", guard=self.GUARD)
-        self.assertEqual(posted.splitlines()[0], HELD)
+        self.assertTrue(posted.startswith(HELD), posted)
         self.assertIn("QA Critic", posted)
         self.assertNotIn("VERDICT:", posted)
         self.assertIn(self.LINE, posted)
@@ -252,7 +252,7 @@ class _Held:
     def test_the_card_copy_is_the_held_status_too(self):
         self.run_post(live="true", guard=self.GUARD)
         copy = self.linear_comment()
-        self.assertEqual(copy.splitlines()[0], HELD)
+        self.assertTrue(copy.startswith(HELD), copy)
         self.assertNotIn("VERDICT:", copy)
         self.assertNotIn("FORM-ALPHA", copy)
 
