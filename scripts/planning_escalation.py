@@ -1028,28 +1028,134 @@ def parse_choices(body: str | None) -> dict | None:
     return block if isinstance(block, dict) else None
 
 
-def read_choices(path: str | None) -> dict | None:
-    """The planner's choices from `path`, when they are fit to show.
-
-    A missing file is the normal case on every route that does not ask for
-    one, and says nothing. Anything else that cannot be shown is logged to the
-    run as one line naming the rule, and nothing about it reaches the card —
-    the escalation goes ahead as prose alone.
-    """
+def _load_choices(path: str | None) -> tuple:
+    """`(block, problem)` for the file at `path`: the block when it passes
+    `choices_problem`, else None and the rule it breaks — None for both when
+    there is no file. One reading, shared by `read_choices` and `screen`."""
     if not path or not os.path.exists(path):
-        return None
+        return None, None
     try:
         with open(path, encoding="utf-8") as fh:
             block = json.load(fh)
     except (OSError, ValueError) as exc:
-        print(f"escalation-choices refused: the file is not JSON ({exc})",
-              file=sys.stderr)
-        return None
+        return None, f"the file is not JSON ({exc})"
     problem = choices_problem(block)
+    return (None, problem) if problem else (block, None)
+
+
+def read_choices(path: str | None) -> dict | None:
+    """The planner's choices from `path`, when they are fit to show.
+
+    A missing file says nothing here. Anything else that cannot be shown is
+    logged to the run as one line naming the rule, and nothing about it
+    reaches the card. On a screened call (`screen`, DRE-7961) either one sends
+    the card to the operator; on any other the escalation goes ahead as prose
+    alone.
+    """
+    block, problem = _load_choices(path)
     if problem:
         print(f"escalation-choices refused: {problem}", file=sys.stderr)
-        return None
     return block
+
+
+# --------------------------------------------------------------------------- #
+# the screen — a decision for the CEO, or housekeeping (DRE-7961)              #
+# --------------------------------------------------------------------------- #
+#
+# The weekly agent report (DRE-7960) found planner questions in front of the
+# CEO with no options at all, and one that said it was not a real question.
+# The choices were optional: a missing file posted prose, a refused one posted
+# prose, and either way the card parked in Green Light. So a planner question
+# that passed a choices file is screened before it is posted. It goes to the
+# CEO only when it passes all three rules below; breaking any one makes it
+# housekeeping, parked in Triage for the operator the way `park_unread` parks
+# a card nothing could read.
+#
+# The screen runs only where a choices file is asked for — the CLI's
+# `--choices-file`, whether or not the file exists — and never on a
+# `--transport` or `--rewrite` call. Every other caller of `escalate` passes
+# no path and is unchanged. The judgment the code cannot make — is this a real
+# business choice — is the planner's, in its brief and the five prompt copies.
+
+#: How many choices a screened question offers. The screen's own limit, inside
+#: the console's `MIN_CHOICES` to `MAX_CHOICES`, which stays the contract
+#: `choices_problem` holds a block to.
+SCREENED_CHOICES = (2, 3)
+
+#: Words an escalation uses to say it is not a decision, matched
+#: case-insensitively in the reason and the block's question, context and why.
+NOT_A_DECISION_PHRASES = (
+    "not a real question",
+    "not really a question",
+    "not a decision",
+    "nothing to decide",
+    "nothing for you to decide",
+    "housekeeping",
+)
+
+#: The three rules, in plain words, as the operator's note names them.
+RULE_NO_DECISION = "it names no decision"
+RULE_OPTIONS = "it does not offer two or three options"
+RULE_SAYS_NOT = "it says it is not a decision"
+
+#: Where housekeeping goes: the operator's queue. A literal, as `UNREAD_LANE`
+#: is, so `ready_lane_writers` and `green_light_rows` can read the destination.
+HOUSEKEEPING_LANE = "Triage"
+
+
+def _said_not_a_decision(texts) -> str | None:
+    """The first phrase from `NOT_A_DECISION_PHRASES` any of `texts` says."""
+    said = " ".join(t for t in texts if isinstance(t, str)).lower()
+    return next((p for p in NOT_A_DECISION_PHRASES if p in said), None)
+
+
+def screen(reason: str | None, path: str | None) -> str | None:
+    """The rule this escalation breaks, in plain words, or None when it is a
+    decision for the CEO. `path` is the choices file the caller passed."""
+    if not path or not os.path.exists(path):
+        return f"{RULE_NO_DECISION}: the planner wrote no choices for it"
+    block, problem = _load_choices(path)
+    if block is None:
+        return f"{RULE_NO_DECISION}: its choices could not be shown — {problem}"
+    low, high = SCREENED_CHOICES
+    if not low <= len(block["choices"]) <= high:
+        return f"{RULE_OPTIONS}: it offers {len(block['choices'])}"
+    phrase = _said_not_a_decision(
+        [reason] + [block.get(key) for key in ("question", "context", "why")])
+    if phrase:
+        return f"{RULE_SAYS_NOT}: it reads “{phrase}”"
+    return None
+
+
+def housekeeping_note(identifier: str, broken: str, reason: str | None,
+                      last_words: str | None = None) -> str:
+    """The note a screened-out escalation carries, written for the operator.
+
+    It opens with the stall exit's tag, `dedupe_dispatch.STALL_PARK_TAG`, for
+    `unread_park_note`'s reason: the plan-gate reads it on the card's newest
+    comment and does not re-plan a card entering Triage. The reason is quoted
+    as written — the operator reads code — unless it carries a verdict marker,
+    which is an approval credential and never relayed."""
+    import dedupe_dispatch
+
+    said = (reason or "").strip() or (last_words or "").strip()
+    if not said:
+        quoted = "The planner stated no reason."
+    elif any(marker in said for marker in _VERDICT_MARKERS):
+        quoted = ("The planner's reason carries a verdict marker, so it is not "
+                  "repeated here — it is in the run's own log.")
+    else:
+        quoted = "**What the planner wrote:**\n\n" + _quoted(said)
+    return (
+        f"🧹 {dedupe_dispatch.STALL_PARK_TAG}: {identifier} — the planner's "
+        f"question is housekeeping, not a decision: {broken}.\n\n"
+        f"Parked in **{HOUSEKEEPING_LANE}** for the operator, not the CEO: a "
+        "question goes to the CEO only when it names a decision, offers two or "
+        "three options and does not say it is not one.\n\n"
+        f"{quoted}\n\n"
+        "The way back is to move it to **Planning**, where the relay starts a "
+        "fresh plan run."
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -1155,11 +1261,14 @@ class Outcome:
     `posted` — a note was written THIS call: the escalation, or the stand-down.
     `stood_down` — why the card was left where it is, in the words the note
     used, or None when it parked. Exactly one of `parked` / `stood_down` holds.
+    `screened_out` — the rule a screened escalation broke (DRE-7961), when it
+    was parked in `HOUSEKEEPING_LANE` for the operator rather than for the CEO.
     """
 
     parked: bool
     posted: bool
     stood_down: str | None
+    screened_out: str | None = None
 
 
 def in_escalation_segment(name: str, contract: dict | None = None) -> bool:
@@ -1411,7 +1520,8 @@ def escalate(linear_ops, identifier: str, reason: str | None,
              attempt_since: str | None = None,
              last_words: str | None = None,
              choices: dict | None = None,
-             from_lane: str | None = None) -> Outcome:
+             from_lane: str | None = None,
+             choices_file: str | None = None) -> Outcome:
     """Post the escalation and park the card — if the card is still ours.
 
     `issue` and `comments` let a caller that has ALREADY read the card hand
@@ -1485,7 +1595,17 @@ def escalate(linear_ops, identifier: str, reason: str | None,
     note: a card standing in that lane is still this escalation's to move to
     the destination. `triage_repair.py` is the one caller that passes it,
     always Triage; every other caller passes nothing and reads as before.
+
+    `choices_file` is the path the CLI's `--choices-file` names (DRE-7961).
+    Passed, it is read as `choices`, and — unless the call is `transport` or
+    `rewrite` — the escalation is screened (`screen`) after the stand-down
+    check: one that breaks a rule posts no escalation note and makes no write
+    to the CEO's queue. It gets one `housekeeping_note`, once per attempt,
+    then the move to `HOUSEKEEPING_LANE`, re-asserted every time. A call
+    passing no path is never screened.
     """
+    if choices_file is not None and choices is None:
+        choices = read_choices(choices_file)
     choices = lifted_choices(reason) or choices
     lane = destination()
     handed = comments is not None
@@ -1529,6 +1649,24 @@ def escalate(linear_ops, identifier: str, reason: str | None,
                 from_lane=from_lane))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
+    broken = None
+    if choices_file is not None and not (transport or rewrite):
+        broken = screen(reason, choices_file)
+    if broken is not None:
+        import dedupe_dispatch
+
+        print(f"{identifier}: screened out — {broken}", file=sys.stderr)
+        if any(dedupe_dispatch.STALL_PARK_TAG in _body(r)
+               for r in _this_attempt(bodies)):
+            print(f"{identifier}: this attempt's park note is already on the "
+                  "card — re-asserting the move only")
+        else:
+            linear_ops.cmd_comment(identifier, housekeeping_note(
+                identifier, broken, reason, last_words))
+            posted = True
+        linear_ops.cmd_state(identifier, HOUSEKEEPING_LANE)
+        return Outcome(parked=True, posted=posted, stood_down=None,
+                       screened_out=broken)
     if already:
         # Scoped once more, to the card's newest return to Planning (DRE-6490).
         already = _asked_this_attempt(linear_ops, identifier, bodies)
@@ -1875,8 +2013,11 @@ def _cmd_escalate(args) -> int:
                   f"{refusal(last_words)}", file=sys.stderr)
     outcome = escalate(linear_ops, args.identifier, reason, args.transport,
                        args.rewrite, last_words=last_words,
-                       choices=read_choices(args.choices_file))
-    if outcome.parked:
+                       choices_file=args.choices_file)
+    if outcome.screened_out:
+        print(f"{args.identifier} is housekeeping, not a decision — parked in "
+              f"{HOUSEKEEPING_LANE} for the operator: {outcome.screened_out}")
+    elif outcome.parked:
         print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
     else:
         print(
@@ -1925,8 +2066,10 @@ def main(argv=None) -> int:
     # its closing message is the reason, quoted rather than called "none".
     esc.add_argument("--execution-file", dest="execution_file", default=None)
     # DRE-6168: the planner's question as JSON, beside its reason. Valid, it is
-    # appended as a fenced block the console shows as buttons; missing, the
-    # note is prose alone, as it is on every route that does not ask for one.
+    # appended as a fenced block the console shows as buttons. DRE-7961: a
+    # call that passes it is screened, so a missing or refused file, a count
+    # other than 2 or 3, or a reason saying it is not a decision parks the
+    # card in Triage for the operator. A route that passes none is unscreened.
     esc.add_argument("--choices-file", dest="choices_file", default=None)
 
     req = sub.add_parser("requeue")
