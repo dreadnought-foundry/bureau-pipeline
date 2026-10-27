@@ -1127,6 +1127,17 @@ def screen(reason: str | None, path: str | None) -> str | None:
     return None
 
 
+def screened(reason: str | None, choices_file: str | None,
+             transport: bool = False, rewrite: bool = False) -> str | None:
+    """`screen`'s answer for a call to `escalate`, or None when the call is
+    not screened: it passed no choices file path, or it is a `transport` or
+    `rewrite` call. One reading of "which calls are screened", for `escalate`
+    and for the CLI that reports where the card went."""
+    if choices_file is None or transport or rewrite:
+        return None
+    return screen(reason, choices_file)
+
+
 def housekeeping_note(identifier: str, broken: str, reason: str | None,
                       last_words: str | None = None) -> str:
     """The note a screened-out escalation carries, written for the operator.
@@ -1261,14 +1272,11 @@ class Outcome:
     `posted` — a note was written THIS call: the escalation, or the stand-down.
     `stood_down` — why the card was left where it is, in the words the note
     used, or None when it parked. Exactly one of `parked` / `stood_down` holds.
-    `screened_out` — the rule a screened escalation broke (DRE-7961), when it
-    was parked in `HOUSEKEEPING_LANE` for the operator rather than for the CEO.
     """
 
     parked: bool
     posted: bool
     stood_down: str | None
-    screened_out: str | None = None
 
 
 def in_escalation_segment(name: str, contract: dict | None = None) -> bool:
@@ -1649,9 +1657,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
                 from_lane=from_lane))
             posted = True
         return Outcome(parked=False, posted=posted, stood_down=elsewhere)
-    broken = None
-    if choices_file is not None and not (transport or rewrite):
-        broken = screen(reason, choices_file)
+    broken = screened(reason, choices_file, transport, rewrite)
     if broken is not None:
         import dedupe_dispatch
 
@@ -1665,8 +1671,7 @@ def escalate(linear_ops, identifier: str, reason: str | None,
                 identifier, broken, reason, last_words))
             posted = True
         linear_ops.cmd_state(identifier, HOUSEKEEPING_LANE)
-        return Outcome(parked=True, posted=posted, stood_down=None,
-                       screened_out=broken)
+        return Outcome(parked=True, posted=posted, stood_down=None)
     if already:
         # Scoped once more, to the card's newest return to Planning (DRE-6490).
         already = _asked_this_attempt(linear_ops, identifier, bodies)
@@ -2014,9 +2019,10 @@ def _cmd_escalate(args) -> int:
     outcome = escalate(linear_ops, args.identifier, reason, args.transport,
                        args.rewrite, last_words=last_words,
                        choices_file=args.choices_file)
-    if outcome.screened_out:
+    broken = screened(reason, args.choices_file, args.transport, args.rewrite)
+    if outcome.parked and broken is not None:
         print(f"{args.identifier} is housekeeping, not a decision — parked in "
-              f"{HOUSEKEEPING_LANE} for the operator: {outcome.screened_out}")
+              f"{HOUSEKEEPING_LANE} for the operator: {broken}")
     elif outcome.parked:
         print(f"{args.identifier} escalated out of {ORIGIN} → {destination()}")
     else:
