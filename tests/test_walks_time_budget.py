@@ -48,7 +48,9 @@ here by the walk's name, with the shard count that would fit.
 """
 from __future__ import annotations
 
+import ast
 import functools
+import inspect
 import json
 import math
 import sys
@@ -62,6 +64,11 @@ sys.path.insert(0, str(REPO / "scripts"))
 import unit_test_parts  # noqa: E402
 
 TESTS_WF = REPO / ".github" / "workflows" / "tests.yml"
+
+
+def helper():
+    """`tests/console_change_walk.py`, the walks' one helper."""
+    return unit_test_parts._helper()
 
 #: The margin on top of the slowest shard's projection, as with the parts.
 MARGIN = 2
@@ -220,6 +227,45 @@ def test_the_clock_is_twice_the_slowest_shard_rounded_up_to_ten_minutes():
     ceiling = math.ceil(MARGIN * unit_test_parts.WALK_SHARD_TARGET_SECONDS / 600) * 600
     assert limit_seconds() <= ceiling, (limit_seconds(), ceiling)
     assert limit_seconds() == 20 * 60
+
+
+#: What the walks job spends before its walk step starts: set up, checkout
+#: and the cached install. Job 122184991649 (run 40502923604) spent 26 s; the
+#: allowance is a cache miss's worth more.
+SETUP_ALLOWANCE_SECONDS = 180
+
+
+def test_a_hung_case_fails_before_the_walks_job_clock_cancels_it():
+    """DRE-8152: run 40502923604's project-model shard 5 of 8 hung until the
+    job's 20 minutes canceled it, so the run concluded `cancelled` with no
+    case named. A case fails at `CASE_LIMIT_SECONDS`, and `run-walks` stops
+    the walk at `WALK_LIMIT_SECONDS`; both land inside the walks job's
+    `timeout-minutes` after its setup, the case limit with room for the
+    walk to report, and neither under a slow runner's honest shard."""
+    case = helper().CASE_LIMIT_SECONDS
+    grace = helper().CASE_GRACE_SECONDS
+    walk = unit_test_parts.WALK_LIMIT_SECONDS
+    clock = limit_seconds()
+    assert case + grace < walk, (case, grace, walk)
+    assert walk + SETUP_ALLOWANCE_SECONDS <= clock, (walk, clock)
+    assert case >= 2 * unit_test_parts.WALK_SHARD_TARGET_SECONDS, case
+    assert (case, walk, clock) == (900, 1020, 1200)
+
+
+def test_the_limits_are_the_ones_the_walks_run_under():
+    """The defaults are the held limits, and no walk hands `run_all` a limit
+    of its own, so the numbers above are the ones a real shard meets."""
+    run_all = inspect.signature(helper().run_all).parameters["limit"].default
+    run_walks = inspect.signature(unit_test_parts.run_walks).parameters["limit"].default
+    assert run_all is None or run_all == helper().CASE_LIMIT_SECONDS, run_all
+    assert run_walks == unit_test_parts.WALK_LIMIT_SECONDS, run_walks
+    for walk in unit_test_parts.walks(REPO):
+        tree = ast.parse((REPO / walk).read_text(encoding="utf-8"))
+        own = [node.lineno for node in ast.walk(tree)
+               if isinstance(node, ast.Call)
+               and getattr(node.func, "attr", None) == "run_all"
+               and any(k.arg == "limit" for k in node.keywords)]
+        assert own == [], f"{walk} sets its own case limit on line(s) {own}"
 
 
 def test_the_projection_rounds_both_counts_up_to_pairs():
