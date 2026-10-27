@@ -51,13 +51,14 @@ and names it, or says in the registry why it does not.
 
 ## Every unit, on 2026-10-18
 
-The discovery finds 19 writes in 15 units. Every one already posts a reason,
+The discovery finds 20 writes in 16 units. Every one already posts a reason,
 so `unreasoned` is empty.
 
 | Unit | Reason written at | Anchor | What the reason tells a reader |
 | -- | -- | -- | -- |
 | `pipeline_notice.py#_file_card_quietly` (reached from five workflows) | `pipeline_notice.py#_file_card` | `_description(body, missed)` | The card is created in Triage carrying the notice's own text, plus a line saying the console door was not reached and why. |
 | `planning_escalation.py#park_unread` | the unit | `unread_park_note(identifier, reason)` | A park note says nothing has read the card, why its classification could not be read, and that the way back is a move to Planning. |
+| `planning_escalation.py#escalate` | the unit | `housekeeping_note(` | A park note says the planner's question is housekeeping, not a decision, names the screen's rule it broke, quotes the reason and says the way back is a move to Planning (DRE-7961). |
 | `reconcile.py#escalate_out_of_planning` | the unit | `stall_park_note(ident, reason)` | A park note says why Planning produced nothing — a stall, the planner line's bound or a hold nobody was asked about — and the way back. |
 | `reconcile.py#_route_to_defect_lane` | `reconcile.py#promote_ready` | `prose_blockers.card_refusal(` | The refusal names the description line that claims a dependency the board does not hold, and both fixes: set the relation or reword the line. |
 | `reconcile.py#flag_stranded` | the unit | `isn't on the dispatch` | The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug. |

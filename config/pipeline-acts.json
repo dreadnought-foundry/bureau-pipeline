@@ -1817,6 +1817,13 @@
       "why": "Act-shaped, and the registry has no row for it — the same debt as `reconcile.stall_park_note` above, whose note and tag it shares: it opens with `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry. Giving either park a row is a REGISTRY change and its own card; converting this one alone would split two notes that read the same key into two shapes."
     },
     {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "housekeeping_note(",
+      "kind": "undeclared-act",
+      "means": "A planner question that failed the screen — it named no decision, offered other than two or three options, or said it was not a decision — is parked in Triage for the operator, the note landing first and naming the rule broken and the way back, never in the CEO's Green Light (DRE-7961).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as `unread_park_note` above, whose tag and lane it shares: it opens with `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry. Giving the parks a row is a REGISTRY change and its own card; converting this one alone would split notes that read the same key into two shapes."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "🏁 Epic complete",
       "kind": "undeclared-act",
