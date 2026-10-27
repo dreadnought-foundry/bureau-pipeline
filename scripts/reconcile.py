@@ -11728,7 +11728,8 @@ def fix_approved_but_red() -> None:
         # a failure (bureau-pipeline #1042, 2026-10-11) — red as any other,
         # neither re-run nor told; a log that cannot be read changes nothing.
         limits = _collateral_limits(runs)
-        split = canceled_check.split(runs, limits, _failed_inside(pr, runs, limits))
+        failed_inside = _failed_inside(pr, runs, limits)
+        split = canceled_check.split(runs, limits, failed_inside)
         if not _tend_canceled_runs(pr, sha, split.unknown):
             continue  # a refused re-run never falls through to a fix dispatch
         failed = list(dict.fromkeys(
@@ -11749,8 +11750,10 @@ def fix_approved_but_red() -> None:
         if not when or age_minutes(when) < 20:
             continue
         # A proof record red on a check is the fix agent's (DRE-6571); on
-        # any other branch this is [] and nothing below changes.
-        red = proof_dispatch.record_red_checks(pr, runs)
+        # any other branch this is [] and nothing below changes. The rule
+        # reads the same logs split did, so a canceled part with a failed
+        # test inside stays red there too (DRE-8177).
+        red = proof_dispatch.record_red_checks(pr, runs, failed_inside)
         eligible.append((pr, failed, red, _red_since(split.red)))
     # DRE-7617: longest red first. `sorted` is stable, so a tie and every
     # unreadable time keep listing order. The guards below read Linear or

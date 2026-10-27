@@ -509,6 +509,7 @@ CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`,
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -519,6 +520,7 @@ from typing import Callable
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import canceled_check  # noqa: E402 — the workflow run a check belongs to (DRE-8177)
 import card_pr  # noqa: E402
 import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
 import hold_deadline  # noqa: E402 — when an event hold is chased (DRE-7967)
@@ -1040,30 +1042,91 @@ def not_proven_at(pr: dict, head: str) -> bool:
     return False
 
 
-def record_red_checks(pr: dict, runs) -> list:
+def _run_id(run: dict) -> int | None:
+    """The workflow run a check belongs to, as `canceled_check.run_of` reads
+    it, off a REST check run's `details_url` or a rollup node's `detailsUrl`."""
+    return canceled_check.run_of(
+        {"details_url": run.get("details_url") or run.get("detailsUrl")})
+
+
+def _conclusion(run: dict, failed_inside: dict | None) -> str:
+    """A check's conclusion, case-blind — `failure` for a canceled check whose
+    log `failed_inside` names a failed test in (DRE-7018)."""
+    conclusion = str(run.get("conclusion") or "").lower()
+    if conclusion == canceled_check.CANCELLED and (failed_inside or {}).get(run.get("id")):
+        return canceled_check.FAILURE
+    return conclusion
+
+
+def _canceled_only(runs, failed_inside: dict | None) -> set:
+    """The workflow runs whose red checks are only a cancellation's echo
+    (DRE-8177): each holds a `cancelled` check, and every red check in it
+    finished no earlier than its last canceled one — the summary job that
+    waited on a canceled part. A finish time is read off `completed_at` or
+    `completedAt`, and a red or canceled check whose time cannot be read
+    keeps its run red. So does a canceled check whose log the caller read
+    and could not — absent from `failed_inside`: a test may have failed
+    inside it. `None` is the caller that read no log."""
+    by_run: dict = {}
+    for run in runs or ():
+        if not isinstance(run, dict) or canceled_check.is_review(run):
+            continue
+        run_id = _run_id(run)
+        if run_id is not None:
+            by_run.setdefault(run_id, []).append(run)
+    only = set()
+    for run_id, checks in by_run.items():
+        canceled, red = [], []
+        for check in checks:
+            conclusion = _conclusion(check, failed_inside)
+            at = canceled_check._finished(
+                {"completed_at": check.get("completed_at") or check.get("completedAt")})
+            if conclusion == canceled_check.CANCELLED:
+                unread = failed_inside is not None and check.get("id") not in failed_inside
+                canceled.append(None if unread else at)
+            elif conclusion in unfixable_checks.FAILED_CONCLUSIONS:
+                red.append(at)
+        if not canceled or None in canceled or None in red:
+            continue
+        if all(at >= max(canceled) for at in red):
+            only.add(run_id)
+    return only
+
+
+def record_red_checks(pr: dict, runs, failed_inside: dict | None = None) -> list:
     """The checks a proof record is red on, in the head's order — or [] when
     it is not a record, or none is red, or the gate has declined it at the
     head as not proven.
 
-    THE one rule (DRE-6571) the approved-but-red sweep and agent-fix's
-    Resolve step both read. A record's rows are the proof run's to observe
-    again (DRE-5927), and the gate's `proof record not proven` decline at the
-    head says the rows are what holds it (DRE-6488). A failed check is a
-    different defect, and the proof run never changes code: a non-review
-    check run at the head whose conclusion is in
-    `unfixable_checks.FAILED_CONCLUSIONS` — so `cancelled` is not red — is
-    the fix agent's, for that check only. `runs` are REST check runs or
-    `statusCheckRollup` nodes; the conclusion is read in either case."""
+    THE one rule (DRE-6571) the approved-but-red sweep, agent-fix's Resolve
+    step and the dispatcher's `_declined` all read. A record's rows are the
+    proof run's to observe again (DRE-5927), and the gate's `proof record
+    not proven` decline at the head says the rows are what holds it
+    (DRE-6488). A failed check is a different defect, and the proof run
+    never changes code: a non-review check run at the head whose conclusion
+    is in `unfixable_checks.FAILED_CONCLUSIONS` — so `cancelled` is not
+    red — is the fix agent's, for that check only. `runs` are REST check
+    runs or `statusCheckRollup` nodes; the conclusion is read in either case.
+
+    A workflow run red only because a part of it was canceled is not red
+    either (DRE-8177): the summary job that waits on every part reads
+    `failure` after a part is canceled at its limit, and the sweep sends no
+    fix agent at a cancellation (DRE-3072). `_canceled_only` is the test.
+    `failed_inside` is the check id → failed tests map `canceled_check.split`
+    reads: a canceled check it names with a failed test is a failure
+    (DRE-7018), and one it leaves out, its log unread, keeps its run red.
+    Rollup nodes carry no id, so `_declined` passes none."""
     if not proof_record_branch(pr.get("headRefName")):
         return []
     if not_proven_at(pr, pr.get("headRefOid") or ""):
         return []
+    echo = _canceled_only(runs, failed_inside)
     red = []
     for run in runs or ():
         name = str(run.get("name") or "")
-        conclusion = str(run.get("conclusion") or "").lower()
         if (name and not name.endswith("review") and name not in red
-                and conclusion in unfixable_checks.FAILED_CONCLUSIONS):
+                and _conclusion(run, failed_inside) in unfixable_checks.FAILED_CONCLUSIONS
+                and _run_id(run) not in echo):
             red.append(name)
     return red
 
@@ -1081,10 +1144,19 @@ def record_red_checks_read(branch: str, head: str, checks_path: str,
                            thread_path: str) -> list:
     """`record_red_checks` off the files the Resolve step read: the head's
     check runs and the pull request's REST comment thread, every page of
-    each. An unreadable file raises, and the step stops on it."""
+    each. An unreadable file raises, and the step stops on it.
+
+    Each canceled job's log is read as the sweep reads it (DRE-8177,
+    DRE-7018), so a canceled part whose log shows a failed test is named
+    here as it is there. A log this step's token cannot read keeps its run
+    red, so a run the sweep sent is never refused for want of it. The
+    Resolve step reads this reader's stdout as the
+    run's note, so the log lines go to stderr."""
     runs = unfixable_checks._check_runs(_pages(checks_path))
     pr = {"headRefName": branch, "headRefOid": head, "comments": _pages(thread_path)}
-    return record_red_checks(pr, runs)
+    with contextlib.redirect_stdout(sys.stderr):
+        failed_inside = reconcile._failed_inside({"number": branch}, runs, {})
+    return record_red_checks(pr, runs, failed_inside)
 
 
 def _plain_line(text: str) -> str:
@@ -2272,7 +2344,10 @@ class _Pass:
 
         A record red on a check with no such decline at the head is not this
         phase's either (DRE-6571): the approved-but-red sweep sends the fix
-        agent, and the line names the check and says so."""
+        agent, and the line names the check and says so. A workflow run red
+        only because a part of it was canceled is not red (DRE-8177), so it
+        goes on as a green head does; its rollup nodes carry no job id, so
+        no log is read for it."""
         red = record_red_checks(pr, pr.get("statusCheckRollup"))
         if red:
             raise _Refused(f"re-run: #{number} at {head[:7]} is red on "

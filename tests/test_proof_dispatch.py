@@ -2746,6 +2746,47 @@ def test_red_a_decline_on_an_earlier_head_with_a_red_check_is_the_fix_agents(
     assert any(RED_CHECK in line and "the fix agent has it" in line for line in lines), lines
 
 
+#: DRE-8177: bureau-pipeline #1235 on 2026-10-27 — part 4 canceled at its
+#: limit, and `scripts unit tests`, which waits on every part, read `failure`
+#: after it. One workflow run, as `statusCheckRollup` gives it.
+CANCELED_PART = "scripts unit tests (part 4)"
+UNIT_JOB = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/18900412345/job/"
+
+
+def _canceled_only(pr: dict) -> dict:
+    nodes = [("scripts unit tests (part 1)", "SUCCESS", "2026-10-27T15:12:03Z", UNIT_JOB + "101"),
+             (CANCELED_PART, "CANCELLED", "2026-10-27T15:30:41Z", UNIT_JOB + "104"),
+             ("scripts unit tests", "FAILURE", "2026-10-27T15:31:09Z", UNIT_JOB + "109"),
+             ("QA critic review", "SUCCESS", "2026-10-27T15:02:00Z", None)]
+    return dict(pr, statusCheckRollup=[
+        {"__typename": "CheckRun", "name": name, "status": "COMPLETED",
+         "conclusion": conclusion, "completedAt": at, "detailsUrl": url}
+        for name, conclusion, at, url in nodes])
+
+
+def test_red_a_run_red_only_on_a_canceled_part_is_not_red(monkeypatch, capsys):
+    """Nobody has a canceled part: the sweep sends no fix agent at one
+    (DRE-3072), so the line never says one has it."""
+    pr = _canceled_only(record(verdict("APPROVE", 100)))
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(), pr=pr)
+    lines = _about(_lines(capsys), "DRE-5930")
+    said = [line for line in lines if "re-run" in line]
+    assert len(said) == 1, lines
+    assert "no decline note" in said[0] and "nothing to answer" in said[0], said
+    assert not any("fix agent" in line or "needs-human" in line for line in lines), lines
+    assert h.fired == [] and tally.someone_else == 0
+
+
+def test_red_a_run_red_only_on_a_canceled_part_is_re_run_on_the_gates_decline(
+        monkeypatch, capsys):
+    """The re-read DRE-7827 needed: the gate's not-proven decline at the head
+    fires the gate's re-run, whatever the canceled part did."""
+    h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(),
+                             pr=_canceled_only(_declined()))
+    assert h.fired == [("DRE-5930", REPO, GATE_RERUN, "proof-execute")]
+    assert tally.dispatched == 1
+
+
 # --------------------------------------------------------------------------- #
 # DRE-6650: an APPROVE carried to the head is the gate's trigger too —         #
 # DRE-6364 replayed as the sweep parked it                                     #
