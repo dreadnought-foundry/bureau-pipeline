@@ -28,7 +28,6 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_unit_test_parts.py -v
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from pathlib import Path
@@ -115,8 +114,8 @@ def test_discovery_finds_the_files_pytest_collects(tmp_path):
 def test_discovery_on_the_live_tree_matches_a_plain_glob():
     found = parts.discover(ROOT)
     assert found, "the live tree has no test files?"
-    # Less the walks, which run in their own job (DRE-6909).
-    assert set(found) | set(parts.walks(ROOT)) >= {
+    # Every one of them: no file is left out by its name (DRE-8017).
+    assert set(found) >= {
         p.relative_to(ROOT).as_posix() for p in (ROOT / "tests").glob("test_*.py")
     }
     assert "tests/test_unit_test_parts.py" in found
@@ -360,7 +359,7 @@ def test_each_part_uploads_what_it_ran():
 
 
 def test_one_job_carries_the_required_check_name():
-    # It waits on the parts and, since DRE-6909, on the walks' job too
+    # It waits on the parts and nothing else since DRE-8017
     # (`tests/test_tests_workflow_parts.py`).
     _, job = _aggregate()
     needs = job.get("needs")
@@ -493,30 +492,21 @@ def test_the_coverage_check_fails_without_the_shared_method(method):
 #: checked clause by clause after the note itself is gone.
 OLD_NOTE = ROOT / "tests" / "fixtures" / "unit-test-durations-note-2bd0361.txt"
 
-#: How the old note joined its clauses.
-OLD_CLAUSE_JOIN = r"; (?:and|plus) "
-
-#: The every-default walk's clause carried the walks multiplier; that sentence
-#: moved to the shared `method` entry and the rest stayed with the walk.
-WALKS_SENTENCE = "; every walk (tests/*_keeps_the_suite_green.py)"
-
-#: The card that re-recorded the walks from CI (DRE-7907): the desk-seconds
-#: walks sentence in `method`, and each desk-measured walk's clause, were
-#: replaced by each walk's slowest CI walk job, its run and job named in its
-#: own `provenance` line, which names this card. What it replaced is owed no
-#: longer; every other clause still is, word for word.
-RECORDED_FROM_CI = "DRE-7907"
-
 #: The longest line the record may hold. The old note's line was 6,888.
 LONGEST_LINE = 1000
 
+#: A console-change walk's file name, which the record no longer keeps
+#: (DRE-8017): the walks are deleted, and with them their seconds and the
+#: `provenance` lines the nightly kept for them.
+WALK_NAME = "_keeps_the_suite_green.py"
 
-def _old_clauses() -> list[str]:
-    return re.split(OLD_CLAUSE_JOIN, OLD_NOTE.read_text(encoding="utf-8").rstrip("\n"))
 
-
-def _named_files(clause: str) -> list[str]:
-    return [f for f in re.findall(r"tests/[\w*]+\.py", clause) if "*" not in f]
+def test_the_record_carries_no_walk():
+    record = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
+    for entry in ("seconds", "provenance"):
+        walks = [f for f in record[entry] if f.endswith(WALK_NAME)]
+        assert walks == [], f"`{entry}` still names the walks {walks}"
+    assert "walk" not in record["method"], record["method"]
 
 
 def test_no_line_of_the_durations_record_is_longer_than_a_thousand_characters():
@@ -541,56 +531,6 @@ def test_the_record_keeps_provenance_one_entry_per_file():
         assert isinstance(entry, str) and entry.strip(), path
         assert f"    {json.dumps(path)}: {json.dumps(entry)}" in lines, (
             f"{path}'s provenance is not one line of its own")
-
-
-def _carry_over(record: dict) -> None:
-    """The old note's clauses, carried over into `record`.
-
-    Until the record is re-measured, every clause is: the general clause and
-    the walks multiplier make the shared `method`, and every other clause is
-    its files' whole `provenance` entry. Once the nightly re-measures it
-    (DRE-7577) the general clause names a run that no longer measured
-    anything, and every file the parts run carries that new run's seconds, so
-    only what the refresh keeps is still owed: the walks multiplier in
-    `method`, and each walk's clause as that walk's entry."""
-    provenance, method = record["provenance"], record["method"]
-    clauses = _old_clauses()
-    assert len(clauses) == 31, len(clauses)
-    general, *per_file = clauses
-    assert _named_files(general) == []
-    split = [c for c in per_file if WALKS_SENTENCE in c]
-    assert len(split) == 1, split
-    walk_rest, walks_sentence = split[0].split(WALKS_SENTENCE)
-    walks_sentence = WALKS_SENTENCE[2:] + walks_sentence
-    texts = [walk_rest if c is split[0] else c for c in per_file]
-    remeasured = general not in method
-    if remeasured:
-        texts = [t for t in texts if any(parts.is_walk(f) for f in _named_files(t))]
-        assert len(texts) == 4, texts
-    # The files the clauses measured — less the walks sentence, which names
-    # the budget test that reads the walks' seconds, not a file it measured.
-    named = sorted({f for t in texts for f in _named_files(t)})
-    assert len(named) == (4 if remeasured else 33), named
-    missing = [f for f in named if f not in provenance]
-    assert missing == [], f"not keyed in `provenance`: {missing}"
-    assert "4.28" in walks_sentence and "(DRE-7016)" in walks_sentence
-    # The general clause and the walks multiplier make the shared entry —
-    # the multiplier until the walks were re-recorded from CI.
-    assert remeasured or general in method, method
-    from_ci = RECORDED_FROM_CI in method
-    assert from_ci or walks_sentence in method, method
-    # Every other clause is its files' whole entry; one naming two files is
-    # the entry of both.
-    for text in texts:
-        assert _named_files(text), text
-        for f in _named_files(text):
-            if from_ci and parts.is_walk(f) and RECORDED_FROM_CI in provenance[f]:
-                continue
-            assert provenance[f] == text, (f, provenance[f], text)
-
-
-def test_every_clause_of_the_old_note_is_carried_over_word_for_word():
-    _carry_over(json.loads(parts.DURATIONS.read_text(encoding="utf-8")))
 
 
 def test_every_provenance_key_has_recorded_seconds():
@@ -632,8 +572,7 @@ def _merge_file(tmp_path: Path, base: str, ours: str, theirs: str
 
 
 #: Two test files two open pull requests might each add; their paths sort to
-#: different places in `provenance`. Between the walks' entries, which a
-#: re-measure keeps (DRE-7577), so they still do once it has dropped the rest.
+#: different places in `provenance`.
 NEW_A = "tests/test_console_b_dre7508_alpha_probe.py"
 NEW_Z = "tests/test_console_f_dre7508_zeta_probe.py"
 
@@ -645,12 +584,34 @@ def _assert_the_new_files_land_apart(provenance: dict) -> None:
     assert where[1] - where[0] >= 2 and where[1] < len(prov), where
 
 
+def _with_neighbours(record: dict) -> dict:
+    """`record` once pull requests have added test files since its last
+    re-measure, each with its own `provenance` line: one file of `seconds`
+    before NEW_A, one between the two and one after NEW_Z.
+
+    A re-measure leaves `provenance` empty (DRE-7577), since every file it
+    keeps carries `method`'s run; the walks' lines, which it used to keep,
+    went with the walks (DRE-8017). Two files added to an EMPTY map write the
+    same line, so the first two pull requests after a re-measure that each
+    add a test file can still conflict here — the per-file lines are what
+    every later pair merges on."""
+    keys = sorted(record["seconds"])
+    picked = [max(k for k in keys if k < NEW_A),
+              next(k for k in keys if NEW_A < k < NEW_Z),
+              min(k for k in keys if k > NEW_Z)]
+    provenance = {**record["provenance"],
+                  **{k: f"{k}, added by a pull request since the re-measure"
+                     for k in picked if k not in record["provenance"]}}
+    return dict(record, provenance=dict(sorted(provenance.items())))
+
+
 def test_two_pull_requests_each_adding_a_test_file_merge_cleanly(tmp_path):
-    base = parts.DURATIONS.read_text(encoding="utf-8")
-    assert json.dumps(json.loads(base), indent=2) + "\n" == base, (
+    live = parts.DURATIONS.read_text(encoding="utf-8")
+    assert json.dumps(json.loads(live), indent=2) + "\n" == live, (
         "the record is not in the shape `measure` writes, so a hand edit and "
         "this test disagree on where its lines are")
-    record = json.loads(base)
+    record = _with_neighbours(json.loads(live))
+    base = json.dumps(record, indent=2) + "\n"
     keys = list(record["seconds"])
     third, two_thirds = keys[len(keys) // 3], keys[2 * len(keys) // 3]
     _assert_the_new_files_land_apart(record["provenance"])
@@ -866,18 +827,19 @@ def test_the_due_command_answers_on_its_first_line(tmp_path):
     names = [f"tests/test_{i:02d}.py" for i in range(20)]
     root = _tree(tmp_path / "repo", names + ["tests/test_x_keeps_the_suite_green.py"])
     path = tmp_path / "record.json"
-    # A walk's seconds are not a part's file and do not count.
+    # A file named like a walk is a test file like any other (DRE-8017), and
+    # its seconds count.
     seconds = {f: 1.0 for f in names[:18]}
     seconds["tests/test_x_keeps_the_suite_green.py"] = 9.0
     path.write_text(json.dumps({"method": "m", "provenance": {}, "seconds": seconds}))
     lines = _run_due(root, path)
     assert lines[0] == "refresh", lines
-    assert "18 of 20" in lines[1] and "90.0%" in lines[1], lines
+    assert "19 of 21" in lines[1] and "90.5%" in lines[1], lines
     seconds[names[18]] = 1.0
     path.write_text(json.dumps({"method": "m", "provenance": {}, "seconds": seconds}))
     lines = _run_due(root, path)
     assert lines[0] == "hold", lines
-    assert "19 of 20" in lines[1] and "95.0%" in lines[1], lines
+    assert "20 of 21" in lines[1] and "95.2%" in lines[1], lines
 
 
 #: Two part logs as `GET /actions/jobs/{id}/logs` serves them: the runner's
@@ -894,8 +856,9 @@ PART_LOGS = {
     ],
 }
 
-WALK_A = "tests/test_console_agent_move_keeps_the_suite_green.py"
-WALK_B = "tests/test_console_change_keeps_the_suite_green.py"
+#: A file named like a console-change walk, which since DRE-8017 is an
+#: ordinary test file: the refresh measures it like any other.
+WALK_NAMED = "tests/test_console_agent_move_keeps_the_suite_green.py"
 
 
 def _write_logs(directory: Path) -> list[Path]:
@@ -915,51 +878,48 @@ def _old_record() -> dict:
                    "at those desk seconds, which tests/test_walks_time_budget.py "
                    "multiplies by 4.28 (DRE-7016)"),
         "provenance": {
-            WALK_A: f"{WALK_A} alone, measured locally for DRE-6889",
-            WALK_B: f"{WALK_B}, at 29 s, in job 114573848564",
+            WALK_NAMED: f"{WALK_NAMED} alone, measured locally for DRE-6889",
             "tests/test_alpha.py": "tests/test_alpha.py, new for DRE-1, at 9.9 s",
         },
         "seconds": {
-            WALK_A: 633.36,
-            WALK_B: 29.0,
+            WALK_NAMED: 633.36,
             "tests/test_alpha.py": 9.9,
             "tests/test_beta.py": 1.0,
         },
     }
 
 
-def test_the_refresh_keeps_the_walks_and_takes_the_logs_seconds(tmp_path):
+def test_the_refresh_takes_the_logs_seconds_and_keeps_no_provenance_line(tmp_path):
     old = _old_record()
-    new = parts.refresh(old, _write_logs(tmp_path),
+    logs = _write_logs(tmp_path)
+    walked = tmp_path / "part-3.log"
+    walked.write_text(
+        f"2026-10-19T10:52:00.0000000Z {WALK_NAMED}::test_a PASSED [  0%]\n"
+        f"2026-10-19T10:52:07.0000000Z {WALK_NAMED}::test_b PASSED [100%]\n")
+    new = parts.refresh(old, logs + [walked],
                         run="39145109282",
-                        jobs=["117727253638", "117727253639",
-                              "117727253640", "117727253641"])
-    # Every walk's seconds and provenance, exactly as they were.
-    for walk in (WALK_A, WALK_B):
-        assert new["seconds"][walk] == old["seconds"][walk]
-        assert new["provenance"][walk] == old["provenance"][walk]
+                        jobs=["117727253638", "117727253639", "117727253640"])
     # Every file the parts ran carries the logs' seconds, and no provenance
     # line of its own: they come from `method`'s run now.
     # Each result line's gap from the one before it, as `measure` reads it.
     assert new["seconds"]["tests/test_alpha.py"] == 2.0
     assert new["seconds"]["tests/test_beta.py"] == 3.5
     assert new["seconds"]["tests/test_gamma.py"] == 4.25
-    assert "tests/test_alpha.py" not in new["provenance"]
-    assert sorted(new["provenance"]) == [WALK_A, WALK_B]
-    # The run and the four jobs it measured, and what the walks' seconds mean.
-    for name in ("39145109282", "117727253638", "117727253639",
-                 "117727253640", "117727253641"):
+    # A file named like a walk is measured like any other (DRE-8017): its old
+    # seconds and its old provenance line are not kept.
+    assert new["seconds"][WALK_NAMED] == 7.0
+    assert new["provenance"] == {}
+    # The run and the jobs it measured, and nothing about walks.
+    for name in ("39145109282", "117727253638", "117727253639", "117727253640"):
         assert name in new["method"], new["method"]
-    assert ("every walk (tests/*_keeps_the_suite_green.py) is recorded at "
-            "those desk seconds") in new["method"]
+    assert "walk" not in new["method"], new["method"]
     assert list(new["seconds"]) == sorted(new["seconds"])
-    assert list(new["provenance"]) == sorted(new["provenance"])
 
 
 def test_the_refresh_command_writes_the_record_through_measure(tmp_path,
                                                                 monkeypatch):
     root = _tree(tmp_path / "repo", ["tests/test_alpha.py", "tests/test_beta.py",
-                                     "tests/test_gamma.py", WALK_A, WALK_B])
+                                     "tests/test_gamma.py"])
     out = tmp_path / "unit-test-durations.json"
     out.write_text(json.dumps(_old_record(), indent=2) + "\n")
     monkeypatch.setattr(parts, "DURATIONS", out)
@@ -971,7 +931,7 @@ def test_the_refresh_command_writes_the_record_through_measure(tmp_path,
     record = json.loads(text)
     assert json.dumps(record, indent=2) + "\n" == text
     assert record["seconds"]["tests/test_gamma.py"] == 4.25
-    assert record["seconds"][WALK_A] == 633.36
+    assert WALK_NAMED not in record["seconds"]
     assert "77" in record["method"] and "701 and 702" in record["method"]
 
 
@@ -1005,21 +965,17 @@ def test_the_refresh_command_writes_nothing_that_would_still_be_due(tmp_path,
 def test_a_refreshed_live_record_passes_the_records_own_checks(tmp_path):
     # The bot pull request the nightly opens runs this suite on the record
     # it wrote, so the refresh of today's record must pass what these tests
-    # ask of it: the walks' carry-over, one provenance line per walk, short
-    # lines, and room for two new files to land apart.
+    # ask of it: no walk, no provenance line kept, and short lines.
     live = json.loads(parts.DURATIONS.read_text(encoding="utf-8"))
     new = parts.refresh(live, _write_logs(tmp_path),
                         run="39145109282",
                         jobs=["117727253638", "117727253639",
                               "117727253640", "117727253641"])
-    _carry_over(new)
-    walks = sorted(parts.walks(ROOT))
-    assert sorted(new["provenance"]) == walks
-    for walk in walks:
-        assert new["seconds"][walk] == live["seconds"][walk]
+    assert new["provenance"] == {}
+    assert [f for f in new["seconds"] if f.endswith(WALK_NAME)] == []
+    assert "walk" not in new["method"], new["method"]
     text = json.dumps(new, indent=2) + "\n"
     assert max(len(line) for line in text.splitlines()) <= LONGEST_LINE
-    _assert_the_new_files_land_apart(new["provenance"])
 
 
 # --- A red part the refresh may still measure (DRE-7726) -------------------
@@ -1152,7 +1108,7 @@ def test_coverage_only_reads_every_log(tmp_path, capsys):
 def test_the_refresh_names_a_part_red_only_on_the_coverage_tests(tmp_path,
                                                                  monkeypatch):
     root = _tree(tmp_path / "repo", ["tests/test_alpha.py", "tests/test_beta.py",
-                                     "tests/test_gamma.py", WALK_A, WALK_B])
+                                     "tests/test_gamma.py"])
     out = tmp_path / "unit-test-durations.json"
     out.write_text(json.dumps(_old_record(), indent=2) + "\n")
     monkeypatch.setattr(parts, "DURATIONS", out)
