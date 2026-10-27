@@ -49,7 +49,7 @@ moved.
 So a change that adds a Triage write cannot go green until it posts a reason
 and names it, or says in the registry why it does not.
 
-## Every unit, on 2026-10-18
+## Every unit, on 2026-10-27
 
 The discovery finds 20 writes in 16 units. Every one already posts a reason,
 so `unreasoned` is empty.
@@ -62,6 +62,7 @@ so `unreasoned` is empty.
 | `reconcile.py#escalate_out_of_planning` | the unit | `stall_park_note(ident, reason)` | A park note says why Planning produced nothing — a stall, the planner line's bound or a hold nobody was asked about — and the way back. |
 | `reconcile.py#_route_to_defect_lane` | `reconcile.py#promote_ready` | `prose_blockers.card_refusal(` | The refusal names the description line that claims a dependency the board does not hold, and both fixes: set the relation or reword the line. |
 | `reconcile.py#flag_stranded` | the unit | `isn't on the dispatch` | The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug. |
+| `planning_route.py#_refuse_no_repo` | the unit | `no_repo_note(identifier, unknown)` | The planning exit's refusal says the card carries no `repo:` label, or one naming no repo in `config/repo-map.json`, that it was not routed, and the fix, beside a no-route hold stamp (DRE-8145). |
 | `rereview_watch.py#_fire` | the unit | `epic-rereview-twice` | A hold stamp says the epic was sent back for a second re-review, and the hold's reason names the way back. |
 | `agent-fix.yml#Escalate checks the loop structurally cannot fix` | the unit | `--reason unfixable-check` | A card note names the red checks the fix loop cannot clear, beside an unfixable-check hold stamp at the head it read. |
 | `agent-fix.yml#Report` | the unit | `--reason fix-dispute` | A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back. |

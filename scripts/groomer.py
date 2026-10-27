@@ -36,15 +36,15 @@ that. This module is the reader that sees the set.
   5. **Assigns cycles.** Linear's own primitive — cycles are enabled and cycle
      11 is running, so "which cycle" is expressible today without inventing a
      container.
-  6. **Proposes.** Two lists drawn from the same twenty (DRE-4727): the
-     Planning list, its order and the WHY on every row, and the Cancel list,
-     a one-line reason on every row. Then what is deferred and what brings
-     each one back, what could not be ranked at all, and — said out loud
-     rather than discovered — which repos wait and roughly how long
-     (DRE-3152). A card a person moved to Cancel on an earlier proposal is
-     the one Cancel row not drawn from the twenty: a recorded Move to Cancel
-     is a decision, not a guess that waits its turn, so it is placed
-     wherever the card stands and takes no slot (DRE-7826).
+  6. **Proposes.** Two lists (DRE-4727): the Planning list, its order and
+     the WHY on every row, and the Cancel list, a one-line reason and its
+     proof on every row. Then what is deferred and what brings each one
+     back, what could not be ranked at all, and — said out loud rather than
+     discovered — which repos wait and roughly how long (DRE-3152). Since
+     DRE-7973 (epic DRE-6648) the Cancel list is drawn from the whole lane
+     and holds no Planning slot, replacing DRE-4727's rule that both lists
+     came from the morning's twenty: a dead card is placed wherever it
+     stands, as a person's recorded Move to Cancel already was (DRE-7826).
 
 ## The order, top to bottom (DRE-3096, DRE-4725, reversed by DRE-4965)
 
@@ -92,11 +92,14 @@ the only way to say it is to say "no". **"Dead" is the Cancel list — a
 recommendation `propose` never acts on, and the drain executes only once the
 CEO agrees** (DRE-4727, DRE-4733). The CEO's decision on DRE-4669 (2026-09-23): when
 the groomer looks at the morning's twenty cards it also decides whether each
-one still applies. So the morning's `capacity` cards are Planning plus Cancel
-together, walked in the rules' order: a card whose description carries a
-`Superseded by:` line, or that the read called `likely-done`, goes on the
-Cancel list; the rest go on the Planning list. A card outside the twenty waits
-its turn whatever it says — it is not cancelled early. Every Cancel row carries
+one still applies. Since DRE-7973 (epic DRE-6648) it asks that of every card
+on offer, and the Cancel list holds no slot: a card whose description carries
+a `Superseded by:` line, that the read called `likely-done`, or that the check
+before posting found done goes on the Cancel list wherever it stands, and the
+Planning list is the first `capacity` cards left in the rules' order. That
+replaces DRE-4727's rule — Planning plus Cancel together the morning's twenty,
+a card outside them waiting its turn — which left dead cards in Intake for
+weeks while the read had already judged them. Every Cancel row carries
 a one-line reason naming the card or merged PR that replaced it, because a
 recommendation nobody can check is one nobody should act on; the drain cancels
 it once the CEO agrees — to `Canceled`, never `Done` — with that reason written
@@ -236,7 +239,7 @@ What the read still does is per card: a card the answer omits or garbles is
 `unranked` and comes OUT of the batch, and the next card in order takes its
 slot — the proposed cards and the unranked ones are disjoint, asserted where
 the proposal is written (DRE-3544); a card the read calls `likely-done` goes on
-the Cancel list when it is in the morning's twenty, with its evidence as the
+the Cancel list wherever it stands (DRE-7973), with its evidence as the
 reason beside the regex's `superseded by DRE-N`; and every card carries the
 read's reason. Every reason passes
 `planning_escalation.refusal` before it is written, because the CEO reads
@@ -248,10 +251,12 @@ the audit card can run the two readings over one population.
 ## The check before posting, and the CEO's earlier answers (DRE-4966)
 
 Before the proposal is posted, `verify_proposal` hands it to
-`groom_verify.check`: every card on both lists, and up to ten behind them, is
-read against its own comments, merged pull requests and other cards that name
-it. A card already done or superseded goes to the Cancel list with that
-evidence, and the next card takes its slot; a Cancel whose replacement is not
+`groom_verify.check`: every card on both lists, up to ten behind them and,
+swept since DRE-7973, every other card on offer, is read against its own
+comments, merged pull requests and other cards that name it. A card already
+done or superseded goes to the Cancel list with that evidence wherever it
+stood, and a Planning card's slot goes to the next card; a Cancel whose
+replacement is not
 Done, a merged PR, or approved and in flight goes back to the Planning list
 with the reason. No model call, and the id is computed after, so an approval
 covers the checked lists. A source it could not read is said on the page as
@@ -1698,11 +1703,23 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     Each is said only for a card on offer this morning — in the lane, and not
     in a held repo — and absent when there is none.
 
+    **The Cancel list is drawn from the whole lane and holds no Planning
+    slot** (DRE-7973, epic DRE-6648). A card's own `Superseded by:` line, the
+    read's `likely-done` and the check's evidence each put the card on the
+    Cancel list wherever it stands in the order, and the Planning list holds
+    up to `capacity` cards on its own. That replaces DRE-4727's rule — two
+    lists drawn from the same twenty, a card outside them waiting its turn.
+    The refusals are asked of every row and said under `cancels_refused`
+    wherever the card stands; a refused card keeps its place.
+
     `verified` is `groom_verify.check`'s answer about a first proposal of the
     same lane (`verify_proposal`): `cancel` puts a card on the Cancel list with
-    its evidence as the reason and takes it out of the slots, so the next card
-    in order fills its place; `keep` rejects a Cancel whose replacement is not
-    real and leaves the card on the Planning list with the reason named.
+    its evidence as the reason wherever it stood — a swept card too — and
+    takes it out of the slots, so the next card in order fills its place;
+    `keep` rejects a Cancel whose replacement is not real and leaves the card
+    on the Planning list with the reason named. With it, `sweep` records what
+    the sweep read and moved and every Cancel row DRE-4727's walk would not
+    have put in the batch cycles (`outside_batch`).
 
     `readiness` is the morning's board facts for the readiness rules
     (`groom_readiness.facts`, read in `_build`, DRE-6665). Every card left in
@@ -1755,19 +1772,21 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
               "quote": defang_reason(
                   f"Move to Cancel recorded by {actor} on {day}, "
                   f"proposal {pid}")[0]}])
+    checked = verified is not None
     verified = verified or {}
     check_cancel = dict(verified.get("cancel") or {})
     check_keep = dict(verified.get("keep") or {})
     verdicts = _verdicts_of(judgement)
-    # Which cards would go on the Cancel list, and on whose word (DRE-4727).
-    # Decided per card here and ACTED ON only for a card the walk below places
-    # in the morning's set: a card outside it waits its turn like any other —
-    # it is not cancelled early, and it is not shown as dead. So every card is
-    # sequenced, and the Cancel list is drawn from the same twenty as the
-    # Planning list rather than from the whole lane. The one exception is a
-    # person's recorded Move to Cancel (`recorded`, DRE-7826): not a writer's
-    # guess that should wait its turn, but a decision already made, so it is
-    # placed wherever it stands, as a check row is.
+    # Which cards would go on the Cancel list, and on whose word. Since
+    # DRE-7973 (epic DRE-6648) every one of them goes on it wherever it
+    # stands in the order, and none holds a Planning slot: the Cancel list is
+    # drawn from the whole lane, beside a Planning list that holds up to
+    # `capacity` cards on its own. That replaces DRE-4727's rule — two lists
+    # drawn from the same twenty, a card outside them waiting its turn —
+    # because the ranked read already judged every card on offer and only
+    # the walk threw its `likely-done` calls away, while dead cards sat in
+    # Intake for weeks. A check row and a person's recorded Move to Cancel
+    # (`recorded`, DRE-7826) were already placed wherever they stood.
     to_cancel: dict = {}
     # …and what each would carry on its row as proof (DRE-7241), by card: one
     # item per writer, `[]` where nothing can be shown.
@@ -1810,9 +1829,9 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         to_cancel.pop(identifier, None)
     # An epic with an open child is never a Cancel, whoever proposed it
     # (DRE-5309). Taken out of both writers' lists HERE, before the slots are
-    # filled, so a refused card is planned like any other and keeps the slot
-    # it had; the refusal is said on the page only for a card the walk below
-    # puts in the morning's set — outside it nothing was going to be cancelled.
+    # filled, so a refused card is planned like any other and keeps the place
+    # the order gave it; the refusal is said on the page wherever the card
+    # stands, since it was going to be cancelled wherever it stood (DRE-7973).
     # The proof check (DRE-7241) is asked of the row each writer would write,
     # the same way and in the same place: a Cancel with no proof, and an
     # epic's Cancel from a writer that cannot say whose work it points at.
@@ -1904,22 +1923,37 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         - {cid for cid, (source, _) in to_cancel.items()
            if source == DEAD_FROM_LINE} - set(check_cancel) - set(not_ready) \
         - set(recorded)
+    walk = [r for r in ordered if r["identifier"] not in declined
+            and r["identifier"] not in check_cancel
+            and r["identifier"] not in recorded
+            and r["identifier"] not in not_ready]
+    # A Cancel row holds no slot (DRE-7973): the `Superseded by:` line's and
+    # the ranked read's rows leave the walk before the cycles are filled, as
+    # a check row and a recorded one already did, so the Planning list holds
+    # up to `capacity` cards on its own.
     planned = {row["identifier"]: row for row in cycle_plan(
-        [r for r in ordered if r["identifier"] not in declined
-         and r["identifier"] not in check_cancel
-         and r["identifier"] not in recorded
-         and r["identifier"] not in not_ready], cycles, capacity)}
+        [r for r in walk if r["identifier"] not in to_cancel], cycles,
+        capacity)}
+    # …and DRE-4727's walk, kept for the record only: the same cards with
+    # those rows still holding their slots. A Cancel row it would not have
+    # placed in the batch cycles is `outside_batch`.
+    before = cycle_plan(walk, cycles, capacity)
+    before_cycles = sorted({r["cycle"] for r in before})[:batch_cycles]
+    in_batch_before = {r["identifier"] for r in before
+                       if r["cycle"] in before_cycles}
 
     batch_numbers = sorted({r["cycle"] for r in planned.values()})[:batch_cycles]
-    # The morning's set is the batch cycle(s) — `capacity` cards, Planning
-    # plus Cancel together, units never split — and each card in it goes on
-    # exactly one of the two lists. Each list is numbered from 1 in the rules'
-    # order, so the page reads as two lists and not as one with holes in it.
+    # The morning's Planning list is the batch cycle(s) — up to `capacity`
+    # cards, units never split — and the Cancel list is every Cancel row on
+    # offer, wherever it stands. Each card goes on exactly one list, and each
+    # list is numbered from 1 in the rules' order, so the page reads as two
+    # lists and not as one with holes in it.
     now_rows, later_rows, dead, refused, unready = [], [], [], [], []
     for row in ordered:
-        # A refused Move to Cancel is said wherever the card stands: it was
-        # going to be cancelled wherever it stood (DRE-7826).
-        if refusing.get(row["identifier"], (None,))[0] == DEAD_FROM_RECORD:
+        # A refused Cancel is said wherever the card stands: it was going to
+        # be cancelled wherever it stood (DRE-7826 for a Move to Cancel,
+        # DRE-7973 for every other writer).
+        if row["identifier"] in refusing:
             source, refusal = refusing[row["identifier"]]
             refused.append({"identifier": row["identifier"],
                             "refusal": refusal, "source": source})
@@ -1953,16 +1987,7 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                          "children": row["children"],
                          "proof": check_proofs[row["identifier"]]})
             continue
-        if row["identifier"] in declined:
-            later_rows.append({"identifier": row["identifier"],
-                               "title": row["title"], "repo": row["repo"],
-                               "reconsidered_in": None, "projected": False,
-                               "older_than_window": False,
-                               "open_children": row["open_children"],
-                               "children": row["children"]})
-            continue
-        row = planned[row["identifier"]]
-        if row["cycle"] in batch_numbers and row["identifier"] in to_cancel:
+        if row["identifier"] in to_cancel:
             source, target = to_cancel[row["identifier"]]
             dead.append({"identifier": row["identifier"],
                          "title": row["title"], "repo": row["repo"],
@@ -1972,12 +1997,17 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
                          "open_children": row["open_children"],
                          "children": row["children"],
                          "proof": proofs[row["identifier"]]})
-        elif row["cycle"] in batch_numbers:
-            if row["identifier"] in refusing \
-                    and refusing[row["identifier"]][0] != DEAD_FROM_RECORD:
-                source, refusal = refusing[row["identifier"]]
-                refused.append({"identifier": row["identifier"],
-                                "refusal": refusal, "source": source})
+            continue
+        if row["identifier"] in declined:
+            later_rows.append({"identifier": row["identifier"],
+                               "title": row["title"], "repo": row["repo"],
+                               "reconsidered_in": None, "projected": False,
+                               "older_than_window": False,
+                               "open_children": row["open_children"],
+                               "children": row["children"]})
+            continue
+        row = planned[row["identifier"]]
+        if row["cycle"] in batch_numbers:
             now_rows.append({**{k: row[k] for k in
                                 ("identifier", "title", "position", "cycle",
                                  "cycle_id", "unit", "epic", "repo",
@@ -2004,20 +2034,17 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # it was going to be batched in is the same contradiction one layer down.
     # A card on the Cancel list keeps its place in the order and carries no
     # cycle either: it is proposed for cancellation, not scheduled.
-    cancelled = {d["identifier"] for d in dead}
     sequence_rows = [{**r, "cycle": None, "cycle_id": None, "projected": False,
                       "reconsidered_in": None, "outcome": NOT_READY}
                      if r["identifier"] in not_ready
                      else {**r, "cycle": None, "cycle_id": None,
-                           "projected": False, "outcome": "not-now"}
-                     if r["identifier"] in declined
-                     else {**r, "cycle": None, "cycle_id": None,
                            "projected": False, "outcome": "dead"}
                      if r["identifier"] in check_cancel
                      or r["identifier"] in recorded
-                     else {**planned[r["identifier"]], "cycle": None,
-                           "cycle_id": None, "projected": False,
-                           "outcome": "dead"} if r["identifier"] in cancelled
+                     or r["identifier"] in to_cancel
+                     else {**r, "cycle": None, "cycle_id": None,
+                           "projected": False, "outcome": "not-now"}
+                     if r["identifier"] in declined
                      else {**planned[r["identifier"]],
                            "outcome": ("now" if planned[r["identifier"]]["cycle"]
                                        in batch_numbers else "not-now")}
@@ -2051,8 +2078,8 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
         "collisions": collisions,
         "unhonoured_constraints": broken,
         "unstated_supersessions": unstated,
-        # Every Cancel the guard refused in the morning's set (DRE-5309) —
-        # `[]` on a morning with none. Not in the id's digest: the lists are.
+        # Every Cancel the guard refused, wherever the card stands (DRE-5309,
+        # DRE-7973) — `[]` on a morning with none. Not in the id's digest: the lists are.
         "cancels_refused": refused,
     }
     # The fourth list (DRE-6665), only when the rules ran: a proposal built
@@ -2060,6 +2087,28 @@ def propose(cards: list[dict], *, cycles: list[dict], capacity: int = DEFAULT_CA
     # digest — a Not ready card is in neither list an approval moves.
     if readiness is not None:
         proposal["outcomes"][NOT_READY] = unready
+    # What the check's sweep read and moved, and every Cancel row DRE-4727's
+    # walk would not have put in the batch cycles — a `Superseded by:` or
+    # ranked-read row it would have left waiting, a card only the sweep read,
+    # and a recorded Move to Cancel, which never held a slot (DRE-7973).
+    # Written when the check ran, so a proposal built without one keeps the
+    # shape it had. Not in the id's digest: the Cancel list is.
+    if checked:
+        swept = list(verified.get("swept") or [])
+        verdict_of = {r["identifier"]: r.get("verdict")
+                      for r in verified.get("cards") or []
+                      if r.get("list") == "sweep"}
+        moved = {d["identifier"] for d in dead
+                 if d["source"] == DEAD_FROM_CHECK}
+        proposal["sweep"] = {
+            "read": len(swept),
+            "to_cancel": sum(1 for i in swept if i in moved),
+            "unread": sum(1 for i in swept if verdict_of.get(i) == "unread"),
+            "outside_batch": [d["identifier"] for d in dead
+                              if d["identifier"] not in in_batch_before
+                              and (d["source"] != DEAD_FROM_CHECK
+                                   or d["identifier"] in swept)],
+        }
     # The CEO's earlier answers, said on the page (DRE-4966) — and absent when
     # there are none, so a thread with no per-card marker proposes exactly
     # what it did before.
@@ -3107,8 +3156,8 @@ def render_proposal(proposal: dict) -> str:
     # unchanged, because the console and the drain both read it back
     # (DRE-3764).
     w.extend(_render_batch_reasons(proposal))
-    # The other half of the morning's set, and absent when it is empty
-    # (DRE-4727) — the console's reader takes no section to mean no
+    # The other list, drawn from the whole lane since DRE-7973, and absent
+    # when it is empty (DRE-4727) — the console's reader takes no section to mean no
     # cancellation, which is what most mornings are.
     w.extend(_render_cancel(proposal))
     # Every Cancel the guard refused (DRE-5309), right after the list it was
@@ -3827,18 +3876,39 @@ def _render_check(proposal: dict) -> list:
     Every unread source is named with the cards it was unread for, and every
     Planning card the check never reached is named too: a card is only ever
     clean on a source that was read (`standards/console-honesty.md` rule 2).
+
+    A record carrying `sweep` (DRE-7973) also says how many more cards on
+    offer the sweep read, in the opening and on its own `- Swept:` line; one
+    written before it renders as it did.
     """
     block = proposal.get("verification")
     if not block:
         return []
     rows = block.get("cards") or []
     by_id = {row["identifier"]: row for row in rows}
+    sweep = proposal.get("sweep")
+    lane = proposal.get("lane") or "Intake"
     w = ["## What the check read", ""]
-    w.append(f"Before this was posted, {_plural(len(rows), 'card')} — both "
-             f"lists and up to {block.get('spare')} behind them, in order — "
-             f"were read against their own comments, merged pull requests "
-             f"and other cards that name them. No model was asked.")
+    if sweep is None:
+        w.append(f"Before this was posted, {_plural(len(rows), 'card')} — "
+                 f"both lists and up to {block.get('spare')} behind them, in "
+                 f"order — were read against their own comments, merged pull "
+                 f"requests and other cards that name them. No model was "
+                 f"asked.")
+    else:
+        w.append(f"Before this was posted, {_plural(len(rows), 'card')} — "
+                 f"both lists, up to {block.get('spare')} behind them in "
+                 f"order, and {sweep['read']} more in {lane} swept for "
+                 f"dead-card evidence — were read against their own comments, "
+                 f"merged pull requests and other cards that name them. No "
+                 f"model was asked.")
     w.append("")
+    if sweep is not None:
+        w.append(f"- Swept: {sweep['read']} more "
+                 f"{'card' if sweep['read'] == 1 else 'cards'} in {lane} "
+                 f"{'was' if sweep['read'] == 1 else 'were'} read for "
+                 f"dead-card evidence — {sweep['to_cancel']} moved to Cancel, "
+                 f"{sweep['unread']} could not be read.")
     said = False
     for identifier in block.get("moved_to_cancel") or []:
         source = (by_id.get(identifier) or {}).get("source")
@@ -5941,10 +6011,12 @@ def verify_proposal(cards: list[dict], shaping: dict, *, lops, run=None,
     """Propose, check the proposal, and propose again with the answer
     (DRE-4966).
 
-    `groom_verify.check` reads the first proposal's lists and the spares
-    behind them; the second `propose` applies what it found — a done or
-    superseded card to the Cancel list, its slot to the next card, a Cancel
-    with no real replacement back to the Planning list — so the id is a
+    `groom_verify.check` reads the first proposal's lists, the spares
+    behind them and, with `sweep=True`, every other card on offer
+    (DRE-7973); the second `propose` applies what it found — a done or
+    superseded card to the Cancel list wherever it stood, its slot, if it
+    held one, to the next card, a Cancel with no real replacement back to
+    the Planning list — so the id is a
     digest of the lists as checked. `propose` is pure, so the second call is
     the first one plus the answer and nothing else: no second model call,
     no second read of the lane. The check's per-card record is written onto
@@ -5952,19 +6024,24 @@ def verify_proposal(cards: list[dict], shaping: dict, *, lops, run=None,
     """
     first = propose(cards, **shaping)
     try:
-        result = groom_verify.check(first, lops=lops, run=run, owners=owners)
+        result = groom_verify.check(first, lops=lops, run=run, owners=owners,
+                                    sweep=True)
     except Exception as e:  # noqa: BLE001 — a failed check is an unread one
         # Fail soft, and say so: the proposal posts with every card unread on
         # every source rather than not at all (vendor boundary Q5).
         print(f"groomer: the check before posting failed — {e}; every card "
               f"is reported unread", file=sys.stderr)
-        result = groom_verify.unread_result(first, "the check failed this run")
+        result = groom_verify.unread_result(first, "the check failed this run",
+                                            sweep=True)
     final = propose(cards, verified=result, **shaping)
     groom_verify.settle(final, result)
     moved = final["verification"]["moved_to_cancel"]
     kept = final["verification"]["cancels_rejected"]
+    sweep = final["sweep"]
     print(f"groomer: the check read {_plural(len(result['cards']), 'card')} — "
-          f"{len(moved)} moved to Cancel, {len(kept)} Cancel(s) rejected"
+          f"{len(moved)} moved to Cancel, {len(kept)} Cancel(s) rejected; "
+          f"the sweep read {sweep['read']} more, {sweep['to_cancel']} to "
+          f"Cancel, {sweep['unread']} unread"
           + "".join(f"; {_unread_line(source, entry)}" for source, entry
                     in sorted(final["verification"]["unread"].items())),
           file=sys.stderr)

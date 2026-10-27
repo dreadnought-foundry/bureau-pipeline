@@ -1188,6 +1188,24 @@
       }
     },
     {
+      "name": "proof-gap-filed",
+      "tag": "proof-gap-card",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A PROOF card whose approved, merged record has every unmet row a gap — a `Not observed. cause: <word> — …` row naming one of the four cause words, or a `Not met. history: …` row — closed, and its gaps were filed as ONE fix card in Intake: parentless, labeled `repo:<the PROOF's repo>`, one line per row with its criterion, its kind, the record's cell and the kind of fix. The same filer files the fix card for a spent re-run budget on a build that fails its rows, worded as a defect in the build.",
+      "state": "unchanged",
+      "next_actor": "groomer.py",
+      "discharges": null,
+      "subscriber": "groomer.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the fix card waits in Intake for scripts/groomer.py to propose it in a batch and the CEO to approve that batch in Green Light, and nothing declares a bound on when that happens — the same null every act that hands work to a person's approval carries.",
+      "why": "DRE-7952 (epic DRE-7944). A record whose unmet rows all carried a cause word or read history never closed: `proof_record.shortfall` held the merge gate (condition P) and the PROOF close on rows a re-run reads the same again, and the dispatcher put them to the operator once, whose only useful answer was to reword the row on a new card. `proof_record.all_unmet_gaps` now passes such a record, and the PROOF close (`linear_ops.merge_close_ruling`, asked by card-done and the reconcile backstop) calls `proof_gap.file_fix_card` before the card moves. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🩹 proof-gap-card:` on the PROOF card names the card's one fix card, so a second close reads it and files nothing; a comment of that shape from anyone else counts for nothing. A receipt that failed to post after the create is caught by the title: an open card with exactly that title is reused and receipted. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/proof_gap.py",
+        "anchor": "pipeline_act.receipt(ACT,"
+      }
+    },
+    {
       "name": "agent-blocker-resolved",
       "tag": "agent-blocker-resolved",
       "adopted": true,

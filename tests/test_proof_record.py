@@ -623,9 +623,15 @@ class TestARowWithACause:
                                ("The stale branch is deleted", "state-gone")]
         assert proof_record.all_unmet_caused(read) is True
 
-    def test_shortfall_still_holds_the_caused_record_and_names_the_cause(self):
-        why = proof_record.shortfall(proof_record.Record(RECORD_PATH, CAUSED, None))
-        assert why is not None and "2 row(s) not met" in why
+    def test_shortfall_passes_a_record_whose_unmet_rows_all_carry_a_cause(self):
+        """DRE-7952: every unmet row is a gap row, so the record closes its
+        PROOF card with a fix card rather than holding it."""
+        assert proof_record.shortfall(proof_record.Record(RECORD_PATH, CAUSED, None)) is None
+
+    def test_shortfall_holds_a_caused_row_beside_a_plain_one_and_names_the_cause(self):
+        text = with_row(CAUSED, "The console shows the order", "Not met.")
+        why = proof_record.shortfall(proof_record.Record(RECORD_PATH, text, None))
+        assert why is not None and "3 row(s) not met" in why
         assert "reads “Not observed. cause: state-gone —" in why
         assert "reads “Not observed. cause: out-of-reach —" in why
 

@@ -1436,3 +1436,251 @@ class TestTheWaitActIsDeclared:
     def test_the_registry_checks_clean(self):
         import pipeline_act
         assert pipeline_act.problems() == []
+
+
+# ===========================================================================
+# DRE-8145: the planning exit refuses a card with no `repo:` label
+# ===========================================================================
+#
+# DRE-7961 and DRE-7962 were filed with no labels at all and moved to Planning
+# by a person. The relay sent both planning runs to its default repo, the
+# pre-approval critic passed both, and `planning_route.py exit` stamped FLEET on
+# each and parked it in Queued, where no sweep promotes a card with no repo.
+# They sat there two days. The exit now reads the repo the way
+# `validate_card` reads it, and a card with none is refused: no verdict, no
+# mark, parked in Triage with the reason on it under a `no-route` hold.
+NO_LABELS = ()
+#: DRE-7961 as filed: a one-off whose body names bureau-pipeline throughout
+#: and carries twelve criteria, with no label saying so.
+DRE_7961_BODY = (
+    "The bureau-pipeline sweep reports a stalled card twice when its lane "
+    "history is read past the window.\n\n"
+    "**Files:** bureau-pipeline `scripts/reconcile.py`, bureau-pipeline "
+    "`tests/test_reconcile.py`.\n\n"
+    "## Acceptance criteria\n\n"
+    + "".join(f"- [ ] bureau-pipeline criterion {n}: the sweep reports the card once\n"
+              for n in range(1, 13))
+)
+
+
+def _critic_passed() -> str:
+    """The one-off critic's passing round record, as the critic writes it."""
+    import plan_critic
+
+    return plan_critic.marker(plan_critic.STAGE_ONE_OFF, 1, plan_critic.PASS,
+                              "the card is buildable as written")
+
+
+def _no_repo_card(labels=NO_LABELS, **kw) -> _Card:
+    return _Card([_stamp("one-off"), _critic_passed()],
+                 description=DRE_7961_BODY, labels=labels, **kw)
+
+
+def _refusals(card: _Card) -> list:
+    return [body for _, body in card.posted
+            if planning_route.NO_REPO_TAG in body]
+
+
+class TestACardWithNoRepoIsRefusedAtTheExit:
+    def test_the_replay_card_is_routable_but_for_its_repo(self):
+        """Guard the fixture: everything but the repo routes it FLEET, so a
+        refusal below is the repo check and nothing else."""
+        assert len(routing_verdict.acceptance_criteria(DRE_7961_BODY)) == 12
+        verdict, _ = planning_route.mechanical_verdict(
+            ONE_OFF_TITLE, DRE_7961_BODY, NO_LABELS, shape="one-off")
+        assert verdict == "FLEET"
+
+    def test_dre_7961_is_refused_to_triage_with_no_verdict_and_no_mark(self):
+        card = _no_repo_card()
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+
+        assert routing_verdict.verdicts_on([b for _, b in card.posted]) == (), (
+            "a card with no repo carries no routing verdict out of Planning"
+        )
+        assert routing_verdict.VERDICT_TAG not in card.bodies()
+        assert planning_route.ROUTE_TAG not in card.bodies(), (
+            "the route note says where the card goes — it goes nowhere"
+        )
+        marks = set(planning_shape.marks("one-off")) | set(planning_shape.marks("roll-up"))
+        assert not marks & {label for _, label in card.labelled}
+        assert card.states == [(CARD, "Triage")]
+
+    def test_the_refusal_names_the_missing_label_and_the_fix(self):
+        card = _no_repo_card()
+        card.run(lambda: planning_route.main(["exit", CARD]))
+
+        refusals = _refusals(card)
+        assert len(refusals) == 1, card.posted
+        text = refusals[0]
+        assert "no `repo:` label" in text
+        assert "config/repo-map.json" in text
+        assert "repo:<slug>" in text
+        assert "not routed" in text
+        assert "bureau-pipeline" in text, "the fix names the slugs it can take"
+
+    def test_the_refused_card_is_held_no_route_through_hold_py(self):
+        import hold
+
+        card = _no_repo_card()
+        card.run(lambda: planning_route.main(["exit", CARD]))
+
+        assert (CARD, hold.HOLD_LABEL) in card.labelled
+        stamp = hold.read_stamp(card.comments)
+        assert stamp is not None, "no hold stamp on the card"
+        assert stamp["reason"] == "no-route"
+        assert stamp["at"] == "repo:none"
+        assert stamp["lifts"] == "repo-on-rail"
+        assert stamp["by"] == "planning_route.py"
+        assert hold.reason_of([hold.HOLD_LABEL], card.comments) == "no-route"
+
+    def test_the_hold_lifts_once_the_label_names_a_repo_on_the_rail(self):
+        import hold
+        import validate_card
+
+        card = _no_repo_card()
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        stamp = hold.read_stamp(card.comments)
+        rail = validate_card.VALID_SLUGS
+        assert hold.lift_due(stamp, lane="Triage", labels=[], pr_head=None,
+                             rail_slugs=rail, bodies=card.comments) is None
+        assert hold.lift_due(stamp, lane="Triage", labels=["repo:bureau-pipeline"],
+                             pr_head=None, rail_slugs=rail,
+                             bodies=card.comments) == "repo-on-rail"
+
+    def test_the_refusal_comes_before_the_hold_and_the_move(self):
+        """The hold label is on before the move: the plan run that a move into
+        Triage fires is refused by the plan-gate for `needs-human`."""
+        import hold
+
+        card = _no_repo_card()
+        order = []
+
+        def run():
+            import linear_ops
+
+            real_state = linear_ops.cmd_state
+            real_label = linear_ops.add_label
+
+            def state(*a, **kw):
+                order.append("move")
+                return real_state(*a, **kw)
+
+            def label(i, name):
+                order.append(f"label:{name}")
+                return real_label(i, name)
+
+            with patch.object(linear_ops, "cmd_state", side_effect=state), \
+                    patch.object(linear_ops, "add_label", side_effect=label):
+                return planning_route.main(["exit", CARD])
+
+        card.run(run)
+        assert order == [f"label:{hold.HOLD_LABEL}", "move"]
+        refusal = next(i for i, b in enumerate(card.comments)
+                       if planning_route.NO_REPO_TAG in b)
+        stamp = next(i for i, b in enumerate(card.comments)
+                     if b.startswith(hold.STAMP_PREFIX))
+        assert refusal < stamp
+
+    def test_an_unknown_slug_is_refused_the_same_way_and_named(self):
+        import hold
+
+        card = _no_repo_card(labels=("repo:nonsense", "agent:engineer"))
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+
+        assert routing_verdict.verdicts_on([b for _, b in card.posted]) == ()
+        assert planning_route.ROUTE_TAG not in card.bodies()
+        assert card.states == [(CARD, "Triage")]
+        refusals = _refusals(card)
+        assert len(refusals) == 1
+        assert "repo:nonsense" in refusals[0]
+        assert "config/repo-map.json" in refusals[0]
+        stamp = hold.read_stamp(card.comments)
+        assert stamp["reason"] == "no-route" and stamp["at"] == "repo:nonsense"
+
+    def test_a_criteria_less_card_with_no_repo_is_refused_before_it_escalates(self):
+        """The escalation is a write too: a card with no repo reaches no lane
+        but Triage, whatever else is wrong with it."""
+        import planning_escalation
+
+        card = _Card([_stamp("one-off")], description=FD4B_BODY, labels=NO_LABELS)
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert planning_escalation.ESCALATION_TAG not in card.bodies()
+        assert card.states == [(CARD, "Triage")]
+
+    def test_a_roll_up_with_no_repo_is_refused_too(self):
+        card = _Card([_stamp("roll-up")], labels=NO_LABELS)
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert planning_route.ROUTE_TAG not in card.bodies()
+        assert card.labelled == [(CARD, "needs-human")]
+        assert card.states == [(CARD, "Triage")]
+
+    def test_re_running_the_refusal_writes_nothing_twice(self):
+        card = _no_repo_card()
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        first = list(card.posted)
+        # The board as the retry reads it: the hold label the first run wrote.
+        card.labels = [label for _, label in card.labelled]
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        assert card.posted == first, "the retry posted the refusal or the stamp again"
+        assert card.states == [(CARD, "Triage"), (CARD, "Triage")]
+
+    def test_once_the_label_is_added_the_card_leaves_on_its_route_with_a_verdict(self):
+        """DRE-4884's re-entry rule needs nothing new: the refusal stamped no
+        verdict, so the re-run stamps the one it reads now."""
+        card = _no_repo_card()
+        card.run(lambda: planning_route.main(["exit", CARD]))
+        assert card.states == [(CARD, "Triage")]
+
+        card.labels = list(ONE_OFF_LABELS)
+        card.lane = "Planning"
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
+        assert planning_route.ROUTE_TAG in card.bodies()
+        assert card.states[-1] == (CARD, planning_shape.destination("one-off"))
+        assert len(_refusals(card)) == 1
+
+    def test_a_legacy_repo_line_is_accepted_as_validate_card_accepts_it(self):
+        body = "**Repo:** bureau-pipeline\n\n" + ONE_OFF_BODY
+        card = _Card([_stamp("one-off")], description=body,
+                     labels=("agent:engineer",))
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
+        assert card.states == [(CARD, planning_shape.destination("one-off"))]
+
+    def test_one_valid_label_beside_an_unknown_one_still_routes(self):
+        """Refused only when NO `repo:` label is a key of the map."""
+        card = _Card([_stamp("one-off")],
+                     labels=("repo:bureau-pipeline", "repo:nonsense", "agent:engineer"))
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
+        assert card.states == [(CARD, planning_shape.destination("one-off"))]
+
+
+class TestTheRepoIsReadThroughValidateCard:
+    def test_the_exit_asks_validate_card(self):
+        """Behavioral pin: the answer is `validate_card._has_repo`'s. Make it
+        say yes and a card with no labels leaves on its route."""
+        import validate_card
+
+        card = _no_repo_card()
+        with patch.object(validate_card, "_has_repo", return_value=True):
+            assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "FLEET"
+        assert _refusals(card) == []
+
+    def test_the_unknown_slug_named_is_validate_cards(self):
+        import validate_card
+
+        card = _no_repo_card(labels=("repo:nonsense",))
+        with patch.object(validate_card, "unknown_repo_slugs",
+                          return_value=["sentinel-slug"]):
+            card.run(lambda: planning_route.main(["exit", CARD]))
+        assert "sentinel-slug" in _refusals(card)[0]
+
+    def test_planning_route_writes_no_second_slug_reading(self):
+        source = (ROOT / "scripts" / "planning_route.py").read_text(encoding="utf-8")
+        assert "validate_card._has_repo(" in source
+        assert "validate_card.unknown_repo_slugs(" in source
+        for second_reading in ('startswith("repo:', "startswith('repo:",
+                               "repo-map.json\")", "_REPO_RE", "rsplit(\"/\""):
+            assert second_reading not in source, second_reading

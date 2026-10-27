@@ -1258,10 +1258,10 @@
         "deferred": false,
         "open_children": 0,
         "children": 0,
-        "cycle": 14,
+        "cycle": null,
         "cycle_id": null,
-        "projected": true,
-        "outcome": "not-now"
+        "projected": false,
+        "outcome": "dead"
       },
       {
         "identifier": "DRE-113",
@@ -1360,7 +1360,7 @@
         "deferred": false,
         "open_children": 0,
         "children": 0,
-        "cycle": 15,
+        "cycle": 14,
         "cycle_id": null,
         "projected": true,
         "outcome": "not-now"
@@ -1496,7 +1496,7 @@
         "deferred": false,
         "open_children": 0,
         "children": 0,
-        "cycle": 16,
+        "cycle": 15,
         "cycle_id": null,
         "projected": true,
         "outcome": "not-now"
@@ -1736,16 +1736,6 @@
           "children": 0
         },
         {
-          "identifier": "DRE-107",
-          "title": "DRE-107 does a thing",
-          "repo": "portico",
-          "reconsidered_in": 14,
-          "projected": true,
-          "older_than_window": false,
-          "open_children": 0,
-          "children": 0
-        },
-        {
           "identifier": "DRE-113",
           "title": "DRE-113 does a thing",
           "repo": "portico",
@@ -1799,7 +1789,7 @@
           "identifier": "DRE-127",
           "title": "DRE-127 does a thing",
           "repo": "portico",
-          "reconsidered_in": 15,
+          "reconsidered_in": 14,
           "projected": true,
           "older_than_window": false,
           "open_children": 0,
@@ -1879,7 +1869,7 @@
           "identifier": "DRE-131",
           "title": "DRE-131 does a thing",
           "repo": "portico",
-          "reconsidered_in": 16,
+          "reconsidered_in": 15,
           "projected": true,
           "older_than_window": false,
           "open_children": 0,
@@ -1896,7 +1886,25 @@
           "children": 0
         }
       ],
-      "dead": []
+      "dead": [
+        {
+          "identifier": "DRE-107",
+          "title": "DRE-107 does a thing",
+          "repo": "portico",
+          "superseded_by": "DRE-101",
+          "position": 1,
+          "epic": null,
+          "band": 2,
+          "open_children": 0,
+          "children": 0,
+          "proof": [
+            {
+              "source": "the card's Superseded by line",
+              "quote": "Superseded by: DRE-101"
+            }
+          ]
+        }
+      ]
     },
     "collisions": {
       "pairs": [
@@ -1949,6 +1957,6 @@
     "unstated_supersessions": [],
     "cancels_refused": [],
     "deprioritised": [],
-    "id": "a85999f18b18"
+    "id": "991592d78894"
   }
 }
