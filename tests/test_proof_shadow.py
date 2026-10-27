@@ -882,3 +882,54 @@ def test_push_through_the_cli_reads_the_switch_from_the_environment(checkout, mo
     assert code == 1
     assert "name-guard: refused — roster unreadable" in out.getvalue()
     assert refs(remote) == ["refs/heads/main"]
+
+
+def tree(remote, branch):
+    return git(remote, "ls-tree", "-r", "--name-only", branch).splitlines()
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_push_live_redacts_a_name_in_the_record_path_and_the_sidecar_names_the_pushed_file(
+        checkout, staged):
+    work, remote = checkout
+    (work / "docs" / "proofs").mkdir()
+    named = work / "docs" / "proofs" / f"dre-1234-{SYNTH_PERSON_LOGIN}-proof.md"
+    named.write_text(NAMED_RECORD)
+    if staged:
+        git(work, "add", "--", str(named))
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = ps.push(**push_args(run_id="507"), cwd=work, roster=synth_roster(), env=LIVE)
+    assert code == 0, out.getvalue()
+    branch = "proof-shadow/DRE-1234-507"
+    paths = tree(remote, branch)
+    for path in paths:
+        no_synth_name(path)
+    sidecar = json.loads(git(remote, "show", f"{branch}:proof-shadow.json"))
+    assert sidecar["record_path"] == "docs/proofs/dre-1234-[a person]-proof.md"
+    assert sidecar["record_path"] in paths
+    assert git(remote, "show", f"{branch}:{sidecar['record_path']}") == REDACTED_RECORD
+    no_synth_name(out.getvalue())
+
+
+def test_push_live_refuses_two_records_that_redact_to_one_path_and_writes_nothing(checkout):
+    work, remote = checkout
+    (work / "docs" / "proofs").mkdir()
+    first = work / "docs" / "proofs" / "dre-1234-synthia.md"
+    second = work / "docs" / "proofs" / "dre-1234-Synthwood.md"
+    first.write_text(NAMED_RECORD)
+    second.write_text(NAMED_RECORD)
+    head = git(work, "rev-parse", "HEAD")
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = ps.push(**push_args(run_id="508"), cwd=work, roster=synth_roster(), env=LIVE)
+    assert code == 1
+    assert out.getvalue().splitlines() == [
+        "::error::proof shadow push: name-guard: refused — 2 records redact to one path"]
+    assert refs(remote) == ["refs/heads/main"]
+    assert git(work, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert git(work, "rev-parse", "HEAD") == head
+    assert not (work / ps.SIDECAR).exists()
+    assert first.read_text() == NAMED_RECORD and second.read_text() == NAMED_RECORD
+    assert sorted(p.name for p in (work / "docs" / "proofs").iterdir()) == [
+        "dre-1234-Synthwood.md", "dre-1234-synthia.md"]
