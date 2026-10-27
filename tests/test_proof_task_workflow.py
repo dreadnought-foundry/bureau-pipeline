@@ -931,26 +931,25 @@ class ResultStepTest(_StepHarness):
 
     # --- the escalation sorted by what it names (DRE-6840) -----------------
 
-    def _park_argv(self) -> list:
-        return ["proof_cause_park", "park", "DRE-77", "--escalation-file",
-                str(self.escalation), "--run-url", RUN_URL]
-
     def _summary(self) -> str:
         return self.summary.read_text() if self.summary.exists() else ""
 
-    def test_cause_rows_with_an_open_record_go_to_the_one_writer(self):
+    def test_cause_rows_with_an_open_record_ask_nobody(self):
+        """DRE-7953: a gap record merges on its approval (DRE-7952), so cause
+        rows go to nobody — no writer, no hold, no question, no Green Light
+        move — and their lines are printed to the log."""
         self._install_cause_park()
         posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
                            escalation=CAUSE_FILE, description=NO_PRESS)
-        self.assertEqual([self._park_argv()], self.parks)
-        # The pull request's report and its In Review move, and nothing else:
-        # no hold, no question and no Green Light move of the step's own.
+        self.assertEqual([], self.parks)
         self.assertEqual(["comment", "advance"], [c[1] for c in posted])
         self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
         self.assertFalse(any(c.startswith("🙋") for c in self._comments(posted)))
-        # The writer's own result line closes the run's log, never a lane assumed.
-        self.assertIn("proof result: record pull request, then left DRE-77 in "
-                      "In Review for the operator\n", self.stdout)
+        for line in CAUSE_FILE.splitlines():
+            if line.startswith("cause:"):
+                self.assertIn(line, self.stdout)
+        self.assertIn("proof result: record pull request\n", self.stdout)
+        self.assertIn("left to the gate, nothing asked", self._summary())
         self.assertNotIn("only the CEO can make", self._summary())
         self.assertNotIn("only the CEO can make", self.stdout)
 
@@ -967,30 +966,15 @@ class ResultStepTest(_StepHarness):
         self.assertIn("proof park: decision", self._summary())
         self.assertNotIn("proof park: press", self._summary())
 
-    def test_a_writer_that_finds_no_cause_row_sends_the_file_to_the_decision(self):
+    def test_a_writer_that_would_refuse_is_never_reached(self):
         self._install_cause_park()
-        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=2)
-        self.assertEqual([self._park_argv()], self.parks)
-        self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
-                         [c[1] for c in posted])
-        self.assertTrue(posted[3][3].startswith(DECISION_RECEIPT), posted[3][3])
-        self.assertEqual([("In Review", "Hand-work"), ("Green Light", "Hand-work,In Review")],
-                         self._moves(posted))
-
-    def test_a_writer_that_refuses_leaves_a_warning_and_moves_nothing(self):
-        self._install_cause_park()
-        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=1)
-        self.assertEqual([self._park_argv()], self.parks)
-        # Never the press or decision fallback: that would put the operator's
-        # question in the CEO's queue.
-        self.assertEqual(["comment", "advance"], [c[1] for c in posted])
-        self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
-        self.assertIn("::warning::", self.stdout)
-        self.assertIn("proof park: the cause park could not be completed for DRE-77 — the "
-                      "dispatcher's next pass parks the record off its rows", self._summary())
-        self.assertNotIn("only the CEO can make", self._summary())
+        for code in (1, 2):
+            posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
+                               escalation=CAUSE_FILE, description=NO_PRESS, park_exit=code)
+            self.assertEqual([], self.parks)
+            self.assertEqual(["comment", "advance"], [c[1] for c in posted])
+            self.assertNotIn("::warning::", self.stdout)
+            self.calls.unlink()
 
 
 class ReturnStepTest(_StepHarness):

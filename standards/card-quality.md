@@ -155,7 +155,10 @@ agent and needs a person. When that happens **the planner escalates with a
 stated reason and the card parks in `Green Light`** — the CEO's decision queue,
 the same lane a plan waits in. The reason is written in business terms, never a
 diff; a reason written as code is not put in front of the CEO at all
-(`scripts/planning_escalation.py`).
+(`scripts/planning_escalation.py`). A planner escalation that fails the screen
+— it names no decision, offers other than two or three options, or says it is
+not a decision — is housekeeping, and parks in `Triage` for the operator, not in
+`Green Light` (DRE-7961, `docs/escalation-choices.md`).
 
 **No label, flag or lane skips `Planning`.** Hand-planning
 is an escalation OUT of Planning, not a way around it, and that distinction is

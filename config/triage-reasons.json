@@ -15,6 +15,12 @@
       "note": "A park note says nothing has read the card, why its classification could not be read, and that the way back is a move to Planning."
     },
     {
+      "unit": "planning_escalation.py#escalate",
+      "reason_at": "planning_escalation.py#escalate",
+      "anchor": "housekeeping_note(",
+      "note": "A park note says the planner's question is housekeeping, not a decision, names the screen's rule it broke, quotes the reason and says the way back is a move to Planning (DRE-7961)."
+    },
+    {
       "unit": "reconcile.py#escalate_out_of_planning",
       "reason_at": "reconcile.py#escalate_out_of_planning",
       "anchor": "stall_park_note(ident, reason)",
