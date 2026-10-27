@@ -45,7 +45,7 @@ import proof_record  # noqa: E402
 import proof_run_state  # noqa: E402
 import spoken_thread  # noqa: E402
 from test_proof_dispatch import (  # noqa: E402
-    CAUSE_HOLD, HISTORY_HOLD, NOW, REPO, Board, Harness, _review, _sent_back,
+    CAUSE_HOLD, HISTORY_HOLD, NOW, PERSON, REPO, Board, Harness, _review, _sent_back,
     comment, detail, hold, lane_card, promoted, receipt, record, state, verdict,
 )
 
@@ -385,6 +385,43 @@ def test_a_copy_of_the_hold_buys_no_second_chase(monkeypatch, capsys, shown):
     h = Harness(monkeypatch, _hand(nodes, window=window), states={CARD: state("dead")})
     h.sweep()
     assert h.fired == []
+
+
+def test_a_copy_newer_than_a_day_does_not_hide_a_hold_that_has_stood(
+        monkeypatch, capsys):
+    """The lane read weighs the OLDEST hold the window shows, as the thread
+    read does: a 5-hour copy of a 40-hour hold names nothing held."""
+    held = event_hold(40)
+    h = Harness(monkeypatch, _hand([held, event_hold(5)]))
+    h.sweep()
+    assert _chased(h) == [(CARD, REPO, _reason(held), "proof-execute")]
+    assert not any("condition 4" in line for line in _about(_lines(capsys)))
+
+
+def test_a_new_hold_after_a_discharged_chased_one_gets_its_own_chase(
+        monkeypatch, capsys):
+    """A chase on hold A, A discharged by a person's `🔬 proof-observed`,
+    then a fresh event hold B that has stood: B is owed its own chase, and
+    the old chase receipt in the window does not hide it."""
+    first, second = event_hold(80), event_hold(30, needs="the weekly report of 2026-10-20")
+    observed = comment(f"{proof_record.OBSERVED_MARK} the column is there", 60 * HOUR,
+                       user=PERSON)
+    h = Harness(monkeypatch, _hand([first, chase_receipt(70, first), observed, second]))
+    h.sweep()
+    assert _chased(h) == [(CARD, REPO, _reason(second), "proof-execute")]
+    assert not any("condition 4" in line for line in _about(_lines(capsys)))
+
+
+def test_a_partial_window_leaves_the_hold_age_to_the_thread_read(monkeypatch, capsys):
+    """A window that does not hold the whole thread may hide an older hold:
+    the lane read does not name the card held off the copy's age."""
+    held, copy = event_hold(40), event_hold(5)
+    board = _hand([held, copy], window=[copy])
+    board.lanes["Hand-work"][0]["comments"]["pageInfo"] = {"hasNextPage": True}
+    h = Harness(monkeypatch, board)
+    h.sweep()
+    assert ("thread", CARD) in board.reads
+    assert _chased(h) == [(CARD, REPO, _reason(held), "proof-execute")]
 
 
 @pytest.mark.parametrize("count,reason", [
