@@ -90,13 +90,15 @@ Process (mandatory):
    but agent-bureau today) makes no press and writes the row as the
    console proof-reader bullet under Identities in briefs/proof.md
    says, `Not observed. cause: out-of-reach — …`. A press the live
-   console refuses is written as the operator's row with the console's
-   reason, as briefs/proof.md's "When the console is not ready" says.
-   Every other press the card's words give the operator — one under
-   the operator's standing permission of 2026-10-07, or a sandbox
-   press not on the standard's list — is the operator's row, with no
-   escalation file:
-   `Not observed. waiting for the operator's press: <the press>`.
+   console refuses is the same cause row with the console's reason,
+   as briefs/proof.md's "When the console is not ready" says. A
+   press outside the sandbox is never a row of yours: it is an
+   OPERATOR card the proof is blocked by, and you read its result
+   like any other row. A criterion that still words a person's press
+   as a wait — one under the operator's standing permission of
+   2026-10-07, or a sandbox press not on the standard's list — reads
+   `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
+   with no escalation file, and the record closes with a fix card.
    briefs/proof.md says which press is whose. For the CEO's press,
    AFTER the pull request is open, write one plain sentence naming
    the press and the one decision asked, with your recommendation, to
@@ -104,14 +106,10 @@ Process (mandatory):
    asked and not yet answered.
 5. A row you cannot observe as worded reads
    `Not observed. cause: <cause-word> — <what the run saw instead>`,
-   with one of the four words briefs/proof.md gives. AFTER the pull
-   request is open, when the record carries at least one such row,
-   write /tmp/agent-escalation.txt once for the card in the three
-   declared lines (`🔎 Finding:`, `❓ Question:`,
-   `💡 Recommendation: <answer> — <why>`), then one line per row:
-   `cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>`.
-   A press and cause rows share the one file: the press sentence
-   first, then the cause lines. Never ask twice.
+   with one of the four words briefs/proof.md gives. It asks nobody:
+   write no escalation file for it. A record whose unmet rows are all
+   such rows, or history rows, closes its card on its approved merge,
+   and one fix card is filed for them.
 6. Last, post the marker:
    `python3 .bureau-pipeline/scripts/linear_ops.py actor ${{ github.event.client_payload.identifier }} proof`.
 

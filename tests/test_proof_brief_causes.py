@@ -13,6 +13,13 @@ So the brief quotes each of them, and these tests hold every quotation to the
 constant it quotes: a misspelled cause word, a reworded grammar line, a
 reworded question or an Identities section that drops the declaration fails
 here, naming what drifted.
+
+Since DRE-7954 (epic DRE-7944) a cause row asks nobody: a record whose unmet
+rows are all gaps closes its card on its approved merge with one fix card
+(DRE-7952, DRE-7953), so the brief writes no question for one. The same file
+holds the brief's other row grammars to the constants that read them: the
+wording-only row the critic accepts (DRE-7949), the stamped waiting row and
+the two dispatch reasons a waiting row is re-read on (DRE-7951).
 """
 
 from __future__ import annotations
@@ -26,8 +33,15 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import console_escalation  # noqa: E402
+import os  # noqa: E402
+
+# `reconcile` reads `os.environ["REPO"]` at import, and `proof_dispatch`
+# imports it; `test_proof_record.py` sets it the same way.
+os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+
+import linear_ops  # noqa: E402
 import proof_cause_park  # noqa: E402
+import proof_dispatch  # noqa: E402
 import proof_reach  # noqa: E402
 import proof_record  # noqa: E402
 from test_american_english_standard import BRITISH  # noqa: E402
@@ -45,9 +59,16 @@ EXAMPLES = {
 
 #: The row grammar's placeholder, after the opening the gate reads.
 ROW_TAIL = " <cause-word> — <what the run saw instead>"
-#: The escalation file's cause line, as `proof_cause_park.cause_line` writes it.
-CAUSE_LINE_ROW = proof_cause_park.CauseRow(
-    "<criterion, cut to 70>", "<cause-word>", "<what was seen instead>")
+#: The wording-only row's tail after `proof_record.WORDING_OPENING` (DRE-7949).
+WORDING_TAIL = " seen “<quote>” — differs: <what>"
+#: The stamped waiting row, its event and stamp placeholders as the brief
+#: writes them (DRE-7316, DRE-7951).
+WAITING_GRAMMAR = (f"{proof_record.WAITING_OPENING} <the event> "
+                   f"[{linear_ops.NOT_BEFORE}<ISO 8601 time with UTC offset>]: "
+                   "<what it would show>")
+#: The row a last timed re-run writes for an event that still has not come.
+LAST_TIMED_ROW = (f"{proof_record.CAUSE_OPENING} misdescribed — the event <event> "
+                  "had not come by <PT>")
 
 
 def _text() -> str:
@@ -141,84 +162,84 @@ def test_the_run_never_rewords_and_never_accepts():
     section = _flat(_causes())
     assert "You never reword a row" in section
     assert "never write an accepted row" in section
-    assert "DRE-6244" in section, "the section does not say DRE-6244's acceptance stands"
+    assert "wording-only" in section, (
+        "the section does not point a row seen working at the wording-only row")
 
 
-def test_the_question_is_the_modules_verbatim():
-    q = f"{console_escalation.QUESTION_PREFIX} {proof_cause_park.QUESTION}"
-    assert q in _indented(_causes()), (
-        f"the section does not quote the question line {q!r} — "
-        f"`proof_cause_park.QUESTION` is {proof_cause_park.QUESTION!r}")
+def test_a_cause_row_asks_nobody():
+    """DRE-7954: the run writes no question for a cause row — the record
+    closes its card on its approved merge with one fix card (DRE-7952)."""
+    section = _flat(_causes())
+    assert "**Nothing is asked.**" in _causes()
+    assert "write no escalation file for a cause row" in section
+    assert "one fix card" in section and "DRE-7952" in section
+    assert proof_cause_park.QUESTION not in section, (
+        "the section still quotes the cause question nobody is asked")
+    assert "Accept each row as out of date" not in section
 
 
-def test_the_three_lines_are_console_escalations():
+def test_the_section_writes_no_escalation_shape():
     lines = _indented(_causes())
-    for prefix in (console_escalation.FINDING_PREFIX, console_escalation.QUESTION_PREFIX,
-                   console_escalation.RECOMMENDATION_PREFIX):
-        assert any(line.startswith(prefix) for line in lines), (
-            f"the section's file shape has no `{prefix}` line")
+    assert not [line for line in lines if line.startswith(proof_cause_park.CAUSE_PREFIX)], (
+        "the section still shows a `cause:` line for an escalation file")
+    assert not [line for line in lines if line.startswith("❓")], (
+        "the section still shows a question line")
 
 
-def test_the_cause_line_is_the_one_the_writer_writes():
-    template = proof_cause_park.cause_line(CAUSE_LINE_ROW)
-    assert template in _indented(_causes()), (
-        f"the section does not quote the cause line `{template}` on its own line")
-
-
-def test_the_cause_line_is_read_back_by_the_writer():
-    """Every `cause:` line the section shows, its word filled in, is one
-    `rows_from_lines` reads — the worked example included."""
-    lines = [line for line in _indented(_causes())
-             if line.startswith(proof_cause_park.CAUSE_PREFIX)]
-    assert len(lines) >= 2, "the section shows no worked cause line"
-    filled = [line.replace("<cause-word>", "misdescribed") for line in lines]
-    rows = proof_cause_park.rows_from_lines(filled)
-    assert len(rows) == len(lines)
-    assert all(r.seen for r in rows), "a cause line names nothing seen instead"
-
-
-def test_the_worked_file_parses_as_the_three_lines():
-    lines = _indented(_causes())
-    worked = [line for line in lines if "<" not in line]
-    esc = console_escalation.parse("\n".join(worked))
-    assert esc is not None, "the section's worked file does not carry the three lines"
-    assert esc.question == proof_cause_park.QUESTION
-    assert esc.recommendation, "the worked file's Recommendation names no pick"
-
-
-def test_the_question_is_written_once_after_the_pull_request_opens():
-    section = _flat(_causes())
-    assert "`/tmp/agent-escalation.txt` once for the card" in section
-    assert "push the record and open its pull request" in section
-
-
-def test_a_cause_row_and_a_press_row_are_one_file():
-    section = _flat(_causes())
-    assert "A cause row and a press row in one record are one file" in section
-    assert "the press lines keep their shape" in section
-
-
-def test_the_workflow_holds_a_cause_card_in_review_for_the_operator():
-    section = _flat(_causes())
-    assert ("Once the record pull request is open, the workflow holds the card "
-            "`In Review` for the operator and posts the operator's question") in section
-    assert "only a press or a decision parks the card in `Green Light`" in section
-    # The sentence DRE-6840 retired: a cause file no longer parks in Green Light.
-    assert ("posts the hold and the question from that file and parks the card in "
-            "`Green Light`") not in section
-
-
-def test_the_question_line_tells_a_cause_file_from_a_decision():
-    section = _flat(_causes())
-    assert ("That Question line, word for word, is what tells the workflow a cause "
-            "file from a decision") in section
-
-
-def test_the_lanes_paragraph_parks_only_a_press_or_a_decision():
+def test_the_lanes_paragraph_parks_only_the_ceos_press_or_a_decision():
     lanes = _flat(_section(_text(), "## The lanes, which you never write"))
     assert lanes, "briefs/proof.md has no lanes section"
     assert ("your escalation file parks it in `Green Light`, the CEO's \"needs you\" "
-            "queue, only when it names a press or a decision") in lanes
+            "queue, only when it names the CEO's press or a decision") in lanes
+    assert "for the operator" not in lanes
+
+
+def test_the_wording_only_grammar_is_the_readers():
+    grammar = proof_record.WORDING_OPENING + WORDING_TAIL
+    assert grammar in _indented(_text()), (
+        f"briefs/proof.md does not quote the wording-only row `{grammar}` on its own "
+        f"line — `proof_record.WORDING_OPENING` is {proof_record.WORDING_OPENING!r}")
+    filled = (grammar.replace("<quote>", "job started at 14:02")
+              .replace("<what>", "the card quotes another log line"))
+    assert proof_record.row_wording(filled)
+
+
+def test_the_critics_acceptance_is_named_and_never_the_runs():
+    text = _flat(_text())
+    assert f"`{proof_record.ACCEPTANCE_MARK}`" in text, (
+        "briefs/proof.md does not name the critic's acceptance line "
+        f"`{proof_record.ACCEPTANCE_MARK}`")
+    assert "the record's critic accepts" in text
+
+
+def test_every_waiting_row_is_stamped_in_the_readers_grammar():
+    lines = _indented(_text())
+    assert WAITING_GRAMMAR in lines, (
+        f"briefs/proof.md does not quote the stamped waiting row `{WAITING_GRAMMAR}`")
+    assert "Every waiting row carries" in _flat(_text())
+    worked = [line for line in lines
+              if line.startswith(proof_record.WAITING_OPENING) and "<" not in line]
+    assert worked, "briefs/proof.md shows no worked stamped waiting row"
+    for line in worked:
+        assert proof_record.row_not_before(line) is not None, (
+            f"the worked waiting row {line!r} carries no stamp the reader reads")
+
+
+def test_the_brief_names_the_two_reasons_a_waiting_row_is_re_read_on():
+    text = _flat(_text())
+    recheck = proof_dispatch.RECHECK_REASON.format(sha7="<sha7>")
+    last = proof_dispatch.LAST_TIMED_REASON.format(at="<PT>", sha7="<sha7>")
+    for reason in (recheck, last):
+        assert f"`{reason}`" in text, f"briefs/proof.md does not name the reason `{reason}`"
+
+
+def test_the_last_timed_rerun_writes_a_misdescribed_cause_row():
+    assert LAST_TIMED_ROW in _indented(_text()), (
+        f"briefs/proof.md does not quote the last timed re-run's row `{LAST_TIMED_ROW}`")
+    filled = (LAST_TIMED_ROW.replace("<event>", "the weekly report")
+              .replace("<PT>", "2026-10-20 09:00 PT"))
+    assert proof_record.row_cause(filled) == "misdescribed"
+    assert proof_record.row_waiting(filled) is None
 
 
 def test_the_identities_section_names_the_declaration():
