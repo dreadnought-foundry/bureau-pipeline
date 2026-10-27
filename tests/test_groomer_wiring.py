@@ -1,4 +1,4 @@
-"""When the groomer runs — three decisions, in order, and the one rule they
+"""When the groomer runs — four decisions, in order, and the one rule they
 leave standing: a clock may reach `propose`, and nothing but an approval
 reaches `drain`.
 
@@ -27,13 +27,25 @@ on the PT clock and whether the standing card in `GROOM_PROPOSAL_CARD` is open;
 and a `schedule` job keyed on the gate's `go` calls the reusable with `mode` the
 literal `propose`.
 
+**The weekly replay (DRE-6648, green-lit 2026-10-25, built by DRE-7975):** D5
+is widened by exactly one more run — the Sunday job, `groom-week.yml`, whose
+`replay-main` job replays the stored replay set on `main` once a week. It calls
+the reusable with the literals `mode: propose`, `judgement: "off"`,
+`pipeline_ref: main` and `replay: tests/fixtures/groom-replay-cases/replay-set.json`,
+and with no `card`. A replay posts to no card, writes no receipt, moves no card
+and drains nothing: `groomer.yml`'s `post` job posts to no card whatever `card`
+says, and a `drain` with `replay` set refuses before any write (DRE-7239,
+DRE-7242). The CEO's green light of DRE-6648, the day it entered In Progress,
+is that decision.
+
 So the trigger shape is part of the contract and is asserted here against the
 LIVE workflow files (the pattern tests/test_self_host_stubs.py uses). A fourth
 trigger, a third cron line, a `mode` on the scheduled job that could be anything
 but `propose`, or ANY other scheduled job anywhere in this repo calling
-`groomer.yml` turns this red: a clock that could reach `drain` is the CEO's
-Approve being bypassed, and a `propose` reachable from the approval dispatch is
-an unaudited model call on a trigger nobody watches.
+`groomer.yml` — but the one weekly replay, `groom-week.yml`'s `replay-main`,
+with its literals — turns this red: a clock that could reach `drain` is the
+CEO's Approve being bypassed, and a `propose` reachable from the approval
+dispatch is an unaudited model call on a trigger nobody watches.
 
 The rest is the wiring every workflow in this repo owes: the reusable threads
 `pipeline_ref` (DRE-2026/DRE-2689), the runnable stub is watched by the medic
@@ -53,7 +65,9 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -151,6 +165,27 @@ RETIRED_CADENCE = (
 
 #: The third decision, in every place the first two are recorded.
 THIRD_DECISION = ("DRE-3586", "2026-09-21", "DRE-4677", "schedule")
+
+#: The fourth (DRE-7975): the weekly replay. The epic the CEO green-lit, the
+#: day it entered In Progress (read off its history), and the card that built
+#: it — recorded in this module's docstring and in docs/groomer.md's cadence
+#: section, and nowhere else in the decision record.
+FOURTH_DECISION = ("DRE-6648", "2026-10-25", "DRE-7975")
+
+#: Every job anywhere in this repo that can run on a `schedule` event and
+#: calls `groomer.yml`: the morning proposal, and the weekly replay.
+SCHEDULED_GROOMER_CALLS = [("groom-week.yml", "replay-main"),
+                           ("self-groomer.yml", "schedule")]
+
+#: The weekly replay's inputs that keep it a replay, each a LITERAL: with
+#: `replay` set the reusable posts to no card and refuses a drain before any
+#: write (DRE-7239, DRE-7242). It passes no `card` at all.
+REPLAY_MAIN_LITERALS = {
+    "mode": "propose",
+    "judgement": "off",
+    "pipeline_ref": "main",
+    "replay": "tests/fixtures/groom-replay-cases/replay-set.json",
+}
 
 
 def _load(name: str) -> dict:
@@ -495,34 +530,15 @@ class OnDemandTriggersTest(unittest.TestCase):
     def test_the_only_scheduled_groomer_call_is_this_stubs_propose(self):
         """EVERY scheduled workflow in the repo, and EVERY job in each — not
         only the first. A job that can run on a `schedule` event and calls
-        `groomer.yml` is allowed in exactly one place: this stub's `schedule`
-        job, in mode `propose`, as a literal. A clock that could reach `drain`
-        is the CEO's Approve bypassed."""
-        found = []
-        for path in sorted(WORKFLOWS.glob("*.yml")):
-            doc = yaml.safe_load(path.read_text())
-            if not isinstance(doc, dict) or "schedule" not in _on(doc):
-                continue
-            for name, job in (doc.get("jobs") or {}).items():
-                if not isinstance(job, dict):
-                    continue
-                if "groomer.yml" not in str(job.get("uses") or ""):
-                    continue
-                if not _reaches_schedule(job):
-                    continue
-                found.append((path.name, name))
-                mode = (job.get("with") or {}).get("mode")
-                self.assertEqual(
-                    mode, "propose",
-                    f"{path.name}:{name} runs the groomer on a schedule in "
-                    f"mode {mode!r}",
-                )
-                self.assertNotIn("${{", str(mode),
-                                 f"{path.name}:{name} computes its mode")
-        self.assertEqual(
-            found, [("self-groomer.yml", "schedule")],
-            "the morning proposal is the only scheduled groom there is",
-        )
+        `groomer.yml` is allowed in exactly two places: this stub's `schedule`
+        job, and the weekly replay (DRE-6648, DRE-7975) — `groom-week.yml`'s
+        `replay-main`, held to its literals. Each in mode `propose`, as a
+        literal. A clock that could reach `drain` is the CEO's Approve
+        bypassed."""
+        self.assertEqual(check_scheduled_groomer_calls(WORKFLOWS),
+                         SCHEDULED_GROOMER_CALLS)
+
+
 
     def test_every_calling_job_calls_the_reusable_at_the_qualified_ref(self):
         """One calling job per trigger, all three the same reusable at the same
@@ -1243,6 +1259,124 @@ class UnmappedRepoReadsNoCodeTest(unittest.TestCase):
         self.assertEqual(
             (upload.get("with") or {}).get("name"),
             "death-receipt-verify-${{ matrix.card }}-attempt${{ github.run_attempt }}")
+
+
+#: The pipeline's own repository, read off `config/repo-map.json` rather
+#: than restated: the slug a card about bureau-pipeline's code is labeled.
+PIPELINE_REPOSITORY = json.loads(
+    (ROOT / "config" / "repo-map.json").read_text(encoding="utf-8"))[
+        "bureau-pipeline"]
+
+#: The agent step's condition, unchanged by DRE-8028: a failed second
+#: checkout leaves the leg running on `target/` alone, as it did before.
+AGENT_IF = ("matrix.repository != '' && steps.target.outcome == 'success' "
+            "&& steps.install_claude.outcome == 'success'")
+
+
+def _holds(expression: str, context: dict) -> bool:
+    """A step's `if`, evaluated over `context`: the `&&` of `==` / `!=`
+    comparisons between a context name and a quoted literal, which is all
+    the verify job's conditions use. Anything else fails the test rather
+    than being guessed at."""
+    import re
+    result = True
+    for clause in _expression(expression).split("&&"):
+        found = re.fullmatch(r"\s*([\w.]+)\s*(==|!=)\s*'([^']*)'\s*", clause)
+        if not found:
+            raise AssertionError(f"cannot evaluate the clause {clause!r}")
+        name, op, literal = found.groups()
+        equal = context[name] == literal
+        result = result and (equal if op == "==" else not equal)
+    return result
+
+
+class VerifyReadsThePipelineBesideTheCardTest(unittest.TestCase):
+    """DRE-8028: a verify leg for a card whose repo is not bureau-pipeline
+    also has bureau-pipeline checked out at `main` under `pipeline/`, so a
+    card about the pipeline's own scripts has the code it is about. The
+    checkout uses the job's own read token — no new mint — and a failed one
+    leaves the leg as it was, on `target/` alone."""
+
+    def setUp(self):
+        self.job = _load("groomer.yml")["jobs"]["verify"]
+        self.steps = self.job.get("steps") or []
+        self.ids = [s.get("id") for s in self.steps]
+        self.step = _verify_step(self.job, "pipeline")
+
+    def test_the_pipeline_is_checked_out_at_main_under_pipeline(self):
+        with_ = self.step.get("with") or {}
+        self.assertEqual(with_.get("repository"), PIPELINE_REPOSITORY)
+        self.assertEqual(with_.get("ref"), "main")
+        self.assertEqual(with_.get("path"), "pipeline")
+        self.assertIs(with_.get("persist-credentials"), False)
+        self.assertIs(self.step.get("continue-on-error"), True)
+
+    def test_it_is_the_same_pinned_checkout_the_card_repo_uses(self):
+        self.assertEqual(self.step.get("uses"),
+                         _verify_step(self.job, "target").get("uses"))
+
+    def test_it_passes_no_token_so_it_reads_with_the_jobs_own(self):
+        self.assertNotIn("token", self.step.get("with") or {},
+                         "the pipeline checkout is handed a token; the job's "
+                         "own `github.token` reads bureau-pipeline")
+
+    def test_the_job_mints_no_token_beyond_the_two_it_mints_today(self):
+        mints = [s.get("id") for s in self.steps
+                 if str(s.get("uses") or "").startswith(
+                     "actions/create-github-app-token@")]
+        self.assertEqual(mints, ["target_token", "model_home"])
+
+    def test_it_runs_right_after_the_card_repo_and_before_the_agent(self):
+        at = self.ids.index("pipeline")
+        self.assertEqual(self.ids[at - 1], "target")
+        self.assertLess(at, self.ids.index("claude"))
+
+    def test_its_condition(self):
+        self.assertEqual(
+            _expression(self.step.get("if")),
+            "matrix.repository != '' && matrix.repository != "
+            f"'{PIPELINE_REPOSITORY}' && steps.target.outcome == 'success'")
+
+    def test_a_card_in_another_repo_gets_the_second_checkout(self):
+        self.assertTrue(_holds(self.step.get("if"), {
+            "matrix.repository": "dreadnought-foundry/agent-bureau",
+            "steps.target.outcome": "success"}))
+
+    def test_a_bureau_pipeline_card_checks_out_one_repo(self):
+        self.assertFalse(_holds(self.step.get("if"), {
+            "matrix.repository": PIPELINE_REPOSITORY,
+            "steps.target.outcome": "success"}))
+        checkouts = [s for s in self.steps
+                     if str(s.get("uses") or "").startswith("actions/checkout@")
+                     and (not s.get("if") or _holds(s["if"], {
+                         "matrix.repository": PIPELINE_REPOSITORY,
+                         "steps.target_token.outcome": "success",
+                         "steps.target.outcome": "success"}))]
+        # `.bureau-pipeline/` — the scripts the leg runs — and `target/`.
+        self.assertEqual([(s.get("with") or {}).get("path") for s in checkouts],
+                         [".bureau-pipeline", "target"])
+
+    def test_no_second_checkout_without_the_cards_repo(self):
+        for context in ({"matrix.repository": "",
+                         "steps.target.outcome": "skipped"},
+                        {"matrix.repository": "dreadnought-foundry/agent-bureau",
+                         "steps.target.outcome": "failure"}):
+            self.assertFalse(_holds(self.step.get("if"), context), context)
+
+    def test_the_agent_steps_condition_does_not_change(self):
+        agent = _verify_step(self.job, "claude")
+        self.assertEqual(_expression(agent.get("if")), AGENT_IF)
+
+    def test_the_prompt_names_both_checkouts_and_stays_fixed_text(self):
+        prompt = str((_verify_step(self.job, "claude").get("with") or {})
+                     .get("prompt"))
+        flat = " ".join(prompt.split())
+        self.assertNotIn("${{", prompt)
+        self.assertIn("target/", flat)
+        self.assertIn("bureau-pipeline", flat)
+        self.assertIn("under pipeline/", flat)
+        self.assertIn("pipeline/ may be absent", flat)
+        self.assertIn("Change nothing under target/ or pipeline/", flat)
 
 
 class PostJobTest(unittest.TestCase):
@@ -1972,6 +2106,118 @@ class JudgedBatchRecordTest(unittest.TestCase):
         """
         self.assertIn("The drain was not run", self.doc)
         self.assertIn("2026-09-12", self.doc)
+
+
+
+def check_scheduled_groomer_calls(workflows: Path) -> list:
+    """The scheduled calls of `groomer.yml` under `workflows`, or an
+    AssertionError naming the `<file>:<job>` that broke the rule."""
+    found = []
+    for path in sorted(workflows.glob("*.yml")):
+        doc = yaml.safe_load(path.read_text())
+        if not isinstance(doc, dict) or "schedule" not in _on(doc):
+            continue
+        for name, job in (doc.get("jobs") or {}).items():
+            if not isinstance(job, dict):
+                continue
+            if "groomer.yml" not in str(job.get("uses") or ""):
+                continue
+            if not _reaches_schedule(job):
+                continue
+            where = f"{path.name}:{name}"
+            found.append((path.name, name))
+            given = job.get("with") or {}
+            mode = given.get("mode")
+            assert "${{" not in str(mode), f"{where} computes its mode"
+            assert mode == "propose", (
+                f"{where} runs the groomer on a schedule in mode {mode!r}")
+            if (path.name, name) != ("groom-week.yml", "replay-main"):
+                continue
+            for key, literal in REPLAY_MAIN_LITERALS.items():
+                value = given.get(key)
+                assert "${{" not in str(value), f"{where} computes its {key}"
+                assert value == literal, (
+                    f"{where} passes {key}={value!r}, not the literal {literal!r}")
+            assert "card" not in given, (
+                f"{where} names a card — the weekly replay posts to none")
+    assert found == SCHEDULED_GROOMER_CALLS, (
+        f"the scheduled grooms are {found}: the morning proposal and the "
+        "weekly replay are the only ones there are")
+    return found
+
+
+class ScheduledGroomerCallCopyTest(unittest.TestCase):
+    """The check above, run over a copy of the workflows in which the weekly
+    replay could post, could drain or could stop replaying: each copy fails,
+    naming `groom-week.yml:replay-main`."""
+
+    def _broken(self, change) -> Path:
+        tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, tmp)
+        copy = tmp / "workflows"
+        shutil.copytree(WORKFLOWS, copy)
+        path = copy / "groom-week.yml"
+        doc = yaml.safe_load(path.read_text())
+        change(doc["jobs"]["replay-main"]["with"])
+        doc["on"] = doc.pop(True)
+        path.write_text(yaml.safe_dump(doc, sort_keys=False))
+        return copy
+
+    def _fails(self, change) -> None:
+        with self.assertRaises(AssertionError) as caught:
+            check_scheduled_groomer_calls(self._broken(change))
+        self.assertIn("groom-week.yml:replay-main", str(caught.exception))
+
+    def test_the_live_workflows_pass(self):
+        self.assertEqual(check_scheduled_groomer_calls(WORKFLOWS),
+                         SCHEDULED_GROOMER_CALLS)
+
+    def test_a_replay_that_sets_card_fails(self):
+        self._fails(lambda w: w.update(card="${{ vars.GROOM_PROPOSAL_CARD }}"))
+
+    def test_a_replay_that_drops_replay_fails(self):
+        self._fails(lambda w: w.pop("replay"))
+
+    def test_a_replay_that_computes_mode_fails(self):
+        self._fails(lambda w: w.update(mode="${{ inputs.mode || 'propose' }}"))
+
+    def test_a_replay_that_drains_fails(self):
+        self._fails(lambda w: w.update(mode="drain"))
+
+    def test_a_replay_that_judges_or_leaves_main_fails(self):
+        self._fails(lambda w: w.update(judgement="on"))
+        self._fails(lambda w: w.update(pipeline_ref="${{ github.ref }}"))
+
+
+class WeeklyReplayRecordTest(unittest.TestCase):
+    """The fourth decision (DRE-7975), in the two places it is recorded: this
+    module's docstring and docs/groomer.md's cadence section. Each names the
+    epic, the day it was green-lit and the card that built it, and its
+    "any other scheduled job" sentence names the one replay exception."""
+
+    def _cadence(self) -> str:
+        text = (ROOT / "docs" / "groomer.md").read_text(encoding="utf-8")
+        section = text.split("## The cadence, and its stated cost", 1)[1]
+        return section.split("\n## ", 1)[0]
+
+    def test_both_records_name_the_fourth_decision(self):
+        for where, text in (("the wiring test's docstring", __doc__ or ""),
+                            ("docs/groomer.md's cadence section",
+                             self._cadence())):
+            for token in (*FOURTH_DECISION, "groom-week.yml", "replay-main"):
+                self.assertIn(token, text, f"{where} never names {token}")
+
+    def test_the_any_other_job_sentences_name_the_exception(self):
+        doc = " ".join((__doc__ or "").split())
+        self.assertRegex(
+            doc, r"ANY other scheduled job anywhere in this repo calling "
+                 r"`groomer\.yml` — but the one weekly replay, "
+                 r"`groom-week\.yml`'s `replay-main`")
+        cadence = " ".join(self._cadence().split())
+        self.assertRegex(
+            cadence, r"fails if any other scheduled job calls `groomer\.yml`"
+                     r" — but the weekly replay, `groom-week\.yml`'s "
+                     r"`replay-main`")
 
 
 if __name__ == "__main__":                      # pragma: no cover

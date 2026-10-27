@@ -33,7 +33,10 @@ What this suite pins, workflow by workflow:
     lacks `actions:read` and a diagnosis that cannot fetch the failed run's
     logs diagnoses blind (DRE-1346 Fix 3). A pool token there would move reads
     off a free bucket onto the contended one and break them. Pinned so the
-    omission reads as a decision, not an oversight.
+    omission reads as a decision, not an oversight. The one exception is the
+    pull-request reads (DRE-8004): no product repo's medic stub grants
+    `pull-requests` read, so those two steps ride the job's own bot mint
+    (`steps.app`) — the main App, still never a pool slot.
 
 These read the LIVE workflow YAML (the test_dispatch_pool_wiring.py pattern —
 no copied fixtures) and must FAIL on the tree before the wiring lands.
@@ -677,9 +680,15 @@ class FixPoolIsUngatedOnPurposeTest(unittest.TestCase):
                     self.assertIn(gate, str(step.get("if")), step_id)
 
 
+#: The medic steps whose GitHub reads are pull-request reads, which the
+#: workflow's own token cannot make in a product repo (DRE-8004): they ride the
+#: job's `Mint bot token` (`id: app`, `BUREAU_APP_ID`), never a pool slot.
+MEDIC_PR_READERS = ("Read the diagnosis verdict", "Write the medic's receipt")
+
+
 class MedicIsNotAConsumerTest(unittest.TestCase):
 
-    def test_every_medic_read_rides_the_workflow_token(self):
+    def tokens(self):
         doc = load(NOT_A_CONSUMER)
         tokens = []
         for job in doc["jobs"].values():
@@ -689,9 +698,24 @@ class MedicIsNotAConsumerTest(unittest.TestCase):
                         value = (step.get(block) or {}).get(key)
                         if value is not None:
                             tokens.append((step.get("name"), value))
+        return tokens
+
+    def test_every_medic_read_rides_the_workflow_token(self):
+        tokens = self.tokens()
         self.assertTrue(tokens, "medic.yml makes no GitHub calls at all?")
         for name, value in tokens:
+            if name in MEDIC_PR_READERS:
+                continue
             self.assertEqual(value, "${{ github.token }}", name)
+
+    def test_the_pull_request_reads_ride_the_bot_mint_not_the_pool(self):
+        tokens = dict(self.tokens())
+        for name in MEDIC_PR_READERS:
+            with self.subTest(step=name):
+                self.assertEqual(tokens.get(name), "${{ steps.app.outputs.token }}")
+        mint = next(s for s in load(NOT_A_CONSUMER)["jobs"]["diagnose"]["steps"]
+                    if s.get("id") == "app")
+        self.assertEqual(mint["with"]["app-id"], "${{ secrets.BUREAU_APP_ID }}")
 
     def test_medic_declares_no_pool_secrets_and_runs_no_selector(self):
         doc = load(NOT_A_CONSUMER)

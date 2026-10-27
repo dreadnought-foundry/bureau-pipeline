@@ -301,7 +301,11 @@ jobs:
           PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
 
+      # `id: sweep` is what the phases below read (DRE-8000). This step keeps
+      # its own status — no `continue-on-error`, `exit "$STATUS"` at the end —
+      # so the idle-board alarm still turns the job red.
       - name: Sweep
+        id: sweep
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The read door (Stage 2 #5/#6a). The mode is the CALLER's variable,
@@ -418,6 +422,17 @@ jobs:
       # the `fix_workflow()` naming family. A repo with no stub prints one line
       # and reads nothing, every pass, until its stub lands.
       #
+      # WHENEVER THE SWEEP RAN, pass or fail (DRE-8000). A step `if:` with no
+      # status function is read as `success() && …`, so on 2026-10-25 the
+      # idle-board alarm that failed `Sweep` skipped this step, the Green Light
+      # reply and the switch read in all 14 agent-bureau runs from 12:32 PM PT
+      # to 3:46 PM PT. `!cancelled()` lifts the implied `success()`, and the
+      # Sweep step's own outcome keeps every gate BEFORE it in charge: a
+      # refused `pipeline_ref` or an unminted token leaves `Sweep` `skipped`,
+      # and these three skip with it. Each phase below carries the same
+      # condition, so a failed dispatch does not skip the next two either
+      # (tests/test_reconcile_workflow_phase_independence.py).
+      #
       # `PROOF_DISPATCH_LIVE` is the caller's variable. Anything but `true` is
       # the dry run: `would:` lines, no dispatch, no receipt, no hold.
       #
@@ -425,7 +440,7 @@ jobs:
       # the `proof-release:` lines — the release reading of the card a pass
       # dispatches, the line its proof record quotes (DRE-6516).
       - name: Dispatch proof runs
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
@@ -476,7 +491,7 @@ jobs:
       # Its own process and its own trailer, in the proof step's shape; dry
       # (`would:` lines, nothing written) until GREEN_LIGHT_REPLY_LIVE is `true`.
       - name: Reply to the CEO's Green Light comments
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
@@ -521,7 +536,7 @@ jobs:
       # variables, and a catalog row with no plumbing here fails
       # tests/test_switch_reason.py by name (docs/switches.md).
       - name: Read the switches
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}

@@ -120,6 +120,8 @@ class LiveWorkflowsTest(unittest.TestCase):
         """Explicit per-site enumeration (readable failure per site)."""
         for name, doc in self.docs.items():
             for job_id, i, step in cpr.internal_checkouts(doc):
+                if cpr.read_at_main(name, job_id, step):
+                    continue        # evidence an agent reads (DRE-8028)
                 with self.subTest(workflow=name, job=job_id, step=i):
                     self.assertEqual(
                         (step.get("with") or {}).get("ref"),
@@ -276,3 +278,75 @@ class CheckerCliTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+#: The one checkout of bureau-pipeline that is evidence an agent reads, not
+#: code the job runs (DRE-8028): the groom verify leg's `pipeline/`.
+GROOM_VERIFY_PIPELINE = ("groomer.yml", "verify", "pipeline")
+
+
+def _verify_leg(ref, *, path="pipeline", persist="false", job="verify"):
+    return wf(f"""
+        on: {{workflow_call: {{inputs: {{pipeline_ref: {{type: string, required: true}}}}}}}}
+        jobs:
+          {job}:
+            steps:
+              - uses: actions/checkout@v5
+                with:
+                  repository: dreadnought-foundry/bureau-pipeline
+                  ref: "{ref}"
+                  path: {path}
+                  persist-credentials: {persist}
+        """)
+
+
+class ReadAtMainTest(unittest.TestCase):
+    """DRE-8028: the groom verify leg checks out bureau-pipeline at `main`
+    under `pipeline/` for its agent to READ, beside the card's own repo. That
+    copy is judged against `main` whatever channel the run rides — at
+    `pipeline_ref` a replay would judge cards against the change under
+    review — and no script runs from it, so the channel pin does not apply.
+    The exception is one named site, and it must be exactly `main` with no
+    credential left on disk; every other checkout still threads the input."""
+
+    MAIN = "main"
+
+    def test_the_exception_is_one_named_site_with_its_reason(self):
+        self.assertEqual(set(cpr.READ_AT_MAIN), {GROOM_VERIFY_PIPELINE})
+        self.assertIn("DRE-8028", cpr.READ_AT_MAIN[GROOM_VERIFY_PIPELINE])
+
+    def test_the_site_exists_in_the_live_workflow(self):
+        """A stale exception is a gap: the site it names must be there."""
+        doc = yaml.safe_load((WORKFLOWS / "groomer.yml").read_text())
+        found = [step for job_id, _, step in cpr.internal_checkouts(doc)
+                 if cpr.read_at_main("groomer.yml", job_id, step)]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["with"]["ref"], "main")
+
+    def test_the_site_at_main_with_no_credential_is_clean(self):
+        self.assertEqual(
+            cpr.check_workflow(_verify_leg(self.MAIN), "groomer.yml"), [])
+
+    def test_the_site_at_the_channel_ref_is_flagged(self):
+        v = cpr.check_workflow(_verify_leg(cpr.REQUIRED_REF_EXPR),
+                               "groomer.yml")
+        self.assertEqual(len(v), 1)
+        self.assertIn("must be read at 'main'", v[0])
+
+    def test_the_site_keeping_a_credential_is_flagged(self):
+        for persist in ("true", "null"):
+            with self.subTest(persist=persist):
+                v = cpr.check_workflow(
+                    _verify_leg(self.MAIN, persist=persist), "groomer.yml")
+                self.assertEqual(len(v), 1)
+                self.assertIn("persist-credentials: false", v[0])
+
+    def test_any_other_site_at_main_is_still_flagged(self):
+        for doc, name in (
+                (_verify_leg(self.MAIN, path=".bureau-pipeline"), "groomer.yml"),
+                (_verify_leg(self.MAIN, job="post"), "groomer.yml"),
+                (_verify_leg(self.MAIN), "plan.yml")):
+            with self.subTest(workflow=name):
+                v = cpr.check_workflow(doc, name)
+                self.assertEqual(len(v), 1)
+                self.assertIn("must thread the input verbatim", v[0])
