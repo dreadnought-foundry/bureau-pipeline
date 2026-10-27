@@ -907,7 +907,7 @@ set a secret or variable, fix a repo label), or a question with only one
 sensible answer. For housekeeping, write the reason and no choices file. An
 escalation with no choices file, a choices file that breaks these rules, a
 count of choices other than 2 or 3, or words saying it is not a real question
-is parked in Triage for the operator, not put to the CEO.
+is parked for the operator, not put to the CEO.
 
 **Your last message is the fallback reason (DRE-5564).** A run that ends with
 no cards and no reason file is escalated all the same, and the note quotes your

@@ -1914,7 +1914,7 @@ jobs:
             housekeeping, write the reason and no choices file. An escalation
             with no choices file, a choices file that breaks these rules, a
             count of choices other than 2 or 3, or words saying it is not a
-            real question is parked in Triage for the operator, not put to the
+            real question is parked for the operator, not put to the
             CEO.
 
             If a finding says the card is really more than one pull request,
@@ -2369,7 +2369,7 @@ jobs:
                the reason and no choices file. An escalation with no choices
                file, a choices file that breaks these rules, a count of choices
                other than 2 or 3, or words saying it is not a real question is
-               parked in Triage for the operator, not put to the CEO.
+               parked for the operator, not put to the CEO.
                The run posts it to the card and parks the card in Green Light,
                the CEO's decision queue — the same lane a plan waits in. Never
                Triage: an escalated card is not broken, it is waiting on a
@@ -2635,7 +2635,7 @@ jobs:
                the reason and no choices file. An escalation with no choices
                file, a choices file that breaks these rules, a count of choices
                other than 2 or 3, or words saying it is not a real question is
-               parked in Triage for the operator, not put to the CEO.
+               parked for the operator, not put to the CEO.
                The run posts it to the card and parks the card in Green Light,
                the CEO's decision queue — the same lane a plan waits in. Never
                Triage: an escalated card is not broken, it is waiting on a
@@ -5828,7 +5828,7 @@ jobs:
                the reason and no choices file. An escalation with no choices
                file, a choices file that breaks these rules, a count of choices
                other than 2 or 3, or words saying it is not a real question is
-               parked in Triage for the operator, not put to the CEO.
+               parked for the operator, not put to the CEO.
 
       # The model-home token again, after the model step(s) above (DRE-6940):
       # an App token lives an hour and a model run can pass it, so the step
@@ -5998,7 +5998,7 @@ jobs:
                the reason and no choices file. An escalation with no choices
                file, a choices file that breaks these rules, a count of choices
                other than 2 or 3, or words saying it is not a real question is
-               parked in Triage for the operator, not put to the CEO.
+               parked for the operator, not put to the CEO.
 
       - name: Roll-up route — split into child epics — finished?
         id: rollup_done
