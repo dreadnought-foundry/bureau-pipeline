@@ -59,6 +59,9 @@ set -e
 # the guard's own `name-guard:` line (a file, line and kind, or the roster's
 # reason — never a name) and no "VERDICT:" line, and the formal review is
 # left alone. The card's copy is built from the same file, after the seam.
+# A held comment also writes `held=true` to the step's outputs, which the
+# "Publish review check" step hands to publish_review_check.py, so the
+# head's check fails closed instead of reporting the composed verdict.
 #
 # The comment is posted with `gh pr comment`, tried four times, because the
 # merge gate reads it. When the pull request has a card, the same text plus
@@ -445,6 +448,9 @@ if [ "${NAME_GUARD_LIVE:-}" = "true" ]; then
   else
     printf '%s\n' "$GUARD_SAID"
     HELD=true
+    # /tmp/qa-verdict.md still holds the composed verdict; the publish step
+    # reads this, so the head's review check fails closed rather than green.
+    if [ -n "${GITHUB_OUTPUT:-}" ]; then echo "held=true" >> "$GITHUB_OUTPUT"; fi
     GUARD_LINE=$(printf '%s\n' "$GUARD_SAID" | awk '/^name-guard:/ { printf "%s%s", sep, $0; sep = "; " }')
     echo "::warning::the critic's comment was held at the name guard — posting a neutral status instead"
     printf '%s\n\n%s\n' \
