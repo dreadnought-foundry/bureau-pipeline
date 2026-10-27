@@ -42,8 +42,15 @@ jobs:
   # The job after it, `unit-result`, carries the name branch protection
   # requires — `scripts unit tests` — reads those records back, and fails when
   # a test file ran in no part or in two (`tests/test_unit_test_parts.py`).
-  # Adding a part is one more number in `matrix.part`; nothing else counts
-  # them, because each part is told the total by `strategy.job-total`.
+  # Adding a part is one more number in `matrix.part`, and one more in
+  # `PARTS` in the durations refresh below, which counts the finished parts
+  # it reads (`tests/test_tests_workflow_durations_refresh.py` fails when the
+  # two disagree); each part itself is told the total by `strategy.job-total`.
+  # FIVE PARTS SINCE DRE-8122 (2026-10-27): part 4 of four took 24 to 29
+  # minutes on every finished run from 10-25 to 10-26 and was canceled at its
+  # 30-minute cap on five pull-request runs from 10-26, with no test failed —
+  # holding two approved pull requests out of the merge. One more part takes
+  # about a fifth off each share and keeps the cap below as it is.
   unit:
     name: scripts unit tests (part ${{ matrix.part }})
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
@@ -52,7 +59,7 @@ jobs:
       # own failures behind somebody else's.
       fail-fast: false
       matrix:
-        part: [1, 2, 3, 4]
+        part: [1, 2, 3, 4, 5]
     # The jobs here that run the WHOLE suite between them, so the only ones
     # whose clock tracks the suite's growth (DRE-3130). It sat at 5 until run
     # 33987398284 reported `6277 passed, 1 skipped, 649 subtests passed in
@@ -193,7 +200,7 @@ jobs:
   # fewer than 90% of the test files, and every pull request that adds a test
   # file moves the tree toward that floor; on 2026-10-18 main sat exactly at
   # it (693 of 770) and #1168, a docs-only change, failed on files other pull
-  # requests had added. The four parts above run every non-walk test file
+  # requests had added. The parts above run every non-walk test file
   # with `pytest -v`, so a green nightly's logs are a whole measurement.
   #
   # Schedule runs only, once every part FINISHED (DRE-7726): `always()` lets
@@ -203,15 +210,15 @@ jobs:
   # `tests/test_unit_test_parts.py` fails on the floor itself (part 4 of run
   # 39315663679 on 2026-10-19, `5 failed, 6725 passed`), so the refresh that
   # would lift the record could never run again. Now the fetch step keeps
-  # each part that succeeded or failed, still needs all four, and measures a
-  # failed one only when `unit_test_parts.py coverage-only` says it finished
+  # each part that succeeded or failed, still needs every one, and measures
+  # a failed one only when `unit_test_parts.py coverage-only` says it finished
   # and failed on the durations-coverage tests and nothing else; any other
   # answer ends the job there, with an error naming the test, before
   # anything is measured, pushed or opened. `unit_test_parts.py due` decides
   # — under 95%, re-measure (`REMEASURE_MARGIN`, about four days of new test
   # files above the floor) — and every later step waits on its answer. On
   # `hold` nothing is opened and the coverage read goes to the job summary.
-  # On `refresh` the record is rebuilt from this run's own four part logs,
+  # On `refresh` the record is rebuilt from this run's own part logs,
   # keeping every walk's seconds and provenance, and the record and no other
   # path is pushed to the one literal branch `bot/test-durations`, whose pull
   # request is opened once and updated after, never a second.
@@ -265,22 +272,22 @@ jobs:
           else
             printf '### Unit test durations: nothing to do\n\n%s, so no pull request is opened.\n' "$coverage" >> "$GITHUB_STEP_SUMMARY"
           fi
-      # This attempt's four part jobs, each one that succeeded or failed, and
+      # This attempt's part jobs, each one that succeeded or failed, and
       # each one's log as the jobs API serves it: one runner timestamp per
-      # line, which is what `measure` reads. PARTS is `unit`'s matrix size;
-      # fewer finished parts than that is not a whole measurement, and the
-      # job stops here. A failed part is measured only when `coverage-only`
+      # line, which is what `measure` reads. PARTS is `unit`'s matrix size,
+      # and a test fails when the two disagree (DRE-8122); fewer finished
+      # parts than that is not a whole measurement, and the job stops here. A failed part is measured only when `coverage-only`
       # says it finished and failed on the durations-coverage tests alone
       # (DRE-7726) — otherwise the job stops here too, naming the test.
       # `gh api` refuses a body holding terminal escape sequences unless told
       # to allow them, and every Actions log holds them in its step headers.
-      - name: Fetch the four parts' logs
+      - name: Fetch every part's logs
         id: logs
         if: steps.due.outputs.decision == 'refresh'
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
-          PARTS: 4
+          PARTS: 5
         run: |
           mkdir -p "$RUNNER_TEMP/part-logs"
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
@@ -360,7 +367,7 @@ jobs:
           COVERAGE: ${{ steps.due.outputs.coverage }}
         run: |
           {
-            echo "The nightly Pipeline Tests run re-measured \`config/unit-test-durations.json\` from its own four part logs (run $RUN_ID), because $COVERAGE."
+            echo "The nightly Pipeline Tests run re-measured \`config/unit-test-durations.json\` from its own part logs (run $RUN_ID), because $COVERAGE."
             echo
             echo "Under 90% every pull request that adds a test file fails \`test_the_durations_record_covers_the_live_tree\`, so this is re-measured about four days before that floor. Every walk keeps its seconds and its \`provenance\` line; every other file carries this run's seconds (DRE-7577)."
             echo
