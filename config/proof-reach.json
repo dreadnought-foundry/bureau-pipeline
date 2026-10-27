@@ -179,6 +179,12 @@
       "printed_by": "scripts/groomer.py",
       "constant": "MEMORY_TAG",
       "when": "every groomer propose run since DRE-7824, one line in the Groom step's log"
+    },
+    {
+      "tag": "name-roster:",
+      "printed_by": "scripts/name_roster.py",
+      "constant": "TAG",
+      "when": "every `check` run since DRE-8165, one line on stdout: the counts of people and forms when the live roster is read in full, or the read that failed — never a name"
     }
   ],
   "causes": [
