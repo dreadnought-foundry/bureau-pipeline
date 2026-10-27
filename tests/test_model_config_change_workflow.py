@@ -383,20 +383,11 @@ def _pr_body(tmp_path: Path) -> str:
     return (tmp_path / "pr-body.md").read_text()
 
 
-def test_the_no_pin_sentence_names_the_fixture_and_the_harness_that_exist():
+def test_the_no_pin_sentence_names_the_fixture_that_exists():
+    # The harness it also names was deleted with the walks (DRE-8017); this
+    # workflow carries nothing since DRE-6977 and goes in DRE-8021.
     rel = model_fixture.FIXTURE_DIR.relative_to(ROOT).as_posix() + "/"
     assert rel in NO_PIN
-    assert (ROOT / "tests" / "test_console_change_keeps_the_suite_green.py").is_file()
-
-
-def test_the_no_pin_sentence_says_where_the_per_case_runs_run():
-    """The per-case runs skip in the unit parts and run in DRE-6873's job, so
-    the sentence says where they run — and names the job the harness's own
-    skip reason names."""
-    import test_console_change_keeps_the_suite_green as harness
-    job = re.fullmatch(r'runs in the "(.+)" job', harness.SKIP_REASON).group(1)
-    assert f"run in the {job} job of Pipeline Tests" in NO_PIN
-    assert " proves " not in NO_PIN
 
 
 def test_the_header_says_no_model_test_pins_a_console_choice():
