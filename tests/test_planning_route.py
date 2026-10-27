@@ -1618,6 +1618,8 @@ class TestACardWithNoRepoIsRefusedAtTheExit:
         card = _no_repo_card()
         card.run(lambda: planning_route.main(["exit", CARD]))
         first = list(card.posted)
+        # The board as the retry reads it: the hold label the first run wrote.
+        card.labels = [label for _, label in card.labelled]
         card.run(lambda: planning_route.main(["exit", CARD]))
         assert card.posted == first, "the retry posted the refusal or the stamp again"
         assert card.states == [(CARD, "Triage"), (CARD, "Triage")]

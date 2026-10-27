@@ -119,6 +119,19 @@ The planner can add the blocker itself, after `decide` read none (DRE-7283,
 escalation, and `plan.yml`'s escalation step parks the epic in Queued under
 the same receipt instead of asking (DRE-8001).
 
+## A card with no repo never leaves for the build queue (DRE-8145)
+
+DRE-7961 and DRE-7962 reached Planning with no labels at all. The relay sent
+both planning runs to its default repo, the critic passed both, and this exit
+stamped FLEET on each and parked it in Queued, where no sweep promotes a card
+with no repo. The exit read the role label, the title and the criteria, and
+never the repo. So `_cmd_exit` now asks `validate_card` first — the gate's own
+reading, never a second one here — and a card none of whose `repo:` labels is
+a key of `config/repo-map.json` is refused before anything else is written: no
+verdict, no mark, no escalation. It is told why, held `no-route` through
+`hold.py` and parked in Triage; the hold lifts when the label names a repo on
+the rail, and the card comes back to this exit, which routes it afresh.
+
 CLI:
 
     python3 scripts/planning_route.py check          # validate the routes
@@ -171,6 +184,17 @@ ONE_OFF_SHAPE = "one-off"
 #: critic on it being empty and the exit on it being set, so it never names a
 #: verdict itself — who is a person is `person_verdict`'s to derive.
 PERSON_OUTPUT = "person"
+
+#: The refusal a card with no repo gets at the exit, and where it parks
+#: (DRE-8145). The lane is a literal, as `planning_escalation.UNREAD_LANE` is,
+#: so `ready_lane_writers` and `triage_reasons` can read the destination.
+NO_REPO_TAG = "planning-exit-no-repo"
+NO_REPO_LANE = "Triage"
+#: The hold the refused card carries: the sweep's stranded watchdog writes the
+#: same reason for the same defect (DRE-6177), and it lifts on `repo-on-rail`.
+NO_ROUTE_REASON = "no-route"
+#: The writer file the hold stamp names.
+WRITER = "planning_route.py"
 
 
 class Unroutable(Exception):
@@ -825,6 +849,66 @@ def _roll_up_note(route: Route) -> str:
     ])
 
 
+def unrouted_repo(card: dict) -> list | None:
+    """None when the card names a repo the pipeline routes; otherwise the
+    `repo:` slugs it carries that name none, empty when it carries no label
+    (DRE-8145).
+
+    Read through `validate_card`, never here: `_has_repo` is the card-quality
+    gate's own test — a `repo:` label that is a key of `config/repo-map.json`,
+    or the deprecated `**Repo:**` body line it still accepts — and
+    `unknown_repo_slugs` names the labels that are not. Imported late because
+    `validate_card` imports this module for the one-off shape's name.
+    """
+    import validate_card
+
+    labels = list(card.get("labels") or ())
+    if validate_card._has_repo(card.get("description") or "", labels):
+        return None
+    return validate_card.unknown_repo_slugs(labels)
+
+
+def no_repo_note(identifier: str, unknown) -> str:
+    """The refusal the card carries: what is missing, the fix, and that it was
+    not routed. Plain English — the person who filed the card reads it."""
+    import validate_card
+
+    if unknown:
+        named = ", ".join(f"`repo:{slug}`" for slug in unknown)
+        why = (f"Its {named} label names no repo in `config/repo-map.json`, so "
+               "no repo's run can build it.")
+    else:
+        why = "It carries no `repo:` label, so no repo's run can build it."
+    slugs = ", ".join(f"`{slug}`" for slug in sorted(validate_card.VALID_SLUGS))
+    return "\n".join([
+        f"🚫 {NO_REPO_TAG}: {identifier} was not routed.",
+        "",
+        why,
+        "",
+        "**The fix:** add the `repo:<slug>` label for the repo this card's "
+        "files live in. The slugs are the keys of `config/repo-map.json`: "
+        f"{slugs}.",
+        "",
+        f"It is parked in {NO_REPO_LANE} with no routing verdict, under a "
+        f"`{NO_ROUTE_REASON}` hold. The hold lifts once the label names one of "
+        "those repos, and the card goes back to Planning, whose exit routes it "
+        "afresh.",
+    ])
+
+
+def _no_route_at(unknown) -> str:
+    """The hold stamp's qualifier: the first slug the card carries, or none.
+    A slug the stamp cannot carry is stamped as none, as the watchdog does."""
+    import hold
+
+    at = f"repo:{unknown[0] if unknown else 'none'}"
+    try:
+        hold.stamp_line(NO_ROUTE_REASON, at, WRITER)
+    except ValueError:
+        return "repo:none"
+    return at
+
+
 def exit_plan(card: dict, comment_bodies, doc: dict | None = None) -> Exit:
     """How this card leaves Planning, for the two routes that leave here.
 
@@ -1024,6 +1108,27 @@ def _retirement(lops, identifier: str, nodes) -> tuple:
     return retired, note
 
 
+def _refuse_no_repo(lops, identifier: str, card: dict, unknown, bodies) -> int:
+    """Refuse a card with no repo at the exit (DRE-8145): the reason, the
+    hold, then the lane — and no verdict, no mark, no route note.
+
+    The note is said once, keyed on its tag. The hold is applied unless the
+    card already wears it on a live `no-route` stamp, so a retry of a run that
+    died before the move posts nothing twice. The label is on before the move:
+    the plan run a move into Triage fires is refused by the plan-gate for it.
+    """
+    import hold
+
+    _say_once(lops, identifier, NO_REPO_TAG, no_repo_note(identifier, unknown))
+    if hold.reason_of(card.get("labels"), bodies) != NO_ROUTE_REASON:
+        hold.apply(identifier, NO_ROUTE_REASON, _no_route_at(unknown), WRITER)
+    lops.cmd_state(identifier, NO_REPO_LANE)
+    named = ", ".join(f"repo:{slug}" for slug in unknown) or "no repo: label"
+    print(f"{identifier} does not leave Planning on a route — it carries {named}, "
+          f"so it is held {NO_ROUTE_REASON} and parked in {NO_REPO_LANE}")
+    return 0
+
+
 def _cmd_exit(identifier: str) -> int:
     import critic_score
     import linear_ops
@@ -1037,6 +1142,11 @@ def _cmd_exit(identifier: str) -> int:
     # window that the exit did not see would stay live beside the new one.
     nodes = linear_ops.comment_timeline(identifier, whole_thread=True)
     bodies = [node.get("body") or "" for node in nodes]
+    # DRE-8145: a card no repo's run can build is refused before anything is
+    # retired, stamped, marked, escalated or moved on its route.
+    unknown = unrouted_repo(card)
+    if unknown is not None:
+        return _refuse_no_repo(linear_ops, identifier, card, unknown, bodies)
     retired, retirement = _retirement(linear_ops, identifier, nodes)
     if retirement is not None:
         # The exit decides on the card as it will read once the note is
