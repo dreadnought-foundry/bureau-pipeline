@@ -714,3 +714,171 @@ def test_push_through_the_cli(checkout, monkeypatch):
                     "--dispatched-at", args["dispatched_at"], "--remote", "origin"])
     assert code == 0
     assert "refs/heads/proof-shadow/DRE-1234-99" in refs(remote)
+
+
+# --------------------------------------------------------------------------- #
+# push through the redaction seam (DRE-8169)                                   #
+# --------------------------------------------------------------------------- #
+#
+# Every name below is synthetic and carries the marker `synth`, the way
+# `board_snapshot.synthetic()` invents its board: no real person's name.
+
+import name_redact  # noqa: E402
+import name_roster  # noqa: E402
+
+OWNER = "synth-org"
+SYNTH_CEO = {"name": "Synthora Synthbridge", "displayName": "Synthora",
+             "email": "synthora.synthbridge@synthetic.invalid", "admin": True, "active": True}
+SYNTH_CEO_LOGIN = "synthbridge-synth"
+SYNTH_PERSON = {"name": "Synthia Synthwood", "displayName": "synthia",
+                "email": "synthia.synthwood@synthetic.invalid", "admin": False, "active": True}
+SYNTH_PERSON_LOGIN = "synthwood-synth"
+SYNTH_PROFILES = {SYNTH_CEO_LOGIN: SYNTH_CEO["name"], SYNTH_PERSON_LOGIN: SYNTH_PERSON["name"]}
+SYNTH_SECRETS = (SYNTH_CEO["name"], "Synthora", "Synthbridge", SYNTH_CEO["email"], SYNTH_CEO_LOGIN,
+                 SYNTH_PERSON["name"], "synthia", "Synthwood", SYNTH_PERSON["email"],
+                 SYNTH_PERSON_LOGIN)
+
+LIVE = {"NAME_GUARD_LIVE": "true", "GITHUB_REPOSITORY_OWNER": OWNER}
+DRY = {"NAME_GUARD_LIVE": "false", "GITHUB_REPOSITORY_OWNER": OWNER}
+
+NAMED_RECORD = ("# record\n\nSynthora Synthbridge asked; synthia checked it.\n"
+                f"Mail {SYNTH_PERSON['email']} or ping `{SYNTH_CEO_LOGIN}`.\n")
+REDACTED_RECORD = ("# record\n\n[the CEO] asked; [a person] checked it.\n"
+                   "Mail [a person] or ping `[the CEO]`.\n")
+#: A model id carrying a login: the sidecar and the commit message both hold it.
+NAMED_MODEL = f"model-of-{SYNTH_PERSON_LOGIN}"
+
+
+def synth_reader(seen=None):
+    """`name_roster.read` over the synthetic Linear users and GitHub members."""
+    def gql(query, variables=None):
+        return {"users": {"nodes": [SYNTH_CEO, SYNTH_PERSON],
+                          "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+
+    def gh(path):
+        if path.startswith(f"orgs/{OWNER}/members"):
+            return ([{"login": m} for m in SYNTH_PROFILES]
+                    if path.endswith("&page=1") else [])
+        if path.startswith("users/"):
+            return {"name": SYNTH_PROFILES.get(path[len("users/"):])}
+        raise AssertionError("unexpected gh path")
+
+    def read(**kw):
+        if seen is not None:
+            seen.append(kw)
+        return name_roster.read(gql=gql, gh=gh, **kw)
+    return read
+
+
+def synth_roster():
+    return synth_reader()(owner=OWNER, extra_logins=())
+
+
+def unreadable_reader(seen=None):
+    def read(**kw):
+        if seen is not None:
+            seen.append(kw)
+        raise name_roster.RosterUnreadable("linear users")
+    return read
+
+
+def no_synth_name(text: str):
+    low = text.casefold()
+    for s in SYNTH_SECRETS:
+        assert s.casefold() not in low, "a synthetic name reached the text"
+
+
+def named_push(work, run_id, **kw):
+    (work / "docs" / "proofs").mkdir(exist_ok=True)
+    (work / "docs" / "proofs" / "dre-1234-proof.md").write_text(NAMED_RECORD)
+    args = {**push_args(run_id=run_id), "model": NAMED_MODEL}
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = ps.push(**args, cwd=work, **kw)
+    return code, out.getvalue(), f"proof-shadow/DRE-1234-{run_id}"
+
+
+def test_push_live_with_a_roster_commits_every_form_as_its_role(checkout):
+    work, remote = checkout
+    code, out, branch = named_push(work, "501", roster=synth_roster(), env=LIVE,
+                                   reader=unreadable_reader())
+    assert code == 0, out
+    assert git(remote, "show", f"{branch}:docs/proofs/dre-1234-proof.md") == REDACTED_RECORD
+    sidecar_text = git(remote, "show", f"{branch}:proof-shadow.json")
+    no_synth_name(sidecar_text)
+    sidecar = json.loads(sidecar_text)
+    assert sidecar["model"] == "model-of-[a person]"
+    assert sidecar["record_path"] == "docs/proofs/dre-1234-proof.md"
+    message = git(remote, "log", "-1", "--format=%B", branch)
+    no_synth_name(message)
+    assert "model-of-[a person]" in message
+    no_synth_name(out)
+    assert f"{name_redact.TAG} ok" in out
+
+
+def test_push_live_with_no_roster_reads_it_once_through_the_reader(checkout):
+    work, remote = checkout
+    seen = []
+    env = {**LIVE, "GITHUB_ACTOR": "synthactor", "GITHUB_TRIGGERING_ACTOR": ""}
+    code, out, branch = named_push(work, "502", env=env, reader=synth_reader(seen))
+    assert code == 0, out
+    assert len(seen) == 1
+    assert seen[0]["owner"] == OWNER
+    assert "synthactor" in seen[0]["extra_logins"]
+    assert git(remote, "show", f"{branch}:docs/proofs/dre-1234-proof.md") == REDACTED_RECORD
+    no_synth_name(git(remote, "show", f"{branch}:proof-shadow.json"))
+    no_synth_name(git(remote, "log", "-1", "--format=%B", branch))
+
+
+def test_push_live_with_an_unreadable_roster_refuses_and_writes_nothing(checkout):
+    work, remote = checkout
+    head = git(work, "rev-parse", "HEAD")
+    before = refs(remote)
+    code, out, branch = named_push(work, "503", env=LIVE, reader=unreadable_reader())
+    assert code == 1
+    assert out.splitlines() == [
+        "::error::proof shadow push: name-guard: refused — roster unreadable: linear users"]
+    assert refs(remote) == before == ["refs/heads/main"]
+    assert git(work, "branch", "--list", branch) == ""
+    assert git(work, "rev-parse", "--abbrev-ref", "HEAD").strip() == "main"
+    assert git(work, "rev-parse", "HEAD") == head
+    assert not (work / ps.SIDECAR).exists()
+    assert (work / "docs" / "proofs" / "dre-1234-proof.md").read_text() == NAMED_RECORD
+
+
+def test_push_not_live_pushes_the_records_unchanged_and_prints_the_dry_line(checkout):
+    work, remote = checkout
+    seen = []
+    code, out, branch = named_push(work, "504", env=DRY, reader=unreadable_reader(seen))
+    assert code == 0, out
+    assert seen == [], "not live, the roster is never read"
+    assert git(remote, "show", f"{branch}:docs/proofs/dre-1234-proof.md") == NAMED_RECORD
+    assert json.loads(git(remote, "show", f"{branch}:proof-shadow.json"))["model"] == NAMED_MODEL
+    dry = [line for line in out.splitlines() if line.startswith(f"{name_redact.TAG} dry — ")]
+    assert len(dry) == 1, out
+    no_synth_name(out.replace(NAMED_MODEL, ""))
+
+
+def test_push_with_the_switch_unset_is_not_live(checkout):
+    work, remote = checkout
+    code, out, branch = named_push(work, "505", env={}, reader=unreadable_reader())
+    assert code == 0, out
+    assert git(remote, "show", f"{branch}:docs/proofs/dre-1234-proof.md") == NAMED_RECORD
+    assert f"{name_redact.TAG} dry — " in out
+
+
+def test_push_through_the_cli_reads_the_switch_from_the_environment(checkout, monkeypatch):
+    work, remote = checkout
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("NAME_GUARD_LIVE", "true")
+    monkeypatch.setattr(ps.name_roster, "read", unreadable_reader())
+    (work / "docs" / "x.md").write_text("x\n")
+    args = push_args(run_id="506")
+    out = io.StringIO()
+    with redirect_stdout(out):
+        code = ps.main(["push", "--card", args["card"], "--run-id", args["run_id"],
+                        "--model", args["model"], "--run-url", args["run_url"],
+                        "--dispatched-at", args["dispatched_at"]])
+    assert code == 1
+    assert "name-guard: refused — roster unreadable" in out.getvalue()
+    assert refs(remote) == ["refs/heads/main"]
