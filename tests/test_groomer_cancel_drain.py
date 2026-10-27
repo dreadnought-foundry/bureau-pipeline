@@ -46,9 +46,9 @@ import lane_contract  # noqa: E402
 import ready_lane_writers  # noqa: E402
 
 from test_groomer_approval_gate import FakeOps as _GateOps  # noqa: E402
-from test_groomer import CYCLES, NOW, card, judged  # noqa: E402
+from test_groomer import CYCLES, NOW, card  # noqa: E402
 from test_groomer_two_lists import (  # noqa: E402
-    SUPERSEDED, TWO_LISTS_RENDER, answer_for, lane, two_lists)
+    TWO_LISTS_RENDER, fifteen_and_five_morning, two_lists)
 
 PROPOSAL_CARD = "DRE-2683"
 
@@ -161,15 +161,6 @@ def _summary(body):
 
 #: The two the CEO said no to, one on each list.
 KEEP_PLANNING, KEEP_CANCEL = "DRE-2", "DRE-8"
-
-
-def fifteen_and_five_morning():
-    """DRE-4727's morning: twenty cards, five of them to cancel. Since
-    DRE-7973 a Cancel row holds no slot, so the lane is those twenty and no
-    more — the twenty-first card would be planned."""
-    cards = lane(20, superseded=SUPERSEDED)
-    return groomer.propose(cards, cycles=CYCLES, capacity=20, now=NOW,
-                           judgement=judged(cards, answer_for(cards)))
 
 
 def _fifteen_and_five(**lanes):

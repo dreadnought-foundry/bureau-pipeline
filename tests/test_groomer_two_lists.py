@@ -82,6 +82,15 @@ def two_lists(**kwargs):
                            judgement=judged(cards, answer_for(cards)), **kwargs)
 
 
+def fifteen_and_five_morning():
+    """DRE-4727's morning: twenty cards, five of them to cancel. Since
+    DRE-7973 a Cancel row holds no slot, so the lane is those twenty and no
+    more — a twenty-first card would be planned."""
+    cards = lane(20, superseded=SUPERSEDED)
+    return groomer.propose(cards, cycles=CYCLES, capacity=20, now=NOW,
+                           judgement=judged(cards, answer_for(cards)))
+
+
 def ids(rows) -> list:
     return [row["identifier"] for row in sorted(rows, key=lambda r: r["position"])]
 
