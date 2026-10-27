@@ -187,6 +187,10 @@ class Board:
             raise LookupError(f"Linear answered no card for {ident}")
         return got
 
+    def blocking(self, ident):
+        """The proof's `blocks` relations (DRE-8156): none on this board."""
+        return []
+
 
 def state(name, *, dispatches=0, receipts=(), run_id=None, lines=None,
           record=None):
