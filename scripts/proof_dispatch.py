@@ -231,18 +231,37 @@ dispatched; without one both refuse as before, the line ending
 `never another without a shipped fix or a new 🔬 proof-observed` and why.
 There are two events, and only these two:
 
-  a. **A named fix shipped.** Each distinct card an unmet row at the head
-     names by `fix: DRE-<n>` (`proof_record.row_fixes`, never a DRE id
-     anywhere else in the cell, and never a history row's) is read once — at
-     most `REARM_FIX_CARDS`; with more the line names them and nothing is
-     read. Every card must be `Done`, labelled for this repo, merged
-     (`find_pr`, `card_pr.MERGED`), and live: one `proof_release` reading of
-     their merges reads `ready`, as `_released` reads a sibling's. Anything
-     else is no re-arm, and the line names the card and why; a card labelled
-     for another repo is not this repo's release to read, so the operator's
-     note is its route. The set re-arms once: an earlier `re-armed` receipt
-     naming every card in it re-arms nothing. A record the critic sent back
-     that could not be read at the head names no fix.
+  a. **A named fix shipped.** Two sources name fix cards, read together
+     (`_fixes`) as one set:
+
+       * each distinct card an unmet row at the head names by `fix: DRE-<n>`
+         (`proof_record.row_fixes`, never a DRE id anywhere else in the cell,
+         and never a history row's). A record the critic sent back that
+         could not be read at the head names none;
+       * each card on the proof's `blocks` relations whose relation was made
+         after the card's newest `🔬 proof-run` receipt of any count
+         (DRE-8156) — a fix filed against the proof, as DRE-7990 and DRE-7991
+         were against DRE-7251, needs no `fix:` cell and no operator's note.
+         The cut keeps the epic's own build cards out: they block every
+         proof and were related, and Done, long before its runs. The
+         relations are read with their times, to the end
+         (`LinearReads.blocking`); relations not read, a receipt with no
+         time, or a relation with no time add nothing, and the line says so.
+
+     Each card in the set is read once — at most `REARM_FIX_CARDS`; with more
+     the line names them and nothing is read. Every card must be `Done`,
+     merged (`find_pr`, `card_pr.MERGED`) and live, each read in its own
+     repo: a card labelled for this repo is read here, and one labelled for
+     another repo in the roster (`config/repo-map.json`) has its pull
+     request found on that repo and its release read there (DRE-8156). One
+     `proof_release` reading per repo of the merges labelled for it must read
+     `ready`, as `_released` reads a sibling's. Anything else is no re-arm,
+     and the line names the card and why — a release that cannot be read
+     included; a card labelled for a repo outside the roster, or for none,
+     is not a release this phase can read, so the operator's note is its
+     route. The set re-arms once: an earlier `re-armed` receipt naming every
+     card in it re-arms nothing, and a blocker related before that receipt
+     is older than the newest receipt, so it is not in the set again.
   b. **A new `🔬 proof-observed`**, posted after the card's newest
      `🔬 proof-run` receipt of any count — after the run that spent the
      budget and after any earlier re-arm's run, so two notes with no run
@@ -274,21 +293,31 @@ DRE-7767, ready, among them — on the cap; with about three sweeps an hour a
 ready proof waited two to three hours for a slot.
 
 So the budget's hold carries what the refusal was read off. When the record
-was read at the head and no unmet row names a fix (`_named_fixes`), its needs
+was read at the head and neither source names a fix (`_fixes` — no unmet
+row's `fix:` cell and no blocker related since the newest receipt), its needs
 half ends `SPENT_AT` — ` — the record at <sha7> names no fix` — and a new
 head with no fix named posts it again, through the same `_hold_once`. A
-record that names a fix is never marked: a fix ships with nothing on the
-proof card, so only the reads can say it has. Then, off the lane read, a
-re-run candidate is spent with nothing new (`spent_on_the_lane`) when the
-newest `🔬 proof-waiting` its window shows is that marked hold and nothing
-after it is a `🔬 proof-observed`, a `🔬 proof-run` receipt or a console
-answer — so no re-arm event, no lift and no run has come since — and the one
-heads read (`open_record_heads`) shows its record still open at that head.
-Same head, same record, same refusal: the card is named on its line every
-pass, `re-run: budget spent and nothing new — held by <the hold>`, counted
-held, and keeps no slot, as a lane hold does (DRE-6464). A note, a receipt,
-a new head, a record no longer open, or heads that could not be read, and it
+record that names a fix is never marked, nor one a blocker names: a fix ships
+with nothing on the proof card, so only the reads can say it has. Then, off
+the lane read, a re-run candidate is spent with nothing new
+(`spent_on_the_lane`) when the newest `🔬 proof-waiting` its window shows is
+that marked hold and nothing after it is a `🔬 proof-observed`, a
+`🔬 proof-run` receipt or a console answer — so no re-arm event, no lift and
+no run has come since — no card on its `blocks` relations was related after
+that hold (DRE-8156), and the one heads read (`open_record_heads`) shows its
+record still open at that head. Same head, same record, same refusal: the
+card is named on its line every pass, `re-run: budget spent and nothing new
+— held by <the hold>`, counted held, and keeps no slot, as a lane hold does
+(DRE-6464). A note, a receipt, a relation made after the hold, a new head, a
+record no longer open, or heads or relations that could not be read, and it
 is a candidate again on the next pass.
+
+The sweep's board read carries no relations, so the lane read adds them
+(DRE-8156): `LinearReads.lane` reads the relations, with their times, of
+every card whose window shows a marked hold (`_marked`) in one request, and
+a card it did not answer for reads as relations not read to the end. On
+DRE-7251 a marked hold of 2026-10-24 hid two fixes related and shipped on
+10-25 for two days, every pass saying `nothing follows it`.
 
 A waiting row may be stamped (DRE-7316): `Not observed. waiting for <the
 event> [not-before=<T>]: …` (`proof_record.row_not_before`). When every
@@ -361,14 +390,17 @@ card's epic and relations, and its thread; a re-run reads only its thread).
 Three candidates is 2 + 2 × 3 = 8 requests however many proofs wait — plus,
 for a card whose first relation page is full, up to
 `reconcile.INVERSE_TOPUP_PAGES` more to read the rest of it (DRE-6416). The
-re-arm's fix reads (DRE-7740) happen only on a spent budget whose record
-names fix cards, and only for a set not already re-armed: at most
-`REARM_FIX_CARDS` Linear card reads, each card's pull request, and one release
-reading. A re-run spent with nothing new (DRE-7787) is not a candidate: it
-costs no Linear read, and however many there are they cost together one
-GitHub read of the open pull requests' heads, made only on a pass whose lane
-read shows a marked budget hold. Its `linear-budget:` trailer is its own,
-lifted into the step summary.
+re-arm's reads (DRE-7740) happen only on a spent budget: one read of the
+proof's relations with their times (DRE-8156, more pages only past a
+hundred), then, when the record or those relations name fix cards and only
+for a set not already re-armed, at most `REARM_FIX_CARDS` Linear card reads,
+each card's pull request on its own repo, and one release reading per repo.
+A re-run spent with nothing new (DRE-7787) is not a candidate: it costs no
+read of its own, and however many there are they cost together one GitHub
+read of the open pull requests' heads and one Linear read of their relations
+per lane read that shows them (DRE-8156), made only on a pass whose lane read
+shows a marked budget hold. Its `linear-budget:` trailer is its own, lifted
+into the step summary.
 
 THE TURN (DRE-6464). The bound once read the same three every pass: oldest
 first, a card held, blocked or unreadable kept its slot, and on 2026-10-09
@@ -461,6 +493,7 @@ import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub rea
 import spoken_thread  # noqa: E402
 import switch_reason  # noqa: E402 — the dry run's off line (DRE-6439)
 import unfixable_checks  # noqa: E402 — what a failed check run is (DRE-6571)
+import validate_card  # noqa: E402 — the roster a fix's repo: label is read against (DRE-8156)
 
 #: Opens every line this phase prints.
 PREFIX = "proof-dispatch:"
@@ -662,6 +695,31 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
 FIX_CARD_QUERY = """query($id: String!) { issue(id: $id) {
                  identifier state { name } labels { nodes { name } } } }"""
 
+#: The proof's relations with the time each was made (DRE-8156): a card on a
+#: `blocks` relation made after the newest `🔬 proof-run` receipt is a fix
+#: filed against it. Read to the end, a page at a time, as the sweep reads a
+#: card's relations (`reconcile.complete_inverse_relations`), whose own query
+#: carries no times.
+BLOCKING_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
+                 inverseRelations(first: %d, after: $after) {
+                   pageInfo { hasNextPage endCursor }
+                   nodes { type createdAt issue { identifier } } } } }""" % (
+    reconcile.INVERSE_TOPUP_PAGE)
+#: The same relation times for every lane card whose window shows the
+#: budget's marked hold, in ONE request per lane read (DRE-8156) — the sweep's
+#: board read carries no relations, and the lane skip needs them.
+LANE_RELATIONS_CARDS = 50
+LANE_RELATIONS_QUERY = """query($numbers: [Float!]) { issues(first: %d, filter: {
+                 team: {key: {eq: "DRE"}}, number: {in: $numbers}}) { nodes {
+                   identifier
+                   inverseRelations(first: %d) {
+                     pageInfo { hasNextPage endCursor }
+                     nodes { type createdAt issue { identifier } } } } } }""" % (
+    LANE_RELATIONS_CARDS, LANE_RELATIONS_CARDS)
+#: What a marked card's relations read as when that request failed or did
+#: not answer for it: not read to the end, so the card is read as a candidate.
+UNREAD_RELATIONS = {"pageInfo": {"hasNextPage": True, "endCursor": None}, "nodes": []}
+
 _DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
 #: The gate's hold note's first line (`evaluate_and_merge.sh`):
 #: `⏸️ Merge gate: declined @<sha> — <reason>`.
@@ -699,8 +757,28 @@ class LinearReads:
 
     def lane(self, state: str) -> list:
         """A lane through the sweep's own read: the read door serves it where
-        it is on, Linear where it is not."""
-        return reconcile.active_cards((state,))
+        it is on, Linear where it is not. Every card whose window shows the
+        budget's marked hold (`_marked`) carries its relations with their
+        times, read for all of them in one request (DRE-8156), so the lane
+        skip can tell a fix filed since the hold; a card that request did not
+        answer for carries `UNREAD_RELATIONS`, and the line says so."""
+        cards = reconcile.active_cards((state,))
+        marked = [card["identifier"] for card in cards if _marked(card)]
+        if not marked:
+            return cards
+        try:
+            data = linear_ops.gql(LANE_RELATIONS_QUERY,
+                                  {"numbers": [_number(c) for c in cards
+                                               if c["identifier"] in marked]})
+            got = {node.get("identifier"): node.get("inverseRelations")
+                   for node in ((data or {}).get("issues") or {}).get("nodes") or []}
+        except Exception as error:  # noqa: BLE001 — unread spares no read
+            print(f"{PREFIX} the blocks relations of {', '.join(marked)} could not "
+                  f"be read — each is read as a candidate: {error}")
+            got = {}
+        return [{**card, "inverseRelations": got.get(card["identifier"])
+                 or UNREAD_RELATIONS} if card["identifier"] in marked else card
+                for card in cards]
 
     def card(self, identifier: str) -> dict:
         issue = (linear_ops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
@@ -723,6 +801,28 @@ class LinearReads:
         if not issue:
             raise LookupError(f"Linear answered no card for {identifier}")
         return issue
+
+    def blocking(self, identifier: str) -> list:
+        """The proof's inverse relations with their times (DRE-8156), read to
+        the end — one request per hundred, at most as many pages as the
+        sweep's top-up reads. Past that, or on a failed read, it raises, and
+        the relations add nothing."""
+        nodes, after = [], None
+        for _ in range(1 + reconcile.INVERSE_TOPUP_PAGES):
+            issue = (linear_ops.gql(BLOCKING_QUERY, {"id": identifier, "after": after})
+                     or {}).get("issue")
+            if not issue:
+                raise LookupError(f"Linear answered no card for {identifier}")
+            page = issue.get("inverseRelations") or {}
+            nodes.extend(page.get("nodes") or [])
+            info = page.get("pageInfo") or {}
+            after = info.get("endCursor")
+            if info.get("hasNextPage") is not True:
+                return nodes
+            if not after:
+                break
+        raise LookupError(f"{identifier}'s relations were not read to the end "
+                          f"({len(nodes)} read)")
 
 
 def github_read(path: str):
@@ -1105,6 +1205,44 @@ def _named_fixes(read) -> list:
     """The distinct cards the record's unmet rows name by `fix:` (DRE-7740)."""
     return list(dict.fromkeys(card for _, result in read.unmet
                               for card in proof_record.row_fixes(result)))
+
+
+def _marked(card: dict) -> bool:
+    """Does the card's lane window show the budget's hold marked with the head
+    its record was read at (`SPENT_AT`, DRE-7787) — the hold the lane skip
+    reads, and so the cards `LinearReads.lane` reads relation times for?"""
+    for comment in linear_ops.window_nodes(card.get("comments")):
+        line = _first_line(comment.get("body"))
+        if line.startswith(BUDGET_HOLDS) and _SPENT_AT.search(line):
+            return True
+    return False
+
+
+def _blocks(page: dict | None) -> list:
+    """The `blocks` relations of an inverse-relation page — cards that block
+    this one."""
+    return [rel for rel in ((page or {}).get("nodes") or [])
+            if rel.get("type") == "blocks"]
+
+
+def _related_since(card: dict, at) -> bool:
+    """Is a card on the proof's `blocks` relations, as the lane read carries
+    them, related after `at` — the marked hold's time (DRE-8156)? Relations
+    not read to the end, a relation with no time, or a hold with none, read
+    as yes: unread never spares the read. A card the lane read carries no
+    relation page for is read off its hold alone, as DRE-7787 wrote it —
+    `LinearReads.lane` gives every marked card one."""
+    page = card.get("inverseRelations")
+    if page is None:
+        return False
+    if prose_blockers.relations_unknown(card):
+        return True
+    held = _when(at)
+    for rel in _blocks(page):
+        when = _when(rel.get("createdAt"))
+        if held is None or when is None or when > held:
+            return True
+    return False
 
 
 def _pipeline_note(body: str) -> bool:
@@ -1528,7 +1666,12 @@ class _Pass:
         receipt (a run since, which may have amended the record), and no
         console answer. With no fix named, no fix can ship for it; the head
         is the sweep's to compare against the one heads read. The window is
-        the newest comments, so anything after a hold it shows is in it."""
+        the newest comments, so anything after a hold it shows is in it.
+
+        A fix can be filed against the proof as a `blocks` relation with
+        nothing on its thread (DRE-8156), so a card with a relation made
+        after the hold — or relations the lane read could not read, or one
+        with no time — is read as before (`_related_since`)."""
         window = linear_ops.window_nodes(card.get("comments"))
         try:
             voices = self.voices(window, None, card=card["identifier"])
@@ -1548,6 +1691,8 @@ class _Pass:
             if (voice.kind not in _INERT or body.lstrip().startswith(OBSERVED_MARK)
                     or proof_run_state.receipt(body) is not None):
                 return None
+        if _related_since(card, voices[marks[-1]].created_at):
+            return None  # a fix filed against it since: the reads decide (DRE-8156)
         return found.group(1), line
 
     def _parked_on(self, card: dict, comments: list, number, head: str) -> None:
@@ -1684,8 +1829,12 @@ class _Pass:
             return self._after_lift(ident, voices, read, receipts, since,
                                     number, head, lifted)
         # A spent budget looks for a re-arm event before either refusal that
-        # ends it (DRE-7740): with one, neither refuses and one run goes.
-        rearm, unarmed = (self._rearm(ident, read, receipts, voices)
+        # ends it (DRE-7740): with one, neither refuses and one run goes. Its
+        # fixes are the record's `fix:` cells and the cards filed against the
+        # proof since its newest receipt (DRE-8156).
+        named, unread = (self._fixes(ident, read, receipts)
+                         if spent >= RERUN_BUDGET else ([], ""))
+        rearm, unarmed = (self._rearm(ident, read, named, unread, receipts, voices)
                           if spent >= RERUN_BUDGET else (None, ""))
         if rearm is not None:
             return rearm, REARM_COUNT
@@ -1706,9 +1855,10 @@ class _Pass:
             if rearmed:
                 needs = (f"{needs} — the re-armed run of {rearmed[-1].at} was "
                          "its event's one run")
-            if read is not None and not _named_fixes(read):
-                # No fix can ship for it (DRE-7787): the head it was read at
-                # lets a later pass's lane read spare the read.
+            if read is not None and not named:
+                # Neither source names a fix (DRE-7787, DRE-8156): the head it
+                # was read at lets a later pass's lane read spare the read,
+                # until a new head or a fix filed against it after the hold.
                 needs += SPENT_AT.format(sha7=head[:7])
             self._hold_once(ident, voices, observed, needs, open_only=True)
             raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
@@ -1775,11 +1925,14 @@ class _Pass:
 
     # -- the re-arm, once the budget is spent (DRE-7740) --------------------- #
 
-    def _rearm(self, ident: str, read, receipts: list, voices: list) -> tuple:
+    def _rearm(self, ident: str, read, named: list, unread: str, receipts: list,
+               voices: list) -> tuple:
         """`(reason, "")` for the re-arm event on a spent budget — a named fix
         shipped, else a new `🔬 proof-observed` — or `(None, " — <why not>")`
         for the refusal's line."""
-        reason, fix_why = self._fix_shipped(ident, read, receipts)
+        reason, fix_why = self._fix_shipped(ident, read, named, receipts)
+        if unread:
+            fix_why = f"{fix_why}; {unread}"
         if reason is not None:
             return reason, ""
         note = self._new_note(voices, receipts)
@@ -1789,28 +1942,73 @@ class _Pass:
         return None, (f" — {fix_why}; no 🔬 proof-observed of the operator's "
                       "follows the newest proof-run receipt")
 
-    def _fix_shipped(self, ident: str, read, receipts: list) -> tuple:
-        """Event (a): every card the unmet rows name by `fix:` is Done, this
-        repo's, merged, and live — `(reason, "")`, else `(None, why)`. At most
-        `REARM_FIX_CARDS` cards are read, each once, and one release reading
-        is made for all their merges; the set re-arms once."""
-        if read is None:
-            return None, "the record was not read at the head, so it names no fix"
-        named = _named_fixes(read)
+    def _fixes(self, ident: str, read, receipts: list) -> tuple:
+        """`(cards, unread)`: the fix cards event (a) reads, each once — the
+        record's `fix:` cells (DRE-7740), then every card on the proof's
+        `blocks` relations whose relation was made after its newest
+        `🔬 proof-run` receipt, oldest relation first (DRE-8156). The cut
+        keeps the epic's own build cards out: they block every proof and
+        were related long before its runs. `unread` is what the line says of
+        relations that added nothing they might have, else ""."""
+        cells = _named_fixes(read) if read is not None else []
+        filed, unread = self._filed_against(ident, receipts)
+        return list(dict.fromkeys(cells + filed)), unread
+
+    def _filed_against(self, ident: str, receipts: list) -> tuple:
+        """`(cards, unread)`: the cards related to the proof as blocking it
+        after its newest receipt (DRE-8156). Relations not read, or a receipt
+        with no time to cut at, add nothing; a relation with no time adds
+        nothing; and `unread` says which."""
+        stamps = [when for when, _ in receipts]
+        if not stamps or any(when is None for when in stamps):
+            return [], ("a proof-run receipt has no time, so no blocks relation "
+                        "is read as filed after the newest")
+        newest = max(stamps)
+        try:
+            relations = self.linear.blocking(ident)
+        except Exception as error:  # noqa: BLE001 — unread adds nothing
+            return [], (f"its blocks relations could not be read, so they add "
+                        f"nothing: {error}")
+        filed, untimed = [], []
+        for rel in _blocks({"nodes": relations}):
+            card = (rel.get("issue") or {}).get("identifier")
+            when = _when(rel.get("createdAt"))
+            if not card:
+                continue
+            if when is None or when.tzinfo is None:
+                untimed.append(card)
+            elif when > newest:
+                filed.append((when, card))
+        unread = (f"the blocks relation from {', '.join(untimed)} has no time, so "
+                  "it adds nothing" if untimed else "")
+        return [card for _, card in sorted(filed)], unread
+
+    def _fix_shipped(self, ident: str, read, named: list, receipts: list) -> tuple:
+        """Event (a): every named fix (`_fixes`) is Done, merged and live —
+        `(reason, "")`, else `(None, why)`. A fix labelled for this repo is
+        read here, one labelled for another repo in the roster
+        (`config/repo-map.json`) on that repo (DRE-8156): its pull request
+        found there and its release read there, as `_released` reads a
+        sibling's. At most `REARM_FIX_CARDS` cards are read, each once, and
+        one release reading is made per repo for its merges; the set re-arms
+        once."""
         if not named:
-            return None, "no unmet row of the record names a fix"
+            why = ("the record was not read at the head, so it names no fix"
+                   if read is None else "no unmet row of the record names a fix")
+            return None, (f"{why}, and no card on its blocks relations was "
+                          "related after the newest proof-run receipt")
         cards = ", ".join(named)
         if len(named) > REARM_FIX_CARDS:
-            return None, (f"the record names {len(named)} fix cards ({cards}) — "
-                          f"more than three are not read; the operator's "
-                          "🔬 proof-observed is the route")
+            return None, (f"the record and its blocks relations name {len(named)} "
+                          f"fix cards ({cards}) — more than three are not read; "
+                          "the operator's 🔬 proof-observed is the route")
         for _, earlier in receipts:
             found = (_REARMED_FIX.fullmatch(earlier.reason)
                      if earlier.count == REARM_COUNT else None)
             if found and set(named) <= set(found.group(1).split(", ")):
                 return None, (f"{cards} already re-armed the run of {earlier.at} "
                               "— a set re-arms once")
-        merges = []
+        merges: dict = {}
         for card in named:
             try:
                 issue = self.linear.fix_card(card)
@@ -1821,30 +2019,43 @@ class _Pass:
                 return None, (f"the fix {card} is {state_name or 'in no state'}, "
                               f"not {SHIPPED_STATE}")
             slug = reconcile.card_repo(issue)
-            if slug != self.slug:
+            repo = (self.repo if slug == self.slug
+                    else validate_card._REPO_MAP.get(slug or ""))
+            if not repo:
                 return None, (f"the fix {card}'s repo: label names "
-                              f"{slug or 'no repo'}, not {self.slug} — its release "
-                              "is not this repo's to read; the operator's "
+                              f"{slug or 'no repo'}, not {self.slug} nor another "
+                              "repo in config/repo-map.json — its release is not "
+                              "this repo's to read; the operator's "
                               "🔬 proof-observed is the route")
+            on = "" if repo == self.repo else f" on {repo}"
             try:
-                pr = self.find_pr(card)
+                pr = (self.find_pr(card) if repo == self.repo
+                      else self.find_pr(card, repo=repo))
             except Exception as error:  # noqa: BLE001
-                return None, f"the fix {card}'s pull request could not be read: {error}"
+                return None, (f"the fix {card}'s pull request{on} could not be "
+                              f"read: {error}")
             if card_pr.pr_state(pr) != card_pr.MERGED:
-                return None, f"the fix {card}'s pull request is not merged"
+                return None, f"the fix {card}'s pull request{on} is not merged"
             sha = (pr.get("mergeCommit") or {}).get("oid")
             if not sha:
-                return None, (f"the fix {card}'s #{pr.get('number')} names no "
+                return None, (f"the fix {card}'s #{pr.get('number')}{on} names no "
                               "merge commit")
-            merges.append(proof_release.Merge(card, pr["number"], sha, []))
-        try:
-            got = self.release(self.repo, merges, read=self.read)
-        except Exception as error:  # noqa: BLE001
-            return None, f"the release carrying {cards} could not be read: {error}"
-        if got.state != "ready":
-            return None, (f"the release carrying {cards} is {got.state}: "
-                          + "; ".join(got.lines))
-        for line in got.lines:
+            merges.setdefault(repo, []).append(
+                proof_release.Merge(card, pr["number"], sha, []))
+        readings = []
+        for repo, carried in merges.items():
+            on = "" if repo == self.repo else f" on {repo}"
+            these = ", ".join(merge.card for merge in carried)
+            try:
+                got = self.release(repo, carried, read=self.read)
+            except Exception as error:  # noqa: BLE001
+                return None, (f"the release carrying {these}{on} could not be "
+                              f"read: {error}")
+            if got.state != "ready":
+                return None, (f"the release carrying {these}{on} is {got.state}: "
+                              + "; ".join(got.lines))
+            readings += [f"{repo}: {line}" if on else line for line in got.lines]
+        for line in readings:
             print(f"{proof_release.TAG}: {ident} — {line}")
         return REARM_FIX_REASON.format(cards=cards), ""
 
@@ -2097,7 +2308,7 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
     the one heads read (`open_record_heads`), injected in the tests."""
     one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
                 read=read or github_read,
-                find_pr=find_pr or (lambda ident: merged_pr(ident, repo)),
+                find_pr=find_pr or (lambda ident, repo=repo: merged_pr(ident, repo)),
                 run_state=run_state or proof_run_state.reading,
                 release=release or proof_release.reading,
                 fire=fire or plan_run.fire,
