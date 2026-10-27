@@ -456,15 +456,21 @@ carrying `[not-before=<T>]` (DRE-7316) and a row nobody stamped — a prose
 event, or the operator's press — read as stamped 12 hours after the pass that
 posts the hold (DRE-7951). Once lifted, stamped rows get a timed re-run, and
 rows not all stamped get one `re-check` per record head, which spends neither
-budget — three per record pull request, then one hold for the operator. A record the gate declined, or the critic
-sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
-at that head, since a re-run would read the same thing: the dispatcher puts it
-to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
-its question, each skipped when the thread already carries it — and leaves the
-card In Review for the operator (DRE-6837); a caused row beside a plain one is
-re-run as before (DRE-6610). The park's own hold never holds the card off the
-record at its head: the operator's amendment discharges it. It is read after
-the first runs, under the same one-per-pass cap, and moves nothing.
+budget — three per record pull request, then one hold for the operator. A record the gate declined
+whose unmet rows are all gaps — a cause word (DRE-6607) or a history row
+(DRE-7740) — is never re-run at that head, since a re-run would read the same
+thing, and is left to the gate (DRE-7953): it merges on its approval and its
+PROOF closes with one fix card (DRE-7952), so the dispatcher posts no hold and
+no question — before this it put the cause rows to the operator through
+`proof_cause_park.park` (DRE-6612, DRE-6837). A gap row beside a plain one is
+re-run as before (DRE-6610), and a record the critic sent back is re-run on
+its findings. A cause hold posted before never holds the card off the record
+at its head. When the gate's two re-runs are spent and every unmet row is a
+plain `Not met.` naming no fix, the dispatcher files one fix card
+(`proof_gap.file_fix_card`, `kind="defect"`) and holds on `— needs <DRE-n>
+shipped`, an event wait the sweep never alarms; once that card ships the
+re-arm gives one more run. It is read after the first runs, under the same
+one-per-pass cap, and moves nothing.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
