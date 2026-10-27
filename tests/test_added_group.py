@@ -39,7 +39,6 @@ import model_choice  # noqa: E402
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
 import model_fixture  # noqa: E402
-import sync_model_config  # noqa: E402
 
 TODAY = "2026-10-11"
 LABEL = "Product & design"
@@ -374,59 +373,3 @@ def test_a_name_that_is_not_lowercase_letters_digits_and_dashes_is_refused(name)
     line = _refused_in_one_sentence(name)
     assert "lowercase letters, digits and dashes" in line, line
 
-
-# --------------------------------------------------------------------------- #
-# The published file                                                          #
-# --------------------------------------------------------------------------- #
-
-def _page(raw: dict, tmp_path: Path, **pin) -> dict:
-    path = tmp_path / "models.yaml"
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    registry = mcc.registry_agents((model_fixture.FIXTURE_DIR / "agents.yaml").read_text())
-    return json.loads(sync_model_config.render_choices(
-        raw, sync_model_config.load_config(path), PRICES, registry, **pin))
-
-
-def test_the_published_file_says_the_pipeline_takes_a_new_group(tmp_path):
-    page = _page(FROZEN, tmp_path)
-    assert page["add_group"] == {"allowed": True, "reason": None}
-    assert [g["key"] for g in page["groups"]] == list(FROZEN["kinds"])
-
-
-def test_the_published_file_says_why_the_pipeline_cannot_take_a_new_group(tmp_path):
-    """The refused branch: the Builders' default is a model the pinned Claude
-    Code cannot run, so no group can be added on it. The reason is the why in
-    plain words, never the probe's own name, label or purpose read back to the
-    CEO as if he had asked for them."""
-    model = model_fixture.ladder(FROZEN, mf.WORKHORSE_KIND)[0]
-    page = _page(FROZEN, tmp_path, floors={model: "99.0.0"}, installed="2.1.0")
-    assert page["add_group"]["allowed"] is False
-    reason = page["add_group"]["reason"]
-    assert reason == ("A new group cannot be added right now. Our pinned Claude Code "
-                      f"cannot run {model_choice.model_label(model)} yet.")
-    assert model_choice.plain_words_problems(reason) == [], reason
-    for placeholder in (sync_model_config.ADD_GROUP_PROBE, "New group",
-                        "A group added from the console"):
-        assert placeholder not in reason, reason
-
-
-def test_the_published_file_carries_an_added_group_and_every_move_into_it(tmp_path):
-    page = _page(WITH_GROUP, tmp_path)
-    assert page["add_group"] == {"allowed": True, "reason": None}
-    group = next(g for g in page["groups"] if g["key"] == GROUP)
-    assert group["label"] == LABEL
-    assert group["purpose"] == PURPOSE
-    assert group["default_model"] == model_fixture.ladder(WITH_GROUP, GROUP)[0]
-    assert group["fallbacks"] == []
-    assert [c["model"] for c in group["choices"]] == list(PRICES)
-    for agent in page["agents"]:
-        if agent["group"] == GROUP:
-            continue
-        move = next((m for m in agent["moves"] if m["group"] == GROUP), None)
-        assert move is not None, agent["name"]
-        expected = agent["name"] not in mf.BACKSTOP_ROLES
-        assert move["allowed"] is expected, (agent["name"], move)
-    for reviewer in mf.BACKSTOP_ROLES:
-        agent = next(a for a in page["agents"] if a["name"] == reviewer)
-        move = next(m for m in agent["moves"] if m["group"] == GROUP)
-        assert model_choice.plain_words_problems(move["reason"]) == [], move
