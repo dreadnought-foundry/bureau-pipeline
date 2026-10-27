@@ -437,7 +437,9 @@ class _Card:
     def __init__(self, comments, *, description: str = ONE_OFF_BODY,
                  labels=ONE_OFF_LABELS, lane: str = "Planning",
                  blocked_by=(), has_children: bool = False, history=(),
-                 relations_fail: bool = False, history_fail: bool = False):
+                 relations_fail: bool = False, history_fail: bool = False,
+                 blocker_epics=(), blocker_cards=(),
+                 epic_read_fail=(), card_read_fail=()):
         self.comments = list(comments)
         self.description = description
         self.labels = list(labels)
@@ -452,6 +454,15 @@ class _Card:
         self.history = [dict(row) for row in history]
         self.relations_fail = relations_fail
         self.history_fail = history_fail
+        #: The sweep's two reads of an open blocker (DRE-7962), answered by
+        #: identifier: `reconcile._blocker_epic`'s and `_blocker_card`'s. A
+        #: blocker named in neither is a read nothing here expected, and the
+        #: sweep holds a blocker it cannot read. Each read is recorded.
+        self.blocker_epics = {row["identifier"]: row for row in blocker_epics}
+        self.blocker_cards = {row["identifier"]: row for row in blocker_cards}
+        self.epic_read_fail = set(epic_read_fail)
+        self.card_read_fail = set(card_read_fail)
+        self.blocker_reads: list[tuple[str, str]] = []
         self.posted: list[tuple[str, str]] = []
         self.labelled: list[tuple[str, str]] = []
         self.states: list[tuple[str, str]] = []
@@ -480,8 +491,21 @@ class _Card:
         def gql(query, variables=None, **kw):
             # The one single-issue read the epic wait makes (DRE-6651): its
             # formal relations with their states, and whether it has children.
-            # Anything else is a read nothing here expected.
+            # Anything else is a read nothing here expected — except the
+            # sweep's two reads of an open blocker (DRE-7962).
             if "inverseRelations" not in query:
+                flat = " ".join(query.split())
+                ident = (variables or {}).get("id")
+                for kind, marker, rows, failing in (
+                        ("epic", "labels(first: 10)", self.blocker_epics, self.epic_read_fail),
+                        ("card", "parent {", self.blocker_cards, self.card_read_fail)):
+                    if marker not in flat:
+                        continue
+                    self.blocker_reads.append((kind, ident))
+                    if ident in failing:
+                        raise linear_ops.LinearError("Linear is down")
+                    if ident in rows:
+                        return {"issue": rows[ident]}
                 raise AssertionError(f"an unstubbed Linear read: {query[:80]!r}")
             if self.relations_fail:
                 raise linear_ops.LinearError("Linear is down")
@@ -1236,6 +1260,166 @@ class TestTheReplayFixture:
         assert planning_shape.shape_on([c["body"] for c in doc["comments"]]) == "epic"
 
 
+# DRE-7962: the wait reads a blocker the way the sweep's return pass does —
+# `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`. Two open
+# blockers count as cleared there (DRE-7831): an In Progress blocker epic that
+# is built out, and a PROOF card whose epic is Done or built out. The wait
+# read only `prose_blockers.TERMINAL`, so the sweep returned DRE-7283 to
+# Planning behind built-out DRE-7282, `decide` parked it in Queued again, and
+# the two lanes bounced it 148 times in two weeks.
+BLOCKER = "DRE-6587"  # the replay's own blocker, In Progress
+PROOF, PROOF_PARENT, PLAIN = "DRE-6590", "DRE-6591", "DRE-6401"
+BLOCKED_AT = "2026-10-25T18:00:00.000Z"
+
+
+def _kid(identifier, state, *, title="a build card"):
+    """One child as `epic_cap.IN_MOTION_NODE` selects it."""
+    return {
+        "identifier": identifier, "title": title, "state": {"name": state},
+        "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+        "children": {"nodes": []},
+    }
+
+
+def _proof_kid(identifier, state="Queued"):
+    return _kid(identifier, state, title="PROOF: the blocking epic works live")
+
+
+def _blocker_epic(identifier, kids, *, state="In Progress"):
+    """A blocker epic as `reconcile._blocker_epic`'s read returns it."""
+    return {
+        "identifier": identifier, "title": f"[EPIC] bureau-pipeline: {identifier}",
+        "priority": 3, "createdAt": BLOCKED_AT, "state": {"name": state},
+        "children": {"nodes": list(kids), "pageInfo": {"hasNextPage": False}},
+    }
+
+
+def _blocker_card(identifier, *, title="an ordinary card", parent=None,
+                  parent_state="Done", state="In Review"):
+    """A blocker as `reconcile._blocker_card`'s read returns it: its title
+    and its parent."""
+    return {
+        "identifier": identifier, "title": title, "state": {"name": state},
+        "parent": ({"identifier": parent, "state": {"name": parent_state}}
+                   if parent else None),
+    }
+
+
+def _proof_card(*, parent_state="Done", state="In Review"):
+    return _blocker_card(PROOF, title="PROOF: the parent epic works live",
+                         parent=PROOF_PARENT, parent_state=parent_state, state=state)
+
+
+#: DRE-7282's shape: its one build card Done, only its proof open.
+BUILT_OUT = _blocker_epic(BLOCKER, [_kid("DRE-6588", "Done"), _proof_kid("DRE-6593")])
+#: A build card still In Progress, so not built out.
+NOT_BUILT_OUT = _blocker_epic(BLOCKER, [_kid("DRE-6588", "In Progress"), _proof_kid("DRE-6593")])
+#: The proof's parent, built out by the same reading.
+PARENT_BUILT_OUT = _blocker_epic(
+    PROOF_PARENT, [_kid("DRE-6592", "Done"), _proof_kid(PROOF, "In Review")])
+PARENT_NOT_BUILT_OUT = _blocker_epic(
+    PROOF_PARENT, [_kid("DRE-6592", "In Progress"), _proof_kid(PROOF, "In Review")])
+
+
+class _StrictBoard:
+    """One epic still to be planned, E, answered both ways: the wait's own
+    read (`_WAIT_QUERY`), the sweep's batched epic record (`$numbers`), and the
+    sweep's two blocker reads — so `epic_wait` and the sweep's strict gate read
+    one board and can be compared."""
+
+    E = "DRE-6589"
+
+    def __init__(self, blocked_by, *, epics=(), cards=(), epic_fail=(), card_fail=()):
+        self.blocked_by = list(blocked_by)
+        self.epics = {e["identifier"]: e for e in epics}
+        self.cards = {c["identifier"]: c for c in cards}
+        self.epic_fail, self.card_fail = set(epic_fail), set(card_fail)
+
+    def _relations(self):
+        return {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": [
+            {"type": "blocks", "issue": {"identifier": i, "state": {"name": s}}}
+            for i, s in self.blocked_by]}
+
+    def gql(self, query, variables=None, **_kw):
+        import linear_ops
+
+        flat = " ".join(query.split())
+        ident = (variables or {}).get("id")
+        if "$numbers" in query:
+            return {"issues": {"pageInfo": {"hasNextPage": False, "endCursor": None},
+                               "nodes": [{
+                                   "id": "uuid", "identifier": self.E,
+                                   "description": "an epic still to be planned",
+                                   "state": {"name": "Queued"},
+                                   "children": {"nodes": []}, "history": {"nodes": []},
+                                   "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+                                   "inverseRelations": self._relations()}]}}
+        if "inverseRelations" in flat:
+            return {"issue": {"identifier": self.E, "children": {"nodes": []},
+                              "inverseRelations": self._relations()}}
+        for marker, rows, failing in (("labels(first: 10)", self.epics, self.epic_fail),
+                                      ("parent {", self.cards, self.card_fail)):
+            if marker in flat:
+                if ident in failing:
+                    raise linear_ops.LinearError("Linear is down")
+                return {"issue": rows.get(ident)}
+        raise AssertionError(f"an unstubbed Linear read: {flat[:80]!r}")
+
+    def both(self):
+        """`(epic_wait's wait, the sweep's strict gate holds)` on this board."""
+        import linear_ops
+        os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+        import reconcile
+
+        with patch.object(linear_ops, "gql", side_effect=self.gql), \
+                patch.object(linear_ops, "lane_history", side_effect=lambda i, **_kw: []):
+            reconcile.reset_sweep_cards()
+            waits = planning_route._read_epic_wait(linear_ops, self.E).wait
+            reconcile.reset_sweep_cards()
+            holds = reconcile.epic_blockers_unmet(self.E, release_at_build_done=False)
+            reconcile.reset_sweep_cards()
+        return waits, holds
+
+
+#: Every kind of open blocker the sweep's strict rule tells apart, with the
+#: answer it gives: released (`False`) or held (`True`).
+STRICT_CASES = {
+    "a built-out In Progress epic": (False, dict(
+        blocked_by=[(BLOCKER, "In Progress")], epics=[BUILT_OUT])),
+    "an In Progress epic not built out": (True, dict(
+        blocked_by=[(BLOCKER, "In Progress")], epics=[NOT_BUILT_OUT])),
+    "an epic not In Progress": (True, dict(
+        blocked_by=[(BLOCKER, "Green Light")],
+        cards=[_blocker_card(BLOCKER, title=f"[EPIC] {BLOCKER}", state="Green Light")])),
+    "a proof of a Done epic": (False, dict(
+        blocked_by=[(PROOF, "In Review")], cards=[_proof_card()])),
+    "a proof of a built-out epic": (False, dict(
+        blocked_by=[(PROOF, "In Review")], epics=[PARENT_BUILT_OUT],
+        cards=[_proof_card(parent_state="In Progress")])),
+    "a proof of an epic not built out": (True, dict(
+        blocked_by=[(PROOF, "In Review")], epics=[PARENT_NOT_BUILT_OUT],
+        cards=[_proof_card(parent_state="In Progress")])),
+    "an open ordinary card": (True, dict(
+        blocked_by=[(PLAIN, "Todo")], cards=[_blocker_card(PLAIN, state="Todo")])),
+    "an In Progress ordinary card": (True, dict(
+        blocked_by=[(PLAIN, "In Progress")],
+        epics=[{**_blocker_card(PLAIN, state="In Progress"),
+                "children": {"nodes": [], "pageInfo": {"hasNextPage": False}}}],
+        cards=[_blocker_card(PLAIN, state="In Progress")])),
+    "a failed built-out read": (True, dict(
+        blocked_by=[(BLOCKER, "In Progress")], epic_fail=[BLOCKER])),
+    "a failed proof read": (True, dict(
+        blocked_by=[(PROOF, "In Review")], card_fail=[PROOF])),
+    "a Done blocker": (False, dict(blocked_by=[(BLOCKER, "Done")])),
+    "a built-out epic beside an open card": (True, dict(
+        blocked_by=[(BLOCKER, "In Progress"), (PLAIN, "Todo")], epics=[BUILT_OUT],
+        cards=[_blocker_card(PLAIN, state="Todo")])),
+    "a built-out epic and its proof": (False, dict(
+        blocked_by=[(BLOCKER, "In Progress"), (PROOF, "In Review")],
+        epics=[BUILT_OUT, PARENT_BUILT_OUT], cards=[_proof_card(parent_state="In Progress")])),
+}
+
+
 class TestABlockedEpicWaits:
     def test_dre_6589_waits_on_dre_6587(self, tmp_path, capsys):
         written, said, card = _replayed(tmp_path, capsys)
@@ -1329,6 +1513,123 @@ class TestABlockedEpicWaits:
         assert written["route"] == "one-off"
         assert written["wait"] == "false"
 
+    # -- DRE-7962: the sweep's strict rule, one reading ----------------------
+
+    def test_a_built_out_blocker_epic_is_planned_not_held(self, tmp_path, capsys):
+        """DRE-7283 behind DRE-7282: no children, no In Progress history, and
+        its one open blocker an In Progress epic with only its proof open. The
+        sweep returns it to Planning; the wait must not park it again."""
+        written, said, card = _replayed(
+            tmp_path, capsys, blocker_epics=[BUILT_OUT],
+            blocked_by=[{"identifier": BLOCKER, "state": "In Progress"}])
+        assert written["route"] == "epic"
+        assert written["wait"] == "false"
+        assert written["waits_on"] == ""
+        assert f"{BLOCKER} is built out" in said
+        assert card.posted == [] and card.states == []
+
+    @pytest.mark.parametrize("parent_state,epics", [
+        ("Done", []), ("In Progress", [PARENT_BUILT_OUT])], ids=["done", "built-out"])
+    def test_a_proof_of_a_done_or_built_out_epic_is_planned(
+            self, tmp_path, capsys, parent_state, epics):
+        written, said, _ = _replayed(
+            tmp_path, capsys, blocker_epics=epics,
+            blocker_cards=[_proof_card(parent_state=parent_state)],
+            blocked_by=[{"identifier": PROOF, "state": "In Review"}])
+        assert written["wait"] == "false"
+        assert written["waits_on"] == ""
+        assert f"{PROOF} is a proof of built-out epic {PROOF_PARENT}" in said
+
+    @pytest.mark.parametrize("blocked_by,epics,cards,waits_on", [
+        ([{"identifier": PLAIN, "state": "Todo"}], [],
+         [_blocker_card(PLAIN, state="Todo")], f"{PLAIN} (Todo)"),
+        ([{"identifier": BLOCKER, "state": "In Progress"}], [NOT_BUILT_OUT], [],
+         f"{BLOCKER} (In Progress)"),
+        ([{"identifier": BLOCKER, "state": "Green Light"}], [],
+         [_blocker_card(BLOCKER, title=f"[EPIC] {BLOCKER}", state="Green Light")],
+         f"{BLOCKER} (Green Light)"),
+        ([{"identifier": PROOF, "state": "In Review"}], [PARENT_NOT_BUILT_OUT],
+         [_proof_card(parent_state="In Progress")], f"{PROOF} (In Review)"),
+    ], ids=["open-card", "epic-not-built-out", "epic-not-in-progress", "proof-not-built-out"])
+    def test_a_blocker_the_sweep_holds_still_waits(
+            self, tmp_path, capsys, blocked_by, epics, cards, waits_on):
+        written, said, _ = _replayed(tmp_path, capsys, blocked_by=blocked_by,
+                                     blocker_epics=epics, blocker_cards=cards)
+        assert written["wait"] == "true"
+        assert written["waits_on"] == waits_on
+        assert waits_on in said
+
+    def test_only_the_blocker_that_holds_is_named(self, tmp_path, capsys):
+        written, _, _ = _replayed(
+            tmp_path, capsys, blocker_epics=[BUILT_OUT],
+            blocker_cards=[_blocker_card(PLAIN, state="Todo")],
+            blocked_by=[{"identifier": BLOCKER, "state": "In Progress"},
+                        {"identifier": PLAIN, "state": "Todo"}])
+        assert written["wait"] == "true"
+        assert written["waits_on"] == f"{PLAIN} (Todo)"
+
+    def test_a_built_out_read_that_fails_holds_that_blocker(self, tmp_path, capsys):
+        """The sweep holds a blocker it cannot read (`_not_built_out`), so the
+        wait does too — the return pass never sends back an epic the wait
+        would then hold, and the wait never plans one the sweep would hold."""
+        written, said, card = _replayed(
+            tmp_path, capsys, epic_read_fail=[BLOCKER],
+            blocked_by=[{"identifier": BLOCKER, "state": "In Progress"}])
+        assert ("epic", BLOCKER) in card.blocker_reads
+        assert written["wait"] == "true"
+        assert written["waits_on"] == f"{BLOCKER} (In Progress)"
+        assert "could not be read" in said and "Linear is down" in said
+
+    def test_a_proof_read_that_fails_holds_that_blocker(self, tmp_path, capsys):
+        written, said, card = _replayed(
+            tmp_path, capsys, card_read_fail=[PROOF],
+            blocked_by=[{"identifier": PROOF, "state": "In Review"}])
+        assert ("card", PROOF) in card.blocker_reads
+        assert written["wait"] == "true"
+        assert written["waits_on"] == f"{PROOF} (In Review)"
+        assert "title and parent could not be read" in said and "Linear is down" in said
+
+    @pytest.mark.parametrize("planned", [
+        {"has_children": True},
+        {"history": [{"createdAt": BLOCKED_AT, "toState": {"name": "In Progress"}}]},
+    ], ids=["children", "green-light"])
+    def test_a_planned_epic_reads_no_blocker(self, tmp_path, capsys, planned):
+        """The sweep's blocker reads come after the guard: an epic planned
+        before is re-planned, whatever its blockers say, at no extra read."""
+        written, _, card = _replayed(
+            tmp_path, capsys, blocker_epics=[NOT_BUILT_OUT],
+            blocked_by=[{"identifier": BLOCKER, "state": "In Progress"}], **planned)
+        assert written["wait"] == "false"
+        assert card.blocker_reads == []
+
+    @pytest.mark.parametrize("case", list(STRICT_CASES))
+    def test_the_wait_and_the_sweeps_strict_gate_agree(self, case):
+        """One reading of the rule: on the same board, `epic_wait` holds
+        exactly when `epic_blockers_unmet(..., release_at_build_done=False)`
+        holds — so the return pass never sends back an epic the wait parks."""
+        held, board = STRICT_CASES[case]
+        waits, holds = _StrictBoard(**board).both()
+        assert holds is held, f"the sweep's strict gate changed on {case}"
+        assert waits is holds, f"{case}: the wait says {waits}, the sweep {holds}"
+
+    def test_the_answer_is_the_sweeps_own(self, tmp_path, capsys, monkeypatch):
+        """Not a copy: change the sweep's reading and the wait follows it."""
+        os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
+        import reconcile
+
+        monkeypatch.setattr(reconcile, "card_relation_blockers",
+                            lambda card: ({}, {PLAIN: "none"}))
+        written, said, _ = _replayed(
+            tmp_path, capsys, blocked_by=[{"identifier": PLAIN, "state": "Todo"}])
+        assert written["wait"] == "false"
+        monkeypatch.setattr(reconcile, "card_relation_blockers",
+                            lambda card: ({PLAIN: None}, {}))
+        monkeypatch.setattr(reconcile, "_proof_blocker",
+                            lambda blocker: (PROOF_PARENT, None))
+        written, _, _ = _replayed(
+            tmp_path, capsys, blocked_by=[{"identifier": PLAIN, "state": "Todo"}])
+        assert written["wait"] == "false"
+
 
 def _gate(step: dict) -> str:
     return " ".join(str(step.get("if") or "").split())
@@ -1351,6 +1652,14 @@ class TestPlanYmlParksAWaitingEpic:
         assert "Backlog" not in run
         for absent in ("plan-cycle", "cycle-start", "open_attempt", "Plan heartbeat"):
             assert absent not in run
+
+    def test_the_receipt_says_when_the_epic_really_is_planned(self):
+        """DRE-7962: the sweep's rule, not "when every one is Done" — an epic
+        behind a built-out epic or its proof is planned, not held."""
+        line = re.search(r'WAITS="([^"]+)"', _step(WAIT_STEP)["run"]).group(1)
+        assert "when every one is Done" not in line
+        assert "built out" in line and "proof" in line
+        assert line.endswith("nothing is asked of anyone until then.")
 
     def test_route_carries_the_one_new_clause(self):
         assert _gate(_step("Route — plan or activate")) == (
@@ -1432,6 +1741,20 @@ class TestTheWaitActIsDeclared:
         row = next(a for a in acts["acts"] if a["name"] == WAIT_ACT)
         assert "waits in Queued" in row["means"]
         assert "Backlog" not in row["means"]
+
+    def test_the_act_row_states_the_sweeps_release_rule(self):
+        """DRE-7962: `why` and `cadence_why` describe the rule the code reads —
+        the sweep's strict one — and both failed-read rules."""
+        acts = json.loads((ROOT / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+        row = next(a for a in acts["acts"] if a["name"] == WAIT_ACT)
+        for stale in ("is not in `prose_blockers.TERMINAL`", "any read that fails writes",
+                      "once every blocker is terminal"):
+            assert stale not in row["why"], stale
+        assert "every formal blocker of the epic is terminal" not in row["cadence_why"]
+        for text in (row["why"], row["cadence_why"]):
+            assert "built out" in text and "proof" in text
+        assert "release_at_build_done=False" in row["why"]
+        assert "holds that blocker" in row["why"]
 
     def test_the_registry_checks_clean(self):
         import pipeline_act
