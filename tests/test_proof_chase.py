@@ -387,6 +387,23 @@ def test_a_copy_of_the_hold_buys_no_second_chase(monkeypatch, capsys, shown):
     assert h.fired == []
 
 
+@pytest.mark.parametrize("copy", [False, True], ids=["the hold", "a copy after the chase"])
+def test_a_chased_hold_stays_held_on_the_lane_read(monkeypatch, capsys, copy):
+    """The lane read sees the chase receipt in its window — a voice it cannot
+    tell from the pipeline's — so a chased card is named held at no read,
+    and so is one whose hold was copied after the chase."""
+    held = event_hold(40)
+    nodes = [held, chase_receipt(30, held), *([event_hold(5)] if copy else [])]
+    board = _hand(nodes)
+    h = Harness(monkeypatch, board, states={CARD: state("dead")})
+    tally = h.sweep()
+    lines = _about(_lines(capsys))
+    assert ("thread", CARD) not in board.reads
+    assert ("card", CARD) not in board.reads
+    assert h.fired == [] and tally.held == 1
+    assert any("condition 4 (hold): held by" in line and EVENT in line for line in lines)
+
+
 def test_a_copy_newer_than_a_day_does_not_hide_a_hold_that_has_stood(
         monkeypatch, capsys):
     """The lane read weighs the OLDEST hold the window shows, as the thread

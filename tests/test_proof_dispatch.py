@@ -206,6 +206,7 @@ def fake_voices(nodes, viewer, *, card):
     for node in nodes:
         who = (node.get("user") or {}).get("id")
         kind = (spoken_thread.CEO_VIA_CONSOLE if who == SIGNED
+                else spoken_thread.UNKNOWN if not viewer
                 else spoken_thread.PIPELINE if who == viewer
                 else spoken_thread.PERSON)
         out.append(spoken_thread.Voice(kind, f"{kind} label",
