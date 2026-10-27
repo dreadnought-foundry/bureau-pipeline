@@ -1537,38 +1537,29 @@ class _Pass:
         until = proof_record.time_only(line)
         if until is not None and until <= self.now:
             return None  # a time that has passed: the thread read may lift it
-        if self._chase_shown(voices, marks[-1]):
-            return None  # an event hold old enough to chase: the thread read decides
+        partial = linear_ops.window_is_partial(card.get("comments"))
+        if self._chase(proof_record.open_holds_at(voices), voices, unseen=partial):
+            return None  # a chase the window shows owed: the thread read decides
         return f"held by {line}{_lifts_at(until)}"
 
-    def _chase_shown(self, voices: list, newest: int) -> bool:
-        """The lane read's pre-filter for a chase (DRE-7967): the newest hold
-        the window shows is an event hold that has stood `chase_after_hours`,
-        and the window shows no `🔬 proof-run` receipt after it and none
-        counted `chase` at all. The thread read decides."""
-        started = _when(voices[newest].created_at)
-        if (started is None or not _is_event_hold(voices[newest].body or "")
-                or hold_deadline.phase(CHASE_TAG, started, self.now) == hold_deadline.WAITING):
-            return False
-        return not any(i > newest or got.count == CHASE_COUNT
-                       for i, v in enumerate(voices)
-                       if (got := proof_run_state.receipt(v.body or "")) is not None)
-
-    def _chase(self, held: list, voices: list) -> tuple | None:
+    def _chase(self, held: list, voices: list, *, unseen: bool = False) -> tuple | None:
         """`(line, at)` of the card's OLDEST open event hold when a chase is
         owed on it (DRE-7967), else None. Owed when every open hold is an
         event hold, the oldest has stood the `proof-waiting` row's
         `chase_after_hours`, no `chase` receipt is newer than the oldest, and
         no receipt of any count is newer than the newest — one chase per
         standing hold, so a copy posted later buys none. A time that cannot
-        be read is never owed."""
+        be read is never owed. The lane read asks the same over its window,
+        so it names held only a card the thread read would refuse too; with
+        `unseen` — a window that may hide an older hold — the age is not read,
+        and the thread read weighs it."""
         if not held or not all(_is_event_hold(line) for line, _ in held):
             return None
         times = [_when(at) for _, at in held]
         if any(t is None for t in times):
             return None
         oldest, newest = min(times), max(times)
-        if hold_deadline.phase(CHASE_TAG, oldest, self.now) == hold_deadline.WAITING:
+        if not unseen and hold_deadline.phase(CHASE_TAG, oldest, self.now) == hold_deadline.WAITING:
             return None
         for voice in voices:
             got = (proof_run_state.receipt(voice.body or "")

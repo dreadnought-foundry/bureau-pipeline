@@ -494,7 +494,10 @@ of <PT>`, counted `(chase)`, after one `chase:` line naming the hold and how
 long it has stood. It is chased once per standing hold — no `chase` receipt
 may be newer than the oldest hold and no receipt of any count newer than the
 newest, so a copy of the hold posted later buys no second chase, and a chase
-whose run dies or never starts has spent it. It posts no
+whose run dies or never starts has spent it. The lane read applies the same
+rule to the open holds its comment window shows, so it names held only a card
+the thread read would refuse too; a window that may hide an older hold leaves
+the hold's age to the thread read. It posts no
 `🔬 proof-observed`, lifts nothing and re-posts nothing, so the hold's clock
 and due date stand; if the event has not come, the late list (DRE-7965)
 names the hold at its due date. Only `Hand-work` is chased: a record's
