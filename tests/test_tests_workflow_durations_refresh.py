@@ -9,10 +9,10 @@ bureau-pipeline #1168, a docs-only change, failed on files other pull requests
 had added (run 39145109282, job 117727253638: `assert 693 >= (0.9 * 771)`).
 
 The nightly `schedule` run of `.github/workflows/tests.yml` runs every non-walk
-test file with `pytest -v` across its four `scripts unit tests (part N)` jobs,
+test file with `pytest -v` across its five `scripts unit tests (part N)` jobs,
 so a green nightly's logs are a whole measurement. One job reads them:
 
-  * it runs on the `schedule` event and on no other, waits on the four parts,
+  * it runs on the `schedule` event and on no other, waits on the five parts,
     and runs only when each of them succeeded or failed — and a failed part
     is measured only when `unit_test_parts.py coverage-only` says it is red
     on the durations-coverage tests and on nothing else (DRE-7726: under the
@@ -21,7 +21,7 @@ so a green nightly's logs are a whole measurement. One job reads them:
   * it asks `unit_test_parts.py due` whether fewer than 95% of the files carry
     recorded seconds — and when not, it opens nothing and writes the coverage
     it read to the job summary;
-  * when due, it re-measures from this run's own four part logs
+  * when due, it re-measures from this run's own five part logs
     (`unit_test_parts.py refresh`), pushes `config/unit-test-durations.json`
     and no other path to the one literal branch `bot/test-durations`, and
     opens a pull request from it, or updates the one already open — never a
@@ -123,7 +123,7 @@ def test_the_job_runs_on_the_schedule_event_only():
     assert _gate("schedule", "success")
 
 
-def test_the_job_waits_on_the_four_parts_and_runs_when_they_finished():
+def test_the_job_waits_on_the_five_parts_and_runs_when_they_finished():
     # Rewritten for DRE-7726 (was ..._and_needs_them_all_green): a failed
     # `unit` no longer skips the job — the fetch step decides whether its red
     # parts are red only on the durations-coverage tests. A canceled or
@@ -137,7 +137,9 @@ def test_the_job_waits_on_the_four_parts_and_runs_when_they_finished():
     cond = str(job.get("if", ""))
     for status in ("failure()", "cancelled()", "success()"):
         assert status not in cond, cond
-    assert _jobs()["unit"]["strategy"]["matrix"]["part"] == [1, 2, 3, 4]
+    # Five since DRE-8122: part 4 of four took 24 to 29 minutes against its
+    # 30-minute cap and was canceled at it on five pull-request runs.
+    assert _jobs()["unit"]["strategy"]["matrix"]["part"] == [1, 2, 3, 4, 5]
 
 
 def test_the_branch_is_the_one_literal():
@@ -206,21 +208,21 @@ def test_under_the_margin_it_re_measures(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 3. The measurement: this run's own four part logs, through `refresh`.
+# 3. The measurement: this run's own five part logs, through `refresh`.
 # ---------------------------------------------------------------------------
 
 
-def test_the_logs_are_this_runs_four_finished_parts():
+def test_the_logs_are_this_runs_five_finished_parts():
     # Rewritten for DRE-7726 (was test_the_logs_are_this_runs_four_green_parts):
-    # a part that concluded `failure` is kept beside the green ones, four are
-    # still required, and the red ones go through `coverage-only` before
-    # anything is measured.
+    # a part that concluded `failure` is kept beside the green ones, every
+    # part is still required (five since DRE-8122), and the red ones go
+    # through `coverage-only` before anything is measured.
     step = _step("actions/jobs/")
     text = step["run"] + json.dumps(step.get("env", {}))
     assert "github.run_id" in text
     assert "scripts unit tests (part " in step["run"]
     assert '.conclusion == "success" or .conclusion == "failure"' in step["run"]
-    assert str(step.get("env", {}).get("PARTS")) == "4"
+    assert str(step.get("env", {}).get("PARTS")) == "5"
     assert "unit_test_parts.py coverage-only" in step["run"]
     _, job = _job()
     steps = job["steps"]
@@ -230,6 +232,18 @@ def test_the_logs_are_this_runs_four_finished_parts():
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
     _, job = _job()
     assert job.get("permissions", {}).get("actions") == "read"
+
+
+def test_the_fetch_expects_as_many_parts_as_unit_runs():
+    """`PARTS` is the one other place the parts are counted (DRE-8122). Left
+    behind when `matrix.part` grows, the fetch finds more finished parts than
+    it expects and refuses every nightly; left behind when it shrinks, it
+    never finds enough. Either way the record stops being re-measured."""
+    step = _step("actions/jobs/")
+    matrix = _jobs()["unit"]["strategy"]["matrix"]["part"]
+    assert str(step.get("env", {}).get("PARTS")) == str(len(matrix)), (
+        f"the fetch step expects {step.get('env', {}).get('PARTS')} finished "
+        f"parts, but `unit` runs {len(matrix)} ({matrix})")
 
 
 def test_the_record_is_rebuilt_by_the_refresh_command():
@@ -311,7 +325,8 @@ def _fetch(tmp_path: Path, parts: dict) -> tuple[subprocess.CompletedProcess,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "RUNNER_TEMP": str(tmp_path), "GITHUB_OUTPUT": str(output),
         "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
-        "RUN_ID": "39400000000", "PARTS": "4", "GH_CALLS": str(calls),
+        "RUN_ID": "39400000000", "PARTS": str(_step("actions/jobs/")["env"]["PARTS"]),
+        "GH_CALLS": str(calls),
         "FAKE_JOBS": str(tmp_path / "jobs.json"), "FAKE_LOGS": str(logs)})
     outputs = dict(line.split("=", 1) for line in output.read_text().splitlines()
                    if "=" in line)
@@ -321,17 +336,18 @@ def _fetch(tmp_path: Path, parts: dict) -> tuple[subprocess.CompletedProcess,
 def test_a_part_red_only_on_the_coverage_tests_is_measured(tmp_path):
     proc, outputs, _ = _fetch(tmp_path, {
         701: ("success", _log([])), 702: ("failure", _log(COVERAGE_FAILED)),
-        703: ("success", _log([])), 704: ("success", _log([]))})
+        703: ("success", _log([])), 704: ("success", _log([])),
+        705: ("success", _log([]))})
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert outputs["jobs"].split() == ["701", "702", "703", "704"], outputs
+    assert outputs["jobs"].split() == ["701", "702", "703", "704", "705"], outputs
     assert outputs["failed"].split() == ["702"], outputs
-    for job in (701, 702, 703, 704):
+    for job in (701, 702, 703, 704, 705):
         assert (tmp_path / "part-logs" / f"job-{job}.log").is_file()
 
 
-def test_four_green_parts_name_no_red_part(tmp_path):
+def test_five_green_parts_name_no_red_part(tmp_path):
     proc, outputs, _ = _fetch(tmp_path, {
-        job: ("success", _log([])) for job in (701, 702, 703, 704)})
+        job: ("success", _log([])) for job in (701, 702, 703, 704, 705)})
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert outputs["failed"] == "", outputs
 
@@ -341,7 +357,8 @@ def test_a_part_red_on_another_test_ends_the_job_before_measuring(tmp_path):
     proc, outputs, _ = _fetch(tmp_path, {
         701: ("success", _log([])),
         702: ("failure", _log(COVERAGE_FAILED + [other])),
-        703: ("success", _log([])), 704: ("success", _log([]))})
+        703: ("success", _log([])), 704: ("success", _log([])),
+        705: ("success", _log([]))})
     assert proc.returncode != 0
     errors = [line for line in proc.stdout.splitlines()
               if line.startswith("::error::")]
@@ -352,7 +369,8 @@ def test_a_part_red_on_another_test_ends_the_job_before_measuring(tmp_path):
 def test_a_red_part_with_no_summary_line_ends_the_job(tmp_path):
     proc, outputs, _ = _fetch(tmp_path, {
         701: ("success", _log([])), 702: ("failure", _log([], summary=False)),
-        703: ("success", _log([])), 704: ("success", _log([]))})
+        703: ("success", _log([])), 704: ("success", _log([])),
+        705: ("success", _log([]))})
     assert proc.returncode != 0
     assert "::error::" in proc.stdout, proc.stdout
     assert "jobs" not in outputs, outputs
@@ -361,9 +379,10 @@ def test_a_red_part_with_no_summary_line_ends_the_job(tmp_path):
 def test_a_canceled_part_is_not_a_whole_measurement(tmp_path):
     proc, outputs, calls = _fetch(tmp_path, {
         701: ("success", _log([])), 702: ("cancelled", _log([])),
-        703: ("success", _log([])), 704: ("failure", _log(COVERAGE_FAILED))})
+        703: ("success", _log([])), 704: ("failure", _log(COVERAGE_FAILED)),
+        705: ("success", _log([]))})
     assert proc.returncode != 0
-    assert "found 3" in proc.stdout and "not 4" in proc.stdout, proc.stdout
+    assert "found 4" in proc.stdout and "not 5" in proc.stdout, proc.stdout
     assert not [c for c in calls if c.endswith("/logs")], calls
     assert "jobs" not in outputs, outputs
 
