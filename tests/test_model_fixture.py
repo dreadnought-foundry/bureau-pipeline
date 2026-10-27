@@ -659,3 +659,210 @@ def test_the_id_scan_reads_strings_and_docstrings_and_skips_comments():
             f"# {model} in a comment is history\n"
             f"MODEL = '{model}'\n")
     assert bare_ids(text) == [(3, model), (5, model)]
+
+
+# --------------------------------------------------------------------------- #
+# 8. The rest of the model tests prove theirs on documents too (DRE-8018)      #
+# --------------------------------------------------------------------------- #
+
+# The eleven model tests that built their trees with the generator and are not
+# the old route's or the generator's own. When the generator goes (DRE-6982),
+# nothing here breaks: each builds its trees with `regenerate=False` and reads
+# every choice off a home document or the tree's own `code_defaults()`.
+HOME_DOCUMENT_TREES = (
+    "tests/test_model_policy.py",
+    "tests/test_review_separation.py",
+    "tests/test_model_fallback.py",
+    "tests/test_model_adoption_actions.py",
+    "tests/test_model_home.py",
+    "tests/test_model_projects_schema.py",
+    "tests/test_model_rules_and_markers.py",
+    "tests/test_review_separation_every_builder.py",
+    "tests/test_project_model_exceptions.py",
+    "tests/test_model_choice_policy.py",
+    "tests/test_proof_group.py",
+)
+# The keys of the frozen `models.yaml` that are choices: DRE-6983 re-freezes
+# that file with none of them, so a test reads them off `fixture_home()`.
+CHOICE_KEYS = ("ladders", "default_ladder", "agents", "ungrouped", "projects", "kinds")
+FROZEN_READERS = ("fixture_config", "fixture_text")
+LITERAL = "_FALLBACK_MODEL_CONFIG"
+
+
+def _called(node, names) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+    return name in names
+
+
+def _bindings(body) -> list[tuple[str, ast.AST]]:
+    """`(name, value)` for each plain name assigned in `body`, not descending
+    into a nested function or class."""
+    found = []
+    stack = list(body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                             ast.Lambda)):
+            continue
+        if isinstance(node, ast.Assign):
+            found += [(t.id, node.value) for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            if isinstance(node.target, ast.Name):
+                found.append((node.target.id, node.value))
+        stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def frozen_choice_reads(text: str) -> list[tuple[int, str]]:
+    """`(line, what)` for every choice `text` reads off the frozen `models.yaml`:
+    a `ladder(...)` whose first argument is frozen, and a subscript (or `.get`)
+    of a frozen value by one of `CHOICE_KEYS`.
+
+    Frozen is a call of `fixture_config()`/`fixture_text()`, of a function that
+    returns one, or a name bound to a value built from any of those — looked up
+    in the function it is used in, then in the module."""
+    tree = ast.parse(text)
+    functions = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    readers = set(FROZEN_READERS)
+    scopes = {None: tree.body, **{fn: fn.body for fn in functions}}
+    frozen: dict = {scope: set() for scope in scopes}
+    bound = {scope: {name for name, _ in _bindings(body)} for scope, body in scopes.items()}
+
+    def is_frozen(node, scope) -> bool:
+        for sub in ast.walk(node):
+            if _called(sub, readers):
+                return True
+            if isinstance(sub, ast.Name):
+                if scope is not None and sub.id in bound[scope]:
+                    if sub.id in frozen[scope]:
+                        return True
+                elif sub.id in frozen[None]:
+                    return True
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for fn in functions:
+            if fn.name not in readers and any(
+                    isinstance(r, ast.Return) and r.value is not None
+                    and is_frozen(r.value, fn) for r in ast.walk(fn)):
+                readers.add(fn.name)
+                changed = True
+        for scope, body in scopes.items():
+            for name, value in _bindings(body):
+                if name not in frozen[scope] and is_frozen(value, scope):
+                    frozen[scope].add(name)
+                    changed = True
+
+    def scope_of(target):
+        inner = None
+        for fn in functions:
+            if fn.lineno <= target.lineno <= (fn.end_lineno or fn.lineno):
+                if inner is None or fn.lineno >= inner.lineno:
+                    inner = fn
+        return inner
+
+    def head(node, scope) -> bool:
+        """`node` itself is frozen: a reader's call or a frozen name, not an
+        expression that merely contains one."""
+        if _called(node, readers):
+            return True
+        if isinstance(node, ast.Name):
+            if scope is not None and node.id in bound[scope]:
+                return node.id in frozen[scope]
+            return node.id in frozen[None]
+        return False
+
+    found = []
+    for node in ast.walk(tree):
+        scope = scope_of(node) if hasattr(node, "lineno") else None
+        if _called(node, {"ladder"}) and node.args and head(node.args[0], scope):
+            found.append((node.lineno, "ladder"))
+        elif (isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant)
+              and node.slice.value in CHOICE_KEYS and head(node.value, scope)):
+            found.append((node.lineno, node.slice.value))
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "get" and node.args
+              and isinstance(node.args[0], ast.Constant)
+              and node.args[0].value in CHOICE_KEYS and head(node.func.value, scope)):
+            found.append((node.lineno, node.args[0].value))
+    return sorted(found)
+
+
+def literal_mentions(text: str) -> list[int]:
+    """The lines of `text` naming the generated literal."""
+    return [n for n, line in enumerate(text.splitlines(), 1) if LITERAL in line]
+
+
+def test_the_eleven_are_the_files_the_card_names_and_each_exists():
+    assert len(HOME_DOCUMENT_TREES) == len(set(HOME_DOCUMENT_TREES)) == 11
+    assert not set(HOME_DOCUMENT_TREES) & set(PLANNER_PATH)
+    for rel in HOME_DOCUMENT_TREES:
+        assert (ROOT / rel).is_file(), rel
+
+
+def test_every_one_of_the_eleven_builds_its_trees_without_the_generator():
+    calls = {rel: fixture_tree_calls(_source(rel)) for rel in HOME_DOCUMENT_TREES}
+    # Each of the eleven builds a tree: a file with no call proves nothing here.
+    assert all(calls.values()), {rel: c for rel, c in calls.items() if not c}
+    regenerating = {rel: [line for line, off in c if not off] for rel, c in calls.items()}
+    assert not any(regenerating.values()), regenerating
+
+
+def test_none_of_the_eleven_names_the_generator_or_its_refusal():
+    found = {rel: old_route_mentions(_source(rel)) for rel in HOME_DOCUMENT_TREES}
+    assert not any(found.values()), found
+
+
+def test_none_of_the_eleven_reads_a_choice_off_the_frozen_config():
+    found = {rel: frozen_choice_reads(_source(rel)) for rel in HOME_DOCUMENT_TREES}
+    assert not any(found.values()), found
+
+
+def test_only_the_rename_pin_names_the_generated_literal():
+    """Renaming the literal (DRE-6982) touches no test of these but the one
+    assertion that `code_defaults()` is the normalized literal."""
+    named = {rel: literal_mentions(_source(rel))
+             for rel in (*HOME_DOCUMENT_TREES, "tests/test_model_effort.py")}
+    pin = named.pop("tests/test_model_fallback.py")
+    assert not any(named.values()), named
+    assert len(pin) == 1, pin
+    line = _source("tests/test_model_fallback.py").splitlines()[pin[0] - 1]
+    assert "code_defaults()" in line and "_normalize_config" in line, line
+
+
+def test_the_choice_scan_finds_each_way_a_choice_is_read_off_the_frozen_file():
+    text = (
+        "FROZEN = model_fixture.fixture_config()\n"                  # 1
+        "A = model_fixture.ladder(FROZEN, 'workhorse')\n"            # 2
+        "B = ladder(fixture_config(), 'judgement')\n"                # 3
+        "C = FROZEN['agents']\n"                                     # 4
+        "D = FROZEN['effort']\n"                                     # 5
+        "raw = yaml.safe_load(fixture_text())\n"                     # 6
+        "E = raw['ladders']\n"                                       # 7
+        "def _canonical():\n"                                        # 8
+        "    return model_fixture.fixture_config()\n"                # 9
+        "F = _canonical()['kinds']\n"                                # 10
+        "G = _canonical().get('projects')\n"                         # 11
+        "H = ladder(fixture_home(), 'workhorse')\n"                  # 12
+        "def scoped(tree):\n"                                        # 13
+        "    raw = yaml.safe_load(tree.read_text())\n"               # 14
+        "    return raw['agents']\n"                                 # 15
+        "def inherited():\n"                                         # 16
+        "    return raw['default_ladder']\n"                         # 17
+        "I = FROZEN['review_separation']['rules']\n"                 # 18
+        "J = _canonical()['ungrouped']\n"                            # 19
+    )
+    assert frozen_choice_reads(text) == [
+        (2, "ladder"), (3, "ladder"), (4, "agents"), (7, "ladders"), (10, "kinds"),
+        (11, "projects"), (17, "default_ladder"), (19, "ungrouped")]
+
+
+def test_the_literal_scan_finds_the_name():
+    text = f"x = 1\nmirror = mf.{LITERAL}['effort']\n"
+    assert literal_mentions(text) == [2]
