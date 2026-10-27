@@ -462,7 +462,7 @@ whose unmet rows are all gaps — a cause word (DRE-6607) or a history row
 thing, and is left to the gate (DRE-7953): it merges on its approval and its
 PROOF closes with one fix card (DRE-7952), so the dispatcher posts no hold and
 no question — before this it put the cause rows to the operator through
-`proof_cause_park.park` (DRE-6612, DRE-6837). A gap row beside a plain one is
+`proof_cause_park.park` (DRE-6612), leaving the card In Review (DRE-6837). A gap row beside a plain one is
 re-run as before (DRE-6610), and a record the critic sent back is re-run on
 its findings. A cause hold posted before never holds the card off the record
 at its head. When the gate's two re-runs are spent and every unmet row is a
