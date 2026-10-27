@@ -258,6 +258,8 @@ def test_the_limits_are_the_ones_the_walks_run_under():
     run_all = inspect.signature(helper().run_all).parameters["limit"].default
     run_walks = inspect.signature(unit_test_parts.run_walks).parameters["limit"].default
     assert run_all is None or run_all == helper().CASE_LIMIT_SECONDS, run_all
+    shard = {helper().SHARD_ENV: "1", helper().SHARDS_ENV: "8"}
+    assert helper().case_limit(shard) == helper().CASE_LIMIT_SECONDS
     assert run_walks == unit_test_parts.WALK_LIMIT_SECONDS, run_walks
     for walk in unit_test_parts.walks(REPO):
         tree = ast.parse((REPO / walk).read_text(encoding="utf-8"))

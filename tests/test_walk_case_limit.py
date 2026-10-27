@@ -32,7 +32,9 @@ So, two limits, both under the job's clock:
     otherwise hold its output pipe open and block the read forever — and
     that case's tests fail with the walk, the shard and the case named, and
     the last of its output. The inner run is `-v` and unbuffered, so that
-    output ends on the inner test that hung.
+    output ends on the inner test that hung. The limit is the walks job's:
+    it holds when that job's shard is named, and a run with none named —
+    `suite-green`'s hour of the change walk's cases — keeps no limit.
   * A WALK LIMIT (`scripts/unit_test_parts.py`'s `WALK_LIMIT_SECONDS`), the
     backstop for a hang outside any subprocess: `run-walks` stops the walk's
     pytest and names the walk, the shard and the cases it selected.
@@ -171,6 +173,45 @@ def test_a_case_inside_its_limit_comes_back_as_it_always_did(tmp_path):
     assert dict(got) == {"a": {"out": "a", "returncode": 0},
                          "b": {"out": "b", "returncode": 0}}
     assert got["a"]["out"] == "a"
+
+
+def test_the_case_limit_is_the_walks_jobs_alone():
+    """The limit is the walks job's, so it reads that job's shard, as
+    `shard` does. `suite-green` runs the change walk's cases through the
+    same helper with no shard named, for 23 to 67 minutes on a 90-minute
+    clock (run 40491497458), and must not be cut off at 15."""
+    shard = {walk.SHARD_ENV: "5", walk.SHARDS_ENV: "8"}
+    assert walk.case_limit(shard) == walk.CASE_LIMIT_SECONDS
+    assert walk.case_limit({}) is None
+
+
+def test_a_shard_named_puts_its_cases_under_the_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(walk, "CASE_LIMIT_SECONDS", 2)
+    monkeypatch.setenv(walk.SHARD_ENV, "1")
+    monkeypatch.setenv(walk.SHARDS_ENV, "1")
+
+    def run_case(name, base):
+        base.mkdir(parents=True)
+        return {"proc": walk.run(base, "-c", f"import time; time.sleep({FOREVER})")}
+
+    start = time.monotonic()
+    got = walk.run_all(["stuck"], run_case, tmp_path)
+    assert time.monotonic() - start < FOREVER / 2
+    with pytest.raises(walk.CaseOverLimit, match="shard 1 of 1: case stuck ran past its 2 s limit"):
+        got["stuck"]
+
+
+def test_no_shard_named_leaves_a_long_case_to_finish(tmp_path, monkeypatch):
+    monkeypatch.setattr(walk, "CASE_LIMIT_SECONDS", 1)
+    monkeypatch.delenv(walk.SHARD_ENV, raising=False)
+    monkeypatch.delenv(walk.SHARDS_ENV, raising=False)
+
+    def run_case(name, base):
+        base.mkdir(parents=True)
+        proc = walk.run(base, "-c", "import time; time.sleep(3); print('done')")
+        return {"out": proc.stdout.strip()}
+
+    assert walk.run_all(["long"], run_case, tmp_path)["long"] == {"out": "done"}
 
 
 def test_a_case_still_queued_at_the_limit_fails_by_name_too(tmp_path, monkeypatch):
