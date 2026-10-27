@@ -86,12 +86,15 @@ def test_the_constants_are_todays_values_and_keep_their_type():
 
 
 def test_rule_3_and_rule_10_keep_their_words():
+    # Which group an agent is in is a choice: the frozen document's agents,
+    # one of them moved, in place of the file's own (DRE-8018).
+    home = model_fixture.fixture_home()
     critic = model_fixture.fixture_config()
-    critic["agents"]["critic"] = "workhorse"
+    critic["agents"] = model_fixture.move_agent(home, "critic", "workhorse")["agents"]
     assert RULE_3_CRITIC in mf.policy_errors(critic)
 
     engineer = model_fixture.fixture_config()
-    engineer["agents"]["engineer"] = "judgement"
+    engineer["agents"] = model_fixture.move_agent(home, "engineer", "judgement")["agents"]
     assert RULE_10_ENGINEER in mf.policy_errors(engineer)
 
 
@@ -117,7 +120,8 @@ _PROBE = textwrap.dedent("""
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory):
     """A tree on the frozen fixture, whose models.yaml has no `rules:` block."""
-    return model_fixture.fixture_tree(tmp_path_factory.mktemp("rules") / "tree")
+    return model_fixture.fixture_tree(tmp_path_factory.mktemp("rules") / "tree",
+                                      regenerate=False)
 
 
 def _with_rules(tree: Path, block: str | None) -> None:

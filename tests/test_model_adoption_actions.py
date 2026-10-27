@@ -68,17 +68,17 @@ CONFIG_PATH = ROOT / "config" / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 SNAPSHOT_PATH = ROOT / "models.json"
 
-#: The frozen model config (DRE-6864) and its home document (DRE-6943). The
-#: Decisions below are classified against the home's groups, never the
-#: committed file: a console save that put Sonnet 4.6 at the Planners' top
-#: turned every adoption here into a refusal. The ids it holds are read off
-#: its ladders, never spelled.
-FROZEN = model_fixture.fixture_config()
-SONNET5 = model_fixture.ladder(FROZEN, "workhorse")[-1]   # the Builders' last rung
-SONNET46 = model_fixture.ladder(FROZEN, "judgement")[-1]  # the Planners' last rung
-OPUS55 = model_fixture.ladder(FROZEN, "workhorse")[0]     # the Builders' top
-OPUS5 = model_fixture.ladder(FROZEN, "workhorse")[1]      # the Builders' second rung
-SONNET55 = model_fixture.ladder(FROZEN, "workhorse")[2]   # the Builders' first Sonnet
+#: The frozen home document (DRE-6943). The Decisions below are classified
+#: against its groups, never the committed file: a console save that put
+#: Sonnet 4.6 at the Planners' top turned every adoption here into a refusal.
+#: The ids it holds are read off its groups, never spelled — and never off the
+#: frozen `models.yaml`, whose choices DRE-6983 takes out (DRE-8018).
+HOME = model_fixture.fixture_home()
+SONNET5 = model_fixture.ladder(HOME, "workhorse")[-1]   # the Builders' last rung
+SONNET46 = model_fixture.ladder(HOME, "judgement")[-1]  # the Planners' last rung
+OPUS55 = model_fixture.ladder(HOME, "workhorse")[0]     # the Builders' top
+OPUS5 = model_fixture.ladder(HOME, "workhorse")[1]      # the Builders' second rung
+SONNET55 = model_fixture.ladder(HOME, "workhorse")[2]   # the Builders' first Sonnet
 
 SONNET6 = "claude-sonnet-6"
 OPUS6 = "claude-opus-6"
@@ -526,7 +526,7 @@ class TestApplyEditsNoFile:
 
     def test_the_tree_is_untouched_and_still_validates(self, tmp_path, monkeypatch,
                                                        capsys):
-        tree = model_fixture.fixture_tree(tmp_path / "tree")
+        tree = model_fixture.fixture_tree(tmp_path / "tree", regenerate=False)
         actions = model_fixture.fixture_module(tree, "model_adoption_actions")
         config = tree / "config" / "models.yaml"
         text = config.read_text()

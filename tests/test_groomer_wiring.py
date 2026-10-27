@@ -1261,6 +1261,124 @@ class UnmappedRepoReadsNoCodeTest(unittest.TestCase):
             "death-receipt-verify-${{ matrix.card }}-attempt${{ github.run_attempt }}")
 
 
+#: The pipeline's own repository, read off `config/repo-map.json` rather
+#: than restated: the slug a card about bureau-pipeline's code is labeled.
+PIPELINE_REPOSITORY = json.loads(
+    (ROOT / "config" / "repo-map.json").read_text(encoding="utf-8"))[
+        "bureau-pipeline"]
+
+#: The agent step's condition, unchanged by DRE-8028: a failed second
+#: checkout leaves the leg running on `target/` alone, as it did before.
+AGENT_IF = ("matrix.repository != '' && steps.target.outcome == 'success' "
+            "&& steps.install_claude.outcome == 'success'")
+
+
+def _holds(expression: str, context: dict) -> bool:
+    """A step's `if`, evaluated over `context`: the `&&` of `==` / `!=`
+    comparisons between a context name and a quoted literal, which is all
+    the verify job's conditions use. Anything else fails the test rather
+    than being guessed at."""
+    import re
+    result = True
+    for clause in _expression(expression).split("&&"):
+        found = re.fullmatch(r"\s*([\w.]+)\s*(==|!=)\s*'([^']*)'\s*", clause)
+        if not found:
+            raise AssertionError(f"cannot evaluate the clause {clause!r}")
+        name, op, literal = found.groups()
+        equal = context[name] == literal
+        result = result and (equal if op == "==" else not equal)
+    return result
+
+
+class VerifyReadsThePipelineBesideTheCardTest(unittest.TestCase):
+    """DRE-8028: a verify leg for a card whose repo is not bureau-pipeline
+    also has bureau-pipeline checked out at `main` under `pipeline/`, so a
+    card about the pipeline's own scripts has the code it is about. The
+    checkout uses the job's own read token — no new mint — and a failed one
+    leaves the leg as it was, on `target/` alone."""
+
+    def setUp(self):
+        self.job = _load("groomer.yml")["jobs"]["verify"]
+        self.steps = self.job.get("steps") or []
+        self.ids = [s.get("id") for s in self.steps]
+        self.step = _verify_step(self.job, "pipeline")
+
+    def test_the_pipeline_is_checked_out_at_main_under_pipeline(self):
+        with_ = self.step.get("with") or {}
+        self.assertEqual(with_.get("repository"), PIPELINE_REPOSITORY)
+        self.assertEqual(with_.get("ref"), "main")
+        self.assertEqual(with_.get("path"), "pipeline")
+        self.assertIs(with_.get("persist-credentials"), False)
+        self.assertIs(self.step.get("continue-on-error"), True)
+
+    def test_it_is_the_same_pinned_checkout_the_card_repo_uses(self):
+        self.assertEqual(self.step.get("uses"),
+                         _verify_step(self.job, "target").get("uses"))
+
+    def test_it_passes_no_token_so_it_reads_with_the_jobs_own(self):
+        self.assertNotIn("token", self.step.get("with") or {},
+                         "the pipeline checkout is handed a token; the job's "
+                         "own `github.token` reads bureau-pipeline")
+
+    def test_the_job_mints_no_token_beyond_the_two_it_mints_today(self):
+        mints = [s.get("id") for s in self.steps
+                 if str(s.get("uses") or "").startswith(
+                     "actions/create-github-app-token@")]
+        self.assertEqual(mints, ["target_token", "model_home"])
+
+    def test_it_runs_right_after_the_card_repo_and_before_the_agent(self):
+        at = self.ids.index("pipeline")
+        self.assertEqual(self.ids[at - 1], "target")
+        self.assertLess(at, self.ids.index("claude"))
+
+    def test_its_condition(self):
+        self.assertEqual(
+            _expression(self.step.get("if")),
+            "matrix.repository != '' && matrix.repository != "
+            f"'{PIPELINE_REPOSITORY}' && steps.target.outcome == 'success'")
+
+    def test_a_card_in_another_repo_gets_the_second_checkout(self):
+        self.assertTrue(_holds(self.step.get("if"), {
+            "matrix.repository": "dreadnought-foundry/agent-bureau",
+            "steps.target.outcome": "success"}))
+
+    def test_a_bureau_pipeline_card_checks_out_one_repo(self):
+        self.assertFalse(_holds(self.step.get("if"), {
+            "matrix.repository": PIPELINE_REPOSITORY,
+            "steps.target.outcome": "success"}))
+        checkouts = [s for s in self.steps
+                     if str(s.get("uses") or "").startswith("actions/checkout@")
+                     and (not s.get("if") or _holds(s["if"], {
+                         "matrix.repository": PIPELINE_REPOSITORY,
+                         "steps.target_token.outcome": "success",
+                         "steps.target.outcome": "success"}))]
+        # `.bureau-pipeline/` — the scripts the leg runs — and `target/`.
+        self.assertEqual([(s.get("with") or {}).get("path") for s in checkouts],
+                         [".bureau-pipeline", "target"])
+
+    def test_no_second_checkout_without_the_cards_repo(self):
+        for context in ({"matrix.repository": "",
+                         "steps.target.outcome": "skipped"},
+                        {"matrix.repository": "dreadnought-foundry/agent-bureau",
+                         "steps.target.outcome": "failure"}):
+            self.assertFalse(_holds(self.step.get("if"), context), context)
+
+    def test_the_agent_steps_condition_does_not_change(self):
+        agent = _verify_step(self.job, "claude")
+        self.assertEqual(_expression(agent.get("if")), AGENT_IF)
+
+    def test_the_prompt_names_both_checkouts_and_stays_fixed_text(self):
+        prompt = str((_verify_step(self.job, "claude").get("with") or {})
+                     .get("prompt"))
+        flat = " ".join(prompt.split())
+        self.assertNotIn("${{", prompt)
+        self.assertIn("target/", flat)
+        self.assertIn("bureau-pipeline", flat)
+        self.assertIn("under pipeline/", flat)
+        self.assertIn("pipeline/ may be absent", flat)
+        self.assertIn("Change nothing under target/ or pipeline/", flat)
+
+
 class PostJobTest(unittest.TestCase):
     """`post`: the verdicts applied to the record, then the record posted."""
 

@@ -108,7 +108,8 @@ class LadderTest(unittest.TestCase):
         # The degrade path is the whole point of the mirror: a checkout whose
         # YAML will not parse still runs the ladders — and must still ask for
         # the level, or the fall-back-to-literal path silently drops to medium.
-        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"], _canonical()["effort"])
+        # The literal is read through its one accessor, never by its name.
+        self.assertEqual(mf.code_defaults()["effort"], _canonical()["effort"])
 
     def test_every_rung_names_a_reason(self):
         # The file's own style: a rung is a decision, and the decision carries

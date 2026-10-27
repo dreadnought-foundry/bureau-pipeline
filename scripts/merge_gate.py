@@ -1589,7 +1589,9 @@ def evaluate_proof_record(head_branch, proof, verdict=None, others=()) -> Option
     On a proof-record branch the record must prove its card: every judged
     row of its criterion table met — or accepted by operator decision with
     the decision linked, a link whose shape alone is read (DRE-6244), or a
-    wording-only row the checker accepted (DRE-7949) — by the
+    wording-only row the checker accepted (DRE-7949) — or every unmet row a
+    gap row, a cause word or a history row the PROOF close files as one fix
+    card (`proof_record.all_unmet_gaps`, DRE-7952) — by the
     same reader the hygiene lane and the PROOF close judge it with. `verdict`
     is the critic verdict condition 2 bound to the head, `{"body", "url"}`,
     and `others` the body of every comment not authored by the qa-bot: an

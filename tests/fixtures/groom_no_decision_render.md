@@ -1,12 +1,12 @@
-# Groom proposal `2841a4dde594` — cycle 12
+# Groom proposal `4958b42802b5` — cycle 12
 
-4 cards of 16 in Intake are proposed for cycle 12, in the order below. Of those, 3 for Planning and 1 for Cancel. Nothing moves until you approve it.
+5 cards of 16 in Intake are proposed for cycle 12, in the order below. Of those, 4 for Planning and 1 for Cancel. Nothing moves until you approve it.
 
 Ranked by the rules only (judgement off) — priority, creation date, file collisions and blocker relations, and nothing about what we are already doing.
 
-**To approve:** comment `🧺 groom-approved: 2841a4dde594` on this card. Approval moves the Planning list to Planning and the Cancel list to Canceled. Anything else — including a comment that mentions the marker — leaves both lists where they are.
+**To approve:** comment `🧺 groom-approved: 4958b42802b5` on this card. Approval moves the Planning list to Planning and the Cancel list to Canceled. Anything else — including a comment that mentions the marker — leaves both lists where they are.
 
-**To say more than yes:** `🧺 groom-declined: 2841a4dde594 — <reason>` declines the batch (the reason is required); `🧺 groom-excluded: 2841a4dde594 DRE-N` keeps a card on either list in Intake and out of every later proposal (don't do); `🧺 groom-held: 2841a4dde594 DRE-N` keeps it in Intake and ranks it last next time (hold); `🧺 groom-added: 2841a4dde594 DRE-N` pulls one in, after the batch; `🧺 groom-rewrite-accepted: 2841a4dde594 DRE-N` accepts the draft posted on card DRE-N and sends it to Planning with the new body. One comment each, and the newest one about a card wins.
+**To say more than yes:** `🧺 groom-declined: 4958b42802b5 — <reason>` declines the batch (the reason is required); `🧺 groom-excluded: 4958b42802b5 DRE-N` keeps a card on either list in Intake and out of every later proposal (don't do); `🧺 groom-held: 4958b42802b5 DRE-N` keeps it in Intake and ranks it last next time (hold); `🧺 groom-added: 4958b42802b5 DRE-N` pulls one in, after the batch; `🧺 groom-rewrite-accepted: 4958b42802b5 DRE-N` accepts the draft posted on card DRE-N and sends it to Planning with the new body. One comment each, and the newest one about a card wins.
 
 ## The population
 
@@ -23,10 +23,11 @@ The Planning list — approving moves these cards to Planning. Urgent first, the
 | 1 | DRE-101 | — | portico | — | DRE-101 does a thing | in the batch by the rules — newest first, position 1 |
 | 2 | DRE-102 | — | portico | — | DRE-102 does a thing | in the batch by the rules — newest first, position 2 |
 | 3 | DRE-103 | — | portico | — | DRE-103 does a thing | in the batch by the rules — newest first, position 3 |
+| 4 | DRE-104 | — | portico | — | DRE-104 does a thing | in the batch by the rules — newest first, position 4 |
 
 ## Cancel, with reasons
 
-The rest of the same set: cards that no longer apply — replaced, superseded or already done. Approving cancels each one with its reason written on the card; `🧺 groom-excluded: 2841a4dde594 DRE-N` keeps one in Intake.
+The rest of the same set: cards that no longer apply — replaced, superseded or already done. Approving cancels each one with its reason written on the card; `🧺 groom-excluded: 4958b42802b5 DRE-N` keeps one in Intake.
 
 | # | Card | Pri | Repo | Epic | Title | Reason |
 | -- | -- | -- | -- | -- | -- | -- |
@@ -42,15 +43,15 @@ Collision cover: 16 card(s) name no file, so a collision involving one of them i
 
 - Nothing: every repo has work in this batch.
 
-12 cards are **not now** — wanted, deliberately not this batch. That is 'later', and it is not 'no'. 12 of them carry the cycle they are reconsidered in.
+11 cards are **not now** — wanted, deliberately not this batch. That is 'later', and it is not 'no'. 11 of them carry the cycle they are reconsidered in.
 
 ## Not now — and when to come back
 
 Wanted, deliberately not this batch — and each one names what brings it back. That is 'later', and it is not 'no'.
 
-- when cycle 13 opens — 4 cards: DRE-104, DRE-105, DRE-106, DRE-107
-- when cycle 14 opens — 4 cards: DRE-108, DRE-109, DRE-110, DRE-111
-- when cycle 15 opens — 4 cards: DRE-112, DRE-113, DRE-114, DRE-115
+- when cycle 13 opens — 4 cards: DRE-105, DRE-106, DRE-107, DRE-108
+- when cycle 14 opens — 4 cards: DRE-109, DRE-110, DRE-111, DRE-112
+- when cycle 15 opens — 3 cards: DRE-113, DRE-114, DRE-115
 
 ## On cycles
 

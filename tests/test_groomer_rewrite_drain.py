@@ -48,7 +48,7 @@ import ready_lane_writers  # noqa: E402
 
 from test_groomer_approval_gate import FakeOps as _GateOps  # noqa: E402
 from test_groomer_console_receipt import OPENSSL, receipted  # noqa: E402
-from test_groomer_two_lists import two_lists  # noqa: E402
+from test_groomer_two_lists import fifteen_and_five_morning  # noqa: E402
 
 PROPOSAL_CARD = "DRE-2683"
 DOC = ROOT / "docs" / "groomer.md"
@@ -75,7 +75,7 @@ def _draft(identifier: str) -> str:
 
 def rewrite_proposal() -> dict:
     """The fifteen-and-five morning, plus two cards on Rewrite first."""
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     proposal["outcomes"][groomer.REWRITE] = [
         {"identifier": identifier, "title": f"Rewrite {identifier}",
          "repo": "agent-bureau", "epic": None, "band": 2, "position": n,
@@ -615,7 +615,7 @@ def test_the_rewrite_first_table_carries_the_accept_line_under_it():
 
 
 def test_a_page_with_no_rewrite_first_table_has_the_clause_and_not_the_line():
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     text = groomer.render_proposal(proposal)
     assert "groom-rewrite-accepted" in _say_more(text)
     assert "To accept a draft:" not in text

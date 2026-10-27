@@ -48,6 +48,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 import yaml
@@ -56,6 +57,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
+import linear_ops  # noqa: E402
 import planning_escalation  # noqa: E402
 import planning_route  # noqa: E402
 
@@ -168,6 +170,15 @@ def _issue(card: str, relations, children) -> dict:
     }}
 
 
+def _blocker_card(identifier: str, relations) -> dict:
+    """The sweep's title-and-parent read of an open blocker (DRE-7962):
+    every blocker here is an ordinary card with no parent, so it waits for
+    Done."""
+    state = next(r["state"] for r in relations if r["identifier"] == identifier)
+    return {"issue": {"identifier": identifier, "title": "a card",
+                      "state": {"name": state}, "parent": None}}
+
+
 class _Board:
     """The epic's relations and history as one reader sees them at a time."""
 
@@ -179,6 +190,8 @@ class _Board:
         self.history = doc["history"]
 
     def gql(self, query, variables=None, **_kw):
+        if "inverseRelations" not in query and "parent {" in query:
+            return _blocker_card(variables["id"], self.relations)
         assert "inverseRelations" in query, f"an unstubbed read: {query[:80]!r}"
         return _issue(self.card, self.relations, self.children)
 
@@ -220,6 +233,14 @@ def _log(**entry):
 
 def gql(query, variables=None, **kw):
     doc = _doc()
+    if "inverseRelations" not in query and "parent {" in query:
+        # The sweep's title-and-parent read of an open blocker (DRE-7962):
+        # an ordinary card with no parent, which waits for Done.
+        _log(op="read", what="blocker")
+        ident = (variables or {}).get("id")
+        state = next(r["state"] for r in doc["relations"] if r["identifier"] == ident)
+        return {"issue": {"identifier": ident, "title": "a card",
+                          "state": {"name": state}, "parent": None}}
     if "inverseRelations" not in query:
         _log(op="unstubbed", query=query[:120])
         raise AssertionError("an unstubbed Linear read: " + query[:80])
@@ -462,7 +483,9 @@ class TestTheReplayFixture:
         assert board.children == []
         assert not [row for row in board.history
                     if row["toState"]["name"] == "In Progress"]
-        waiting = planning_route._read_epic_wait(board, REPLAY["card"])
+        # The sweep's blocker read goes through `linear_ops` (DRE-7962).
+        with patch.object(linear_ops, "gql", side_effect=board.gql):
+            waiting = planning_route._read_epic_wait(board, REPLAY["card"])
         assert waiting.wait is True
         assert waiting.waits_on == "DRE-7290 (Hand-work)"
 
@@ -489,6 +512,9 @@ class TestDre7283WaitsInsteadOfAsking:
         assert [e["act"] for e in entries if e["op"] == "act"] == [WAIT_ACT]
         assert WAIT_ACT in held[0], "the receipt carries its act's trailer"
         assert comments == held
+        # DRE-7962: DRE-7290 is read the sweep's way, and holds as an ordinary card.
+        assert {"op": "read", "what": "blocker"} in entries
+        assert not [e for e in entries if e["op"] == "unstubbed"], entries
         assert _states(entries) == [QUEUED]
         ops = [e["op"] for e in entries if e["op"] in ("comment", "state")]
         assert ops == ["comment", "state"], "the receipt lands before the move"
