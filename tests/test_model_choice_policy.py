@@ -103,7 +103,26 @@ def committed() -> dict:
 
 
 def frozen() -> dict:
-    return model_fixture.fixture_config()
+    """The frozen `models.yaml` as a file of today's shape: its code-side
+    facts, and the frozen document's choices written the way the file writes
+    them — each group a kind with its label and purpose on a ladder of its
+    key, and every name with an `about` line and no group ungrouped. A fresh
+    copy, for a test that edits it and asks `policy_errors`. The choices come
+    off the document, never the file, whose choices DRE-6983 takes out
+    (DRE-8018)."""
+    side = {key: value for key, value in model_fixture.fixture_config().items()
+            if key not in mf._CHOICE_KEYS}
+    doc = fixture_home()
+    return {
+        **side,
+        "default_ladder": mf.WORKHORSE_KIND,
+        "kinds": {key: {"ladder": key, "label": group["label"], "purpose": group["purpose"]}
+                  for key, group in doc["groups"].items()},
+        "ladders": {key: list(group["models"]) for key, group in doc["groups"].items()},
+        "agents": dict(doc["agents"]),
+        "ungrouped": [name for name in side["about"] if name not in doc["agents"]],
+        "projects": {slug: dict(entry) for slug, entry in doc["projects"].items()},
+    }
 
 
 def prices() -> dict:
@@ -115,8 +134,8 @@ def slugs() -> set[str]:
 
 
 def errors(cfg: dict, with_prices: dict | None = None) -> list[str]:
-    """`policy_errors` on a copy of the frozen `models.yaml` — the code-side
-    facts and the old file's schema."""
+    """`policy_errors` on a copy of the frozen `models.yaml` (`frozen()`) —
+    the code-side facts and the old file's schema."""
     return mf.policy_errors(cfg, prices() if with_prices is None else with_prices,
                             repo_slugs=slugs())
 
@@ -226,7 +245,7 @@ def test_a_choice_is_admitted_and_leads_its_walk(name, tmp_path):
     build, role, repo, chosen = CHOICES[name]
     doc = build()
     assert refusals(doc) == []
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     repo_args = ("--repo", repo) if repo else ()
     model, note = cli(tree, doc, role, *repo_args)
     assert model == chosen
@@ -243,12 +262,16 @@ def test_the_builders_led_with_the_reviewers_first_model_select_it_for_the_engin
     builders_top = ladder(HOME, "workhorse")[0]
     assert builders_top != first
     doc = lead_with(HOME, "workhorse", first)
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     on_doc, note = cli(tree, doc, "engineer")
     on_defaults, _ = cli(tree, None, "engineer")
     assert on_doc == first
     assert note.endswith(READ), note
-    assert on_defaults == builders_top
+    # With no home, the tree's own defaults in the code: the engineer's group
+    # there, whichever one a save left it in.
+    defaults = fixture_module(tree).code_defaults()
+    group = defaults["agents"]["engineer"]
+    assert on_defaults == defaults["ladders"][defaults["kinds"][group]][0]
 
 
 def test_the_reviewers_choice_needs_no_declared_rule():
@@ -263,7 +286,7 @@ def test_a_project_exception_off_its_ladder_walks_it_first_then_the_ladder(tmp_p
     doc = with_project(HOME, "atlas", "workhorse", SONNET46)
     assert SONNET46 not in ladder(doc, "workhorse")
     want = [SONNET46, *ladder(doc, "workhorse")]
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     fm = fixture_module(tree, doc=doc)
     assert fm.effective_ladders(fm.CONFIG, "atlas")["workhorse"] == want
     got = py(tree, doc, "print(json.dumps([mf.ladder_for('engineer', 'atlas'), "
@@ -302,7 +325,7 @@ def test_a_reviewer_is_separated_from_the_build_model(name, tmp_path):
     build, repo, built_on, reviewed_on = SEPARATIONS[name]
     doc = build()
     assert refusals(doc) == []
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     fm = fixture_module(tree, doc=doc)
     assert fm.reviewers_for(fm.CONFIG, built_on, repo)[0] == reviewed_on
     assert built_on not in fm.reviewers_for(fm.CONFIG, built_on, repo)
@@ -337,7 +360,7 @@ def test_reviewers_for_reads_the_raw_and_the_normalized_shape():
 # --------------------------------------------------------------------------- #
 
 def test_an_unknown_build_still_lands_on_opus55_on_the_frozen_document(tmp_path):
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     for role in REVIEWERS:
         assert decision(tree, HOME, role, built_on_unknown=True)["model"] == OPUS55, role
 
@@ -345,7 +368,7 @@ def test_an_unknown_build_still_lands_on_opus55_on_the_frozen_document(tmp_path)
 def test_the_unknown_case_on_reviewers_opus55_keeps_the_last_rung_and_says_so(tmp_path):
     doc = lead_with(HOME, "advisory", OPUS55)
     assert ladder(doc, "advisory") == [OPUS55, SONNET55, SONNET5]
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     for role in REVIEWERS:
         got = decision(tree, doc, role, built_on_unknown=True)
         assert got["model"] == SONNET5, role
@@ -365,7 +388,7 @@ def test_the_unknown_case_reads_the_projects_build_walk(tmp_path):
     unknown case takes it off, which the fleet's build walk alone would not."""
     doc = with_project(with_project(HOME, "atlas", "workhorse", SONNET46),
                        "atlas", "advisory", SONNET46)
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     on_atlas = decision(tree, doc, "critic", repo="atlas", built_on_unknown=True)
     assert SONNET46 in on_atlas["separated"]
     assert on_atlas["model"] == OPUS55
@@ -533,7 +556,7 @@ def test_a_build_on_a_model_only_a_project_names_is_read_off_its_marker(tmp_path
     doc = with_project(doc, "atlas", "workhorse", SONNET46)
     assert not any(SONNET46 in group["models"] for group in doc["groups"].values())
     assert refusals(doc) == []
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
     got = py(tree, doc, (
         f"m = {SONNET46!r}\n"
         "print(json.dumps([m in mf.KNOWN_MODELS, "
@@ -564,7 +587,7 @@ def test_the_automatic_paths_never_climb():
 
 
 def test_discover_writes_no_file(tmp_path):
-    tree = fixture_tree(tmp_path)
+    tree = fixture_tree(tmp_path, regenerate=False)
 
     def digest() -> dict:
         return {str(p.relative_to(tree)): hashlib.sha256(p.read_bytes()).hexdigest()

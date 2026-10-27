@@ -380,6 +380,9 @@ def _rerun(monkeypatch, doc: dict) -> str:
             assert ident == doc["card"]
             return list(doc["comments"]), dispatch_tests.VIEWER
 
+        def blocking(self, ident):
+            return []
+
     holds: list = []
     posted: list[str] = []
     fired: list = []

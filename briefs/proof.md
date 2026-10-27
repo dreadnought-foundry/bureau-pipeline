@@ -446,8 +446,9 @@ brings that next run. For any other row, the sweep sends the record back to a
 proof run when the critic sends it back, or once the critic has approved it
 and the gate has declined it at its head — twice per record pull request, whichever trigger spent them, then one more run per re-arm event, and never
 another without one (DRE-5931, DRE-6488, DRE-7740). After the two the card is
-held for an operator; a re-arm event is a card a row names by `fix:` shipping,
-or a new `🔬 proof-observed` from the operator. On either trigger, a record with a row waiting for an event is held
+held for an operator; a re-arm event is a card a row names by `fix:` shipping
+— or a card filed against the proof as a blocker since its last run, in this
+repo or another (DRE-8156) — or a new `🔬 proof-observed` from the operator. On either trigger, a record with a row waiting for an event is held
 until the operator records the event instead — or, when every waiting row is
 stamped, until the latest stamp passes (DRE-7316) — even beside a row a re-run could
 answer: no run before the event can make it merge, and the one re-run after it
