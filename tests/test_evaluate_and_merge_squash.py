@@ -1,4 +1,5 @@
-"""The merge gate squashes a proof record and merge-commits everything else (DRE-8171).
+"""The merge gate squashes a proof record and merge-commits everything else (DRE-8171),
+squashing only where the repository allows squash (DRE-8195).
 
 A proof-record branch, `agent/DRE-<n>-proof-record`, can carry a commit whose
 message or diff names a person. Merged with a merge commit, every commit on
@@ -6,7 +7,10 @@ the branch lands on `main` for good; squashed, only the one squash commit does.
 So scripts/evaluate_and_merge.sh picks its merge flag off the head branch,
 through the one reader that already decides what a record branch is —
 `proof_record.proof_record_branch` — and every other branch keeps `--merge`,
-because the TDD split commits must stay visible on `main`.
+because the TDD split commits must stay visible on `main`. A record squashes
+only where the repository's own `allow_squash_merge` is true: GitHub refuses a
+squash where it is false (agent-bureau), so there the record merges with
+`--merge`, and a setting it cannot read keeps the squash.
 
 These runs drive the file by path against the stub `gh` of
 tests/test_merge_gate_one_read.py, which records every argv, and read the
@@ -31,8 +35,8 @@ import proof_record  # noqa: E402
 from test_evaluate_and_merge import header  # noqa: E402
 from test_merge_gate_one_read import (  # noqa: E402
     ALL_MET, AUTHOR_APP_X, CI_RUN_DONE, DEPENDABOT_BRANCH, GREEN_CI, HEAD,
-    PATCH_COMMIT, PR, RECORD_FILES, SERVER_ERROR, green_fixture, run_gate,
-    view,
+    PATCH_COMMIT, PR, RECORD_FILES, REPO, SERVER_ERROR, green_fixture,
+    run_gate, view,
 )
 
 RECORD_BRANCH = "agent/DRE-8171-proof-record"
@@ -92,6 +96,67 @@ class AProofRecordIsSquashedTest(unittest.TestCase):
         self.assertEqual(run.merges, [merge_argv("--squash")] * 2, run.explain())
 
 
+def setting_reads(run) -> list:
+    return [c for c in run.calls
+            if c[:2] == ["api", f"repos/{REPO}"] and ".allow_squash_merge" in c]
+
+
+class TheRepositorysSettingPicksTheRecordsMethodTest(unittest.TestCase):
+    """A proof record squashes only where the repository allows squash
+    (DRE-8195). agent-bureau has `allow_squash_merge: false`, and GitHub
+    refuses a squash there, so its record merges with a merge commit."""
+
+    def test_a_record_where_squash_is_not_allowed_merges_with_a_merge_commit(self):
+        run = run_gate(record_fixture(allow_squash_merge=False), linear_stub=True)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "merge", run.explain())
+        self.assertEqual(run.merges, [merge_argv("--merge")], run.explain())
+        self.assertIn("allow_squash_merge: false", run.proc.stdout, run.explain())
+        self.assertIn("merge method: --merge", run.proc.stdout, run.explain())
+
+    def test_the_retry_where_squash_is_not_allowed_is_a_merge_commit_too(self):
+        run = run_gate(record_fixture(allow_squash_merge=False,
+                                      merge_errors=[SERVER_ERROR]), linear_stub=True)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.merges, [merge_argv("--merge")] * 2, run.explain())
+
+    def test_a_record_where_squash_is_allowed_still_squashes(self):
+        run = run_gate(record_fixture(allow_squash_merge=True), linear_stub=True)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.merges, [merge_argv("--squash")], run.explain())
+        self.assertIn("allow_squash_merge: true", run.proc.stdout, run.explain())
+        self.assertIn("merge method: --squash", run.proc.stdout, run.explain())
+
+    def test_the_setting_is_read_once(self):
+        run = run_gate(record_fixture(allow_squash_merge=False,
+                                      merge_errors=[SERVER_ERROR]), linear_stub=True)
+        self.assertEqual(len(setting_reads(run)), 1, run.explain())
+
+    def test_an_unreadable_setting_keeps_the_squash(self):
+        run = run_gate(record_fixture(repo_read_fails=True), linear_stub=True)
+        self.assertEqual(run.proc.returncode, 0, run.explain())
+        self.assertEqual(run.decision(), "merge", run.explain())
+        self.assertEqual(run.merges, [merge_argv("--squash")], run.explain())
+        self.assertEqual(len(setting_reads(run)), 1, run.explain())
+        self.assertIn("could not be read", run.proc.stdout, run.explain())
+
+    def test_a_refusal_stays_loud(self):
+        run = run_gate(record_fixture(
+            allow_squash_merge=False,
+            merge_error="GraphQL: Pull request is not mergeable (mergePullRequest)"),
+            linear_stub=True)
+        self.assertEqual(run.proc.returncode, 1, run.explain())
+        self.assertIn("real failure", run.proc.stdout, run.explain())
+
+    def test_every_other_branch_keeps_its_merge_commit_either_way(self):
+        for allowed in (True, False):
+            for name, fixture in EveryOtherBranchKeepsItsMergeCommitTest.CASES.items():
+                with self.subTest(allow_squash_merge=allowed, branch=name):
+                    run = run_gate(fixture(allow_squash_merge=allowed), linear_stub=True)
+                    self.assertEqual(run.decision(), "merge", run.explain())
+                    self.assertEqual(run.merges, [merge_argv("--merge")], run.explain())
+
+
 class EveryOtherBranchKeepsItsMergeCommitTest(unittest.TestCase):
     """The TDD split commits stay visible on `main`: `--merge`, never
     `--squash`, with the same trailing flags."""
@@ -143,6 +208,16 @@ class TheHeaderStatesTheRuleTest(unittest.TestCase):
         self.assertIn("--merge", paragraph)
         self.assertIn("MERGE_METHOD", paragraph)
         self.assertRegex(history, r"DRE-8171(?!\d)")
+
+    def test_what_it_does_says_the_method_follows_the_repositorys_setting(self):
+        what, history = "\n".join(header()).split("Incident history", 1)
+        paragraph = next(p for p in re.split(r"\n#\s*\n", what) if "--squash" in p)
+        self.assertIn("allow_squash_merge", paragraph)
+        # The why: GitHub refuses a squash where the setting is off, and the
+        # name hazard a squash closes is a public repository's.
+        self.assertRegex(paragraph, r"refuses")
+        self.assertRegex(paragraph, r"public")
+        self.assertRegex(history, r"DRE-8195(?!\d)")
 
 
 if __name__ == "__main__":

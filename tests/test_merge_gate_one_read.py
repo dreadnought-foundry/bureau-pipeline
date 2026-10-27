@@ -198,6 +198,11 @@ if args[0] == "api":
         # The REST author read the one view replaced (DRE-2039).
         emit(fx.get("rest_author", "agent-bureau-bot[bot]"))
     if path == "repos/" + os.environ["REPO_FULL"]:
+        if opt("--jq") == ".allow_squash_merge":
+            # The repository's own merge setting (DRE-8195); bureau-pipeline's is true.
+            if fx.get("repo_read_fails"):
+                fail("HTTP 502: Bad Gateway")
+            emit("true" if fx.get("allow_squash_merge", True) else "false")
         emit("main")
     emit({})
 
