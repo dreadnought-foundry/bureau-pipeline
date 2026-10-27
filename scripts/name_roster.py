@@ -35,8 +35,9 @@ THE ROLES. The one Linear admin is the CEO and every one of their forms carries
 `[the CEO]`; every other form carries `[a person]`. Exactly one admin is
 expected: none, or more than one, is an unreadable roster.
 
-UNREADABLE. Any failed or malformed read, a roster with no people, or an admin
-count other than one raises `RosterUnreadable`. Its reason names the read that
+UNREADABLE. Any failed or malformed read, an organization that lists no member
+(what a token without the App's `members: read` is answered), a roster with no
+people, or an admin count other than one raises `RosterUnreadable`. Its reason names the read that
 failed — `linear users`, `github members`, `github profile <n>` by count,
 `people: 0`, `admins: <count>` — never a name, a login or an email, and the
 failed read's own message is never chained onto it, since that message can
@@ -191,8 +192,13 @@ def _linear_users(gql, identities_path) -> list[dict]:
     return people
 
 
-def _github_logins(gh, owner: str, extra_logins, page_size: int) -> list[str]:
-    """Every member's login, every page, then the extra logins; bots skipped."""
+def _github_logins(gh, owner: str, extra_logins, page_size: int) -> tuple[list[str], int]:
+    """Every member's login, every page, then the extra logins; bots skipped.
+
+    Also the count of members who are not bots. A token without the App's
+    `members: read` is answered with an empty list, never an error, and an
+    organization always has a member — so the caller reads none as unreadable.
+    """
     logins: list[str] = []
     try:
         page = 1
@@ -211,7 +217,8 @@ def _github_logins(gh, owner: str, extra_logins, page_size: int) -> list[str]:
         if login and not _is_bot(login) and login.casefold() not in seen:
             seen.add(login.casefold())
             out.append(login)
-    return out
+    members = sum(1 for login in logins if not _is_bot(login))
+    return out, members
 
 
 def _profiles(gh, logins: list[str]) -> list[str]:
@@ -258,7 +265,7 @@ def read(*, gql=linear_ops.gql, gh=gh_api, owner: str, identities_path=IDENTITIE
          extra_logins=(), page_size: int = PAGE_SIZE) -> Roster:
     """The live roster, read in full, or `RosterUnreadable`."""
     users = _linear_users(gql, identities_path)
-    logins = _github_logins(gh, owner, extra_logins, page_size)
+    logins, members = _github_logins(gh, owner, extra_logins, page_size)
     profiles = _profiles(gh, logins)
 
     admins = sum(1 for u in users if u["admin"])
@@ -286,6 +293,8 @@ def read(*, gql=linear_ops.gql, gh=gh_api, owner: str, identities_path=IDENTITIE
 
     if not people:
         raise RosterUnreadable("people: 0")
+    if not members:
+        raise RosterUnreadable("github members")
     if admins != 1:
         raise RosterUnreadable(f"admins: {admins}")
     return Roster(_forms(people), people=len(people), linear=len(users), github=len(logins))
