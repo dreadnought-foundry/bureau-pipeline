@@ -28,7 +28,6 @@ import json
 import os
 import re
 import sys
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -47,8 +46,7 @@ import proof_run_state  # noqa: E402
 import spoken_thread  # noqa: E402
 from test_proof_dispatch import (  # noqa: E402
     CAUSE_HOLD, HISTORY_HOLD, NOW, REPO, Board, Harness, _review, _sent_back,
-    ceo_press_hold, comment, detail, fake_voices, hold, lane_card, promoted,
-    receipt, record, state, verdict,
+    comment, detail, hold, lane_card, promoted, receipt, record, state, verdict,
 )
 
 CARD = "DRE-5930"
@@ -59,10 +57,6 @@ HOUR = 60
 
 def event_hold(hours_ago: float, *, needs: str = EVENT) -> dict:
     return hold(OBSERVED, needs, hours_ago * HOUR)
-
-
-def _posted_at(node: dict) -> datetime:
-    return datetime.fromisoformat(node["createdAt"].replace("Z", "+00:00"))
 
 
 def _reason(node: dict) -> str:
@@ -326,8 +320,9 @@ def test_not_an_event_hold(kind):
     assert not proof_dispatch._is_event_hold(_line(*NOT_EVENTS[kind]))
 
 
-def test_a_cause_hold_is_the_parks(kind="a cause hold"):
-    assert proof_cause_park.is_cause_hold(_line(*NOT_EVENTS[kind]))
+def test_the_cause_and_history_holds_are_the_parks():
+    for kind in ("a cause hold", "a history hold"):
+        assert proof_cause_park.is_cause_hold(_line(*NOT_EVENTS[kind])), kind
 
 
 @pytest.mark.parametrize("kind", sorted(NOT_EVENTS))
