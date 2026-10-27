@@ -79,7 +79,41 @@ shows with no `🔬 proof-observed` line and no console answer after it. That
 card is named on its line every pass and spends none of the candidate reads.
 A hold the window shows something after, or does not show at all, is the
 thread read's to decide, in order, as before — and so is a newest hold that is
-time-only with its time passed (DRE-7228), which the thread read may lift.
+time-only with its time passed (DRE-7228), which the thread read may lift,
+and a newest event hold old enough to chase (below, DRE-7967).
+
+## The chase of an event hold in Hand-work (DRE-7967)
+
+A hold on a first-run candidate whose needs half waits on an event — not a
+time, not a person's press — once held the card for good: nothing looked
+again, so the event could happen and the card still waited. An event hold
+(`_is_event_hold`) is an open hold that nothing in the pipeline lifts or
+answers by itself: not time-only, not naming `CEO_PRESS`, not a cause or
+history hold (`proof_cause_park.is_cause_hold`), not one whose needs half
+opens one of this module's own wordings (`_OWN_NEEDS`: `OPERATOR_PRESS` and
+every string constant named `*_NEEDS`, discovered off the module, never
+listed — `OPERATOR_NEEDS` is the alarm's and is not read), and not one that
+waits for fix cards to ship (`<DRE-n> shipped`).
+
+When every open hold is an event hold, the oldest has stood the
+`proof-waiting` row's `chase_after_hours` (`hold_deadline.phase`,
+`config/hold-deadlines.json`), no `chase` receipt is newer than the oldest
+and no receipt of any count is newer than the newest, the card skips
+condition 4's `_lift_or_hold` and condition 6's budget, reads conditions 5
+and 7, and is dispatched once: `chase of the event hold of <PT>`, counted
+`chase`, after one `chase:` line naming the hold and how long it has stood.
+One chase per standing hold — a copy posted later buys none, and a chase
+whose run dies or never starts has spent it. It posts no
+`🔬 proof-observed`, lifts nothing and re-posts nothing, so the hold's clock
+and due date are unchanged; if the event has not come, the late list
+(DRE-7965) picks the hold up at its due date. The count opens neither
+`re-run` nor `timed re-run`, is none of `re-check`, `re-armed` or the
+return's, and its reason opens neither `first proof run` nor `second
+dispatch`, so it spends no budget. Off the lane read the card is a candidate
+when its window's newest hold is such a hold and shows no receipt after it
+and none counted `chase`; the thread read decides. Hand-work only: a record's
+waiting holds In Review re-check themselves (DRE-7951), and Green Light is
+never chased.
 
 ## The return after the CEO's answer
 
@@ -487,6 +521,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import card_pr  # noqa: E402
 import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
+import hold_deadline  # noqa: E402 — when an event hold is chased (DRE-7967)
 import lane_contract  # noqa: E402 — the queue's names, which the promotion receipt carries
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402 — the critic's marker for `standing_verdict`
@@ -590,6 +625,14 @@ LAST_TIMED_REASON = "last timed re-run after not-before {at} at {sha7}"
 #: `timed re-run`, so it spends neither budget; there is one per record head.
 RECHECK_REASON = "re-check of the waiting rows at {sha7}"
 RECHECK_COUNT = "re-check"
+#: The one run a Hand-work card's event hold gets once it has stood the
+#: `proof-waiting` row's `chase_after_hours` (DRE-7967). Its reason opens
+#: neither `first proof run` nor `second dispatch`, and its count is none of
+#: the counted ones, so it spends no budget.
+CHASE_REASON = "chase of the event hold of {at}"
+CHASE_COUNT = "chase"
+#: The `config/hold-deadlines.json` row the chase is timed by (DRE-7964).
+CHASE_TAG = "proof-waiting"
 #: How long after the pass that posts it a waiting hold over a row nobody
 #: stamped — a prose event, or the operator's press — lifts itself, and how
 #: long after its post a prose waiting hold already standing does (DRE-7951).
@@ -1312,6 +1355,47 @@ OPERATOR_NEEDS = (EXHAUSTED_NEEDS,
                   TIMED_EXHAUSTED_NEEDS, RECHECK_EXHAUSTED_NEEDS)
 EVENT_NEEDS = (linear_ops.NOT_BEFORE, FIX_SHIPPED_NEEDS)
 
+#: The spent-budget hold DRE-7953 posts when it files a fix card, by its
+#: needs half: a run before that card ships reads the same failure.
+_CARDS_SHIPPED = re.compile(r"^DRE-\d+(?:, DRE-\d+)* shipped")
+
+
+def _own_needs() -> tuple:
+    """The dispatcher's own needs wordings, discovered off the module and
+    never listed (DRE-7967): `OPERATOR_PRESS` and every module-level string
+    constant whose name ends `_NEEDS`, each a pattern anchored at the start of
+    a hold's needs half, its `{…}` fields matching any text. A wording added,
+    renamed or retired is read as it stands. `OPERATOR_NEEDS` is no part of
+    it: it is the alarm's, and the chase reads more than the alarm does."""
+    wordings = [OPERATOR_PRESS] + [value for name, value in vars(sys.modules[__name__]).items()
+                                   if name.endswith("_NEEDS") and isinstance(value, str)]
+    return tuple(re.compile("^" + ".*?".join(re.escape(part) for part in
+                                            re.split(r"\{[^{}]*\}", wording)))
+                 for wording in wordings)
+
+
+def _needs_half(line: str) -> str:
+    """A hold line's needs half — the text after its last `— needs` — or ""."""
+    _, mark, needs = line.rpartition(proof_record._NEEDS)
+    return needs.strip() if mark else ""
+
+
+def _is_event_hold(line: str) -> bool:
+    """Is this open hold one that nothing in the pipeline lifts or answers by
+    itself (DRE-7967)? Not a time-only hold (`_lift_or_hold` lifts it), not
+    one naming `CEO_PRESS`, not a cause or history hold, not one whose needs
+    half opens one of the dispatcher's own wordings (`_OWN_NEEDS`), and not
+    one that waits for fix cards to ship."""
+    line = _first_line(line)
+    if not line.startswith(HOLD_MARK) or CEO_PRESS in line:
+        return False
+    if proof_record.time_only(line) is not None or proof_cause_park.is_cause_hold(line):
+        return False
+    needs = _needs_half(line)
+    if _CARDS_SHIPPED.match(needs):
+        return False
+    return not any(own.match(needs) for own in _OWN_NEEDS)
+
 
 def _waiting_criterion(criterion: str, event: str) -> str:
     """The criterion as a waiting hold names it: one waiting on the
@@ -1453,19 +1537,71 @@ class _Pass:
         until = proof_record.time_only(line)
         if until is not None and until <= self.now:
             return None  # a time that has passed: the thread read may lift it
+        if self._chase_shown(voices, marks[-1]):
+            return None  # an event hold old enough to chase: the thread read decides
         return f"held by {line}{_lifts_at(until)}"
+
+    def _chase_shown(self, voices: list, newest: int) -> bool:
+        """The lane read's pre-filter for a chase (DRE-7967): the newest hold
+        the window shows is an event hold that has stood `chase_after_hours`,
+        and the window shows no `🔬 proof-run` receipt after it and none
+        counted `chase` at all. The thread read decides."""
+        started = _when(voices[newest].created_at)
+        if (started is None or not _is_event_hold(voices[newest].body or "")
+                or hold_deadline.phase(CHASE_TAG, started, self.now) == hold_deadline.WAITING):
+            return False
+        return not any(i > newest or got.count == CHASE_COUNT
+                       for i, v in enumerate(voices)
+                       if (got := proof_run_state.receipt(v.body or "")) is not None)
+
+    def _chase(self, held: list, voices: list) -> tuple | None:
+        """`(line, at)` of the card's OLDEST open event hold when a chase is
+        owed on it (DRE-7967), else None. Owed when every open hold is an
+        event hold, the oldest has stood the `proof-waiting` row's
+        `chase_after_hours`, no `chase` receipt is newer than the oldest, and
+        no receipt of any count is newer than the newest — one chase per
+        standing hold, so a copy posted later buys none. A time that cannot
+        be read is never owed."""
+        if not held or not all(_is_event_hold(line) for line, _ in held):
+            return None
+        times = [_when(at) for _, at in held]
+        if any(t is None for t in times):
+            return None
+        oldest, newest = min(times), max(times)
+        if hold_deadline.phase(CHASE_TAG, oldest, self.now) == hold_deadline.WAITING:
+            return None
+        for voice in voices:
+            got = (proof_run_state.receipt(voice.body or "")
+                   if voice.kind == spoken_thread.PIPELINE else None)
+            if got is None:
+                continue
+            when = _when(voice.created_at)
+            if when is None or when > newest or (got.count == CHASE_COUNT and when > oldest):
+                return None
+        return held[times.index(oldest)][0], oldest
+
+    def _chased(self, ident: str, line: str, at: datetime) -> tuple:
+        """The chase's line and its `(reason, count)` (DRE-7967)."""
+        after = hold_deadline.load()[CHASE_TAG]["chase_after_hours"]
+        stood = int((self.now - at).total_seconds() // 3600)
+        _say(ident, f"chase: the event hold of {_pt(at)} has stood {stood}h, past "
+                    f"its {after:g}h — {proof_record._cut(line, 120)}")
+        return CHASE_REASON.format(at=_pt(at)), CHASE_COUNT
 
     def first_run(self, card: dict) -> tuple:
         """`(reason, count)` for an eligible first-run candidate, or raises
-        `_Refused` naming the first condition that fails."""
+        `_Refused` naming the first condition that fails. A card whose every
+        open hold is an event hold owed its chase (`_chase`, DRE-7967) skips
+        the hold's condition 4 and the budget's condition 6."""
         ident = card["identifier"]
         issue = self._epic_and_blockers(card)
         if "needs-human" in _labels(card):
             raise _condition(4, "hold", "it carries needs-human", "held")
         comments, viewer, voices = self._thread(card)
-        holds = _open_holds(voices)
-        if holds:
-            self._lift_or_hold(ident, holds, voices)
+        held = proof_record.open_holds_at(voices)
+        chase = self._chase(held, voices)
+        if held and chase is None:
+            self._lift_or_hold(ident, [line for line, _ in held], voices)
 
         got = self.run_state(self.repo, ident, comments, viewer,
                              read=self.read, now=self.now)
@@ -1475,6 +1611,9 @@ class _Pass:
         if got.state not in FREE:
             raise _condition(5, "run", why, "running")
 
+        if chase is not None:
+            self._released(issue, ident)
+            return self._chased(ident, *chase)
         reason = self._budget(card, got, voices)
         self._released(issue, ident)
         return reason, FIRST_COUNT.format(n=got.dispatches + 1)
@@ -2446,6 +2585,11 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
         tried = True
     print(tally.line(live))
     return tally
+
+
+#: Read last, so a `*_NEEDS` wording declared anywhere in the module is in it
+#: (`_own_needs`, DRE-7967).
+_OWN_NEEDS = _own_needs()
 
 
 def main(argv=None) -> int:

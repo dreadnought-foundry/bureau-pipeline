@@ -242,7 +242,7 @@
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: nothing is dispatched at a branch with no pull request, and scripts/reconcile.py declares no bound on when somebody opens one.",
+      "cadence_why": "Null: the bound on when somebody opens the pull request for work with none is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
       "why": "CI, the critic, the merge gate and the Linear sync all key off a pull request; a branch on its own passes through no gate at all and closes no card. Keyed on the branch rather than the card, so a second branch that strands the same way still speaks.",
       "emits": {
         "file": "scripts/reconcile.py",
@@ -586,7 +586,7 @@
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the hold waits on an observation only a person can make, and scripts/linear_ops.py declares no bound on when they are able to make it.",
+      "cadence_why": "Null: the bound on the hold — when the proof dispatcher chases it once and when it is late — is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
       "why": "DRE-3275. A proof answers 'did it work', observed against real state (standards/card-quality.md), and some proofs cannot start: DRE-3135 needed a failing agent pull request in a console repo to EXIST before anyone could watch the pipeline handle it. That hold was typed by hand on 2026-09-06 as ordinary prose, so nothing read it — the card looked silent, and a silent card is what every backstop here is built to notice. With the row, `linear_ops.py proof-waiting` composes the line through the one receipt writer and the console's receipts.py renders `Waiting for proof — <reason>`. It discharges NOTHING: a hold is the start of an obligation, not the end of one. What ends it is `🔬 proof-observed: <what was observed>` — a plain comment, deliberately NOT a row of its own, the way a critic verdict ends a re-dispatch without being an act. Giving the discharge a row would put this act's live key on the comment that discharges it, and the next reader would find a fresh hold where the observation is; it is declared in `unconverted` as the record it is. The subscriber is the sweep, which is what reads a hold on a card and leaves it alone; the reader that renders it is the console, and resolving subscribers against real workflows is DRE-2827. The two halves are refused when they carry `budget exhausted` or `holding for a human`, because the console's enrich.HOLD_MARKERS reads either phrase as a fix-budget hold and would render this card as the wrong kind of stuck.",
       "emits": {
         "file": "scripts/linear_ops.py",
@@ -1258,7 +1258,7 @@
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the alarm names a card a person must pick up, and scripts/reconcile.py declares no bound on how long the operator takes — the same null work-never-landed, the sweep's other alarm on a person's card, carries.",
+      "cadence_why": "Null: the bound on how long a person's card waits in Hand-work — this alarm is its chase, and the card is late after that — is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
       "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes.",
       "emits": {
         "file": "scripts/reconcile.py",

@@ -885,12 +885,18 @@ def test_the_candidate_cap_defers_the_rest(monkeypatch, capsys):
 PASS = timedelta(minutes=15)
 
 
+#: When the ring's held cards were held: within the chase's 24 hours, so
+#: each is a card that cannot run — an event hold that had stood longer is
+#: chased once (DRE-7967).
+HELD_SINCE = 600
+
+
 def _shown_held(ident: str, entered: float) -> dict:
     """A first-run candidate whose lane window carries an undischarged hold."""
     return lane_card(ident, window=[
         promoted(entered),
         hold(f"{ident} waits for Sunday's edition", "the edition to land",
-             entered - 10)])
+             HELD_SINCE)])
 
 
 def _three_blocked(eligible: str = "DRE-6042") -> Board:
@@ -898,7 +904,7 @@ def _three_blocked(eligible: str = "DRE-6042") -> Board:
     open blocker, and a hold the lane window does not show — each costing a
     read — entered before an eligible fourth."""
     unseen = [promoted(2000), hold("held beyond the window", "the operator",
-                                   1990)]
+                                   HELD_SINCE)]
     return Board(
         hand=[lane_card("DRE-5407", entered=3000),
               lane_card("DRE-5409", entered=2500),
@@ -1199,17 +1205,24 @@ def _first(body: str) -> str:
 @pytest.mark.parametrize("shown", [True, False], ids=["window-shows-it", "beyond-the-window"])
 def test_dre_6549s_prose_hold_past_its_date_is_never_lifted(monkeypatch, capsys, shown):
     """The fixture is DRE-6549's own hold, read the morning after the time
-    its prose names: nothing reads a date out of prose."""
-    thread = [promoted(600), hold(DRE_6549_OBSERVED, DRE_6549_NEEDS, 300, user=PERSON)]
+    its prose names: nothing reads a date out of prose. The hold is an event
+    hold that has stood past its 24 hours, so it gets its one chase
+    (DRE-7967) — a run, never a lift."""
+    held = hold(DRE_6549_OBSERVED, DRE_6549_NEEDS, 300, user=PERSON)
+    thread = [promoted(600), held]
     card = lane_card("DRE-6549", window=thread if shown else [promoted(600)])
     board = Board(hand=[card], threads={"DRE-6549": thread})
     h = Harness(monkeypatch, board)
-    tally = h.sweep(now=AFTER_6549)
+    h.sweep(now=AFTER_6549)
     lines = _about(_lines(capsys), "DRE-6549")
-    assert h.fired == [] and h.posted == [], lines
-    assert tally.held == 1
-    assert any(line.endswith(f"condition 4 (hold): held by 🔬 proof-waiting: "
-                             f"{DRE_6549_OBSERVED} — needs {DRE_6549_NEEDS}")
+    chase = proof_dispatch.CHASE_REASON.format(
+        at=spoken_thread.pacific_label(held["createdAt"]))
+    assert h.fired == [("DRE-6549", REPO, chase, "proof-execute")], lines
+    # The receipt is all it posts: no lift, no 🔬 proof-observed, no hold.
+    assert [proof_run_state.receipt(b).count for _, b in h.posted] == ["chase"], lines
+    assert h.holds == []
+    assert any("chase: the event hold of " in line
+               and f"— 🔬 proof-waiting: {DRE_6549_OBSERVED[:40]}" in line
                for line in lines), lines
 
 
