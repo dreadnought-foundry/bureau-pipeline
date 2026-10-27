@@ -234,7 +234,8 @@ REARM_7251 = "re-run after DRE-7990, DRE-7991 shipped"
 
 def _pass_7251(monkeypatch, *, thread=None, relations=None, lane_relations="same",
                cards=None, prs=None, releases=None, text=None, head=HEAD_7251,
-               declined="2026-10-25T04:31:40Z", now=NOW_7251, live=True):
+               declined="2026-10-25T04:31:40Z", now=NOW_7251, live=True,
+               run="finished"):
     thread = THREAD_7251 if thread is None else thread
     relations = BUILD_7251 + FIXES_7251 if relations is None else relations
     shown = relations if lane_relations == "same" else lane_relations
@@ -247,7 +248,7 @@ def _pass_7251(monkeypatch, *, thread=None, relations=None, lane_relations="same
               releases=releases, records={D7251: pr},
               texts={PR_7251: record_text(D7251, MET_ROW, NOT_MET_ROW)
                      if text is None else text},
-              states={D7251: state("finished", dispatches=1,
+              states={D7251: state(run, dispatches=1,
                                    record={"number": PR_7251, "state": "open"})})
     tally = h.sweep(now=now, live=live)
     return h, tally
@@ -457,6 +458,29 @@ def test_an_untimed_relation_and_unread_relations_add_nothing_and_say_so(monkeyp
     assert h.fired == []
     assert any("relations could not be read" in line and "503" in line
                for line in lines), lines
+
+
+def test_relations_not_read_leave_the_budget_hold_unmarked(monkeypatch, capsys):
+    """Unread is not "names none": with the relations read failing, the two
+    fixes filed after the receipt are still there, so the hold the pass
+    posts carries no `SPENT_AT` the lane skip would trust."""
+    h, tally = _pass_7251(monkeypatch, thread=UNHELD_7251,
+                          relations=RuntimeError("Linear: 503"), lane_relations=FIXES_7251)
+    assert h.fired == [] and tally.held == 1
+    [(_, observed, needs)] = h.holds
+    assert observed == GATE_HELD[0] and "names no fix" not in needs
+
+
+def test_a_receipt_with_no_time_leaves_the_budget_hold_unmarked(monkeypatch, capsys):
+    """A receipt with no time gives no cut to read the relations at, so they
+    are unread, and the hold is not marked as naming no fix."""
+    untimed = [*SPENT_7251[:-1], {**REARMED_7251, "createdAt": None}]
+    h, tally = _pass_7251(monkeypatch, thread=untimed, run="dead")
+    lines = _about(_lines(capsys), D7251)
+    assert h.fired == [] and tally.held == 1, lines
+    assert any("receipt has no time" in line for line in lines), lines
+    [(_, observed, needs)] = h.holds
+    assert observed == GATE_HELD[0] and "names no fix" not in needs
 
 
 def test_the_record_and_the_blockers_are_one_set_under_the_cap(monkeypatch, capsys):
