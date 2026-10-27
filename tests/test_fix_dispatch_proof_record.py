@@ -721,6 +721,15 @@ class ACanceledOnlyRunIsNotRedTest(unittest.TestCase):
         # A log that shows no failed test changes nothing.
         self.assertEqual(self._read(runs, failed_inside={104: []}), [])
 
+    def test_a_canceled_part_whose_log_could_not_be_read_keeps_the_run_red(self):
+        # The caller read the logs and this one is absent from the map: a test
+        # may have failed inside it (DRE-7018), so the run is not cleared.
+        runs = _canceled_only()
+        self.assertEqual(self._read(runs, failed_inside={}), [SUMMARY])
+        self.assertEqual(self._read(runs, failed_inside={999: []}), [SUMMARY])
+        # No map at all is `_declined`'s case: no log was read, none is owed.
+        self.assertEqual(self._read(runs, failed_inside=None), [])
+
 
 class ACanceledPartWithAFailedTestStaysTheFixAgentsTest(unittest.TestCase):
     """DRE-8177 keeps DRE-7018: a canceled part whose log already shows a
@@ -736,12 +745,14 @@ class ACanceledPartWithAFailedTestStaysTheFixAgentsTest(unittest.TestCase):
         self.assertEqual(len(sweep.thread), 1, log)
         self.assertIn(CANCELED_PART, sweep.thread[0][1])
 
-    def _read(self, runs, log):
+    def _read(self, runs, log=None, *, seam=None):
+        """The Resolve reader over `runs`, with the job log answered by
+        `_read_job_log` returning `log`, or by `seam` patched in below it."""
         import proof_dispatch
         out = io.StringIO()
-        with tempfile.TemporaryDirectory() as raw, \
-                mock.patch.object(reconcile, "_read_job_log", return_value=log), \
-                redirect_stdout(out):
+        if seam is None:
+            seam = mock.patch.object(reconcile, "_read_job_log", return_value=log)
+        with tempfile.TemporaryDirectory() as raw, seam, redirect_stdout(out):
             checks, thread = Path(raw) / "c.json", Path(raw) / "t.json"
             checks.write_text(json.dumps([{"total_count": len(runs), "check_runs": runs}]))
             thread.write_text(json.dumps([[rest(QA_BOT_REST, APPROVE)]]))
@@ -757,10 +768,27 @@ class ACanceledPartWithAFailedTestStaysTheFixAgentsTest(unittest.TestCase):
         self.assertEqual(stdout, "")
 
     def test_the_resolve_reader_reads_a_plain_cancellation_as_not_red(self):
-        for log in ((_log(), None), (None, "rc=1: HTTP 404")):
-            with self.subTest(log=log):
-                got, stdout = self._read(_canceled_only(), log)
-                self.assertEqual(got, [])
+        got, stdout = self._read(_canceled_only(), (_log(), None))
+        self.assertEqual(got, [])
+        self.assertEqual(stdout, "")
+
+    def test_the_resolve_reader_keeps_an_unreadable_log_red(self):
+        # The Resolve step reads on its App token, which can refuse
+        # `actions: read`. The real `_read_job_log` runs here, below it the
+        # loud token path refusing and the quiet `gh()` path answering
+        # nothing; either way the canceled part is not read as a plain
+        # cancellation, so the run the sweep sent stays admitted.
+        env = {k: v for k, v in os.environ.items() if k != "GH_DISPATCH_TOKEN"}
+        seams = {
+            "token refused": mock.patch.object(
+                reconcile, "_actions_read", return_value=(None, "rc=1: HTTP 403")),
+            "quiet gh() answers nothing": mock.patch.multiple(
+                reconcile, gh=mock.Mock(return_value="")),
+        }
+        for why, seam in seams.items():
+            with self.subTest(why=why), mock.patch.dict(os.environ, env, clear=True):
+                got, stdout = self._read(_canceled_only(), seam=seam)
+                self.assertEqual(got, [SUMMARY])
                 self.assertEqual(stdout, "")
 
 
