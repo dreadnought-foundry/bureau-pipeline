@@ -38,14 +38,7 @@ this module is where the medic asks them:
      FIRST kill keeps the ordinary retry, because 2 GB can be one turn short
      on one card and ample on the next. The same wall, a fourth time.
 
-  4. **THE CHANGE SET WAS REFUSED BY DESIGN** (DRE-6851). A `Model config
-     change` run whose "Validate the change set" step printed the validator's
-     refusal did not fail — it answered the person who asked, who was already
-     told "Not applied" on the Settings page. It gets no retry, and medic.yml
-     gives it no diagnosis and no failure card either. Every other failure of
-     that workflow, a crashed validator included, keeps both.
-
-  5. **THE DEFAULT BRANCH HAS MOVED PAST THE RUN** (DRE-6882). A failed `push`
+  4. **THE DEFAULT BRANCH HAS MOVED PAST THE RUN** (DRE-6882). A failed `push`
      run on the default branch whose commit is no longer that branch's tip is
      not retried: the commit is no longer the branch's tip, so a rerun's
      result, red or green, says nothing about `main` — on 2026-10-10 the
@@ -194,14 +187,10 @@ RULE_STALLED_REPEAT = "stalled-no-stream-repeat"
 # the retry. Re-running the same work on the same size of machine dies the same
 # way; it needs a bigger machine or a smaller card, and neither is a rerun.
 RULE_OUT_OF_MEMORY = "out-of-memory"
-# DRE-6851. The FIFTH rule: the run did not fail, it ANSWERED. A `Model config
-# change` run whose "Validate the change set" step refused the set is red by
-# design — the refusal is the answer to the person who asked, already shown to
-# them as "Not applied" on Settings › Agents & models. On 2026-10-10 run
-# 38114763170 was retried (refused again, writing nothing) and then diagnosed,
-# and the diagnosis filed DRE-6830 "Pipeline failure: Model config change",
-# which planning parked in Green Light as a question for the CEO. A refusal is
-# neither retried nor carded; medic.yml says so in its own run summary.
+# DRE-6851. The word of a rule that read a refused change set off the console's
+# old pull-request save route. DRE-8021 deleted the route and the reader with
+# it, so nothing hands `decide` a refusal now; the word stays because
+# medic.yml's `refused_by_design` job and its diagnosis gates still name it.
 RULE_REFUSED_BY_DESIGN = "refused-by-design"
 # DRE-6882. The SIXTH rule: the run's commit is no longer the default branch's
 # tip. On 2026-10-10 the retry of a failed agent-bureau `main` run finished red
@@ -218,27 +207,6 @@ SUPERSEDED_EVENT = "push"
 
 # How much of a commit the sentence names — red_main_repair.SHA_CHARS's width.
 SHORT_SHA = 12
-
-# The workflow and the step the fifth rule is about, by their own names in
-# `.github/workflows/model-config-change.yml` — tests/test_medic_refused_change_set.py
-# reads that file to hold the two together. The workflow is matched as a
-# prefix, case-insensitively, the way `park_rule_applies` matches.
-CHANGE_SET_WORKFLOW = "model config change"
-REFUSED_STEP = "Validate the change set"
-
-# The validator's refusal lines, as `model_config_change.py apply --check`
-# prints them: `change set refused: <reason>` for a set it could not read, and
-# `the change set from <who> was refused — …` beside one line per refused
-# change. Either as the workflow command the script printed (`::error::`) or as
-# the annotation a downloaded log can show it as (`##[error]`). Anchored to the
-# start of the line's content, so a log that QUOTES the line in prose does not
-# match — and a validator that threw prints neither, and stays a real failure.
-_REFUSAL_LINE = re.compile(
-    r"^(?:::error::|##\[error\])"
-    r"(?:change set refused: (?P<reason>.*\S)|the change set from .* was refused\b)"
-)
-# The reason a per-change refusal names, `change N of M (<op …>): <reason>`.
-_CHANGE_REASON = re.compile(r"^(?:::error::|##\[error\])(?P<reason>change \d+ of \d+ .*\S)")
 
 # The park receipt's own marker — `dead_run.decide()`'s hold sentence, which
 # both caps reach ("🚨 held-for-human (dead-run-requeue cap reached)" and
@@ -416,67 +384,6 @@ def out_of_memory_refusal(kill, *, attempt) -> str:
             f"runner's kill is entitled to is already spent"
         )
     return f"{said}, and {_NO_BIGGER_MACHINE[kill.runner_class]}"
-
-
-def is_change_set_workflow(workflow_name) -> bool:
-    """Is this the `Model config change` workflow? Prefix, case-insensitive."""
-    name = " ".join(str(workflow_name or "").split()).lower()
-    return bool(name) and name.startswith(CHANGE_SET_WORKFLOW)
-
-
-def change_set_refusal(log_text: str, *, workflow, failed_step: str = "") -> str:
-    """The one sentence that says this run's change set was refused by design,
-    or "" when the run is a real failure (DRE-6851).
-
-    Three facts, all off the run: the workflow is `Model config change`; the
-    step that failed is "Validate the change set"; and that step's log carries
-    the validator's own refusal line. The failed step is the Jobs API's answer
-    when medic.yml could read it (`failed_step`), and otherwise the step field
-    of the refusal line itself — `gh run view --log-failed` prints every line
-    as `job<TAB>step<TAB>time content`. A Jobs API answer naming another step
-    wins over the log: a refusal printed by a later step is not the validator
-    answering the person who asked.
-
-    Fails toward the retry: an unreadable log, a log with no prefix, another
-    workflow quoting the line, or a validation step that crashed without
-    printing a refusal all answer "", and keep the retry and the failure card.
-    """
-    if not is_change_set_workflow(workflow):
-        return ""
-    named = " ".join((failed_step or "").split())
-    if named and named != REFUSED_STEP:
-        return ""
-    refused, reasons = False, []
-    for raw in (log_text or "").splitlines():
-        fields = raw.split("\t", 2)
-        if len(fields) != 3:
-            continue
-        step = fields[1].strip()
-        if not named and step != REFUSED_STEP:
-            continue
-        line = _LOG_PREFIX.sub("", fields[2], count=1).strip()
-        match = _REFUSAL_LINE.match(line)
-        if match:
-            refused = True
-            if match.group("reason"):
-                reasons.append(match.group("reason"))
-            continue
-        match = _CHANGE_REASON.match(line)
-        if match:
-            reasons.append(match.group("reason"))
-    if not refused:
-        return ""
-    # The FIRST reason only, and without a full stop of its own: the summary
-    # is one sentence, and the full list is already in the run's own summary.
-    reason = " ".join(reasons[0].split()).rstrip(". ") if reasons else ""
-    because = f" ({reason})" if reason else ""
-    return (
-        f"The change set was refused by design at its '{REFUSED_STEP}' "
-        f"step{because}, which is the answer to the person who asked — they "
-        f"were told \"Not applied\" on Settings › Agents & models, and the "
-        f"failed run's own summary lists every reason — so it was not retried "
-        f"and no failure card was filed."
-    )
 
 
 def reads_the_tip(event, branch, default_branch) -> bool:
@@ -1239,10 +1146,6 @@ def _decide_cli(args) -> int:
         out_of_memory=out_of_memory_refusal(
             out_of_memory.from_log(log_text), attempt=args.run_attempt
         ),
-        # DRE-6851: off the same log, plus the failed step's name.
-        refused_by_design=change_set_refusal(
-            log_text, workflow=args.workflow, failed_step=args.failed_step
-        ),
         # DRE-6882: the default branch's tip, read by medic.yml's gate step
         # for a push run on that branch and handed over as a flag.
         superseded=superseded_on_default(
@@ -1291,9 +1194,9 @@ def main(argv=None) -> int:
     # Stage 2 fix #23. The failed workflow's name, which decides whether the
     # park rule applies (`park_rule_applies`). Absent means the rule applies.
     gate.add_argument("--workflow", default="")
-    # DRE-6851. The failed step's name off the Jobs API, which decides whether
-    # a refused change set was refused by its validation step. Absent means
-    # the log's own step field decides (`change_set_refusal`).
+    # DRE-6851. The failed step's name off the Jobs API. The rule that read it
+    # went with the change-set route (DRE-8021); medic.yml still passes it, so
+    # it is still taken, and read by nothing.
     gate.add_argument("--failed-step", default="")
     # Stage 2 fix #23. Where to leave the card read for the limit step, so it
     # does not ask Linear for the same comments again (`write_snapshot`).
