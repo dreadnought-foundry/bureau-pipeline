@@ -20,11 +20,14 @@ default branch.
 (`name_redact`, DRE-8166) runs for it (DRE-8169). Live — `NAME_GUARD_LIVE` is
 `true` — it reads the roster once (`name_roster.read`, owner
 `GITHUB_REPOSITORY_OWNER`, the run's actors as extra logins) and rewrites each
-added record, the sidecar's values and the commit message through
-`name_redact.redact` before it commits. A roster it cannot read refuses the
-push before `git checkout -b`, having written nothing:
+added record — its path as well as its text, so the sidecar's `record_path`
+names the file it pushed — the sidecar's values and the commit message through
+`name_redact.redact` before it commits. A roster it cannot read, or two records
+whose paths redact to one, refuses the push before `git checkout -b`, having
+written nothing:
 
     ::error::proof shadow push: name-guard: refused — roster unreadable: <reason>
+    ::error::proof shadow push: name-guard: refused — <n> records redact to one path
 
 Not live, it reads no roster, pushes what the agent wrote and prints one
 `name-guard: dry — …` line. No line it prints carries a name. The workflow's
@@ -232,11 +235,24 @@ def push(card: str, run_id: str, *, model: str, run_url: str, dispatched_at: str
     try:
         records = added_records(cwd)
         if roster is not None:
-            for path in records:
-                record = Path(cwd) / path
-                text = record.read_text(encoding="utf-8")
-                if seam(text) != text:
-                    record.write_text(seam(text), encoding="utf-8")
+            renamed = {path: seam(path) for path in records}
+            if len(set(renamed.values())) != len(renamed):
+                print(f"::error::proof shadow push: {tag} refused — "
+                      f"{len(records)} records redact to one path")
+                return 1
+            if any(new != old and (Path(cwd) / new).exists() for old, new in renamed.items()):
+                print(f"::error::proof shadow push: {tag} refused — "
+                      f"a record redacts to a path that already exists")
+                return 1
+            texts = {path: (Path(cwd) / path).read_text(encoding="utf-8") for path in records}
+            for old, new in renamed.items():
+                if new != old:
+                    _git(cwd, "rm", "-q", "--cached", "--ignore-unmatch", "--", old)
+                    (Path(cwd) / new).parent.mkdir(parents=True, exist_ok=True)
+                    (Path(cwd) / old).unlink()
+                if new != old or seam(texts[old]) != texts[old]:
+                    (Path(cwd) / new).write_text(seam(texts[old]), encoding="utf-8")
+            records = sorted(renamed.values())
         doc = {k: seam(v) if isinstance(v, str) else v
                for k, v in sidecar(card, model, run_url, dispatched_at, records).items()}
         _git(cwd, "checkout", "-q", "-b", branch)
