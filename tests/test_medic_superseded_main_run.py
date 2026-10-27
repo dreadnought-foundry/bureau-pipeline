@@ -86,8 +86,8 @@ def _decide(*, event="push", branch=DEFAULT, default_branch=DEFAULT,
 
 
 # ── an Actions `if:` evaluated the way Actions evaluates it ─────────────────
-# Copied from tests/test_medic_refused_change_set.py: `||`/`&&` return an
-# operand, `==`/`!=` compare, a missing property is null.
+# Copied from the refused-change-set test DRE-8021 deleted: `||`/`&&` return
+# an operand, `==`/`!=` compare, a missing property is null.
 _IDENT = re.compile(r"'[^']*'|\b[a-z_]+(?:\.[a-z_]+)+\b")
 
 
@@ -456,6 +456,56 @@ class TheRuleIsWrittenDownTest(unittest.TestCase):
         flat = _flat(comment)
         self.assertIn("DRE-6882", flat)
         self.assertIn("superseded-on-default", flat)
+
+
+class TheRefusedChangeSetRuleIsGoneTest(unittest.TestCase):
+    """DRE-8021: the console's pull-request save route is deleted, and with
+    it the medic's rule that read the route's validator refusal off a failed
+    run's log (DRE-6851). A failed run whose log carries that line is decided
+    like any other failure, under any workflow the medic watches — and the
+    gate still takes `--failed-step`, which medic.yml passes."""
+
+    REFUSED_LOG = (
+        "change\tValidate the change set\t2026-10-11T06:37:12.1000000Z "
+        "::error::change set refused: the change set is not JSON\n"
+        "change\tValidate the change set\t2026-10-11T06:37:12.2000000Z "
+        "##[error]Process completed with exit code 2.\n"
+    )
+
+    def _decide(self, workflow: str) -> dict:
+        with tempfile.NamedTemporaryFile("w", suffix=".log", delete=False) as f:
+            f.write(self.REFUSED_LOG)
+            path = f.name
+        out = io.StringIO()
+        try:
+            with mock.patch.object(medic_retry, "card_facts",
+                                   side_effect=AssertionError("no card to read")), \
+                    contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                rc = medic_retry.main(
+                    ["decide", "--log", path, "--run-id", RUN_ID, "--run-attempt", "1",
+                     "--workflow", workflow, "--failed-step", "Validate the change set"])
+        finally:
+            os.unlink(path)
+        self.assertEqual(0, rc)
+        return dict(line.split("=", 1) for line in out.getvalue().splitlines() if "=" in line)
+
+    def test_a_refusal_line_keeps_the_retry_under_every_watched_workflow(self):
+        with open(os.path.join(ROOT, ".github", "workflows", "self-medic.yml"),
+                  encoding="utf-8") as f:
+            stub = yaml.safe_load(f)
+        watched = (stub.get("on") or stub.get(True))["workflow_run"]["workflows"]
+        self.assertGreater(len(watched), 10)
+        for workflow in watched:
+            with self.subTest(workflow=workflow):
+                result = self._decide(workflow)
+                self.assertEqual("true", result["retry"], result)
+                self.assertNotEqual(medic_retry.RULE_REFUSED_BY_DESIGN, result["rule"])
+
+    def test_the_module_keeps_no_reader_of_the_refusal(self):
+        for name in ("is_change_set_workflow", "change_set_refusal",
+                     "CHANGE_SET_WORKFLOW", "REFUSED_STEP"):
+            self.assertFalse(hasattr(medic_retry, name), name)
 
 
 if __name__ == "__main__":
