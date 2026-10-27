@@ -120,7 +120,7 @@ class _Card:
                     "children": {"nodes": []}}
 
         bodies = lambda *a, **kw: [c["body"] for c in self.comments]  # noqa: E731
-        with patch.object(linear_ops, "comment_timeline", side_effect=lambda i: list(self.comments)), \
+        with patch.object(linear_ops, "comment_timeline", side_effect=lambda i, **kw: list(self.comments)), \
                 patch.object(linear_ops, "comment_bodies", side_effect=bodies), \
                 patch.object(linear_ops, "cmd_comment", side_effect=post), \
                 patch.object(linear_ops, "cmd_state", side_effect=move), \
