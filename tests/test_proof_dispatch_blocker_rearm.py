@@ -31,7 +31,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -94,9 +94,12 @@ def fix(ident: str, repo: str, state_name: str = "Done") -> dict:
             "labels": {"nodes": [{"name": f"repo:{repo}"}, {"name": "agent:engineer"}]}}
 
 
-def merged(number: int, sha: str, ident: str) -> dict:
-    return {"number": number, "state": "MERGED", "headRefName": f"agent/{ident}-fix",
-            "mergeCommit": {"oid": sha}}
+def merged(number: int, sha: str, ident: str, stamp: str | None = None) -> dict:
+    """A merged pull request row; `stamp` is its merge time where the
+    record gives one."""
+    row = {"number": number, "state": "MERGED", "headRefName": f"agent/{ident}-fix",
+           "mergeCommit": {"oid": sha}}
+    return {**row, "mergedAt": stamp} if stamp else row
 
 
 def record_text(ident: str, *rows) -> str:
@@ -220,8 +223,10 @@ CARDS_7251 = {"DRE-7990": fix("DRE-7990", "agent-bureau"),
               "DRE-7991": fix("DRE-7991", "portico"),
               **{r["issue"]["identifier"]: fix(r["issue"]["identifier"], "agent-bureau")
                  for r in BUILD_7251}}
-PRS_7251 = {(AB_REPO, "DRE-7990"): merged(4179, "527d0d682" + "0" * 31, "DRE-7990"),
-            (PORTICO_REPO, "DRE-7991"): merged(1050, "b8490f3d6" + "0" * 31, "DRE-7991")}
+PRS_7251 = {(AB_REPO, "DRE-7990"): merged(4179, "527d0d682" + "0" * 31, "DRE-7990",
+                                     "2026-10-25T19:07:31Z"),
+            (PORTICO_REPO, "DRE-7991"): merged(1050, "b8490f3d6" + "0" * 31, "DRE-7991",
+                                         "2026-10-25T19:45:25Z")}
 #: Merged 19:07:31Z and 19:45:25Z; agent-bureau Reconcile at 17:49:26Z on 10-27.
 NOW_7251 = _ts("2026-10-27T17:49:26Z")
 REARM_7251 = "re-run after DRE-7990, DRE-7991 shipped"
