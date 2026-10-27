@@ -26,6 +26,7 @@ import io
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -202,6 +203,15 @@ def test_findings_count_the_longest_form_only():
         name_redact.Finding("a.md", 3, "full-name")]
 
 
+def test_findings_over_many_named_lines_take_linear_time():
+    r = roster()
+    lines = [("big.md", n, "by Synthwood") for n in range(1, 50_001)]
+    start = time.monotonic()
+    found = name_redact.findings(lines + lines[:10], r)
+    assert time.monotonic() - start < 3, "findings de-duplicates by scanning a list"
+    assert found == [name_redact.Finding("big.md", n, "surname") for n in range(1, 50_001)]
+
+
 # --------------------------------------------------------------------------- #
 # C. added_lines over a throwaway repository                                    #
 # --------------------------------------------------------------------------- #
@@ -269,6 +279,15 @@ def test_a_merged_in_default_branch_carrying_a_name_yields_no_finding(tmp_path):
     lines = name_redact.added_lines("main", head, cwd=str(repo))
     assert lines
     assert name_redact.findings(lines, roster()) == []
+
+
+def test_a_bare_carriage_return_does_not_split_a_line(tmp_path):
+    repo = make_repo(tmp_path)
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, {"cr.md": "foo\rwritten by Synthia Synthwood\n"}, "a cr\n\nfoo\rby Synthwood")
+    got = name_redact.added_lines("main", head, cwd=str(repo))
+    assert ("cr.md", 1, "foo\rwritten by Synthia Synthwood") in got
+    assert (f"commit:{head[:7]}", 3, "foo\rby Synthwood") in got
 
 
 def test_added_lines_raises_on_a_range_git_cannot_read(tmp_path):
@@ -369,6 +388,32 @@ def test_guard_range_live_refuses_the_branchs_own_names_only(tmp_path):
     assert (code, out) == (0, f"name-guard: dry — would refuse commit:{first[:7]}:3 (full-name)\n")
 
 
+def test_guard_range_live_refuses_a_name_after_a_bare_carriage_return(tmp_path):
+    repo = make_repo(tmp_path)
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, {"cr.md": "foo\rwritten by Synthia Synthwood\n"}, "a cr\n\nfoo\rby Synthwood")
+    argv = ["guard", "--range", "main", head, "--cwd", str(repo), "--owner", OWNER]
+    code, out, err = run(argv, env=LIVE)
+    assert code == 1
+    assert out.splitlines() == ["name-guard: refused — cr.md:1 carries a full-name form",
+                                f"name-guard: refused — commit:{head[:7]}:3 carries a surname form"]
+    no_secret(out + err)
+
+
+def test_a_path_carrying_a_name_is_printed_as_its_role(tmp_path):
+    repo = make_repo(tmp_path)
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, {"Synthwood/notes.md": "by Synthwood\n"}, "a named folder")
+    argv = ["guard", "--range", "main", head, "--cwd", str(repo), "--owner", OWNER]
+    code, out, err = run(argv, env=LIVE)
+    assert code == 1
+    assert out == "name-guard: refused — [a person]/notes.md:1 carries a surname form\n"
+    no_secret(out + err)
+    code, out, err = run(argv, env=DRY)
+    assert out == "name-guard: dry — would refuse [a person]/notes.md:1 (surname)\n"
+    no_secret(out + err)
+
+
 def test_guard_range_clean_branch_says_ok(tmp_path):
     repo = make_repo(tmp_path)
     git(repo, "checkout", "-q", "-b", "feature")
@@ -419,6 +464,20 @@ def test_guard_pre_push_dry_prints_dry_and_exits_0(tmp_path):
     assert code == 0
     assert out.splitlines()[1:] == ["name-guard: dry — would refuse proof.md:2 (login)"]
     no_secret(out + err)
+
+
+def test_guard_pre_push_reads_a_large_push_in_linear_time(tmp_path):
+    repo = make_repo(tmp_path)
+    git(repo, "checkout", "-q", "-b", "feature")
+    head = commit(repo, {"big.lock": "".join(f"line {n}\n" for n in range(50_000))}, "a large file")
+    stdin = (f"refs/heads/feature {head} refs/heads/feature {ZERO}\n"
+             f"refs/heads/copy {head} refs/heads/copy {ZERO}\n")
+    argv = ["guard", "--pre-push", "--default-ref", "main", "--cwd", str(repo), "--owner", OWNER]
+    start = time.monotonic()
+    code, out, _ = run(argv, env=LIVE, stdin=stdin)
+    assert time.monotonic() - start < 5, "the pre-push reader de-duplicates by scanning a list"
+    assert code == 0
+    assert out.splitlines()[1:] == ["name-guard: ok — 50001 lines read, nothing to refuse"]
 
 
 def test_guard_pre_push_of_only_a_deletion_reads_nothing(tmp_path):
