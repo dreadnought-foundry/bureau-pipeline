@@ -110,9 +110,22 @@ DRE-6589 reached Planning with a formal `blockedBy` relation on an In Progress
 card, and the planner could only ask the CEO "wait, or plan now?" — a question
 the board already answered. So `decide`, on an epic, also reads its formal
 blockers, its children and its lane history, and writes `wait=true` with
-`waits_on` when a blocker is open, it has no children and it was never moved to
-In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it to Queued
-and dispatches no planner. Any read that fails writes `wait=false`.
+`waits_on` when a blocker still holds, it has no children and it was never
+moved to In Progress. `plan.yml` then posts the `epic-waits` receipt, moves it
+to Queued and dispatches no planner. A failed read of the epic's relations,
+children or history writes `wait=false`.
+
+A blocker holds by the sweep's own strict rule (DRE-7962), the one its return
+pass sends a waiting epic back to Planning on —
+`reconcile.epic_blockers_unmet(..., release_at_build_done=False)`, asked of
+the helpers it is built from (`strict_blockers`). A blocker that is Done, an
+In Progress epic that is built out, or the proof of an epic that is Done or
+built out does not hold. One whose built-out check or title-and-parent read
+fails does, as the sweep holds it. The wait used to read only
+`prose_blockers.TERMINAL`, and DRE-7831 widened the sweep's rule past it: the
+return pass sent DRE-7283 back behind built-out DRE-7282, the wait parked it
+again, and the two lanes bounced it 148 times in two weeks, each bounce a new
+receipt and a planner slot.
 
 The planner can add the blocker itself, after `decide` read none (DRE-7283,
 2026-10-25). So `wait` makes the same reading again at the planner's
@@ -521,6 +534,55 @@ def _no_wait(reason: str) -> EpicWait:
     return EpicWait(wait=False, waits_on="", reason=reason)
 
 
+def _reconcile():
+    """The sweep, imported for its strict blocker rule (DRE-7962). Late:
+    reconcile imports modules that import this one. It reads `REPO` at import
+    and raises without it, deliberately (DRE-3042); the rule's reads never use
+    it and a plan run's steps do not set it, so it is defaulted for the import
+    — the board snapshot does the same."""
+    os.environ.setdefault(
+        "REPO", os.environ.get("GITHUB_REPOSITORY") or "dreadnought-foundry/bureau-pipeline")
+    import reconcile
+
+    return reconcile
+
+
+def strict_blockers(card: dict) -> tuple[dict[str, str | None], dict[str, str]]:
+    """The sweep's strict reading of `card`'s open formal blockers (DRE-7962):
+    `(held, released)`.
+
+    It is `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`'s
+    reading, asked of the helpers that rule is built from, never restated:
+    `card_relation_blockers` releases an In Progress blocker EPIC that is built
+    out, and `_proof_blocker` releases a PROOF card whose epic is Done or built
+    out (DRE-7831). Every other open blocker is `held` — to None when it waits
+    for Done, else to why it holds, a read that failed included: the sweep
+    holds a blocker it cannot read. `released` names why each was cleared, in
+    the return pass's own words.
+    """
+    reconcile = _reconcile()
+    unbuilt, built_out = reconcile.card_relation_blockers(card)
+    held: dict[str, str | None] = {}
+    released = {blocker: f"is built out (open: {open_children})"
+                for blocker, open_children in built_out.items()}
+    for blocker, why in unbuilt.items():
+        if why is not None:
+            held[blocker] = f"not built out: {why}"
+            continue
+        parent, why = reconcile._proof_blocker(blocker)
+        if parent is not None:
+            released[blocker] = f"is a proof of built-out epic {parent}"
+        else:
+            held[blocker] = why
+    return held, released
+
+
+#: When a waiting epic is planned, in the receipt's words: the sweep's strict
+#: rule, which the return pass brings it back on.
+RELEASE_RULE = ("once every one is Done, an In Progress epic that is built out, "
+                "or the proof of an epic that is Done or built out")
+
+
 def epic_wait(card: dict, history) -> EpicWait:
     """Does an epic still to be PLANNED wait on an open formal blocker?
 
@@ -528,17 +590,23 @@ def epic_wait(card: dict, history) -> EpicWait:
     is `linear_ops.lane_history`'s list, newest first. It waits only when all
     three say it has not been planned yet:
 
-      * at least one `blocks` relation is not in `prose_blockers.TERMINAL` —
-        the reading `reconcile.epic_blockers_unmet(...,
-        release_at_build_done=False)` makes for an epic still to be planned;
-      * it has no children;
       * no entry of its history moves it to `In Progress` — that move is its
-        green light.
+        green light;
+      * it has no children;
+      * at least one open `blocks` relation still holds under the sweep's
+        strict rule (`strict_blockers`) — the one
+        `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`
+        returns a waiting epic to Planning on (DRE-7962). A blocker that is
+        Done, a built-out In Progress epic, or the proof of an epic that is
+        Done or built out does not hold it. A blocker whose built-out check or
+        title-and-parent read fails does: it is named in `waits_on` and the
+        reason says the read failed.
 
     An epic with children or an earlier green light is one DRE-6407 released
     at its blocker's build-done and `mid_epic.py discovery --kind amendment`
     sent back to be re-planned. Holding it in Queued would park running work
-    with nothing to bring it back, so it is planned and the reason says why.
+    with nothing to bring it back, so it is planned and the reason says why —
+    and none of its blockers is read.
     """
     import prose_blockers
 
@@ -557,16 +625,24 @@ def epic_wait(card: dict, history) -> EpicWait:
     if any(((row.get("toState") or {}).get("name")) == "In Progress"
            for row in history or ()):
         planned.append("its lane history moves it to In Progress (an earlier green light)")
-    waits_on = ", ".join(f"{i} ({states[i]})" for i in open_ids)
     if planned:
         return _no_wait(
             f"{' and '.join(planned)}, so it was planned before and is re-planned "
-            f"rather than held on {waits_on}"
+            f"rather than held on {', '.join(f'{i} ({states[i]})' for i in open_ids)}"
         )
+    held, released = strict_blockers(card)
+    if not held:
+        cleared = "; ".join(f"{b} {why}" for b, why in sorted(released.items()))
+        return _no_wait(
+            f"every open blocker is cleared under the sweep's rule — {cleared} — "
+            "so it is planned rather than held"
+        )
+    waits_on = ", ".join(f"{i} ({states[i]})" for i in sorted(held))
+    whys = "".join(f"; {b} holds — {why}" for b, why in sorted(held.items()) if why)
     return EpicWait(
         wait=True,
         waits_on=waits_on,
-        reason=f"it waits on {waits_on} and is planned when every one is Done",
+        reason=f"it waits on {waits_on} and is planned {RELEASE_RULE}{whys}",
     )
 
 
@@ -583,9 +659,11 @@ _WAIT_QUERY = """query($id: String!) { issue(id: $id) {
 
 
 def _read_epic_wait(lops, identifier: str) -> EpicWait:
-    """`epic_wait` for a live epic. Fails open: a relation, children or history
-    read that fails holds nothing, so an unreadable board never parks an epic
-    the planner could plan."""
+    """`epic_wait` for a live epic. Fails open on the epic's own reads: a
+    relation, children or history read that fails holds nothing, so an
+    unreadable board never parks an epic the planner could plan. A blocker's
+    reads are the sweep's (`strict_blockers`, through `linear_ops`), and those
+    fail closed for that one blocker, as the sweep's do (DRE-7962)."""
     try:
         issue = (lops.gql(_WAIT_QUERY, {"id": identifier}) or {}).get("issue") or {}
     except Exception as exc:  # noqa: BLE001 — an unread board holds nothing
