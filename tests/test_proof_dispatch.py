@@ -73,6 +73,8 @@ SIGNED = "console-signed"
 NOW = datetime(2026, 10, 6, 17, 30, tzinfo=timezone.utc)
 WORKFLOW = ROOT / ".github" / "workflows" / "reconcile.yml"
 STEP = "Dispatch proof runs"
+#: The fix card the harness's filer answers with (DRE-7953).
+DEFECT_CARD = "DRE-8001"
 
 
 def _at(minutes_ago: float) -> str:
@@ -212,9 +214,14 @@ class Harness:
 
     def __init__(self, monkeypatch, board, *, states=None, release="ready",
                  release_lines=None, fire_ok=True, prs=None, records=None,
-                 texts=None, heads=None):
+                 texts=None, heads=None, filed=None):
         self.board = board
         self.heads = heads
+        #: The defect fix card the filer answers with, or the error it raises
+        #: (DRE-7953); `filings` records each call.
+        self.filed = filed or {"identifier": DEFECT_CARD,
+                               "url": f"https://linear.app/x/issue/{DEFECT_CARD}/y"}
+        self.filings: list = []
         self.head_reads = 0
         self.states = states or {}
         self.release_state = release
@@ -292,13 +299,21 @@ class Harness:
         self.fired.append((card["identifier"], repo, reason, event))
         return (True, "") if self.fire_ok else (False, "gh api refused: HTTP 403")
 
+    def file_fix(self, proof_card, epic, record_pr_url, gaps, *, repo_slug, kind):
+        """`proof_gap.file_fix_card`, recorded (DRE-7953): no Linear write."""
+        self.order.append(("file", proof_card))
+        self.filings.append((proof_card, epic, record_pr_url, list(gaps), repo_slug, kind))
+        if isinstance(self.filed, Exception):
+            raise self.filed
+        return dict(self.filed)
+
     def sweep(self, *, live=True, now=NOW):
         return proof_dispatch.sweep(
             REPO, SLUG, live=live, linear=self.board, read=lambda path: None,
             find_pr=self.find_pr, run_state=self.run_state,
             release=self.release, fire=self.fire, voices=fake_voices, now=now,
             find_record=self.find_record, read_record=self.read_record,
-            open_heads=self.open_heads)
+            open_heads=self.open_heads, file_fix=self.file_fix)
 
 
 def _lines(capsys) -> list:
@@ -2333,6 +2348,9 @@ GATE_HELD = ("the gate declined the record twice after re-observation",
 #: the head it was read at rides on the needs half, so a later pass knows
 #: off the lane read that nothing could re-arm it.
 GATE_SPENT = (GATE_HELD[0], f"{GATE_HELD[1]} — the record at {SHA7} names no fix")
+#: The gate's spent budget on rows that are all plain `Not met.` (DRE-7953):
+#: one fix card filed, and the hold waits for it to ship.
+GATE_FILED = (GATE_HELD[0], f"{DEFECT_CARD} shipped")
 GATE_UNANSWERED = ("the re-run finished and the gate's decline still stands at "
                    "the record's head",
                    "an operator reading the gate's declined note and the "
@@ -2481,25 +2499,26 @@ def test_gate_after_the_shared_budget_one_hold_and_never_a_loop(
         monkeypatch, capsys, first, second):
     """One critic re-run and one gate re-run, in either order, spend the one
     budget of two: the gate's next decline holds once, and never re-runs
-    again without a re-arm event (DRE-7740)."""
+    again without a re-arm event (DRE-7740). Its one unmet row is a plain
+    `Not met.`, so the hold waits on the fix card it filed (DRE-7953)."""
     spent = (first(1500, 1), comment("⏳ 5/5 amended", 1400),
              second(800, 2), comment("⏳ 5/5 amended", 700))
     h, tally, _ = _gate_pass(monkeypatch, thread=_sent_back(*spent), pr=_declined())
     out = capsys.readouterr().out
     assert h.fired == [] and h.posted == []
-    assert h.holds == [("DRE-5930", *GATE_SPENT)]
+    assert h.holds == [("DRE-5930", *GATE_FILED)] and len(h.filings) == 1
     assert tally.held == 1 and "3 of 2" not in out
 
     # The next pass reads past the budget's own hold to the record at the
     # head (DRE-7740), finds no re-arm event, and posts nothing: an open copy
-    # of the hold stands.
+    # of the hold stands, and the card it names is not filed again.
     h, tally, _ = _gate_pass(monkeypatch, pr=_declined(),
-                             thread=_sent_back(*spent, hold(*GATE_SPENT, 50)))
+                             thread=_sent_back(*spent, hold(*GATE_FILED, 50)))
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.holds == [] and h.posted == []
     assert any("re-run: budget — 2 re-runs" in line and "never another without a "
                "shipped fix or a new 🔬 proof-observed" in line for line in lines), lines
-    assert tally.held == 1
+    assert tally.held == 1 and h.filings == []
 
 
 def test_gate_a_critic_re_run_spends_one_of_the_gates_two(monkeypatch, capsys):
@@ -3240,8 +3259,9 @@ def test_sent_back_waiting_hold_in_the_dry_run_writes_nothing(monkeypatch, capsy
     assert f"would: hold DRE-5930 — {WAITING[0]}" in _lines(capsys)
 
 
+# --------------------------------------------------------------------------- #
 # DRE-6610: a declined record whose unmet rows ALL carry a cause word          #
-# DRE-6837: held In Review for the operator, never moved to Green Light        #
+# DRE-7953: left to the gate — no hold, no question, never re-run              #
 # --------------------------------------------------------------------------- #
 
 import proof_cause_park  # noqa: E402
@@ -3254,10 +3274,9 @@ CAUSED = record_md(MET_ROW, CAUSE_ROW, GONE_ROW)
 CAUSE_ROWS = proof_cause_park.rows_of(CAUSED)
 CAUSE_HOLD = proof_cause_park.hold(CAUSE_ROWS)
 CAUSE_QUESTION = proof_cause_park.question(CAUSE_ROWS)
-CAUSE_REFUSAL = (f"re-run: 2 row(s) of the record at {SHA7} cannot be observed as "
-                 "worded (cause: out-of-reach, state-gone) — ")
-NEVER_AGAIN = ", never re-run to read the same thing"
-LEFT = "left DRE-5930 in In Review for the operator"
+#: The refusal of a record whose unmet rows are all gaps (DRE-7953).
+GATE_LEFT = (f"re-run: every unmet row of the record at {SHA7} is a gap it closes "
+             "with — left to the gate, never re-run")
 
 
 class _Moves:
@@ -3296,19 +3315,13 @@ def test_cause_the_hold_names_the_criteria_and_the_cause_words_and_no_press():
     assert proof_record.CEO_PRESS not in observed + needs
 
 
-def test_cause_a_record_whose_unmet_rows_all_carry_a_cause_is_held_and_asked_never_re_run(
+def test_cause_a_record_whose_unmet_rows_all_carry_a_cause_is_left_to_the_gate(
         monkeypatch, capsys):
     h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back())
     lines = _about(_lines(capsys), "DRE-5930")
-    assert h.fired == []
-    assert h.holds == [("DRE-5930", *CAUSE_HOLD)]
-    assert len(h.posted) == 1
-    assert h.posted[0][1].startswith(proof_cause_park.QUESTION_OPENING)
-    assert h.order == [("hold", "DRE-5930"), ("comment", "DRE-5930")]
-    assert moves.log == []
-    assert tally.held == 1 and tally.dispatched == 0 and tally.failures == []
-    assert any(f"{CAUSE_REFUSAL}held, asked, {LEFT}{NEVER_AGAIN}" in line
-               for line in lines), lines
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert tally.refused == 1 and tally.dispatched == 0 and tally.failures == []
+    assert any(line.endswith(GATE_LEFT) for line in lines), lines
     assert h.text_reads == [(900, HEAD)]
 
 
@@ -3323,41 +3336,18 @@ def test_cause_the_next_pass_in_green_light_is_no_re_run_candidate(monkeypatch, 
     assert not any(read[0] == "thread" for read in h.board.reads)
 
 
-def test_cause_the_next_pass_still_in_review_posts_nothing_and_moves_nothing(
-        monkeypatch, capsys):
-    parked = _sent_back(hold(*CAUSE_HOLD, 80), comment(CAUSE_QUESTION, 79))
+@pytest.mark.parametrize("parked_at", [80, 2490], ids=["dispatcher", "proof-run"])
+def test_cause_an_old_park_on_the_thread_is_read_past_and_nothing_is_posted(
+        monkeypatch, capsys, parked_at):
+    """The park the dispatcher or the proof run posted before DRE-7953: its
+    hold no longer holds the reading, and nothing is asked again."""
+    parked = _sent_back(hold(*CAUSE_HOLD, parked_at), comment(CAUSE_QUESTION, parked_at - 1))
     h, tally, moves = _cause_pass(monkeypatch, thread=parked)
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.holds == [] and h.posted == []
     assert moves.log == []
-    assert tally.held == 1
-    assert any(f"{CAUSE_REFUSAL}already asked, {LEFT}{NEVER_AGAIN}" in line
-               for line in lines), lines
-
-
-def test_cause_the_runs_own_park_on_the_thread_is_already_asked(monkeypatch, capsys):
-    """The run held and asked: nothing new is posted, and nothing moves."""
-    asked = proof_cause_park.question(CAUSE_ROWS, run_url="https://github.com/x/y/runs/1")
-    parked = _sent_back(hold(*CAUSE_HOLD, 2490), comment(asked, 2489))
-    h, tally, moves = _cause_pass(monkeypatch, thread=parked)
-    lines = _about(_lines(capsys), "DRE-5930")
-    assert h.fired == [] and h.holds == [] and h.posted == []
-    assert moves.log == []
-    assert tally.held == 1
-    assert any(f"{CAUSE_REFUSAL}already asked, {LEFT}{NEVER_AGAIN}" in line
-               for line in lines), lines
-
-
-def test_cause_a_full_thread_is_a_failure_and_still_never_a_re_run(monkeypatch, capsys):
-    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(),
-                                  comment=lambda *a, **k: linear_ops.COMMENT_CAP_CONDITION)
-    lines = _about(_lines(capsys), "DRE-5930")
-    assert h.fired == []
-    assert len(h.holds) == 1 and moves.log == []
-    assert tally.held == 1 and len(tally.failures) == 1
-    assert "full" in tally.failures[0]
-    assert any(CAUSE_REFUSAL in line and "full" in line and NEVER_AGAIN in line
-               for line in lines), lines
+    assert tally.refused == 1
+    assert any(line.endswith(GATE_LEFT) for line in lines), lines
 
 
 def test_cause_another_open_hold_still_holds_and_nothing_is_parked(monkeypatch, capsys):
@@ -3387,15 +3377,12 @@ def test_cause_one_caused_row_and_one_waiting_row_is_held_for_the_event(
     assert tally.held == 1
 
 
-def test_cause_the_dry_run_prints_would_hold_and_writes_nothing(monkeypatch, capsys):
+def test_cause_the_dry_run_would_hold_nothing_and_ask_nothing(monkeypatch, capsys):
     h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), live=False)
     lines = _lines(capsys)
     assert h.fired == [] and h.posted == [] and h.holds == [] and moves.log == []
-    hold_line = linear_ops.proof_waiting_line(*CAUSE_HOLD)
-    assert f"would: hold DRE-5930 — {hold_line}" in lines
-    assert f"would: ask DRE-5930 — {CAUSE_QUESTION.split(chr(10), 1)[0]}" in lines
-    assert any(f"{CAUSE_REFUSAL}would: leave DRE-5930 in In Review for the operator"
-               f"{NEVER_AGAIN}" in line for line in lines), lines
+    assert not any("would: hold" in line or "would: ask" in line for line in lines), lines
+    assert any(line.endswith(GATE_LEFT) for line in lines), lines
 
 
 def test_cause_a_signed_answer_after_the_cause_hold_is_no_return(monkeypatch, capsys):
@@ -3415,19 +3402,16 @@ def test_cause_a_signed_answer_after_the_cause_hold_is_no_return(monkeypatch, ca
         refused.value.line
 
 
-def test_cause_the_critics_request_changes_is_held_and_asked_too(monkeypatch, capsys):
-    """Under either trigger (DRE-6837): a cause-only record the critic sent
-    back is never re-dispatched to read the same thing."""
+def test_cause_the_critics_request_changes_is_answered_by_a_re_run(monkeypatch, capsys):
+    """Only the gate merges a gap record, on the critic's approval (DRE-7952):
+    a cause-only record the critic sent back is re-run on the critic's
+    budget, whose spent hold still alarms — never left where nothing answers."""
     h, tally, moves = _cause_pass(
         monkeypatch, thread=_sent_back(),
         pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
-    lines = _about(_lines(capsys), "DRE-5930")
-    assert h.fired == [] and moves.log == []
-    assert h.holds == [("DRE-5930", *CAUSE_HOLD)]
-    assert [b.split("\n", 1)[0] for _, b in h.posted] == [
-        CAUSE_QUESTION.split("\n", 1)[0]]
-    assert any(f"{CAUSE_REFUSAL}held, asked, {LEFT}{NEVER_AGAIN}" in line
-               for line in lines), lines
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")] and moves.log == []
+    assert h.holds == []
+    assert not any(b.startswith("🙋") for _, b in h.posted)
 
 
 # --------------------------------------------------------------------------- #
@@ -3479,26 +3463,20 @@ def test_replay_dre_6694_after_the_runs_cause_park_is_held_for_the_event(
     assert [x[2] for x in h.holds] == [RECHECK_AT]
 
 
-def test_replay_dre_6772_through_the_dispatcher_is_held_and_asked_for_the_operator(
+def test_replay_dre_6772_through_the_dispatcher_is_left_to_the_gate(
         monkeypatch, capsys):
     h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), ident="DRE-6772",
                                   text=DRE_6772)
     lines = _about(_lines(capsys), "DRE-6772")
-    assert h.fired == [] and moves.log == []
-    assert h.holds == [("DRE-6772", *proof_cause_park.hold(DRE_6772_ROWS))]
-    assert [b for _, b in h.posted] == [proof_cause_park.question(DRE_6772_ROWS)]
-    assert h.posted[0][1].startswith(
-        "🙋 For the operator — the proof run cannot observe 1 row(s) as worded")
-    assert any(line.startswith("proof-dispatch:") and line.endswith(
-        "held, asked, left DRE-6772 in In Review for the operator, never re-run "
-        "to read the same thing") for line in lines), lines
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert any(line.startswith("proof-dispatch:") and line.endswith(GATE_LEFT)
+               for line in lines), lines
 
 
 def test_replay_dre_6772_with_proof_observed_after_the_hold_is_refused_again(
         monkeypatch, capsys):
-    """Why the question never tells the operator to record `🔬 proof-observed`
-    for a cause row: it discharges the hold, and the record at the head is
-    still caused, so the dispatcher refuses again and asks nothing twice."""
+    """A `🔬 proof-observed` after the old park discharges its hold, and the
+    record at the head is still a gap record: refused again, asked nothing."""
     parked = _sent_back(
         hold(*proof_cause_park.hold(DRE_6772_ROWS), 80),
         comment(proof_cause_park.question(DRE_6772_ROWS), 79),
@@ -3508,9 +3486,7 @@ def test_replay_dre_6772_with_proof_observed_after_the_hold_is_refused_again(
                                   text=DRE_6772)
     lines = _about(_lines(capsys), "DRE-6772")
     assert h.fired == [] and h.posted == [] and h.holds == [] and moves.log == []
-    assert any(line.endswith("already asked, left DRE-6772 in In Review for the "
-                             "operator, never re-run to read the same thing")
-               for line in lines), lines
+    assert any(line.endswith(GATE_LEFT) for line in lines), lines
 
 
 # --------------------------------------------------------------------------- #
@@ -3526,7 +3502,6 @@ NOT_MET_6772 = ("The release notes name the pool's owner",
                 "Not met. the notes name no owner")
 TWO_CAUSED = record_md(MET_ROW, MISDESCRIBED_ROW, GONE_6772)
 TWO_CAUSED_ROWS = proof_cause_park.rows_of(TWO_CAUSED)
-LEFT_6772 = "left DRE-6772 in In Review for the operator"
 
 
 def _first_head_park(minutes_ago: float = 80) -> list:
@@ -3539,25 +3514,24 @@ CRITIC = verdict("REQUEST_CHANGES", 100)
 
 
 @pytest.mark.parametrize("pr", [None, "critic"], ids=["gate", "critic"])
-def test_amendment_a_two_cause_rows_where_one_stood_are_asked_again(
+def test_amendment_a_two_cause_rows_where_one_stood_ask_nothing(
         monkeypatch, capsys, pr):
-    """Case (a), under either trigger: the record at the new head names two
-    cause rows where the first named one. The old hold no longer matches, and
-    neither the drop nor the park waits on the gate's trigger: a new hold and
-    a new question follow it, and nothing is dispatched."""
+    """Case (a): the record at the new head names two cause rows where the
+    first named one. The old hold no longer holds the reading under either
+    trigger, and nothing is asked: the gate's decline leaves it to the gate,
+    the critic's findings get the re-run (DRE-7953)."""
     h, tally, moves = _cause_pass(
         monkeypatch, thread=_sent_back(*_first_head_park()), ident="DRE-6772",
         text=TWO_CAUSED,
         pr=_declined(ident="DRE-6772", approve=CRITIC) if pr else None)
     lines = _about(_lines(capsys), "DRE-6772")
-    assert h.fired == [] and moves.log == []
-    assert h.holds == [("DRE-6772", *proof_cause_park.hold(TWO_CAUSED_ROWS))]
-    assert h.holds[0][2].startswith("the operator's decision on 2 row(s)")
-    assert [b for _, b in h.posted] == [proof_cause_park.question(TWO_CAUSED_ROWS)]
-    assert h.order == [("hold", "DRE-6772"), ("comment", "DRE-6772")]
-    assert tally.held == 1 and tally.dispatched == 0
-    assert any(line.endswith(f"held, asked, {LEFT_6772}{NEVER_AGAIN}")
-               for line in lines), lines
+    assert h.holds == [] and moves.log == []
+    assert not any(b.startswith("🙋") for _, b in h.posted)
+    if pr:
+        assert h.fired == [("DRE-6772", REPO, RERUN, "proof-execute")]
+    else:
+        assert h.fired == [] and h.posted == [] and tally.refused == 1
+        assert any(line.endswith(GATE_LEFT) for line in lines), lines
 
 
 def test_amendment_b_one_row_accepted_and_one_not_met_is_re_run(monkeypatch, capsys):
@@ -3580,9 +3554,8 @@ def test_amendment_c_the_same_rows_at_the_same_head_post_nothing(monkeypatch, ca
         text=DRE_6772)
     lines = _about(_lines(capsys), "DRE-6772")
     assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
-    assert tally.held == 1 and tally.dispatched == 0
-    assert any(line.endswith(f"already asked, {LEFT_6772}{NEVER_AGAIN}")
-               for line in lines), lines
+    assert tally.refused == 1 and tally.dispatched == 0
+    assert any(line.endswith(GATE_LEFT) for line in lines), lines
 
 
 def test_amendment_unread_under_the_critics_trigger_the_old_hold_stands(
@@ -3613,13 +3586,19 @@ def test_amendment_the_cause_hold_is_the_parks_own_by_its_opening():
         "🔬 proof-waiting: x — needs y"]
 
 
-def test_rerunning_conditions_neither_the_drop_nor_the_park_on_the_gate():
-    """Named so a builder removes them rather than reads around them: the two
-    `trigger.gate` conditions DRE-6837 removed from `rerunning`."""
+def test_rerunning_the_cause_hold_drop_is_not_conditioned_on_the_gate():
+    """The `trigger.gate` condition DRE-6837 removed from the drop stays
+    removed: the line that reads past the old cause holds is guarded by the
+    record having been read, never by the trigger. The park it also removed
+    from is gone (DRE-7953); the one `trigger.gate` left in `rerunning`
+    guards leaving a gap record to the gate, which only the gate merges."""
     import inspect
 
-    source = inspect.getsource(proof_dispatch._Pass.rerunning)
-    assert "trigger.gate" not in source
+    source = inspect.getsource(proof_dispatch._Pass.rerunning).splitlines()
+    at = next(i for i, line in enumerate(source) if "_past_cause_hold(" in line)
+    guard = next(line for line in reversed(source[:at]) if line.strip().startswith("if "))
+    assert "trigger.gate" not in guard and "text is not None" in guard
+    assert not hasattr(proof_dispatch, "park_caused")
 
 
 # --------------------------------------------------------------------------- #
@@ -3722,12 +3701,11 @@ FIX_ROW = ("The Desk loads in under two seconds",
 HISTORY_ROW = ("The nightly's window holds the 09:00 PT slot",
                "Not met. history: the 09:00–10:00 PT window of 2026-10-12 — it "
                "filled at 09:52 PT")
+#: The history rows' operator's-decision hold DRE-7740 posted and DRE-7953
+#: retired: a thread may still carry one.
 HISTORY_NEEDS = ("the operator's decision on 1 row(s) that read a closed window or "
                  "a finished run: reword each on a new card, or drop the record")
 HISTORY_HOLD = (proof_record._cut(HISTORY_ROW[0], 70), HISTORY_NEEDS)
-HISTORY_REFUSAL = (f"re-run: 1 row(s) of the record at {SHA7} read a closed window or "
-                   "a finished run — held for the operator, never re-run to read the "
-                   "same thing")
 NEVER_ANOTHER = "never another without a shipped fix or a new 🔬 proof-observed"
 #: Two re-runs spent on this pull request, each answered by a new head.
 SPENT = (gate_rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
@@ -3872,7 +3850,9 @@ def test_rearm_a_dre_id_elsewhere_in_the_cell_is_not_a_fix(monkeypatch, capsys):
            f"Not met. 9 s, the slowness {FIX} describes")
     h, _ = _rearm_pass(monkeypatch, thread=_sent_back(*SPENT),
                        text=record_md(MET_ROW, row))
-    assert h.fired == [] and h.holds == [("DRE-5930", *GATE_SPENT)]
+    # A plain `Not met.` naming no fix: the defect's own card (DRE-7953).
+    assert h.fired == [] and h.holds == [("DRE-5930", *GATE_FILED)]
+    assert len(h.filings) == 1
     assert not any(read[0] == "fix_card" for read in h.board.reads)
 
 
@@ -3918,7 +3898,7 @@ def test_rearm_the_pipelines_own_notes_re_arm_nothing(monkeypatch, capsys, user)
                            text=record_md(MET_ROW, NOT_MET_ROW))
     lines = _about(_lines(capsys), "DRE-5930")
     assert h.fired == [] and h.posted == []
-    assert h.holds == [("DRE-5930", *GATE_SPENT)]
+    assert h.holds == [("DRE-5930", *GATE_FILED)]
     assert any(NEVER_ANOTHER in line for line in lines), lines
 
 
@@ -3945,39 +3925,27 @@ def test_rearm_the_dry_run_prints_would_and_writes_nothing(monkeypatch, capsys):
     assert f"would: dispatch DRE-5930 — re-run after {FIX} shipped" in _lines(capsys)
 
 
-def test_history_a_record_whose_only_unmet_rows_read_history_is_held_at_once(
+def test_history_a_record_whose_only_unmet_rows_read_history_is_left_to_the_gate(
         monkeypatch, capsys):
-    h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(),
-                                  text=record_md(MET_ROW, HISTORY_ROW))
-    lines = _about(_lines(capsys), "DRE-5930")
-    assert h.fired == [] and h.posted == [] and moves.log == []
-    assert h.holds == [("DRE-5930", *HISTORY_HOLD)]
-    assert HISTORY_HOLD[1].startswith(proof_cause_park.CAUSE_HOLD_OPENING)
-    line = linear_ops.proof_waiting_line(*HISTORY_HOLD)
-    assert proof_cause_park.is_cause_hold(line)
-    for half in HISTORY_HOLD:
-        assert linear_ops.proof_text_refusal(half, "half") is None
-    assert tally.held == 1 and tally.dispatched == 0
-    assert any(HISTORY_REFUSAL in line for line in lines), lines
-    capsys.readouterr()
-
-    # The next pass reads past its own hold to the same record and posts
-    # nothing; a 🔬 proof-observed re-arms nothing here either.
-    for extra in ((), (observed_note(30),)):
-        h, tally, moves = _cause_pass(monkeypatch, text=record_md(MET_ROW, HISTORY_ROW),
-                                      thread=_sent_back(hold(*HISTORY_HOLD, 60), *extra))
+    """DRE-7953: a history row is a gap (DRE-7952), so no operator's-decision
+    hold is posted; the old one on a thread is read past, and a
+    `🔬 proof-observed` re-arms nothing here either."""
+    for thread in (_sent_back(), _sent_back(hold(*HISTORY_HOLD, 60)),
+                   _sent_back(hold(*HISTORY_HOLD, 60), observed_note(30))):
+        h, tally, moves = _cause_pass(monkeypatch, thread=thread,
+                                      text=record_md(MET_ROW, HISTORY_ROW))
         lines = _about(_lines(capsys), "DRE-5930")
-        assert h.fired == [] and h.posted == [] and h.holds == []
-        assert tally.held == 1
-        assert any(HISTORY_REFUSAL in line for line in lines), lines
+        assert h.fired == [] and h.posted == [] and h.holds == [] and moves.log == []
+        assert tally.refused == 1 and tally.dispatched == 0
+        assert any(line.endswith(GATE_LEFT) for line in lines), lines
+    assert proof_cause_park.is_cause_hold(linear_ops.proof_waiting_line(*HISTORY_HOLD))
 
 
-def test_history_spends_no_budget_and_holds_under_the_critics_trigger(monkeypatch, capsys):
+def test_history_under_the_critics_trigger_is_re_run(monkeypatch, capsys):
     h, tally, _ = _cause_pass(monkeypatch, thread=_sent_back(),
                               text=record_md(MET_ROW, HISTORY_ROW),
                               pr=_declined(approve=verdict("REQUEST_CHANGES", 100)))
-    assert h.fired == [] and h.holds == [("DRE-5930", *HISTORY_HOLD)]
-    assert not any(proof_run_state.receipt(b) for _, b in h.posted)
+    assert h.fired == [("DRE-5930", REPO, RERUN, "proof-execute")] and h.holds == []
 
 
 @pytest.mark.parametrize("beside", [NOT_MET_ROW, FIX_ROW], ids=["not-met", "fix"])
@@ -3989,27 +3957,13 @@ def test_history_beside_another_unmet_row_is_re_run(monkeypatch, capsys, beside)
     assert h.holds == []
 
 
-def test_history_beside_cause_rows_holds_both_for_the_operator(monkeypatch, capsys):
+def test_history_beside_cause_rows_asks_nobody(monkeypatch, capsys):
     text = record_md(MET_ROW, HISTORY_ROW, CAUSE_ROW)
     h, tally, moves = _cause_pass(monkeypatch, thread=_sent_back(), text=text)
     lines = _about(_lines(capsys), "DRE-5930")
-    cause_rows = proof_cause_park.rows_of(text)
-    assert h.fired == [] and moves.log == []
-    assert h.holds == [("DRE-5930", *proof_cause_park.hold(cause_rows)),
-                       ("DRE-5930", *HISTORY_HOLD)]
-    assert [b for _, b in h.posted] == [proof_cause_park.question(cause_rows)]
-    assert tally.held == 1
-    assert any(HISTORY_REFUSAL.split(" — held")[0] in line and "cause: out-of-reach"
-               in line for line in lines), lines
-    capsys.readouterr()
-
-    # The next pass posts neither again.
-    parked = _sent_back(hold(*proof_cause_park.hold(cause_rows), 80),
-                        comment(proof_cause_park.question(cause_rows), 79),
-                        hold(*HISTORY_HOLD, 78))
-    h, tally, _ = _cause_pass(monkeypatch, thread=parked, text=text)
-    assert h.fired == [] and h.holds == [] and h.posted == []
-    assert tally.held == 1
+    assert h.fired == [] and h.holds == [] and h.posted == [] and moves.log == []
+    assert tally.refused == 1
+    assert any(line.endswith(GATE_LEFT) for line in lines), lines
 
 
 def test_the_wording_says_one_more_per_re_arm_event():
@@ -4392,13 +4346,22 @@ def test_spent_a_record_naming_a_fix_is_never_marked_and_always_read(monkeypatch
 
 def test_spent_an_unmarked_open_hold_gets_the_marked_one_once(monkeypatch, capsys):
     """A budget hold posted before the mark existed is answered once with the
-    marked hold — the next pass's lane read can then spare the read."""
-    thread = _sent_back(*SPENT, hold(*GATE_HELD, 650))
-    h, tally, _ = _gate_pass(monkeypatch, thread=thread, pr=_declined())
-    assert h.holds == [("DRE-5930", *GATE_SPENT)] and tally.held == 1
-    h, _, _ = _gate_pass(monkeypatch, pr=_declined(),
-                         thread=thread + [hold(*GATE_SPENT, 10)])
+    marked hold — the next pass's lane read can then spare the read. On the
+    critic's trigger: the gate's, on plain rows, files a fix card (DRE-7953)."""
+    critic = _declined(approve=verdict("REQUEST_CHANGES", 100))
+    spent = (rerun_receipt(1500, 1), comment("⏳ 5/5 amended", 1400),
+             rerun_receipt(800, 2), comment("⏳ 5/5 amended", 700))
+    marked = (RERUN_HELD[0], f"{RERUN_HELD[1]} — the record at {SHA7} names no fix")
+    thread = _sent_back(*spent, hold(*RERUN_HELD, 650))
+    h, tally, _ = _gate_pass(monkeypatch, thread=thread, pr=critic)
+    assert h.holds == [("DRE-5930", *marked)] and tally.held == 1
+    h, _, _ = _gate_pass(monkeypatch, pr=critic, thread=thread + [hold(*marked, 10)])
     assert h.holds == []
+
+    # The gate's unmarked hold on plain rows gets the fix card's hold instead.
+    h, _, _ = _gate_pass(monkeypatch, pr=_declined(),
+                         thread=_sent_back(*SPENT, hold(*GATE_HELD, 650)))
+    assert h.holds == [("DRE-5930", *GATE_FILED)] and len(h.filings) == 1
 
 
 def test_spent_the_mark_rides_after_the_re_armed_note(monkeypatch, capsys):
