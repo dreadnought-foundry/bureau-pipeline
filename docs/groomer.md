@@ -91,7 +91,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      leg does not stop `verify`.
    - **`verify`** is that matrix: one read-only agent per card, reading the
      card's repo on its default branch under `target/` with a token that can
-     only read that one repo, and holding no Linear key at all. Each agent
+     only read that one repo, and holding no Linear key at all. When the
+     card's repo is not bureau-pipeline, the leg also checks out
+     bureau-pipeline at `main` under `pipeline/` with the job's own read
+     token (DRE-8028), since the code behind a card about the pipeline's own
+     scripts lives there; a code item naming a line in it carries
+     `"repo": "bureau-pipeline"`, counts as a line under `target/` does, and
+     reads `bureau-pipeline:<file>:<line> — <quote>` on the page. A failed
+     second checkout leaves the agent on `target/` alone. Each agent
      asks whether the card's problem can still be seen in that code — not
      whether the card's own fix merged — and answers `still-needed`,
      `partly-solved`, `done-elsewhere`, `obsolete`, `not-worth-it` or

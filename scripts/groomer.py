@@ -3320,7 +3320,8 @@ def _render_batch_reasons(proposal: dict) -> list:
 
 def proof_line(item: dict) -> str:
     """One verify proof item as the page writes it: `path:line — quote` for a
-    `file:line` item, `<fact> — quote` for a done-work or routing item
+    `file:line` item — `<repo>:path:line — quote` when it names its repo, as
+    a line in bureau-pipeline does (DRE-8028) — `<fact> — quote` for a done-work or routing item
     (DRE-7240) — the runner's line from the data it supplied, never the
     agent's paraphrase — and `source — quote` for any other. The ONE form,
     read by the Cancel reason (`groom_verify_agent.cancel_reason`) and the
@@ -3331,7 +3332,9 @@ def proof_line(item: dict) -> str:
         return " ".join(str(text or "").split())
 
     if "file" in item:
-        return f"{one(item.get('file'))}:{item.get('line')} — {one(item.get('quote'))}"
+        repo = one(item.get("repo"))
+        return (f"{repo + ':' if repo else ''}{one(item.get('file'))}:"
+                f"{item.get('line')} — {one(item.get('quote'))}")
     if "done_card" in item:
         fact = one(item.get("fact")) or (f"{one(item.get('done_card'))} → "
                                          f"{one(item.get('pr'))}")
