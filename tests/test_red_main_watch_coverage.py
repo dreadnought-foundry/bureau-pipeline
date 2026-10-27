@@ -177,6 +177,19 @@ class LiveCoverageTest(unittest.TestCase):
         # the medic's job, never a second repair.
         self.assertNotIn("Red-Main Repair", watched_by_stub())
 
+    def test_the_deleted_save_route_is_neither_on_disk_nor_watched(self):
+        # DRE-8021 deleted the console's pull-request save route and the carry
+        # bridge into the home, workflows and all. A watch list naming either
+        # watches nothing, and a watch list naming any workflow this repo
+        # does not have is a stale entry.
+        for pattern in ("model-config-*.yml", "model-home-*.yml"):
+            self.assertEqual([], sorted(WF_DIR.glob(pattern)), pattern)
+        names = {wf.name for wf in cww.load_workflows(WF_DIR)}
+        for stub in (REPAIR_STUB, "self-medic.yml"):
+            listed = (cww.on_block(doc(stub)).get("workflow_run") or {}).get("workflows")
+            self.assertTrue(listed, stub)
+            self.assertEqual([], [n for n in listed if n not in names], stub)
+
     def test_the_medic_is_the_declared_terminal_watcher(self):
         # The terminal-watcher exemption, stated in data with its reason — nothing
         # watches the medic, deliberately, and the checker says why.
@@ -229,7 +242,7 @@ class NewWorkflowCannotSlipThroughTest(unittest.TestCase):
             "    steps:\n      - run: 'true'\n",
         )
         # Each list gains the new gate at its end, whatever it ends with today
-        # (DRE-6986 added Model home carry to both).
+        # (DRE-6986 added a workflow to both, and DRE-8021 deleted it).
         repair = (self.dir / REPAIR_STUB).read_text()
         stub = _append_watched(repair, "Brand New Gate")
         self.assertNotEqual(repair, stub, "the repair rail's watch list did not take the new gate")

@@ -481,29 +481,8 @@ defaults in the code as a home document — what the operator seeds it with.
 
 What this file still carries is read for the **code-side facts** — `effort`,
 `review_separation`, `discovery`, `retired`, `excluded`, `session_agents`,
-`about` and `rules` — and, until DRE-6982, its old save route regenerates the
-literal from it on every merged save, so a save by that route stays in force
-through the defaults.
-
-**Carried into the home until part 2's switch (DRE-6986).** Once the home is
-seeded a run reads it and not this file, so a save by the old route would be
-in force nowhere. Until the console writes the home itself (part 2,
-DRE-6976), `.github/workflows/model-home-carry.yml` runs on every push to
-`main` that touches this file and carries a merged change to its choices into
-the home within minutes (`scripts/model_home_carry.py`): a group's new first
-model moves to the front of the home's ladder, the home's other rungs as they
-are; an agent's new group; an added group with its ladder; a project's model
-set or cleared. Nothing else is carried — a ladder changed below its first
-rung, a group removed, a whole choice key removed — and the run says so in one
-line and ends green. The write is held to `model_home.home_errors`, re-read
-just before it, and stamped `written_by: console` for a merge from the old
-route's `agent/model-config-` branch, `operator` otherwise. Before the seeding
-nothing is carried: the change is in the defaults in the code, which the
-seeding renders. A push whose queued run GitHub cancelled, or whose run was
-red, is carried by the next run: it compares from the last green run's head
-when that is older than the push's own `before`. Each run prints one line
-tagged `model-home-carry:`. It goes
-with the route it serves (DRE-6981).
+`about` and `rules` — and, until DRE-6982, the generator renders the defaults
+in the code from it.
 
 **The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,
 verifier]`) and `planners_may_hold` (today `[planner]`): the agents that must stay Reviewers
@@ -946,38 +925,16 @@ Until DRE-8020 the generator had a third target, a whole generated file the
 console's Settings › Agents & models page read. Nothing reads it now — the
 console reads the home and the pipeline's own facts (DRE-7876) — so the file is
 gone, and the generator no longer judges the moves and choices the page could
-offer. The plain-English caution a choice carries lives in
-`scripts/model_choice.py`, which the change script below imports; the one
-choice it still refuses is a model the pinned Claude Code cannot run (`Our
-pinned Claude Code cannot run <model> yet.`), read off the floor tables in
-`tests/test_model_cli_support.py` through `claude_code_pin.model_floors`.
+offer. The plain-English caution words a choice carried
+(`scripts/model_choice.py`) went with their last caller, the old save route
+(DRE-8021).
 
-The console WRITES this file too, without ever editing YAML itself (DRE-6624).
-Save changes on Settings › Agents & models dispatches
-`.github/workflows/model-config-change.yml` with a change set — move an agent,
-add an agent, add a group, set a group's default model, set or clear a
-project's exception — and `scripts/model_config_change.py` makes each change as
-a text edit that keeps every comment, the way an adoption does. Every change is
-judged by `model_fallback.policy_errors` before anything is written: one
-refusal fails the run with each refused change's reason and opens no branch.
-An accepted set is regenerated with the generator above and opened as ONE pull
-request on `agent/model-config-<digest>`, the same changes always naming the
-same branch, so pressing Save twice opens one pull request. A new group is a
-build group beside the three (DRE-6834, *An explicit choice is admissible*
-above), and a name that is taken, empty or not lowercase letters, digits and
-dashes is refused in one plain sentence; the file's top-level `add_group`,
-`{"allowed": true, "reason": null}` today, tells the console the pipeline takes
-one, judged as a move is, and when it does not, `reason` says why in plain
-words. The new group's model carries a caution in the pull request the way a
-Builders choice does, priced against the Builders' default model. A
-session agent joins any group (DRE-6833), and so does an agent added in the same
-change set, since `add_agent` makes it one; a name in neither `agents.yaml` nor
-`session_agents` cannot, because the generator writes a model for every other
-name in `agents`. The console shows the CEO every `::error::` line and summary
-bullet of a refusal word for word, so each is one plain sentence — the change in
-the pull request body's words, then why, groups by their labels — rendered by
-`model_config_change.plain_lines`; the validator's own findings go to the run
-log and to a block under the bullets, for an engineer.
+**A save on Settings › Agents & models writes the home** (DRE-6977). It opens
+no pull request and edits no file here: the console writes the one document
+under a lock, held to `model_home.home_errors`, and the change is in force from
+the next agent run, which reads the home when it selects. The route that turned
+a save into a pull request editing this file (DRE-6624), and the bridge that
+carried such a merge into the home (DRE-6986), were deleted by DRE-8021.
 
 ## The effort level (DRE-4836)
 
@@ -1049,8 +1006,7 @@ Where a change takes effect depends on which regime a run's `model-home:` line
 shows, and `docs/model-choice-levers.md` says which one held when it was last
 read. Once the home reads, a change written to it is in force on the next run
 (DRE-6939). The old route — edit `models.yaml`, run the sync script, commit
-both, which is also what the console's save does until it writes the home
-itself (DRE-6976) — changes the defaults in the code, which every run without
+both — changes the defaults in the code, which every run without
 a readable home runs on. Merging it to `main` puts it in force for `@main`
 callers at once, and for tag-pinned callers when `stable` or the next `vN`
 moves past the merge — treat it as a production change. Remember that
