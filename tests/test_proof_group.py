@@ -7,18 +7,20 @@ ladder. What changes is that the proof model can move alone — a reorder of the
 Proof ladder moves the model chosen for `proof` and leaves every build role
 that is not on it where it was.
 
-The console can change every one of those choices, and
-`tests/test_console_change_keeps_the_suite_green.py` runs this file in a copy
-after each change it can save — a group's default changed, `proof` moved to
-another group, a build role moved onto Proof. So each check reads the kind
-`agents.proof` names in the copy, and the roles on it, rather than assume
-today's mapping.
+Which group `proof` is in, and what each group runs, are choices the console
+can change, and since DRE-6939 the selector reads them off the home, never off
+a tree's `config/models.yaml`. So each check runs on a home document built
+from the frozen one (`model_fixture.fixture_home()`): `proof` moved onto a
+Proof group of its own, listing the models of the group it was in, in the same
+order — and that document with the Proof group's last model led with. Each
+check reads the group `agents.proof` names in the document, and the roles on
+it, rather than assume today's mapping.
 
-Each selection runs the selector's CLI against a temporary copy of the real
-config, built and regenerated the way `tests/test_model_choice_levers.py`
-builds one, with every model up (`BUREAU_FAKE_AVAILABLE`) and no network
-call. Every model id a check expects is read off the copy, never typed
-(DRE-6853), and the group's ladder and label are not asserted as literals:
+Each selection runs the selector's CLI in a tree `model_fixture.fixture_tree`
+builds without the generator (DRE-8018), the document handed to it through
+`home_env`, with every model up (`BUREAU_FAKE_AVAILABLE`) and no network
+call. Every model id a check expects is read off the document, never typed
+(DRE-6853), and the group's models and label are not asserted as literals:
 they are choices the console can change (DRE-6866).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_group.py -q
@@ -26,141 +28,104 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_group.py -q
 
 from __future__ import annotations
 
-import os
-import shutil
+import copy
 import subprocess
 import sys
-from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tests"))
 
-HOME_NAMES = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
+import model_fixture  # noqa: E402
+from model_fixture import fixture_home, fixture_tree, home_env, ladder, lead_with  # noqa: E402
 
-# The config files a tree carries beside its scripts, as the levers test
-# copies them: `model-choices.json` is one of the generator's targets.
-CONFIG_FILES = ("models.yaml", "model-prices.yaml", "repo-map.json", "model-choices.json")
+PROOF = "proof"
 
 # The six build roles the Builders group names, which a Proof-only change
 # must leave alone.
 BUILD_ROLES = ("engineer", "frontend", "devops", "database-architect", "fixer", "repairer")
 
 
-def real_raw() -> dict:
-    return yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+def with_proof_group(doc: dict) -> dict:
+    """`doc` with `proof` on a Proof group of its own, listing the models of
+    the group it was in, in the same order — the day the group landed."""
+    new = copy.deepcopy(doc)
+    models = ladder(new, new["agents"][PROOF])
+    new["groups"][PROOF] = {"label": "Proof",
+                            "purpose": "Run a proof card's checks and record what it saw.",
+                            "models": list(models)}
+    return model_fixture.move_agent(new, PROOF, PROOF)
 
 
-def ladder_ids(raw: dict, kind: str) -> list[str]:
-    """The model ids `kind` walks in a raw config."""
-    return [r["model"] if isinstance(r, dict) else r
-            for r in raw["ladders"][ladder_of(raw, kind)]]
+def proof_group(doc: dict) -> str:
+    """The group `agents.proof` names in a home document."""
+    return doc["agents"][PROOF]
 
 
-def ladder_of(raw: dict, kind: str) -> str:
-    """The name of the ladder `kind` walks in a raw config."""
-    spec = raw["kinds"][kind]
-    return spec["ladder"] if isinstance(spec, dict) else spec
+def last_model_first(doc: dict) -> dict:
+    """`doc` with the group proof is in led with that group's last model."""
+    group = proof_group(doc)
+    return lead_with(doc, group, ladder(doc, group)[-1])
 
 
-def build_tree(dest: Path, edit: Callable[[dict], None] | None = None) -> Path:
-    """Today's scripts and a copy of the real config at `dest`, its
-    `models.yaml` edited by `edit` when one is given, and the generated
-    mirrors regenerated from it by the real generator."""
-    dest = Path(dest)
-    (dest / "scripts").mkdir(parents=True, exist_ok=True)
-    (dest / "config").mkdir(parents=True, exist_ok=True)
-    for path in sorted((ROOT / "scripts").glob("*.py")):
-        shutil.copy2(path, dest / "scripts" / path.name)
-    for name in CONFIG_FILES:
-        shutil.copy2(ROOT / "config" / name, dest / "config" / name)
-    shutil.copy2(ROOT / "agents.yaml", dest / "agents.yaml")
-    if edit is not None:
-        raw = yaml.safe_load((dest / "config" / "models.yaml").read_text())
-        edit(raw)
-        (dest / "config" / "models.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
-    proc = subprocess.run(
-        [sys.executable, str(dest / "scripts" / "sync_model_config.py")],
-        cwd=dest, capture_output=True, text=True, timeout=120)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    return dest
-
-
-def tree_raw(tree: Path) -> dict:
-    return yaml.safe_load((tree / "config" / "models.yaml").read_text())
-
-
-def child_env() -> dict:
-    """This environment with no home name, and every model up."""
-    env = {k: v for k, v in os.environ.items() if k not in HOME_NAMES}
-    env["BUREAU_FAKE_AVAILABLE"] = "{}"
-    return env
-
-
-def select(tree: Path, role: str) -> tuple[str, str]:
-    """`(model, note)` from the tree's selector CLI, the way a workflow's
-    Select model step calls it."""
+def select(tree: Path, doc: dict, role: str) -> tuple[str, str]:
+    """`(model, note)` from the tree's selector CLI on `doc`, the way a
+    workflow's Select model step calls it."""
     note = tree / "note.txt"
     if note.exists():
         note.unlink()
+    env = home_env(tree, doc, BUREAU_FAKE_AVAILABLE="{}")
+    env.pop("BUREAU_MODEL_HOME_TOKEN", None)
     proc = subprocess.run(
         [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select", role,
          "--explain-file", str(note)],
-        cwd=tree, capture_output=True, text=True, env=child_env(), timeout=120)
+        cwd=tree, capture_output=True, text=True, env=env, timeout=120)
     assert proc.returncode == 0, proc.stderr
+    assert "model-home: read" in proc.stderr, proc.stderr
     return proc.stdout.strip(), note.read_text().rstrip("\n")
 
 
-def proof_kind(raw: dict) -> str:
-    """The kind `agents.proof` names in a raw config."""
-    return raw["agents"]["proof"]
-
-
-def last_rung_first(raw: dict) -> None:
-    """The ladder proof walks in a raw config, its last rung moved first."""
-    rungs = raw["ladders"][ladder_of(raw, proof_kind(raw))]
-    rungs.insert(0, rungs.pop())
+@pytest.fixture(scope="module")
+def base(tmp_path_factory) -> tuple[Path, dict]:
+    """A tree, and the frozen document with proof on a Proof group."""
+    tree = fixture_tree(tmp_path_factory.mktemp("base") / "tree", regenerate=False)
+    return tree, with_proof_group(fixture_home())
 
 
 @pytest.fixture(scope="module")
-def base(tmp_path_factory) -> Path:
-    """The copy as committed, regenerated."""
-    return build_tree(tmp_path_factory.mktemp("base"))
-
-
-@pytest.fixture(scope="module")
-def reordered(tmp_path_factory) -> Path:
-    """The copy with proof's ladder's last rung moved first, regenerated."""
-    return build_tree(tmp_path_factory.mktemp("reordered"), last_rung_first)
+def reordered(tmp_path_factory, base) -> tuple[Path, dict]:
+    """A tree, and that document with the Proof group's last model first."""
+    tree = fixture_tree(tmp_path_factory.mktemp("reordered") / "tree", regenerate=False)
+    return tree, last_model_first(base[1])
 
 
 def test_a_proof_run_selects_the_first_model_of_the_kind_it_is_on(base):
-    raw = tree_raw(base)
-    kind = proof_kind(raw)
-    top = ladder_ids(raw, kind)[0]
-    chosen, note = select(base, "proof")
+    tree, doc = base
+    group = proof_group(doc)
+    top = ladder(doc, group)[0]
+    chosen, note = select(tree, doc, PROOF)
     assert chosen == top
-    assert f"{top} chosen for proof ({kind} kind)" in note
+    assert f"{top} chosen for proof ({group} kind)" in note
 
 
 def test_reordering_the_proof_ladder_moves_proof_and_only_the_build_roles_on_it(
         base, reordered):
-    raw = tree_raw(base)
-    kind = proof_kind(raw)
-    moved = ladder_ids(tree_raw(reordered), kind)[0]
-    assert moved == ladder_ids(raw, kind)[-1]
+    (base_tree, doc), (moved_tree, moved_doc) = base, reordered
+    group = proof_group(doc)
+    moved = ladder(moved_doc, group)[0]
+    assert moved == ladder(doc, group)[-1]
 
-    before, _ = select(base, "proof")
-    after, note = select(reordered, "proof")
+    before, _ = select(base_tree, doc, PROOF)
+    after, note = select(moved_tree, moved_doc, PROOF)
     assert after == moved
     assert after != before
-    assert f"{moved} chosen for proof ({kind} kind)" in note
+    assert f"{moved} chosen for proof ({group} kind)" in note
 
-    ladder = ladder_of(raw, kind)
     for role in BUILD_ROLES:
-        if ladder_of(raw, raw["agents"][role]) == ladder:
-            assert select(reordered, role)[0] == moved, role
+        if doc["agents"][role] == group:
+            assert select(moved_tree, moved_doc, role)[0] == moved, role
         else:
-            assert select(reordered, role)[0] == select(base, role)[0], role
+            assert (select(moved_tree, moved_doc, role)[0]
+                    == select(base_tree, doc, role)[0]), role

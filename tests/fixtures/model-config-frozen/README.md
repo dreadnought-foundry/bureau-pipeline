@@ -68,7 +68,12 @@ with `regenerate=False`: `fixture_tree(dest, regenerate=False)` copies today's
 `scripts/` and the frozen files and runs nothing, because a tree whose selector
 answers from a home document has no use for a regenerated literal. A test that
 reads the committed files checks only what must hold for any saved state, and
-derives every expected value from those files.
+derives every expected value from those files. The planner's path
+(`PLANNER_PATH`, DRE-6990) and the rest of the model tests
+(`HOME_DOCUMENT_TREES`, DRE-8018), both in `tests/test_model_fixture.py`, are
+held to this: every tree they build passes `regenerate=False`, none names the
+generator, and none reads a choice off the frozen `models.yaml` — they read it
+off `home.json`, or off a tree's own `code_defaults()` when no home is read.
 
 `fixture_tree`'s default still regenerates the literal: it runs
 `scripts/sync_model_config.py` inside the tree and raises `FixtureStale` when
