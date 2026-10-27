@@ -557,6 +557,20 @@ jobs:
   # with the cases keeps every shard inside it. `tests/test_walks_time_budget.py`
   # holds every shard of every walk to the target and to this clock, and
   # names the walk and the shard count that would fit when one does not.
+  #
+  # A HUNG CASE FAILS BEFORE THIS CLOCK (DRE-8152). On 2026-10-27 the
+  # project-model walk's shard 5 of 8 printed nothing after its case-free
+  # tests until this clock canceled it (job 122184991649, run 40502923604):
+  # an inner suite left children that never exited, and the run concluded
+  # `cancelled`, naming no case, so `stable` did not move. Two limits sit
+  # under the clock now. A shard's cases have 900 s from when they start
+  # (`tests/console_change_walk.py`'s `CASE_LIMIT_SECONDS`, twice the
+  # target); a case past it is killed with every child it left, and its
+  # tests fail naming the walk, the shard, the case and the inner test it
+  # was in. `run-walks` stops a walk's pytest at 1,020 s (`WALK_LIMIT_SECONDS`),
+  # the backstop for a hang outside any subprocess, and names the shard's
+  # cases. Both leave the job red rather than canceled;
+  # `tests/test_walks_time_budget.py` holds the order.
   walks:
     name: scripts unit tests (walk ${{ matrix.walk }} shard ${{ matrix.shard }} of ${{ matrix.shards }})
     needs: walk-list

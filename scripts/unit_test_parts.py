@@ -51,6 +51,14 @@ cases gains shards with no edit here or in `tests.yml`;
 `tests/test_walks_time_budget.py` holds every shard to the target and to the
 walks job's clock.
 
+A HUNG WALK IS STOPPED BY NAME (DRE-8152). On 2026-10-27 the project-model
+walk's shard 5 of 8 hung until the walks job's 20-minute clock canceled it
+(job 122184991649, run 40502923604), and a canceled run names nothing.
+`run-walks` runs each walk's pytest in a process group of its own and stops
+it at `WALK_LIMIT_SECONDS`, red, printing the walk, the shard and the cases
+it selected. That is the backstop: a hung case is caught first, inside the
+walk, by the helper's `CASE_LIMIT_SECONDS`, and named there.
+
 `measure` rebuilds the durations record from pytest `--junit-xml` reports, or
 from the GitHub Actions logs of the parts' `pytest -v` (each result line is
 timestamped by the runner, so a green run's logs ARE a measurement):
@@ -109,6 +117,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import statistics
 import subprocess
 import sys
@@ -146,6 +155,15 @@ WALK_JOB_FIXED_SECONDS = 19
 #: GitHub's 2-core runners, so a shard projected here lands at or under 15
 #: minutes on a slow one.
 WALK_SHARD_TARGET_SECONDS = 450
+
+#: The most `run-walks` lets one walk's pytest run, in seconds (DRE-8152):
+#: 17 minutes, three under the walks job's 20-minute `timeout-minutes` for
+#: its setup, and two over the helper's 900-second case limit
+#: (`tests/console_change_walk.py`'s `CASE_LIMIT_SECONDS`) for the walk to
+#: report the cases that ran past it. A walk hung outside any subprocess the
+#: helper can stop is stopped here, red and named, rather than canceled with
+#: the job; `tests/test_walks_time_budget.py` holds the order.
+WALK_LIMIT_SECONDS = 1020
 
 #: The weight of a file when nothing is measured at all.
 DEFAULT_WEIGHT = 1.0
@@ -593,29 +611,70 @@ def _took(seconds: float) -> str:
     return f"{minutes}m{secs:02d}s"
 
 
-def shard_line(root: Path, rel: str) -> str:
-    """The one line naming the walk, the shard this job runs of it and how
-    many of its cases that shard selected (DRE-7907) — read through the
-    helper, by the same names the walk's own run reads."""
+def _shard(root: Path, rel: str) -> tuple[str, str, list[str] | None]:
+    """The shard this job runs of the walk `rel`, as `n of m`; and the cases
+    it selected, or None with the reason they could not be read in their
+    place — read through the helper, by the same names the walk's own run
+    reads."""
     helper = _helper()
     shard = os.environ.get(helper.SHARD_ENV, "1")
     shards = os.environ.get(helper.SHARDS_ENV, "1")
-    head = f"shard {shard} of {shards} of walk {rel}"
     names = walk_cases(root, rel)
     if names is None:
-        return f"{head}: its cases could not be read"
+        return f"{shard} of {shards}", "its cases could not be read", None
     try:
-        picked = helper.shard(names)
+        return f"{shard} of {shards}", f"of {len(names)}", helper.shard(names)
     except ValueError as exc:
-        return f"{head}: {exc}"
-    return f"{head}: {len(picked)} case(s) selected of {len(names)}"
+        return f"{shard} of {shards}", str(exc), None
 
 
-def run_walks(root: Path, only: str | None = None) -> int:
+def shard_line(root: Path, rel: str) -> str:
+    """The one line naming the walk, the shard this job runs of it and how
+    many of its cases that shard selected (DRE-7907)."""
+    shard, why, picked = _shard(root, rel)
+    head = f"shard {shard} of walk {rel}"
+    if picked is None:
+        return f"{head}: {why}"
+    return f"{head}: {len(picked)} case(s) selected {why}"
+
+
+def over_limit_line(root: Path, rel: str, limit: float) -> str:
+    """The one line naming a walk `run-walks` stopped at `limit` (DRE-8152):
+    the walk, the shard and the cases it selected."""
+    shard, why, picked = _shard(root, rel)
+    cases = ", ".join(picked) if picked is not None else f"unknown ({why})"
+    return (f"walk {rel}, shard {shard}, ran past its {limit:g} s limit and "
+            f"was stopped before the walks job's clock — the case(s) this "
+            f"shard selected: {cases}")
+
+
+def _run_walk(root: Path, rel: str, limit: float) -> int | None:
+    """The walk's pytest, in a process group of its own; its exit code, or
+    None when it ran past `limit` and the group was killed."""
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "pytest", "-v", "-p", "no:cacheprovider", rel],
+        cwd=root, start_new_session=True)
+    try:
+        return proc.wait(timeout=limit)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+        return None
+    except BaseException:
+        os.killpg(proc.pid, signal.SIGKILL)
+        raise
+
+
+def run_walks(root: Path, only: str | None = None,
+              limit: float = WALK_LIMIT_SECONDS) -> int:
     """Every walk, or only the walk `only` names, one pytest run each, timed,
     each run as the shard the environment names (every case when it names
-    none). 1 when a walk failed or there is no walk at all — a pattern that
-    matches nothing is a silent green — and 2 when `only` names no walk."""
+    none), each stopped at `limit` seconds. 1 when a walk failed, ran past
+    its limit, or there is no walk at all — a pattern that matches nothing
+    is a silent green — and 2 when `only` names no walk."""
     found = walks(root)
     if not found:
         print(f"unit_test_parts: no walk ({WALK}) under {root / 'tests'} — "
@@ -633,11 +692,12 @@ def run_walks(root: Path, only: str | None = None) -> int:
         shards.append(shard_line(root, rel))
         print(shards[-1], flush=True)
         start = time.monotonic()
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", "-v", "-p", "no:cacheprovider", rel],
-            cwd=root)
+        code = _run_walk(root, rel, limit)
         took = time.monotonic() - start
-        verdict = "passed" if proc.returncode == 0 else "failed"
+        if code is None:
+            shards.append(over_limit_line(root, rel, limit))
+            print(shards[-1], flush=True)
+        verdict = "passed" if code == 0 else "failed"
         rows.append((rel, verdict, took))
         print(f"walk {rel} ... {verdict} ... took {_took(took)}", flush=True)
     failed = [rel for rel, verdict, _ in rows if verdict == "failed"]

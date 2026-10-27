@@ -4,7 +4,8 @@
     "tests/test_console_agent_move_keeps_the_suite_green.py": "tests/test_console_agent_move_keeps_the_suite_green.py's whole walk job at 2,769 s, the slowest of four Pipeline Tests push runs on main on 2026-10-24: 46m09s in job 120989216557 (run 40133214810, 2:12 PM to 3:13 PM PT, ubuntu-latest, 2 cores, 25 cases in one job), recorded for DRE-7907",
     "tests/test_console_change_keeps_the_suite_green.py": "tests/test_console_change_keeps_the_suite_green.py, which has no desk measurement because its slow cases skip in the walks job, at 29 s, the longest the walks job has taken for it (0m29s in job 114573848564, run 38174492643, 2026-10-11)",
     "tests/test_console_every_default_keeps_the_suite_green.py": "tests/test_console_every_default_keeps_the_suite_green.py's whole walk job at 3,607 s, the slowest of four Pipeline Tests push runs on main on 2026-10-24: 60m07s in job 120989216560 (run 40133214810, 2:12 PM to 3:13 PM PT, ubuntu-latest, 2 cores, 35 cases in one job), recorded for DRE-7907",
-    "tests/test_console_project_model_keeps_the_suite_green.py": "tests/test_console_project_model_keeps_the_suite_green.py's whole walk job at 3,056 s, the slowest of four Pipeline Tests push runs on main on 2026-10-24: 50m56s in job 120947794113 (run 40119507138, 11:10 AM to 12:16 PM PT, ubuntu-latest, 2 cores, 31 cases in one job), recorded for DRE-7907"
+    "tests/test_console_project_model_keeps_the_suite_green.py": "tests/test_console_project_model_keeps_the_suite_green.py's whole walk job at 3,056 s, the slowest of four Pipeline Tests push runs on main on 2026-10-24: 50m56s in job 120947794113 (run 40119507138, 11:10 AM to 12:16 PM PT, ubuntu-latest, 2 cores, 31 cases in one job), recorded for DRE-7907",
+    "tests/test_walk_case_limit.py": "tests/test_walk_case_limit.py at 18.57 s, a local pytest run of the file alone on 2026-10-27 (4 cores), added with it by DRE-8152"
   },
   "seconds": {
     "tests/fixtures/mirror-check/agent-bureau/console/backend/tests/test_unrelated.py": 0.01,
@@ -821,6 +822,7 @@
     "tests/test_visual_qa_context.py": 0.5,
     "tests/test_visual_qa_plan.py": 0.38,
     "tests/test_waiting_epic_not_held_by_proof.py": 0.41,
+    "tests/test_walk_case_limit.py": 18.57,
     "tests/test_walk_reach.py": 17.88,
     "tests/test_walks_time_budget.py": 5.63,
     "tests/test_watchdog_names_the_mark.py": 1.04,
