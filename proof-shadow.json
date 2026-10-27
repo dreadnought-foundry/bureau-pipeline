@@ -1,0 +1,7 @@
+{
+  "card": "DRE-6678",
+  "model": "claude-sonnet-5-5",
+  "run_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/40567772170",
+  "dispatched_at": "2026-10-27T19:17:23Z",
+  "record_path": "docs/groomer-readiness-proof-2026-10.md"
+}
