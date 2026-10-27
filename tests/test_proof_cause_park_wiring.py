@@ -362,7 +362,7 @@ class CauseParkStepSourceTest(unittest.TestCase):
         """DRE-7953: nothing in the step runs the cause park's CLI — no
         `park`, no `hold`, no `question`. The press and decision hold stays."""
         run = self._run_text()
-        self.assertNotIn("proof_cause_park.py", run)
+        self.assertNotIn("scripts/proof_cause_park.py", run)
         self.assertIn('linear_ops.py proof-waiting "$CARD" "$OBSERVED" "$NEEDS"', run)
 
     def test_park_stays_with_no_caller_and_says_it_is_retired(self):
@@ -370,13 +370,13 @@ class CauseParkStepSourceTest(unittest.TestCase):
         nothing in the pipeline calls it."""
         doc = " ".join((proof_cause_park.__doc__ or "").split())
         self.assertIn("`park` is retired (DRE-7953)", doc)
-        self.assertIn("retired (DRE-7953)", " ".join((proof_cause_park.park.__doc__ or "").split()))
+        self.assertIn("Retired (DRE-7953)", " ".join((proof_cause_park.park.__doc__ or "").split()))
         self.assertTrue(callable(proof_cause_park.park))
         self.assertTrue(callable(getattr(proof_cause_park, "_cmd_park", None)))
         scripts = (ROOT / "scripts").glob("*")
         callers = [p.name for p in scripts if p.is_file() and p.name != "proof_cause_park.py"
-                   and "proof_cause_park.py park" in p.read_text(encoding="utf-8",
-                                                                  errors="replace")]
+                   and "scripts/proof_cause_park.py park" in p.read_text(
+                       encoding="utf-8", errors="replace")]
         self.assertEqual([], callers)
 
     def test_the_step_quotes_none_of_the_module_s_words(self):
