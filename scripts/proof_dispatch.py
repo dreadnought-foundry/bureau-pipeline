@@ -985,22 +985,24 @@ def _run_id(run: dict) -> int | None:
         {"details_url": run.get("details_url") or run.get("detailsUrl")})
 
 
-def _conclusion(run: dict, failed_inside: dict) -> str:
+def _conclusion(run: dict, failed_inside: dict | None) -> str:
     """A check's conclusion, case-blind — `failure` for a canceled check whose
     log `failed_inside` names a failed test in (DRE-7018)."""
     conclusion = str(run.get("conclusion") or "").lower()
-    if conclusion == canceled_check.CANCELLED and failed_inside.get(run.get("id")):
+    if conclusion == canceled_check.CANCELLED and (failed_inside or {}).get(run.get("id")):
         return canceled_check.FAILURE
     return conclusion
 
 
-def _canceled_only(runs, failed_inside: dict) -> set:
+def _canceled_only(runs, failed_inside: dict | None) -> set:
     """The workflow runs whose red checks are only a cancellation's echo
     (DRE-8177): each holds a `cancelled` check, and every red check in it
     finished no earlier than its last canceled one — the summary job that
     waited on a canceled part. A finish time is read off `completed_at` or
     `completedAt`, and a red or canceled check whose time cannot be read
-    keeps its run red."""
+    keeps its run red. So does a canceled check whose log the caller read
+    and could not — absent from `failed_inside`: a test may have failed
+    inside it. `None` is the caller that read no log."""
     by_run: dict = {}
     for run in runs or ():
         if not isinstance(run, dict) or canceled_check.is_review(run):
@@ -1016,7 +1018,8 @@ def _canceled_only(runs, failed_inside: dict) -> set:
             at = canceled_check._finished(
                 {"completed_at": check.get("completed_at") or check.get("completedAt")})
             if conclusion == canceled_check.CANCELLED:
-                canceled.append(at)
+                unread = failed_inside is not None and check.get("id") not in failed_inside
+                canceled.append(None if unread else at)
             elif conclusion in unfixable_checks.FAILED_CONCLUSIONS:
                 red.append(at)
         if not canceled or None in canceled or None in red:
@@ -1047,12 +1050,12 @@ def record_red_checks(pr: dict, runs, failed_inside: dict | None = None) -> list
     fix agent at a cancellation (DRE-3072). `_canceled_only` is the test.
     `failed_inside` is the check id → failed tests map `canceled_check.split`
     reads: a canceled check it names with a failed test is a failure
-    (DRE-7018). Rollup nodes carry no id, so `_declined` passes none."""
+    (DRE-7018), and one it leaves out, its log unread, keeps its run red.
+    Rollup nodes carry no id, so `_declined` passes none."""
     if not proof_record_branch(pr.get("headRefName")):
         return []
     if not_proven_at(pr, pr.get("headRefOid") or ""):
         return []
-    failed_inside = failed_inside or {}
     echo = _canceled_only(runs, failed_inside)
     red = []
     for run in runs or ():
@@ -1081,7 +1084,9 @@ def record_red_checks_read(branch: str, head: str, checks_path: str,
 
     Each canceled job's log is read as the sweep reads it (DRE-8177,
     DRE-7018), so a canceled part whose log shows a failed test is named
-    here as it is there. The Resolve step reads this reader's stdout as the
+    here as it is there. A log this step's token cannot read keeps its run
+    red, so a run the sweep sent is never refused for want of it. The
+    Resolve step reads this reader's stdout as the
     run's note, so the log lines go to stderr."""
     runs = unfixable_checks._check_runs(_pages(checks_path))
     pr = {"headRefName": branch, "headRefOid": head, "comments": _pages(thread_path)}
