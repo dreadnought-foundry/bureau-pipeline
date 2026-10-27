@@ -4,6 +4,18 @@
 `stable` pointed at `b2a6e726` at that time, 9 commits behind `main`.
 Every time in this record is Pacific.
 
+**2026-10-27 (DRE-8024): the regime read on 2026-10-12 ended with part 2 of DRE-6936.**
+Part 2 (DRE-6976, done on 2026-10-25) made a save on Settings › Agents & models write the home (DRE-6977).
+A bureau-pipeline run now reads the home when it selects. Agent Plan run 40578961866 (`plan.yml@main` at `86711ecb`) logged this at 1:34:44 PM PT on 2026-10-27:
+`model-home: read — written 2026-10-27T20:06:22Z by console`
+and then
+`model-policy: claude-opus-5-5 chosen for planner (judgement kind) — top of the ladder, nothing above it was skipped — project bureau-pipeline: no exception, fleet ladder · model-home: read`.
+No proof run, no product repository's run and no console job was read for this paragraph.
+A choice is changed only in the home, through Settings › Agents & models.
+Part 3 (DRE-6981) has not landed. Its DRE-6982 removes the generator and DRE-6983 the choices in `config/models.yaml`. After that the defaults in the code are hand-written, and they are not a lever.
+The sibling table's `DRE-7188` and `DRE-7189` rows now name the home as their lever, and the test pulls no other model-choice lever.
+The rest of this reading is kept as history.
+
 **The answer, in one line:** today every selecting run read on bureau-pipeline says `model-home: unreadable (BUREAU_MODEL_HOME_TOKEN is set and empty, so the token mint failed), running on the defaults in the code`.
 So for those runs the choice in force is the generated literal in `scripts/model_fallback.py`, rendered from `config/models.yaml`.
 A product repository's runs, and agent-bureau's console, were not read: treat the same answer there as unverified until one of their `model-home:` lines is quoted.
@@ -11,7 +23,7 @@ The home, `BUREAU_MODEL_CHOICES`, is consulted on every run and is never read.
 A change reaches a run when a pull request changes `config/models.yaml` and its generated mirrors, and the run's pipeline ref carries that merge.
 
 This record belongs to DRE-7184, the first child of the model-cost epic.
-`tests/test_model_choice_levers.py` pulls every lever it names, against the real selector and a temporary copy of the real config.
+`tests/test_model_choice_levers.py` pulls every lever it names, against the real selector and a temporary copy of today's scripts and config, with every choice it moves written in a home document.
 
 ## The three places a choice can come from
 
@@ -38,7 +50,6 @@ This record belongs to DRE-7184, the first child of the model-cost epic.
 **`config/model-choices.json` is read by the console's Settings › Agents & models page only, never on the dispatch path.**
 It is the generator's third target, a whole generated file.
 No selecting script opens it.
-The test garbles it, then deletes it, in its copy, and the selection note does not change by one character.
 
 ## How to tell which regime a run is on
 
@@ -143,11 +154,11 @@ From that run on:
   The bridge carries only these changes: a group's first model, an agent's group, an added group with its ladder, and a project's model set or cleared.
   A rung changed below the first, or a group removed, is not carried.
 - **Each sibling row's lever below changes from `defaults in the code` to `the home`.** Its one step back becomes writing the earlier value back to the home, through the writer `main` carries that day: the console's undo once DRE-6976 ships it, or otherwise the carry of a revert, or an operator document passing `python3 scripts/model_home.py check`.
-  The test already pulls that lever (`the home` in its `EXERCISED` table), so changing a row's lever needs no new test.
+  On 2026-10-27 (DRE-8024) the `DRE-7188` and `DRE-7189` rows made that change, and `defaults in the code` left the test's `EXERCISED` table, so a row naming it now fails.
 - **The `model-attempt line` rows do not change.** That lever is a workflow line, not a model choice.
 
 Two epics in progress move these levers further.
-DRE-6936's later parts remove the generated literal and the choices held in `config/models.yaml`. After that, no row may name a lever in a file that no longer holds a choice.
+DRE-6936's part 3 (DRE-6981, not yet landed) removes the generated literal and the choices held in `config/models.yaml`. After that, no row may name a lever in a file that no longer holds a choice.
 DRE-6853 forbids tests that pin a choice the console can change. The test takes every id from the copy it builds, so that guard passes over it.
 
 ## The sibling epics' one step back
@@ -168,8 +179,8 @@ A row naming a lever the test does not pull fails it.
 | -- | -- | -- | -- | -- | -- | -- | -- |
 | `DRE-7185` | Records the builder, so an unknown-builder review lands on Sonnet 5.5 | `model-attempt line` | `critic`, `verifier` | `posted` → `not posted` | Revert the pull request that makes the fix agent and red-main repair post the `🧠 model-attempt:` line (`agent-fix.yml`, `red-main-repair.yml` and their `self-` stubs) | `@main` callers on the revert's merge; `stable` callers when `stable` moves past it; `vN` callers at the next cut | `this build's model could not be read` |
 | `DRE-7187` | Moves the harness reviewer to Sonnet 5.5 | `model-attempt line` | `critic` | `posted` → `not posted` | Set the bureau-pipeline repository variable `HARNESS_BUILDER_LINE` to `off`. Reverting the pull request that adds the probe fixtures' builder line is the permanent step back | From the next harness run that starts, which reads the variable when its job starts. A run already going keeps the value it started with | `this build's model could not be read` |
-| `DRE-7188` | Moves proof runs to their own group, on Sonnet 5.5 | `defaults in the code` | `proof` | `proof` → `workhorse` | A pull request setting `agents.proof` back to `workhorse` in `config/models.yaml`, with `python3 scripts/sync_model_config.py` regenerating its mirrors (`scripts/model_fallback.py`, `agents.yaml`, `config/model-choices.json`) — the revert of the change that moved it | bureau-pipeline's proof runs (`self-proof-task.yml@main`) on the merge; a product repo's proof runs when `stable` moves past it; `vN` callers at the next cut | `chosen for proof (workhorse kind)` |
-| `DRE-7189` | Routes the console's jobs through the selector, on Sonnet 5.5 | `defaults in the code` | `console-weekly-report` | `advisory` → `workhorse` | A pull request putting the console's roles back in `workhorse` in `config/models.yaml`, with its mirrors regenerated — the revert of the change that put them in the Reviewers | When agent-bureau's console runs the reverted literal — see the row's note below | `chosen for console-weekly-report (workhorse kind)` |
+| `DRE-7188` | Moves proof runs to their own group, on Sonnet 5.5 | `the home` | `proof` | `proof` → `workhorse` | On Settings › Agents & models, move the proof agent back to Builders, or press undo on the change that moved it. One save that writes the home and opens no pull request | From the next proof run that selects after the save, once that run's pipeline ref reads the home (its line says `model-home: read`) — see the row's note below | `chosen for proof (workhorse kind)` |
+| `DRE-7189` | Routes the console's jobs through the selector, on Sonnet 5.5 | `the home` | `console-weekly-report` | `advisory` → `workhorse` | On Settings › Agents & models, move the console's three roles back to Builders, or press undo on the newest change. One save, with no pull request and no console deploy | From the console's next job that selects after the save, once the console's selector reads the home — not yet read, see the row's note below | `chosen for console-weekly-report (workhorse kind)` |
 
 **DRE-7185.** Once rolled back, a review of a fix or a red-main repair reads no build model from the card, so it runs `--built-on-unknown`.
 Today's walk then ends on Opus 5.5. The test's run in today's regime shows this note:
@@ -183,17 +194,21 @@ The probe fixtures post the line only while their switch is `on` (DRE-7619), so 
 Each harness run reads the variable when its job starts, so a run already going keeps the value it started with.
 Reverting the pull request that adds the probe fixtures' builder line is the permanent step back.
 
-**DRE-7188.** Proof runs have had their own Proof group since DRE-7284, whose ladder lists the Builders' models in the same order. Today's note reads:
-`DEGRADED model-policy: claude-opus-5-5 chosen for proof (proof kind) — top of the ladder, nothing above it was skipped — project none: fleet ladder · model-home: unreadable (…), running on the defaults in the code`.
-That is `chosen for proof (proof kind)` on `claude-opus-5-5`, the Builders' first model.
-While switched, it reads `chosen for proof (proof kind)` on `claude-sonnet-5-5`.
-The one step back is still `agents.proof` moving from `proof` to `workhorse`. Rolled back, the note reads `chosen for proof (workhorse kind)`.
-The Proof group can stay in the file. Only `agents.proof` moves.
+**DRE-7188.** Proof runs have had their own Proof group since DRE-7284, whose ladder lists the Builders' models in the same order.
+While switched, the note reads `chosen for proof (proof kind)` on `claude-sonnet-5-5`.
+The one step back is the proof agent's group in the home moving from Proof to Builders: one save on Settings › Agents & models, or undo on the change that moved it.
+The save is in force for a proof run that reads the home when it selects. A run's own `model-home:` line says whether it did.
+bureau-pipeline's `@main` runs read it on 2026-10-27 (Agent Plan run 40578961866, quoted above). No proof run, and no run pinned to `stable` or a `vN` tag, was read for this record.
+A run whose ref does not read the home stays on the defaults in the code, so for it the save is in force only once its ref carries the home reader.
+Rolled back, the note reads `chosen for proof (workhorse kind)`.
+The Proof group can stay in the home. Only the proof agent moves.
+DRE-7283, the second half of DRE-7188, was planned on a rollback through `agents.proof` in `config/models.yaml`. That route goes with DRE-6936, and this row is the rollback it is planned on.
 
-**DRE-7189.** The console's jobs are not in the selector today: they are pinned to Opus in agent-bureau's console.
-`console-weekly-report` stands in for the role names DRE-7189 will register. Every such name needs an `agents` entry in `config/models.yaml` and a registry entry in `agents.yaml`.
-Rolled back, the note reads `chosen for console-weekly-report (workhorse kind)` on Opus 5.5, the Builders' first rung, which is the model the jobs are pinned to today.
-**The delay is the one thing this record could not read.** The console calls a vendored copy of `scripts/model_fallback.py`, so it runs on that copy's literal, or on the home if the console reads it.
-This run's token could not read agent-bureau, so the step is in force when the console's copy carries the reverted literal and the console is deployed, which is an operator step.
-DRE-7189 must quote the console's own `model-home:` line, or its equivalent, to confirm which source its jobs read before it names this rollback as exercised.
+**DRE-7189.** `console-weekly-report` stands in for the role names DRE-7189 will register. Until they exist, the test adds it to the home as an added agent.
+The one step back is the console's three roles moving back to Builders in the home: one save on Settings › Agents & models, or undo on the newest change.
+The save opens no pull request.
+**The delay is the one thing this record could not read.** This run's token reads no agent-bureau run, so no `model-home:` line from the console's jobs is quoted here.
+The save is in force for the console's jobs once their selector reads the home. DRE-7189 must quote the console's own `model-home:` line before it names this rollback as exercised.
+Rolled back, the note reads `chosen for console-weekly-report (workhorse kind)` on Opus 5.5, the Builders' first rung.
+DRE-7305, part 2 of DRE-7189, renames the role in this row once its three roles exist.
 Reverting the agent-bureau change that routes the jobs through the selector restores the hard-coded Opus pin. That is the coarser undo, and it leaves no selection note at all.

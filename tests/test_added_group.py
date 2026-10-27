@@ -14,10 +14,9 @@ Builders' ladder holds for its ladder, a pull request built by a role in it is
 never reviewed by the model that built it, and the critic and the verifier
 still may not leave Reviewers, nor anyone but the planner join Planners.
 
-The replay runs against the committed `config/models.yaml` in a copy of this
-repository, the way `model-config-change.yml` saves it; every rule test runs on
-the frozen fixture (`tests/model_fixture.py`), and every id, agent and slug is
-read off the file it runs on.
+Every rule test runs on the frozen fixture (`tests/model_fixture.py`), each
+selection test on its home document with the group added, and every id, agent
+and slug is read off the file or the document it runs on.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_added_group.py -q
 """
@@ -36,7 +35,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 sys.path.insert(0, str(ROOT / "tests"))
 
-import console_change_walk as walk  # noqa: E402
 import model_choice  # noqa: E402
 import model_config_change as mcc  # noqa: E402
 import model_fallback as mf  # noqa: E402
@@ -114,22 +112,24 @@ def _reasons(refusals) -> list[str]:
     return [reason for refusal in refusals for reason in refusal["reasons"]]
 
 
-def _select(tree: Path, *args: str) -> str:
-    """`model_fallback.py select …` in `tree`, every model available, no token."""
-    env = {k: v for k, v in os.environ.items()
-           if k not in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN")}
-    env["BUREAU_FAKE_AVAILABLE"] = "{}"
+def _select(tree: Path, doc: dict, *args: str) -> str:
+    """`model_fallback.py select …` in `tree` on the home document `doc`,
+    every model available, no token."""
+    env = model_fixture.home_env(tree, doc, BUREAU_FAKE_AVAILABLE="{}")
+    for key in ("ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"):
+        env.pop(key, None)
     import subprocess
 
     proc = subprocess.run([sys.executable, "scripts/model_fallback.py", "select", *args],
                           cwd=tree, env=env, capture_output=True, text=True)
     assert proc.returncode == 0, proc.stderr
     assert "REFUSING model config" not in proc.stderr, proc.stderr
+    assert "model-home: read" in proc.stderr, proc.stderr
     return proc.stdout.strip()
 
 
 def _frozen_tree(tmp_path: Path) -> Path:
-    return model_fixture.fixture_tree(tmp_path / "tree")
+    return model_fixture.fixture_tree(tmp_path / "tree", regenerate=False)
 
 
 def _models(tree: Path) -> dict:
@@ -137,92 +137,56 @@ def _models(tree: Path) -> dict:
 
 
 # --------------------------------------------------------------------------- #
-# The replay: the CEO's own save, against the committed file                   #
-# --------------------------------------------------------------------------- #
-
-def test_the_ceos_add_group_saves_against_the_committed_file(tmp_path):
-    """`add_group product-design` ("Product & design", "Decide what to build
-    and how it looks.", claude-opus-5-5) — the change the CEO's save sent —
-    validates, applies, regenerates and passes `sync_model_config.py --check`
-    on a copy of this repository."""
-    tree = walk.copy_tree(tmp_path / "tree")
-    before = _models(tree)
-    change = {"op": "add_group", "group": _free_name(before), "label": LABEL,
-              "purpose": PURPOSE, "model": "claude-opus-5-5"}
-    work = tmp_path / "save"
-    work.mkdir()
-    walk.save(tree, [change], work)
-
-    after = _models(tree)
-    group = change["group"]
-    assert after["kinds"][group] == {"ladder": group, "label": LABEL, "purpose": PURPOSE}
-    assert _ids(after["ladders"][group]) == [change["model"]]
-    for kind in before["kinds"]:
-        assert after["kinds"][kind] == before["kinds"][kind]
-        assert after["ladders"][kind] == before["ladders"][kind]
-    page = json.loads((tree / "config" / "model-choices.json").read_text())
-    assert group in [g["key"] for g in page["groups"]]
-
-
-def test_one_change_set_adds_a_group_moves_two_agents_and_gives_a_project_a_model(tmp_path):
-    """Add a group, move a pipeline-run build agent and a session-run agent
-    into it, and give one project an exception for it — one save."""
-    tree = walk.copy_tree(tmp_path / "tree")
-    raw = _models(tree)
-    prices = yaml.safe_load((tree / "config" / "model-prices.yaml").read_text())["prices"]
-    first = model_fixture.ladder(raw, mf.WORKHORSE_KIND)[0]
-    aside = set(_ids(raw.get("excluded"))) | set(_ids(raw.get("retired")))
-    other = next(m for m in prices if m != first and m not in aside)
-    add = _add(raw, first)
-    group, agent, session, slug = (add["group"], _build_agent(raw),
-                                   _session_agent(raw), _slug(raw))
-    work = tmp_path / "save"
-    work.mkdir()
-    walk.save(tree, [
-        add,
-        {"op": "move_agent", "agent": agent, "group": group},
-        {"op": "move_agent", "agent": session, "group": group},
-        {"op": "set_project_model", "project": slug, "group": group, "model": other},
-    ], work)
-
-    after = _models(tree)
-    assert after["agents"][agent] == group
-    assert after["agents"][session] == group
-    assert session in after["session_agents"]
-    assert session not in (after.get("ungrouped") or [])
-    assert after["projects"][slug] == {group: other}
-    registry = (tree / "agents.yaml").read_text()
-    assert f"    kind: {group}\n" in registry
-
-
-# --------------------------------------------------------------------------- #
 # Selection                                                                    #
 # --------------------------------------------------------------------------- #
 
+def _doc_models(doc: dict) -> list[str]:
+    """Every model the document's groups hold, first seen first."""
+    return list(dict.fromkeys(m for kind in doc["groups"]
+                              for m in model_fixture.ladder(doc, kind)))
+
+
+def _doc_build_agent(doc: dict) -> str:
+    """The first agent the document puts in the Builders group."""
+    return next(name for name, group in doc["agents"].items()
+                if group == mf.WORKHORSE_KIND)
+
+
+def _doc_slug(doc: dict) -> str:
+    """A real repo slug the document gives no exception of its own."""
+    taken = set(doc.get("projects") or {})
+    slugs = json.loads((ROOT / "config" / "repo-map.json").read_text())
+    return next(slug for slug in slugs if slug not in taken)
+
+
+def _with_group(doc: dict, model: str) -> tuple[dict, str]:
+    """`doc` with a group added on `model` alone — its label, purpose and
+    models, as a save of "+ Add a group" writes it — and the group's name."""
+    group = _free_name({"kinds": doc["groups"]})
+    new = json.loads(json.dumps(doc))
+    new["groups"][group] = {"label": LABEL, "purpose": PURPOSE, "models": [model]}
+    return new, group
+
+
 def test_a_role_in_an_added_group_selects_from_its_ladder_and_its_projects_exception(tmp_path):
     tree = _frozen_tree(tmp_path)
-    raw, prices = _models(tree), model_fixture.fixture_prices()
-    builders = model_fixture.ladder(raw, mf.WORKHORSE_KIND)
+    home = model_fixture.fixture_home()
+    builders = model_fixture.ladder(home, mf.WORKHORSE_KIND)
     # Models the Builders do not lead with, so a walk of the wrong ladder shows.
-    mine, theirs = [m for m in prices if m not in builders[:1]
-                    and m not in _ids(raw["excluded"])][:2]
-    add = _add(raw, mine)
-    agent, slug = _build_agent(raw), _slug(raw)
-    work = tmp_path / "save"
-    work.mkdir()
-    walk.save(tree, [add, {"op": "move_agent", "agent": agent, "group": add["group"]}], work)
+    mine, theirs = [m for m in _doc_models(home) if m not in builders[:1]][:2]
+    agent, slug = _doc_build_agent(home), _doc_slug(home)
+    doc, group = _with_group(home, mine)
+    doc = model_fixture.move_agent(doc, agent, group)
 
-    assert _select(tree, agent) == mine
-    assert _select(tree, agent, "--repo", slug) == mine
-    work = tmp_path / "save-2"
-    work.mkdir()
-    walk.save(tree, [{"op": "set_project_model", "project": slug,
-                      "group": add["group"], "model": theirs}], work)
-    assert _select(tree, agent, "--repo", slug) == theirs
-    assert _select(tree, agent) == mine
+    assert _select(tree, doc, agent) == mine
+    assert _select(tree, doc, agent, "--repo", slug) == mine
+    doc = model_fixture.with_project(doc, slug, group, theirs)
+    assert _select(tree, doc, agent, "--repo", slug) == theirs
+    assert _select(tree, doc, agent) == mine
     # The Builders and every other project are untouched.
-    other = _build_agent(_models(tree))
-    assert _select(tree, other, "--repo", slug) == builders[0]
+    other = _doc_build_agent(doc)
+    assert other != agent
+    assert _select(tree, doc, other, "--repo", slug) == builders[0]
 
 
 def test_a_pull_request_built_in_an_added_group_is_not_reviewed_on_its_build_model(tmp_path):
@@ -231,25 +195,20 @@ def test_a_pull_request_built_in_an_added_group_is_not_reviewed_on_its_build_mod
     every model the added group builds on comes off the reviewer's walk as the
     Builders' do."""
     tree = _frozen_tree(tmp_path)
-    raw, prices = _models(tree), model_fixture.fixture_prices()
-    builders = model_fixture.ladder(raw, mf.WORKHORSE_KIND)
+    home = model_fixture.fixture_home()
+    builders = model_fixture.ladder(home, mf.WORKHORSE_KIND)
     # A model no Builders rung holds, made the Reviewers' first and the added
     # group's only model: the overlap is the added group's alone.
-    shared = _priced_off(raw, prices, raw["kinds"][mf.WORKHORSE_KIND]["ladder"])[0]
-    add = _add(raw, shared)
-    agent = _build_agent(raw)
-    work = tmp_path / "save"
-    work.mkdir()
-    walk.save(tree, [
-        {"op": "set_default_model", "group": mf.ADVISORY_KIND, "model": shared},
-        add,
-        {"op": "move_agent", "agent": agent, "group": add["group"]},
-    ], work)
-    assert _select(tree, agent) == shared
+    shared = next(m for m in _doc_models(home) if m not in builders)
+    agent = _doc_build_agent(home)
+    doc = model_fixture.lead_with(home, mf.ADVISORY_KIND, shared)
+    doc, group = _with_group(doc, shared)
+    doc = model_fixture.move_agent(doc, agent, group)
+    assert _select(tree, doc, agent) == shared
     for reviewer in mf.BACKSTOP_ROLES:
-        assert _select(tree, reviewer) == shared
-        assert _select(tree, reviewer, "--built-on", shared) != shared
-        assert _select(tree, reviewer, "--built-on-unknown") != shared
+        assert _select(tree, doc, reviewer) == shared
+        assert _select(tree, doc, reviewer, "--built-on", shared) != shared
+        assert _select(tree, doc, reviewer, "--built-on-unknown") != shared
     assert shared not in builders
 
 

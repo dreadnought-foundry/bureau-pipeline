@@ -18,9 +18,10 @@ THE NEWEST RECEIPT IS THE ANCHOR. A receipt is the dispatcher's line,
 posted by the pipeline's own key; `<count>` is `dispatch <n> of 2`,
 `re-run <n> of 2`, `timed re-run <n> of 2` (DRE-7316), `after the CEO's
 answer`, `re-armed` — one more run on a spent re-run budget, after a named
-fix shipped or a new `🔬 proof-observed` (DRE-7740) — or `re-check`, the
+fix shipped or a new `🔬 proof-observed` (DRE-7740) — `re-check`, the
 dispatcher's one re-check per record head of waiting rows nobody stamped
-(DRE-7951). Comments by anyone else never
+(DRE-7951), or `chase`, the one run a Hand-work card's event hold gets once
+it has stood its `chase_after_hours` (DRE-7967). Comments by anyone else never
 count as receipts or heartbeats (the authorship rule `standards/plan-critic.md`
 applies to round records).
 
@@ -80,12 +81,12 @@ FINISHED = re.compile(r"^⏳ 5/5\b")
 _RECEIPT = re.compile(
     r"^🔬 proof-run: dispatched a proof run at (?P<at>.+?) — (?P<reason>.+) "
     r"\((?P<count>dispatch \d+ of 2|re-run \d+ of 2|timed re-run \d+ of 2"
-    r"|after the CEO's answer|re-armed|re-check)\)$")
+    r"|after the CEO's answer|re-armed|re-check|chase)\)$")
 _RUN_ID = re.compile(r"Run: \S*/actions/runs/(\d+)\b")
 
 #: The reasons that spend the first-run budget (DRE-5926). A re-run after the
 #: critic's findings, the return after the CEO's answer, a re-armed run
-#: (DRE-7740) and a re-check (DRE-7951) never do.
+#: (DRE-7740), a re-check (DRE-7951) and a chase (DRE-7967) never do.
 FIRST_RUN = ("first proof run", "second dispatch")
 
 #: How long a receipt nothing has followed is a queued run, not a dead ask.

@@ -608,10 +608,13 @@ def open_holds(voices: list) -> list:
     return [line for line, _ in open_holds_at(voices)]
 
 
-def open_holds_at(voices: list) -> list:
+def open_holds_at(voices: list, *,
+                  discharge: tuple = (spoken_thread.PIPELINE, spoken_thread.PERSON)) -> list:
     """`open_holds`, each as `(first line, createdAt)` — the PROOF close
     weighs a hold against the merge's time (DRE-6489); the dispatcher reads
-    `open_holds` and never the time."""
+    `open_holds` and never the time. A `🔬 proof-observed` discharges from a
+    voice of `discharge`; the dispatcher's lane read, whose every voice is
+    UNKNOWN, widens it to those too (DRE-7967)."""
     held: list = []
     for voice in voices:
         body = (voice.body or "").lstrip()
@@ -622,7 +625,7 @@ def open_holds_at(voices: list) -> list:
         elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
             held = [h for h in held if CEO_PRESS not in h[0]]
         elif (body.startswith(OBSERVED_MARK)
-              and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
+              and voice.kind in discharge):
             held = [h for h in held if CEO_PRESS in h[0]]
     return held
 
