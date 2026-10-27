@@ -116,7 +116,13 @@ set -e
 # reads it, merges with --squash, so no commit on the branch, and no name in
 # one, lands on the base: only the squash commit does. Every other branch
 # merges with --merge, so the TDD split commits stay visible on the base.
-# The script asks that reader and restates no branch rule.
+# The script asks that reader and restates no branch rule. A record's method
+# then follows the repository's own allow_squash_merge setting, read once:
+# where it is false GitHub refuses every squash, so the record merges with
+# --merge instead. That gives up nothing the squash was for, because the name
+# hazard it closes is a public repository's, and the repository that turns
+# squash off (agent-bureau) is private. A setting that cannot be read keeps
+# --squash, and a refusal stays loud.
 #
 # No note carries verdict-shaped text, so none passes for an approval or wakes
 # the gate's own comment trigger.
@@ -445,6 +451,15 @@ set -e
 #   squash: the proof close binds the APPROVE to headRefOid and reads the
 #   record there (DRE-5919, DRE-6141), and proof_release compares the tag with
 #   mergeCommit.oid, the squash commit on `main`.
+# DRE-8195 (2026-10-27). DRE-8171 read allow_squash_merge off bureau-pipeline
+#   only. agent-bureau has it false, so its DRE-7825 record (#4132, all rows
+#   met, APPROVE at fcb3bce) was refused at merge in gate run 40597073925 with
+#   "Squash merges are not allowed on this repository", and every record there
+#   would have gone red the same way. The script now reads the setting once,
+#   off the repository it merges in, and a record branch squashes only where
+#   it is true; where it is false the record merges with --merge, as before
+#   DRE-8171. The log line names the setting and the method. An unreadable
+#   setting keeps --squash; every other branch keeps --merge.
 
 set -euo pipefail
 
@@ -823,7 +838,19 @@ fi
 # A proof record squashes, every other branch keeps its merge commit (DRE-8171).
 # Asked of the one reader, never restated; a failed ask kills the step unmerged.
 MERGE_METHOD=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_record; print("--squash" if proof_record.proof_record_branch(sys.argv[1]) else "--merge")' "$BRANCH")
-echo "merge method: $MERGE_METHOD"
+# ...but only where the repository allows squash: GitHub refuses it where it
+# does not, so there the record merges as before. Unreadable keeps the squash (DRE-8195).
+if [ "$MERGE_METHOD" = "--squash" ]; then
+  ALLOW_SQUASH=$(gh api "repos/$REPO_FULL" --jq .allow_squash_merge 2>/dev/null || true)
+  case "$ALLOW_SQUASH" in
+    true)  echo "merge method: --squash — $REPO_FULL has allow_squash_merge: true, so this proof record squashes" ;;
+    false) MERGE_METHOD=--merge
+           echo "merge method: --merge — $REPO_FULL has allow_squash_merge: false, so this proof record merges with a merge commit" ;;
+    *)     echo "merge method: --squash — allow_squash_merge could not be read for $REPO_FULL, so this proof record squashes as before" ;;
+  esac
+else
+  echo "merge method: --merge — not a proof-record branch"
+fi
 [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress" || true
 # Pinned to the evaluated head; a moved head is benign (DRE-2117, DRE-1990).
 # GitHub's refusal text is kept for the out-of-date arm and still logged (DRE-6195).
