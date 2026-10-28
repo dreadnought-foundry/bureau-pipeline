@@ -5,8 +5,7 @@ signing in. Live facts are observed against the real deployment through a
 scripted, limited proof-reader identity; on-screen steps are observed in a
 browser on a local run of the same released commit; an on-screen step counts
 as proven only when BOTH halves are seen — the screen locally and the request
-it makes succeeding live. The operator runs a proof as soon as its build cards
-finish.
+it makes succeeding live. A proof runs as soon as its build cards finish.
 
 The pre-approval critic and the planner read the epic shape out of exactly two
 documents — `standards/card-quality.md` and `briefs/planner.md` — so a rule
@@ -21,9 +20,13 @@ pipeline starts the proof run itself, on its own workflow and with scripted
 read-only identities, and the run opens the record as a pull request on
 `agent/DRE-<n>-proof-record`. The card closes on the approved merge of that
 record. A press that is a business decision of the CEO's is written
-`needs the CEO's press: <the press>`, so the run can name it back; a press the
-operator can make — on the sandbox project, or under the operator's standing
-permission of 2026-10-07 — is the operator's row and never his (DRE-6842).
+`needs the CEO's press: <the press>`, so the run can name it back. Every other
+press a person makes after merge is its own OPERATOR card the PROOF is blocked
+by, never a row (DRE-7950, written into the two documents by DRE-7955).
+
+DRE-7955 also took the operator out of the 2026-09-30 sentence: the pipeline
+dispatches the proof as soon as its build cards finish (DRE-5920), so no
+person runs it.
 """
 
 from __future__ import annotations
@@ -72,8 +75,11 @@ class StandardTest(unittest.TestCase):
         self.assertSays("Proofs never wait on the CEO's sign-in")
         self.assertSays("needed only for a real business decision")
 
-    def test_the_operator_runs_a_proof_when_its_build_cards_finish(self):
-        self.assertSays("the operator runs a proof as soon as its build cards finish")
+    def test_the_pipeline_dispatches_a_proof_when_its_build_cards_finish(self):
+        self.assertSays("a proof runs as soon as its build cards finish")
+        self.assertSays("the pipeline dispatches it")
+        self.assertNotRegex(self.section, _loose("the operator runs a proof"),
+                            "the standard still says a person runs the proof")
 
     def test_live_facts_route_through_the_proof_reader_identity(self):
         self.assertSays("Live facts")

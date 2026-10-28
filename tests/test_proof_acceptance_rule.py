@@ -26,9 +26,10 @@ DRE-7949 gave the acceptance to the record's critic: the run writes the row
 `Not met. wording-only: seen “…” — differs: …`, and the critic's verdict at
 the head accepts it in one `🔎 proof-row-accepted:` line. DRE-7954 rewrote
 the two briefs around that, so they carry the rule with the critic as the
-writer (`RULE`), and the standard keeps the operator's wording (`LEGACY_RULE`)
-until the sibling card that rewrites it. The sentences that name no writer are
-in both, so the three documents still read one rule.
+writer (`RULE`). DRE-7955 rewrote the standard the same way, so all three
+documents carry `RULE` word for word, and none gives the acceptance to the
+operator. An older record's operator-accepted row is history: the gate still
+reads it, and the standard describes it without the old acceptance words.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ STANDARD = ROOT / "standards" / "card-quality.md"
 PROOF_BRIEF = ROOT / "briefs" / "proof.md"
 CRITIC_BRIEF = ROOT / "briefs" / "critic.md"
 DOCUMENTS = (STANDARD, PROOF_BRIEF, CRITIC_BRIEF)
-#: The documents DRE-7954 rewrote around the critic's acceptance (DRE-7949).
+#: The briefs DRE-7954 rewrote around the critic's acceptance (DRE-7949).
 BRIEFS = (PROOF_BRIEF, CRITIC_BRIEF)
 
 #: The sentences that name no writer, as all three documents must carry them.
@@ -66,7 +67,8 @@ SHARED = (
     "A row that is part shown and part not seen is not acceptable either.",
 )
 
-#: The rule, sentence by sentence, as the two briefs carry it since DRE-7954.
+#: The rule, sentence by sentence, as the two briefs carry it since DRE-7954
+#: and the standard since DRE-7955.
 #: The sentences are the contract; each document wraps them in its own
 #: reader's words around them, never in place of them.
 RULE = (
@@ -81,33 +83,6 @@ RULE = (
     "The record's critic writes it, in its verdict — never the builder and "
     "never the proof run.",
 ) + SHARED
-
-#: The rule as the standard still carries it, until the sibling card of
-#: DRE-7954 rewrites the standard around the critic's acceptance.
-LEGACY_RULE = (
-    # The acceptable half.
-    "A row may be accepted by operator decision only where the mechanism was "
-    "actually observed working and just the card's wording, quoted text, "
-    "timing, count or method of observing differs.",
-    # Overtaken stays, as one named case of the acceptable half.
-    "A criterion overtaken by a later shipped decision is one case of this.",
-    # What an acceptance must contain.
-    "The acceptance names what was seen, quoted from the record, says what "
-    "differs from the card's words, and links the written decision.",
-    # Who writes it.
-    "The operator writes the decision and the row — never the builder and "
-    "never the proof run.",
-    # The never-acceptable half.
-    "A row where the thing itself was not seen is never accepted: it stays "
-    "unmet and waits for a new run or a reworded card.",
-    # The five cases, in the CEO's order.
-    "That covers a value that is only a default, a reader with no access, an "
-    "event that has not happened, a missing positive control, and indirect "
-    "evidence.",
-    # The mixed row.
-    "A row that is part shown and part not seen is not acceptable either.",
-)
-
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -134,25 +109,18 @@ def test_every_document_carries_the_shared_sentences_word_for_word(path, sentenc
     )
 
 
-@pytest.mark.parametrize("path", BRIEFS, ids=lambda p: str(p.relative_to(ROOT)))
+@pytest.mark.parametrize("path", DOCUMENTS, ids=lambda p: str(p.relative_to(ROOT)))
 @pytest.mark.parametrize("sentence", RULE, ids=range(len(RULE)))
-def test_both_briefs_carry_the_rule_word_for_word(path, sentence):
+def test_every_document_carries_the_rule_word_for_word(path, sentence):
     assert _says(path, sentence), (
         f"{path.relative_to(ROOT)} does not carry the rule sentence {sentence!r} "
-        f"as DRE-7954 wrote it — the proof brief and the critic brief read one wording"
+        f"as DRE-7954 and DRE-7955 wrote it — the standard, the proof brief and the "
+        f"critic brief read one wording"
     )
 
 
-@pytest.mark.parametrize("sentence", LEGACY_RULE, ids=range(len(LEGACY_RULE)))
-def test_the_standard_carries_the_rule_until_its_card(sentence):
-    assert _says(STANDARD, sentence), (
-        f"standards/card-quality.md does not carry the CEO's 2026-10-10 rule "
-        f"sentence {sentence!r} (DRE-6773)"
-    )
-
-
-@pytest.mark.parametrize("path", BRIEFS, ids=lambda p: str(p.relative_to(ROOT)))
-def test_neither_brief_gives_the_acceptance_to_the_operator(path):
+@pytest.mark.parametrize("path", DOCUMENTS, ids=lambda p: str(p.relative_to(ROOT)))
+def test_no_document_gives_the_acceptance_to_the_operator(path):
     for stale in ("The operator writes the decision", "A row may be accepted by operator decision",
                   "accepted by the operator"):
         assert not _says(path, stale), (
@@ -180,6 +148,16 @@ def test_no_document_still_limits_acceptance_to_overtaken_alone(path):
             f"{path.relative_to(ROOT)} still limits an accepted row to an "
             f"overtaken criterion: {stale!r}"
         )
+
+
+def test_the_standard_names_the_critics_acceptance_and_the_history():
+    """DRE-7955: the standard names the row the run writes, the line the
+    critic accepts it with, and an older accepted row as history."""
+    for needle in (proof_record.WORDING_OPENING, proof_record.ACCEPTANCE_MARK, "DRE-7949",
+                   "a person never does"):
+        assert _says(STANDARD, needle), f"standards/card-quality.md does not say {needle!r}"
+    assert _says(STANDARD, "An older record may carry a row accepted before DRE-7949"), (
+        "standards/card-quality.md no longer describes an older accepted row as history")
 
 
 def test_the_proof_run_records_unmet_rows_as_today_and_never_accepts():

@@ -363,8 +363,9 @@ another held repo is not caught, and the epic's note says so on every reading.
 A child that needs the CEO is checked too (DRE-7523). That is an open child
 that is an operator card — the hold label, the `operator-step` mark, or routed
 `OPERATOR` by its labels or title, a PROOF title excepted — or that carries an
-acceptance criterion on a person's row, one containing `needs the CEO's press:`
-or `waiting for the operator's press:`. The plan names each such child by its
+acceptance criterion on a person's row: one containing `needs the CEO's press:`,
+or the operator's row an older card may still carry, as the check reads both
+off `plan_proof_reach.PERSON_ROWS`. The plan names each such child by its
 identifier, as a whole token, in a `Step that needs the CEO:` paragraph, or the
 plan is sent back at the first critic: the check appends a `ceo-step:` line
 naming the card and the step to the structural file the seam gate reads.
@@ -380,6 +381,14 @@ epic's **first prose paragraph** is the CEO-readable plan summary — lead with 
 epic, **move ONLY the epic to In
 Progress and stop** — reconcile auto-promotes the unblocked children; never
 hand-move children (it double-dispatches and reverts in-progress work).
+
+**An epic closes once its last build card is Done (DRE-7948).** The sweep
+closes an In Progress epic on the pass after its last build card is Done, with
+a child Done among them. Its open PROOF and after-merge OPERATOR cards — the
+follow-on work, `epic_cap.follow_on`: a proof, or a card marked for a person —
+carry on under the closed epic, are still promoted and dispatched, and close
+on their own. The close comment names them. Roll-up parents still close when
+every child is Done.
 
 **A card has no children.** Giving a card sub-issues silently converts it INTO
 an epic — the gate infers `agent:planner` from having children, and reconcile
@@ -412,10 +421,12 @@ seen, and the merge closed their cards with nearly every row `Not observed.` So
 the record itself is now read. It is the one `.md` file the record's pull
 request adds under `docs/` or `architecture/`. The merge gate holds the pull
 request open unless every judged row of its criterion table is met. It also
-holds when there is no table, no judged row, or no record it can read. The
+holds when there is no table, no judged row, or no record it can read. Two
+kinds of unmet row do not hold it: a wording-only row the record's critic
+accepted, and a gap, both below. The
 close refuses on the same reading of the record at the merged head, and it also
 refuses while a `🔬 proof-waiting` hold stands that nothing discharged.
-An approved, all-met record that merged overrides an operator's
+An approved, all-met record that merged overrides a
 `🔬 proof-waiting` hold posted before the merge — the proof dispatcher's own
 holds and one typed with `linear_ops.py proof-waiting` — because the merged
 record is the observation the hold was waiting for (DRE-6489). Two holds
@@ -424,43 +435,61 @@ and one posted after the merge. A refused card stays open under the
 `🔒 Merged — card deliberately left open` comment, which names what refused
 it, such as the standing hold or the unmet row.
 
-**A row shown working but not as the card words it is accepted, not met
-(DRE-6244, DRE-6773).** The CEO decided on 2026-10-07 that a record may carry a
-row the operator accepted, provided the record links the written reason. The
-CEO decided on 2026-10-10 which rows those are, and rejected both accepting
-every unmet row and accepting none:
+**A row shown working but not as the card words it is a wording-only row, and
+the record's critic accepts it (DRE-6244, DRE-6773, DRE-7949).** The CEO
+decided on 2026-10-07 that a record may carry an accepted row. The CEO decided
+on 2026-10-10 which rows those are, and rejected both accepting every unmet
+row and accepting none:
 
-- A row may be accepted by operator decision only where the mechanism was
-  actually observed working and just the card's wording, quoted text, timing,
-  count or method of observing differs. A criterion overtaken by a later
-  shipped decision is one case of this.
-- The acceptance names what was seen, quoted from the record, says what
-  differs from the card's words, and links the written decision. The operator
-  writes the decision and the row — never the builder and never the proof
-  run.
+- A row may be accepted only where the mechanism was actually observed
+  working and just the card's wording, quoted text, timing, count or method
+  of observing differs. A criterion overtaken by a later shipped decision is
+  one case of this.
+- The acceptance names what was seen, quoted from the record, and says what
+  differs from the card's words. The record's critic writes it, in its
+  verdict — never the builder and never the proof run.
 - A row where the thing itself was not seen is never accepted: it stays unmet
   and waits for a new run or a reworded card. That covers a value that is only
   a default, a reader with no access, an event that has not happened, a
   missing positive control, and indirect evidence. A row that is part shown
   and part not seen is not acceptable either.
 
-A proof run never writes an accepted row on its own judgment: it records
-`Not observed.` or `Not met.` and lets the gate hold. The row reads
-`ACCEPTED by operator decision — <reason> (<link>)`, where the reason is what
-was seen and what differs, and the link is a Linear comment
-(`linear.app/<workspace>/issue/DRE-<n>/<slug>#comment-<id>`) or a GitHub pull
-request comment (`github.com/<owner>/<repo>/pull/<n>#issuecomment-<id>`) in
-the same cell. An accepted row with no such link is held as not met. A record
-whose judged rows are all `Met.` or accepted is `**Status: PASS.**`, and the
-card's close comment names every accepted row by its criterion. The gate checks
-only that a link of the right shape is present. It does not open the link, so
-it cannot confirm the comment exists, that the operator wrote it, or that the
-row it accepts was seen — the critic, whose APPROVE the gate still requires,
-is the reader who follows it and applies both halves of the rule above.
+The proof run writes such a row `Not met. wording-only: seen “<quote>” —
+differs: <what>`, opening with `WORDING_OPENING` (`scripts/proof_record.py`,
+DRE-7949), and lets the gate hold. The record's critic, a separate run,
+accepts it with one line of its verdict at the record's head, opening
+`🔎 proof-row-accepted:` (`ACCEPTANCE_MARK`), that quotes the criterion, what
+was seen and what differs. The merge gate and the card's close read an
+acceptance only there, and the close comment names every accepted row by its
+criterion. The run that took the reading never accepts its own row, and a
+person never does. A `Not observed.` row is never accepted, whatever kind it
+is.
+
+An older record may carry a row accepted before DRE-7949, its Result opening
+with the old acceptance words and linking a Linear or GitHub comment in the
+same cell. That is history. The gate still reads such a row, and checks only
+that a link of the right shape is present: it never opens it, so the critic,
+whose APPROVE the gate still requires, is the reader who follows it and
+applies both halves of the rule above. No new row is written that way.
+
+**A row waiting for an event waits for a time, never a person (DRE-6814,
+DRE-7951).** A row that can be observed only once something happens that no
+one on the card has to cause — a release not yet cut, a date not yet reached,
+a scheduled run that has not fired — reads `Not observed. waiting for <the
+event> [not-before=<T>]: <what it would show>`, stamped with the earliest time
+its event can have happened. A person's press is never such an event. The
+`🔬 proof-waiting` hold the sweep posts for it is the pipeline's own: it waits
+for the latest stamp and never a person, then the pipeline lifts it and
+re-runs the record. A waiting row left unstamped gets a re-check
+(`RECHECK_REASON`, `scripts/proof_dispatch.py`) twelve hours after the hold is
+posted. A record pull request gets at most two timed re-runs, and on the last
+(`LAST_TIMED_REASON`) a row whose event still has not come reads
+`Not observed. cause: misdescribed — …`, a gap (below).
 
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
-2026-09-30 that the operator runs a proof as soon as its build cards finish,
-and the card closes on the evidence that run records. The CEO is needed only
+2026-09-30 that a proof runs as soon as its build cards finish — the pipeline
+dispatches it (DRE-5920, below) — and the card closes on the evidence that run
+records. The CEO is needed only
 for a real business decision, never to sign in so a step can be watched. A
 proof observes two kinds of thing, each by its own route:
 
@@ -495,10 +524,9 @@ decision of his — which model a real project runs on, whether a real proposal
 is approved, whether a real card is removed from a proposal — and it is written
 on the card in the words `needs the CEO's press: <the press>`; a run that meets
 one records everything else, parks the card once in Green Light naming the
-press, and nobody chases it. A press the operator can make — which ones, the
-rows below say — is the operator's event row and never his:
-`waiting for the operator's press: <the press>`, held for the operator and
-never parked in Green Light (`briefs/planner.md`).
+press, and nobody chases it. Every other press a person makes after merge is
+never his and never a row: it is an OPERATOR card the PROOF is blocked by,
+below.
 
 The third kind is a **sandbox press**: a press on the sandbox project
 `agent-bureau-demo`, inside the Demo tenant, that is on the list below. The
@@ -528,22 +556,32 @@ sandbox too.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run
-holds the console proof-reader. `waiting for the operator's press:` stays for
-every other press the operator can make: a press outside the sandbox
-(production, a real customer's project, a fleet-wide setting, or a console
-press under the operator's standing permission of 2026-10-07 on a real
+holds the console proof-reader. `needs the CEO's press:` stays only for a
+business decision of his. Those are the only two rows a press gets.
+
+**A press only a person can make after merge is an OPERATOR card the PROOF is
+blocked by, never a row (DRE-7950).** Every other press — a press outside the
+sandbox (production, a real customer's project, a fleet-wide setting, or a
+console press under the operator's standing permission of 2026-10-07 on a real
 project), a press on the sandbox that is not on the list, such as setting a
-project's Builders to a model (DRE-6638), and a press on the sandbox on a PROOF
-labeled for any other repo. `needs the CEO's press:` stays only for a business
-decision of his.
+project's Builders to a model (DRE-6638), a press on the sandbox on a PROOF
+labeled for any other repo, or the recording of a removal or decision the CEO
+has already made — is its own OPERATOR card, labeled `needs-human`, `no-code`
+and `agent:devops`, and the PROOF is blocked by it. The PROOF criterion is the
+reading of that card's result: the value it set, the run that went green after
+it, what the system answers now. The plan critic refuses a PROOF criterion
+that waits on such a press, with `FINDING_PERSON_PRESS`
+(`scripts/plan_proof_reach.py`), naming the criterion and the OPERATOR card to
+file instead. A card filed before DRE-7944 that still words a person's press as
+a wait gets `Not observed. cause: operator-step-unblocked — …` in its record,
+and closes with a fix card, a gap (below).
 
 **A sandbox press a plan wants that is not on the list.** The plan adds two
 cards: an agent-bureau card that adds the press to `SANDBOX_PRESS_MUTATIONS`
 (with the script's `SANDBOX_PRESSES`, which copies it), and a bureau-pipeline
 card that adds it to this list and to `scripts/plan_proof_reach.py`'s
 `SANDBOX_PRESSES`, the constant the epic's reach card, DRE-7779, adds. The
-PROOF is blocked by both. Until then the press is the
-operator's row.
+PROOF is blocked by both. Until then the press is an OPERATOR card, as above.
 
 Five conditions. The first four are checked on the planner's OUTPUT rather than
 on any document that states the convention — a convention nothing checks is a
@@ -661,16 +699,17 @@ one of four words, read off the declaration's `causes`:
   `BUREAU_DOCKER_RUNS_ON` as set while setting it was still the open operator
   card DRE-6478, with no `blockedBy` between them.
 
-**A record whose unmet rows all carry a cause is put to the operator once, in
-In Review (DRE-6837).** The proof run or the dispatcher asks it, through one
-writer, under a hold that names the operator's decision it waits for: one
-plain-English question per card, addressed to the operator, that quotes the
-criterion, says why it cannot be shown and says what was seen instead. The card
-stays in In Review, where its open record pull request puts it — never to the
-CEO in Green Light. The record is never re-run to read the same thing — a
-second run at the same head reads what the first one did. DRE-6244's rule
-on accepting such a row stands unchanged: a cause says why a row is unmet,
-never that it is accepted, and only the operator's linked decision accepts one.
+**A record whose unmet rows all carry a cause, or are history rows, closes its
+card with one fix card in `Intake` (DRE-7952).** Such a record is a gap. A
+history row, `Not met. history: …` (DRE-7740), read a window that had closed
+or a run that had finished, so every re-run would read the same result. The
+record is never re-run to read the same thing — a second run at the same head
+reads what the first one did — and nobody is asked about it. It merges on its
+approved record, and its PROOF closes on that merge with one fix card filed in
+`Intake` that carries each unmet row, written by `proof_gap.file_fix_card`.
+DRE-6244's rule on accepting a row stands unchanged: a cause says why a row is
+unmet, never that it is accepted, and only the record's critic accepts a
+wording-only row.
 
 ## Mid-epic discovery (DRE-2739)
 A finding made **while building**, about an epic that is already approved and
