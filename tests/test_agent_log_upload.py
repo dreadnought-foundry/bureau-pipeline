@@ -81,8 +81,8 @@ from model_fallback import EFFORT_LEVELS  # noqa: E402
 #: not there is refused at AssumeRoleWithWebIdentity and shows up only as gaps.
 #: The epic's six (engineer, fix, critic, verifier, planner, medic), and the
 #: red-main repair agent, reviewed for an upload role and added by DRE-5353 —
-#: agent-bureau's DRE-5351 trusts it at the store. The eighth is the proof run
-#: (DRE-5924), which agent-bureau's DRE-8260 trusts there.
+#: agent-bureau's DRE-5351 trusts it at the store. And the proof run (DRE-5924),
+#: which agent-bureau's DRE-8260 trusts there.
 UPLOADS = {
     ("agent-task.yml", "execute"),
     ("agent-fix.yml", "fix"),
