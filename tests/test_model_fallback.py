@@ -33,11 +33,13 @@ console's to change (DRE-6862). So every rule of the walk runs against the
 frozen fixture (`tests/model_fixture.py`) — the selector loaded from a
 throwaway tree of the frozen files on the frozen home document, or that tree's
 CLI handed the same document — and reads every rung it expects off the
-document's groups (DRE-8018). The tree is built without the generator, and the
-one test of the defaults in the code reads what it expects off the tree's own
-`code_defaults()`. Only AgentsRegistryAlignment's `model:` check and
-CommittedStateTest read the committed files, for what must hold for any saved
-state.
+document's groups (DRE-8018). The tree is copied and never regenerated, and
+the one test of the defaults in the code reads what it expects off the tree's
+own `code_defaults()`. Only CommittedStateTest and CodeDefaultsTest read the
+committed files: the first for what must hold for any saved state, the second
+to hold the hand-written defaults in the code, `CODE_DEFAULTS`, to the
+code-side facts of config/models.yaml now that no generator writes them
+(DRE-6982).
 
 These tests drive the ladder walk with a STUBBED availability function — no real
 network. The is_error heartbeat helpers (attempt_marker/error_marker) and the
@@ -45,6 +47,7 @@ hold-cap regression (dead_run.py) are preserved and re-asserted here.
 """
 
 import io
+import json
 import os
 import re
 import subprocess
@@ -602,16 +605,14 @@ class CallerSuppliedLadderTest(unittest.TestCase):
 
 
 class AgentsRegistryAlignment(unittest.TestCase):
-    """The ladders must agree with the CANONICAL config so the console roster
-    and the runtime selection never drift (the registry contract, DRE-1335).
+    """Each role resolves through its group (the registry contract, DRE-1335).
 
-    DRE-2316 moved the canonical declaration OUT of agents.yaml and into
-    config/models.yaml: the registry's `model:` is now a generated mirror and
-    its 5x copy-pasted `ladder:` block is gone. The resolution — role → group →
-    ladder — is a rule and runs on the fixture; the registry's `model:` lines
-    are checked against the committed config as written. The generated-region
-    mechanics (markers, regeneration, the drift gate) live in
-    tests/test_model_config.py."""
+    DRE-2316 moved the canonical declaration OUT of agents.yaml, and DRE-6982
+    took the last copy of it out: the registry carries no `model:` and no
+    `kind:` at all, and each agent's group and model are read from the home
+    when a run starts. The resolution — role → group → ladder — is a rule and
+    runs on the fixture; tests/test_agents_registry.py holds the registry to
+    carrying no model."""
 
     def test_every_role_walks_its_own_groups_ladder(self):
         # DRE-3015: a role is resolved through its group, not handed the build
@@ -624,28 +625,6 @@ class AgentsRegistryAlignment(unittest.TestCase):
                 self.assertEqual(fx.ladder_for(role), walk(role))
         self.assertNotEqual(walk(PLANNER), default_ladder())
         self.assertEqual(fx.ladder_for(PLANNER), walk(PLANNER))
-
-    def test_every_registry_model_line_is_the_top_of_its_configured_ladder(self):
-        """`model:` is the field the console's agent editor rewrites, so it is
-        the field a bad write lands in, and the one no test looked at until an
-        Opus 5 tile was found saving the retired id. It is GENERATED from the
-        config, and it must be the first rung of that agent's configured ladder
-        as written — read off the committed files, whatever they say."""
-        cfg = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
-        agents = yaml.safe_load((ROOT / "agents.yaml").read_text())["agents"]
-        declared = {
-            a["name"]: a["model"] for a in agents if isinstance(a.get("model"), str)
-        }
-        self.assertTrue(declared, "no agent declares a bare model: field")
-        for name, model in sorted(declared.items()):
-            with self.subTest(agent=name):
-                self.assertIn(name, cfg["agents"], f"{name}: in no group")
-                top = model_fixture.ladder(cfg, cfg["agents"][name])[0]
-                self.assertEqual(
-                    model, top,
-                    f"{name}: agents.yaml `model: {model}` is not the top of its "
-                    f"configured ladder ({top})",
-                )
 
 
 class CommittedStateTest(unittest.TestCase):
@@ -843,7 +822,119 @@ class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
         first = mf.code_defaults()
         first["ladders"]["workhorse"].append("claude-test-scribble")
         self.assertNotIn("claude-test-scribble", mf.code_defaults()["ladders"]["workhorse"])
-        self.assertEqual(mf.code_defaults(), mf._normalize_config(mf._FALLBACK_MODEL_CONFIG))
+        self.assertEqual(mf.code_defaults(), mf._normalize_config(mf.CODE_DEFAULTS))
+
+
+# The code-side facts the defaults in the code carry beside the choices. With
+# no generator (DRE-6982) nothing writes them from config/models.yaml, so the
+# test below holds each to the file's. `rules` is not in the literal: its
+# defaults in the code are `_RULES_DEFAULTS`, held the same way.
+CODE_SIDE_FACTS = ("effort", "review_separation", "discovery", "retired",
+                   "excluded", "session_agents", "about")
+
+
+def code_side_drift(literal: dict, rules: dict, raw: dict) -> list[str]:
+    """The code-side facts on which `literal` (with `rules`, the code's
+    `rules:` defaults) differs from the parsed config `raw`, by key."""
+    ours, theirs = mf._normalize_config(literal), mf._normalize_config(raw)
+    drift = [key for key in CODE_SIDE_FACTS if ours.get(key) != theirs.get(key)]
+    block = raw.get("rules") or {}
+    if {k: tuple(v) for k, v in rules.items()} != {
+            k: tuple(block.get(k) or ()) for k in rules}:
+        drift.append("rules")
+    return drift
+
+
+class CodeDefaultsTest(unittest.TestCase):
+    """`CODE_DEFAULTS` is the hand-written document the fleet runs on when
+    the home cannot be read (DRE-6982). It was the generated
+    `_FALLBACK_MODEL_CONFIG`; the generator and its markers are gone."""
+
+    SOURCE = (ROOT / "scripts" / "model_fallback.py").read_text()
+
+    def _committed(self) -> dict:
+        return yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+
+    def test_each_code_side_fact_is_the_files(self):
+        drift = code_side_drift(mf.CODE_DEFAULTS, mf._RULES_DEFAULTS, self._committed())
+        self.assertEqual(
+            drift, [],
+            f"CODE_DEFAULTS differs from config/models.yaml on {drift}: edit the "
+            "two together")
+
+    def test_the_check_names_the_key_that_differs(self):
+        edits = {
+            "effort": lambda raw: raw["effort"].update({"claude-test-x": "low"}),
+            "review_separation": lambda raw: raw["review_separation"].update(
+                roles=raw["review_separation"]["roles"][:1]),
+            "discovery": lambda raw: raw["discovery"].update(
+                alert=not raw["discovery"]["alert"]),
+            "retired": lambda raw: raw["retired"].append(
+                {"model": "claude-test-retired", "reason": "x"}),
+            "excluded": lambda raw: raw["excluded"].append(
+                {"model": "claude-test-excluded", "reason": "x"}),
+            "session_agents": lambda raw: raw["session_agents"].pop(),
+            "about": lambda raw: raw["about"].update(
+                {next(iter(raw["about"])): "Says something else"}),
+            "rules": lambda raw: raw["rules"].update(
+                reviewers_only=raw["rules"]["reviewers_only"][:1]),
+        }
+        self.assertEqual(sorted(edits), sorted((*CODE_SIDE_FACTS, "rules")))
+        for key, edit in edits.items():
+            with self.subTest(key=key):
+                raw = self._committed()
+                edit(raw)
+                self.assertEqual(
+                    code_side_drift(mf.CODE_DEFAULTS, mf._RULES_DEFAULTS, raw), [key])
+
+    def test_the_literal_has_no_generated_region_and_says_what_it_is(self):
+        self.assertNotIn("BEGIN generated", self.SOURCE)
+        self.assertNotIn("END generated", self.SOURCE)
+        self.assertEqual(len(re.findall(r"^CODE_DEFAULTS = \{", self.SOURCE, re.M)), 1)
+        lines = self.SOURCE.split("\nCODE_DEFAULTS = {", 1)[0].splitlines()
+        comment = []
+        for line in reversed(lines):
+            if not line.startswith("#"):
+                break
+            comment.insert(0, line.lstrip("# "))
+        said = " ".join(" ".join(comment).split())
+        for clause in ("only when the home cannot be read",
+                       "never edited to change a choice",
+                       "never consulted while the home answers"):
+            self.assertIn(clause, said)
+
+    def test_with_no_home_the_engineer_runs_on_the_first_builders_model(self):
+        groups = mf.CODE_DEFAULTS["groups"]
+        builders = next(key for key, group in groups.items()
+                        if group["label"] == "Builders")
+        first = mf.CODE_DEFAULTS["ladders"][mf.CODE_DEFAULTS["kinds"][builders]][0]
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")}
+        env["BUREAU_FAKE_AVAILABLE"] = "{}"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "model_fallback.py"), "select",
+             "engineer"], capture_output=True, text=True, env=env)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), first)
+        self.assertIn("running on the defaults in the code", proc.stderr)
+
+    def test_render_defaults_prints_a_document_the_check_accepts(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")}
+        rendered = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "model_home.py"), "render-defaults"],
+            capture_output=True, text=True, env=env)
+        self.assertEqual(0, rendered.returncode, rendered.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "home.json"
+            path.write_text(rendered.stdout)
+            checked = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "model_home.py"), "check",
+                 str(path)], capture_output=True, text=True, env=env)
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        doc = json.loads(rendered.stdout)
+        defaults = mf.code_defaults()
+        self.assertEqual(doc["agents"], defaults["agents"])
 
 
 if __name__ == "__main__":

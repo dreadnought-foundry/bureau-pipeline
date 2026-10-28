@@ -26,8 +26,6 @@ selector of a tree built with `regenerate=False` answers from the frozen home
 document (DRE-6990), every expected id is read off that document's groups, and
 every level off the frozen `effort:` block, a code-side fact. What still reads
 the committed file is what must hold for any saved state.
-`tests/test_model_config.py` is the sibling that pins the canonical file and
-its generated mirrors.
 """
 
 import copy
@@ -357,7 +355,7 @@ class WorkflowWiringTest(unittest.TestCase):
                 )
 
     def test_no_workflow_hardcodes_an_effort_level(self):
-        # Same rule as the model id (test_model_config.py:
+        # Same rule as the model id (test_workflow_model_pins.py:
         # test_no_workflow_hardcodes_a_model_id): the level is config, read
         # through the selector, never a literal a file can drift on.
         literal = re.compile(r"--effort\s+(?!\$)")

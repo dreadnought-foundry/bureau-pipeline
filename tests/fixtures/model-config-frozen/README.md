@@ -12,9 +12,8 @@ That commit is after DRE-6833 merged, so the frozen `models.yaml` carries
 as a home document (DRE-6972, the home contract on DRE-6939), with
 `written_by: operator` and the `written_at` of that date (Rule 3). Every test
 reaches these files through `tests/model_fixture.py` — never by spelling this
-directory's name — and that module's `fixture_tree` builds a throwaway tree
-from them with today's `scripts/`, regenerating its mirrors unless it is told
-not to (Rule 4).
+directory's name — and that module's `fixture_tree` copies a throwaway tree
+from them with today's `scripts/`, and never regenerates it (Rule 4).
 
 ## Rule 1: what a test may read the model files for
 
@@ -28,16 +27,13 @@ console save changes every one of them and would turn a rule test red.
 
 ## Rule 2: the refresh rule
 
-The fixture pairs frozen data with today's code, so a change to the generator,
-the selector, the schema or the policy that makes the frozen files fail to
-regenerate or fail `policy_errors` re-freezes the fixture in the same pull
-request: when a tree no longer builds, every rule test fails with the sentence
-"the frozen model fixture no longer regenerates under today's code —
-re-freeze it in this pull request". Copy the three files again from that
-branch, rewrite the sha and the date above, and nothing else moves, because
-every test reads the fixture through `tests/model_fixture.py` and derives every
-id from it. A schema addition the generator tolerates (a missing optional key)
-needs no re-freeze. The directory is named for what it is rather than for a date, so a
+The fixture pairs frozen data with today's code, so a change to the selector,
+the schema or the policy that makes the frozen files fail `policy_errors`, or
+`home.json` fail `model_home.py check`, re-freezes the fixture in the same pull
+request. Copy the three files again from that branch, rewrite the sha and the
+date above, and nothing else moves, because every test reads the fixture
+through `tests/model_fixture.py` and derives every id from it. A schema
+addition today's code tolerates (a missing optional key) needs no re-freeze. The directory is named for what it is rather than for a date, so a
 re-freeze overwrites it in place and renames nothing.
 
 ## Rule 3: the frozen document
@@ -49,39 +45,35 @@ built in the test — `fixture_home()`, edited with `lead_with`, `move_agent` or
 `with_project` and handed to a tree with `home_env` or
 `fixture_module(..., doc=...)`, all in `tests/model_fixture.py`.
 
-`home.json` was produced once by running
-`python3 scripts/model_home.py render-defaults` inside a tree `fixture_tree`
-builds — whose literal is regenerated from the frozen `models.yaml` — with
-`written_at` then fixed to the date above. It is never compared with what
-`render-defaults` prints now: that stamps the moment it runs, and renders the
-live defaults in the code, which every merged save regenerates, so the
-comparison would go red on a legitimate save. What pins it is the frozen
-files: a test compares its groups, agents and projects with the frozen
-`models.yaml` alone, and `model_home.py check` accepts it inside a fixture
-tree. Re-render it the same way, inside a fixture tree, when `render-defaults`
-changes shape or the three files are re-frozen.
+`home.json` was produced once (DRE-6972) by running
+`python3 scripts/model_home.py render-defaults` inside a fixture tree whose
+literal the generator of that day had regenerated from the frozen
+`models.yaml`, with `written_at` then fixed to the date above. It is never
+compared with what `render-defaults` prints now: that stamps the moment it
+runs, and renders the live defaults in the code, `CODE_DEFAULTS`, which are
+not the frozen choices. What pins it is the frozen files: a test compares its
+groups, agents and projects with the frozen `models.yaml` alone, and
+`model_home.py check` accepts it inside a fixture tree. No generator is left
+to put the frozen choices in a tree's literal (DRE-6982), so when
+`render-defaults` changes shape or the three files are re-frozen, the
+document is rewritten by hand from the frozen files, in the shape
+`render-defaults` prints, and the same two checks hold it.
 
-## Rule 4: how a tree is built, and whom the default serves
+## Rule 4: how a tree is built
 
-A rule of the policy or of selection is proved on a document, in a tree built
-with `regenerate=False`: `fixture_tree(dest, regenerate=False)` copies today's
-`scripts/` and the frozen files and runs nothing, because a tree whose selector
-answers from a home document has no use for a regenerated literal. A test that
-reads the committed files checks only what must hold for any saved state, and
-derives every expected value from those files. The planner's path
-(`PLANNER_PATH`, DRE-6990) and the rest of the model tests
-(`HOME_DOCUMENT_TREES`, DRE-8018), both in `tests/test_model_fixture.py`, are
-held to this: every tree they build passes `regenerate=False`, none names the
-generator, and none reads a choice off the frozen `models.yaml` — they read it
-off `home.json`, or off a tree's own `code_defaults()` when no home is read.
+A tree is copied and never regenerated. `fixture_tree(dest)` copies today's
+`scripts/` and the frozen files and runs nothing: the generator that once
+rewrote a tree's literal is gone (DRE-6982), and the defaults in the code are
+the tree's own hand-written `CODE_DEFAULTS`. `regenerate` stays a keyword that
+defaults to `False`, so the callers that pass `regenerate=False` are
+untouched, and `regenerate=True` raises `ValueError`.
 
-`fixture_tree`'s default still regenerates the literal: it runs
-`scripts/sync_model_config.py` inside the tree and raises `FixtureStale` when
-the generator refuses the frozen files. Two sets of tests still build on it —
-the old route's tests (`tests/test_model_config_change.py` and its siblings,
-`tests/console_change_walk.py` and the
-`tests/test_console_*_keeps_the_suite_green.py` walks), and the generator's own
-(`tests/test_model_config.py`, `tests/test_model_choices.py` and
-`tests/test_model_caution.py`). It stays the default until part 3 removes both:
-the generator, and the route that saves a choice by rewriting
-`config/models.yaml` (DRE-6990).
+A rule of the policy or of selection is proved on a document, in a tree
+`fixture_tree` copies. A test that reads the committed files checks only what
+must hold for any saved state, and derives every expected value from those
+files. The planner's path (`PLANNER_PATH`, DRE-6990) and the rest of the model
+tests (`HOME_DOCUMENT_TREES`, DRE-8018), both in
+`tests/test_model_fixture.py`, are held to this: every tree they build passes
+`regenerate=False`, none names the generator, and none reads a choice off the
+frozen `models.yaml` — they read it off `home.json`, or off a tree's own
+`code_defaults()` when no home is read.

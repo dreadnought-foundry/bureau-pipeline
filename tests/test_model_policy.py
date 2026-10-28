@@ -292,10 +292,10 @@ class RoleKindsTest(unittest.TestCase):
 
     def test_every_agent_role_is_classified(self):
         cfg = _committed()
-        # A scripted entry (`model: null`, DRE-5369) runs no model and has no
-        # kind to classify; test_agents_registry.py holds it to that claim.
+        # A scripted entry (`maxTurns: null`, DRE-5369) runs no model and has
+        # no kind to classify; test_agents_registry.py holds it to that claim.
         registry = {a["name"] for a in yaml.safe_load(AGENTS.read_text())["agents"]
-                    if not ("model" in a and a["model"] is None)}
+                    if not ("maxTurns" in a and a["maxTurns"] is None)}
         # Every registry agent has a kind, and every name under `agents` is in
         # the registry or is a session agent — one that has a group for the
         # console and is never a pipeline role (DRE-6833).
