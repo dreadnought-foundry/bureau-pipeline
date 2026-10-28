@@ -2,10 +2,12 @@
 every agent workflow has an entry, and budgets match the workflow text they
 describe — drift here means the console lies about the fleet.
 
-The MODEL half of that contract moved to config/models.yaml (DRE-2316): the
-registry's `model:` is a generated mirror of it, and the workflow no longer
-carries the id at all, so the check here is that the workflow SELECTS from the
-config rather than pinning a string.
+The MODEL half of that contract moved to config/models.yaml (DRE-2316), and
+since DRE-6982 the registry carries no copy of it: no `model:` and no `kind:`
+line, because each agent's group and model are read from the home when a run
+starts. The workflow carries no id either, so the check here is that the
+workflow SELECTS rather than pinning a string, and that the registry stays
+free of the lines it used to mirror.
 
 DRE-2729 closed the rest of the contract. `tools:` used to be a comment asking
 people to remember, and it had drifted on two of ten entries — the planner
@@ -268,12 +270,13 @@ def repo_scope_drift(entry, path):
 
 
 def is_scripted(entry):
-    """A SCRIPTED agent (DRE-5369): a roster entry that declares `model:
-    null`, because its workflow runs a script and never a model — the hygiene
-    agent is the first. The key must be PRESENT and null: an entry whose
-    generated model region was deleted has no `model` key at all, and that is
-    drift, never a reason to skip the checks below."""
-    return "model" in entry and entry["model"] is None
+    """A SCRIPTED agent (DRE-5369): a roster entry that declares `maxTurns:
+    null`, because its workflow runs a script and never a model, so it takes
+    no turns — the hygiene agent is the first. It declared `model: null` until
+    DRE-6982 took every `model:` line out of the registry. The key must be
+    PRESENT and null: an entry that lost its `maxTurns` line has no key at
+    all, and that is drift, never a reason to skip the checks below."""
+    return "maxTurns" in entry and entry["maxTurns"] is None
 
 
 def scripted_drift(entry, path):
@@ -288,7 +291,7 @@ def scripted_drift(entry, path):
     src = path.read_text()
     doc = yaml.safe_load(src) or {}
     problems = [
-        f"{entry['name']}: declares `model: null` (scripted) but {path.name} "
+        f"{entry['name']}: declares `maxTurns: null` (scripted) but {path.name} "
         f"runs a model in step {name!r} ({ACTION})"
         for _job_id, _job, _step, name in agent_steps(doc)
     ]
@@ -361,7 +364,7 @@ class AgentsRegistryTest(unittest.TestCase):
         reads. A roster entry describes the budget a card gets when it asks for
         nothing; a `turns:` label can still select a rung below it.
 
-        DRE-5369: a scripted entry (`model: null`) takes no turns, so it has
+        DRE-5369: a scripted entry (`maxTurns: null`) takes no turns, so it has
         no ceiling to match; `test_scripted_agents_run_no_model` holds it."""
         for a in load():
             if is_scripted(a):
@@ -536,15 +539,15 @@ class AgentsRegistryTest(unittest.TestCase):
                           f"agents.yaml's header does not mention {token!r}")
 
     def test_workflows_resolve_the_model_through_the_config(self):
-        """The roster's `model:` is a GENERATED mirror of config/models.yaml
-        (DRE-2316) — so it is no longer a literal to grep for in the workflow.
+        """The roster carries no `model:` (DRE-2316, DRE-6982) — so the model
+        is not a literal to grep for in the workflow.
 
         The old assertion (`model` appears verbatim in the workflow source) is
         exactly what a hardcoded `--model claude-sonnet-4-6` satisfied, which is
         how the critic/verifier/medic bypassed selection while this test stayed
         green. The contract now: the workflow SELECTS, and pins nothing.
 
-        A scripted entry (`model: null`, DRE-5369) selects nothing because it
+        A scripted entry (`maxTurns: null`, DRE-5369) selects nothing because it
         runs no model; that it really runs none is the next test's job."""
         for a in load():
             if is_scripted(a):
@@ -557,23 +560,47 @@ class AgentsRegistryTest(unittest.TestCase):
                 f"{a['name']}: {a['workflow']} hardcodes a model id")
 
     def test_scripted_agents_run_no_model(self):
-        """`model: null` is a claim that the workflow makes no model call; the
-        two skips above are only safe while that claim is checked."""
+        """`maxTurns: null` is a claim that the workflow makes no model call;
+        the two skips above are only safe while that claim is checked."""
         scripted = [a for a in load() if is_scripted(a)]
         self.assertEqual(["hygiene"], [a["name"] for a in scripted])
         for a in scripted:
             problems = scripted_drift(a, os.path.join(ROOT, a["workflow"]))
             self.assertEqual([], problems, "\n".join(problems))
 
-    def test_only_a_present_null_model_is_scripted(self):
+    def test_only_a_present_null_turn_budget_is_scripted(self):
         """The skip predicate, pinned from both sides: every model-running
-        entry is checked, and an entry that LOST its model line is not waved
-        through as scripted."""
+        entry is checked, and an entry that LOST its turn budget line is not
+        waved through as scripted."""
         for a in load():
             self.assertEqual(is_scripted(a), a["name"] == "hygiene", a["name"])
-        self.assertTrue(is_scripted({"name": "x", "model": None}))
+        self.assertTrue(is_scripted({"name": "x", "maxTurns": None}))
         self.assertFalse(is_scripted({"name": "x"}))
-        self.assertFalse(is_scripted({"name": "x", "model": "claude-opus-5-5"}))
+        self.assertFalse(is_scripted({"name": "x", "maxTurns": 80}))
+
+    def test_the_registry_carries_no_model(self):
+        """DRE-6982: the thirteen generated regions are gone with their
+        `kind:` and `model:` lines, and the scripted entry's hand-written pair
+        went with them. Each agent's group and model are read from the home
+        when a run starts; the registry holds no copy of either."""
+        raw = open(os.path.join(ROOT, "agents.yaml")).read()
+        self.assertNotIn("BEGIN generated", raw)
+        self.assertNotIn("END generated", raw)
+        self.assertEqual(
+            [], re.findall(r"^\s*-?\s*(?:kind|model):.*$", raw, re.M),
+            "agents.yaml carries a `kind:` or `model:` line")
+        for a in load():
+            self.assertNotIn("model", a, a["name"])
+            self.assertNotIn("kind", a, a["name"])
+
+    def test_the_header_says_the_group_and_model_come_from_the_home(self):
+        header = open(os.path.join(ROOT, "agents.yaml")).read().split("\nagents:", 1)[0]
+        said = " ".join(line.lstrip("# ") for line in header.splitlines())
+        said = " ".join(said.split())
+        self.assertIn("read from the home when a run starts", said)
+        self.assertIn("are not in this file", said)
+        self.assertNotRegex(header, r"(?m)^#\s+model\s+—",
+                            "the enforcement list still has a `model` row")
 
     def test_every_agent_has_a_valid_category(self):
         # category groups the roster in the console by business function
@@ -754,11 +781,11 @@ class DriftFixtureTest(unittest.TestCase):
         self.assertIn("dreadnought-foundry/agent-bureau", problems[0])
 
     def test_a_scripted_entry_whose_workflow_runs_a_model_fails(self):
-        """DRE-5369. `model: null` turns off the turns and model-selection
+        """DRE-5369. `maxTurns: null` turns off the turns and model-selection
         checks, so a workflow that quietly runs `claude-code-action` behind a
         scripted entry would be an agent nothing budgets or selects for."""
         path = self._write(_FIXTURE)
-        entry = dict(_ENTRY, model=None, tools=[], maxTurns=None)
+        entry = dict(_ENTRY, tools=[], maxTurns=None)
         problems = scripted_drift(entry, path)
         self.assertTrue(any(ACTION in p and "Implement card" in p for p in problems),
                         f"a scripted entry over an agent step passed: {problems}")
@@ -782,7 +809,7 @@ jobs:
         run: python3 scripts/hygiene.py read --out board.json
 """
         path = self._write(script)
-        entry = dict(_ENTRY, model=None, tools=[], maxTurns=None)
+        entry = dict(_ENTRY, tools=[], maxTurns=None)
         self.assertEqual([], scripted_drift(entry, path))
         widened = dict(entry, credentials=["LINEAR_API_KEY", "BUREAU_APP_ID"])
         problems = scripted_drift(widened, path)

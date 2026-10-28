@@ -19,7 +19,7 @@ This module reads the home ONCE per process, when a choice is first asked for
 — and puts its choices in place in `CONFIG`, `LADDERS`, `KINDS`,
 `AGENT_KINDS` and `LADDER`. Importing the module reads nothing: most of its
 importers want a code-side fact, and do no I/O for it. With no home named
-(`not set`) the choices are the DEFAULTS IN THE CODE — `_FALLBACK_MODEL_CONFIG`
+(`not set`) the choices are the DEFAULTS IN THE CODE — `CODE_DEFAULTS`
 below, `code_defaults()` — exactly as before the home; with a home that cannot
 be read they are the defaults too, LOUDLY: the note opens `DEGRADED` and ends
 with the home's clause (`selection_note`).
@@ -30,12 +30,13 @@ CODE-SIDE FACTS (`effort`, `review_separation`, `discovery`, `retired`,
 `excluded`, `session_agents`, `about`, and the `rules` behind `BACKSTOP_ROLES`
 and `JUDGEMENT_ROLES`), a FILE in the public bureau-pipeline
 checkout the product-repo workflows already do (`.bureau-pipeline`), the same
-shape as `config/repo-map.json` (see config/README.md). Until DRE-6982 its
-old save route regenerates the literal below from it on every merged save, so
-a save by that route stays in force through the defaults.
+shape as `config/repo-map.json` (see config/README.md).
 
-`_FALLBACK_MODEL_CONFIG` is GENERATED from that file. Do not hand-edit it: run
-`python3 scripts/sync_model_config.py` (`--check` fails CI on drift).
+`CODE_DEFAULTS` is written by hand, and nothing generates it (DRE-6982): the
+home is where a choice is changed, and the defaults in the code are the
+document the fleet falls back on when the home cannot be read. Its code-side
+facts are held equal to that file's by `tests/test_model_fallback.py`, which
+names the key that differs.
 
 THE ROLE KINDS (DRE-2317, DRE-3015)
 -----------------------------------
@@ -88,8 +89,8 @@ gained a rung.
 `policy_errors()` below turns all of that from a convention into a validated
 invariant: a config that demotes the critic to a build kind, or declares
 `on_new_model: workhorse` (or `judgement`) is REJECTED — the selector degrades
-to the last-known-good mirror rather than honour it, and
-`sync_model_config.py --check` fails CI red.
+to the last-known-good facts in the code rather than honour it, and the
+home's reader sets aside a home that breaks a rule (`model_home.home_errors`).
 
 AN EXPLICIT CHOICE CAUTIONS, IT IS NOT REFUSED (DRE-6785, CEO decision
 2026-10-10). "It shouldn't gray out these models. I should be able to set it to
@@ -107,8 +108,8 @@ THE DECLARED OVERLAPS (DRE-3880, CEO decision 2026-09-16; DRE-5116)
 the build/review fence is no longer bought by keeping those two lists disjoint.
 It is bought at SELECTION time, per pull request: `select(role, built_on=…)`
 walks the reviewer past the model the build ran on. `config/models.yaml`'s
-`review_separation` block may say which model leads instead, and the generated
-mirror below carries it so a truncated checkout separates too.
+`review_separation` block may say which model leads instead, and
+`CODE_DEFAULTS` below carries it too, so a truncated checkout separates.
 
 Since 2026-09-28 (DRE-5116) there are two such models: `claude-sonnet-5-5` tops
 the advisory ladder and `claude-sonnet-5` sits below it, and both are rungs of
@@ -283,17 +284,17 @@ BACKSTOP_ROLES: tuple[str, ...] = _RULES["reviewers_only"]
 # `rules.planners_may_hold` (DRE-6992).
 JUDGEMENT_ROLES: tuple[str, ...] = _RULES["planners_may_hold"]
 
-# The defaults in the code (DRE-6939): the choices every run makes when the
-# home is not set or cannot be read, read through `code_defaults()` and by
-# nobody else by name. The code-side facts in it are the last-known-good ones,
-# used only when config/models.yaml is missing/unreadable/malformed, so a
-# truncated checkout degrades instead of stranding a dispatch.
-#
-# GENERATED REGION: do not hand-edit. Edit config/models.yaml, then run
-# `python3 scripts/sync_model_config.py` to regenerate it (`--check` in CI fails
-# if the two drift).
-# --- BEGIN generated model config (from config/models.yaml) ---
-_FALLBACK_MODEL_CONFIG = {
+# The defaults in the code (DRE-6939, DRE-6982), written by hand. This is the
+# document the fleet runs on only when the home cannot be read (or none is
+# named). It is never edited to change a choice — a choice is changed in the
+# home, on Settings › Agents & models — and it is never consulted while the
+# home answers. Read it through `code_defaults()`; no other file names it. Its
+# code-side facts (`effort`, `review_separation`, `discovery`, `retired`,
+# `excluded`, `session_agents`, `about`) are the last-known-good ones, used
+# only when config/models.yaml is missing/unreadable/malformed, so a truncated
+# checkout degrades instead of stranding a dispatch; a test holds each equal to
+# that file's.
+CODE_DEFAULTS = {
     "default_ladder": "workhorse",
     "kinds": {
         "workhorse": "workhorse",
@@ -371,16 +372,15 @@ _FALLBACK_MODEL_CONFIG = {
     "retired": ["claude-opus-4-8"],
     "excluded": ["claude-haiku-5-5", "claude-fable-5"],
 }
-# --- END generated model config ---
 
 
 def code_defaults() -> dict:
     """The defaults in the code, normalized — the choices a run makes when no
     home answers (DRE-6939), and the document the operator seeds the home
     with (`model_home.render_defaults`). A fresh copy on every call, so no
-    caller can edit what the next one reads. The one accessor of the
-    generated literal: its name is nobody else's business."""
-    return _normalize_config(_FALLBACK_MODEL_CONFIG) or {}
+    caller can edit what the next one reads. The one accessor of
+    `CODE_DEFAULTS`: its name is nobody else's business."""
+    return _normalize_config(CODE_DEFAULTS) or {}
 
 
 # The keys of the normalized config that are CHOICES (DRE-6939): the home's
@@ -487,8 +487,8 @@ def _normalize_config(raw) -> dict | None:
 def _normalize_groups(raw_kinds, raw_groups) -> dict:
     """`{kind: {"label": str, "purpose": str}}`, in the kinds' order (DRE-6633).
 
-    Read off each kind's mapping in the canonical file, or off the mirror's
-    own `groups` block, where the kinds are bare ladder names. `label` defaults
+    Read off each kind's mapping in the canonical file, or off
+    `CODE_DEFAULTS`' own `groups` block, where the kinds are bare ladder names. `label` defaults
     to the key title-cased and `purpose` to empty — only when absent.
     """
     mirrored = raw_groups if isinstance(raw_groups, Mapping) else {}
@@ -508,10 +508,10 @@ def _normalize_separation(raw) -> dict:
     """`review_separation` in ONE shape: `{"declared": bool, "roles": [...],
     "rules": {built_on: reviewers_use}}` (DRE-3880).
 
-    Two input shapes are accepted deliberately, so the canonical file, the
-    generated mirror, the CI check and the tests all judge by one set of rules:
-    the YAML's list of `{built_on:, reviewers_use:, reason:}` mappings, and the
-    mirror's compact `{built_on: reviewers_use}` mapping.
+    Two input shapes are accepted deliberately, so the canonical file,
+    `CODE_DEFAULTS` and the tests all judge by one set of rules: the YAML's
+    list of `{built_on:, reviewers_use:, reason:}` mappings, and
+    `CODE_DEFAULTS`' compact `{built_on: reviewers_use}` mapping.
 
     `declared` distinguishes "this config says nothing about separation" from
     "it declares none": the first is the edit that DELETED the block, and
@@ -1258,8 +1258,8 @@ class _EveryIdPriced(dict):
 
 
 def _load_code_side() -> dict:
-    """The bundled YAML when readable AND admissible, else the generated
-    literal above. Degrades, never raises — this sits on the dispatch path of
+    """The bundled YAML when readable AND admissible, else `CODE_DEFAULTS`
+    above. Degrades, never raises — this sits on the dispatch path of
     every card, and a config we cannot parse must not block a build. Only its
     code-side facts are kept (`_load_config`).
 
@@ -1270,8 +1270,8 @@ def _load_code_side() -> dict:
     The price rule (4b) is the one rule not judged here, so the import reads no
     price (DRE-6992): it is about the ladders and the projects, which are
     choices this loader does not keep. Where a choice is made it is still
-    held to it — `sync_model_config.py --check` on this file, and the home's
-    reader on the home.
+    held to it — by the home's reader on the home, and by the tests on
+    `CODE_DEFAULTS`.
     """
     try:
         import yaml  # PyYAML ships in the runner image; absence is degradable
@@ -1300,7 +1300,7 @@ def _load_code_side() -> dict:
             f"({exc}); using last-known-good fallback",
             file=sys.stderr,
         )
-    return _normalize_config(_FALLBACK_MODEL_CONFIG) or dict(_FALLBACK_MODEL_CONFIG)
+    return _normalize_config(CODE_DEFAULTS) or dict(CODE_DEFAULTS)
 
 
 CONFIG = _load_config()

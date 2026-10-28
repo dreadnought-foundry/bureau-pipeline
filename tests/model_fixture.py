@@ -16,10 +16,9 @@ Since the selector selects on the home or the defaults in the code (DRE-6939),
 a scenario is a home document rather than an edit of a tree's `models.yaml`:
 `fixture_home()` is the frozen choices as one, `lead_with`, `move_agent` and
 `with_project` edit a copy, and `home_env` or `fixture_module(..., doc=...)`
-hands it to a tree (DRE-6972). Such a tree is built with
-`fixture_tree(dest, regenerate=False)`, which runs no generator; the default
-still regenerates the literal for the old route's tests and the generator's
-own (DRE-6990).
+hands it to a tree (DRE-6972). A tree is copied and never regenerated: the
+generator is gone (DRE-6982), so `fixture_tree` runs nothing, and the
+defaults in the code are the tree's own hand-written `CODE_DEFAULTS`.
 """
 from __future__ import annotations
 
@@ -29,7 +28,6 @@ import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -43,27 +41,11 @@ from unit_test_parts import discover  # noqa: E402
 FIXTURE_NAME = "model-config-frozen"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / FIXTURE_NAME
 
-# What every rule test says when the fixture stops regenerating, so the whole
-# suite fails with one sentence that names the remedy, not a traceback inside
-# the generator.
-STALE = (
-    "the frozen model fixture no longer regenerates under today's code — "
-    "re-freeze it in this pull request "
-    f"({(FIXTURE_DIR / 'README.md').relative_to(ROOT).as_posix()}, the refresh rule)"
-)
-
-# A test file that names any of these can read the model files: the three files
-# themselves, and the selector, the generator and the console's change script
-# that read them. A test that names a rung id is in the set too
-# (`model_reading_tests`), because it reaches the selector some other way.
-MODEL_FILE_NAMES = (
-    "models.yaml", "agents.yaml", "model-choices.json",
-    "model_fallback", "sync_model_config", "model_config_change",
-)
-
-
-class FixtureStale(Exception):
-    """The generator refused the frozen files under today's code."""
+# A test file that names any of these can read the model files: the two files
+# themselves, and the selector that reads them. A test that names a rung id is
+# in the set too (`model_reading_tests`), because it reaches the selector some
+# other way.
+MODEL_FILE_NAMES = ("models.yaml", "agents.yaml", "model_fallback")
 
 
 def fixture_config() -> dict:
@@ -157,27 +139,19 @@ def _copy_into(dest: Path) -> None:
     shutil.copy2(ROOT / "config" / "repo-map.json", dest / "config" / "repo-map.json")
 
 
-def fixture_tree(dest: Path, regenerate: bool = True) -> Path:
+def fixture_tree(dest: Path, regenerate: bool = False) -> Path:
     """A throwaway tree at `dest` running today's code on the frozen files.
 
-    With `regenerate` (the default) its generated regions are regenerated from
-    the frozen files, and `FixtureStale` is raised when the generator refuses
-    them: the old route's tests and the generator's own still build on that
-    literal. With `regenerate=False` the tree is copied and nothing runs — a
-    tree whose selector answers from a home document (`home_env`,
-    `fixture_module(..., doc=...)`) has no use for a regenerated literal
-    (DRE-6990)."""
+    The tree is copied and nothing runs. `regenerate` stays a keyword so the
+    callers that pass `regenerate=False` (DRE-6990, DRE-8018) are untouched;
+    `regenerate=True` raises `ValueError`, because the generator that rewrote
+    a tree's literal is gone (DRE-6982)."""
+    if regenerate:
+        raise ValueError(
+            "fixture_tree(regenerate=True): the generator is gone (DRE-6982) — "
+            "a tree is copied and never regenerated")
     dest = Path(dest)
     _copy_into(dest)
-    if not regenerate:
-        return dest
-    proc = subprocess.run(
-        [sys.executable, str(dest / "scripts" / "sync_model_config.py")],
-        cwd=dest, capture_output=True, text=True)
-    if proc.returncode != 0:
-        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-15:])
-        raise FixtureStale(
-            f"{STALE}\n`sync_model_config.py` exited {proc.returncode}:\n{tail}")
     return dest
 
 

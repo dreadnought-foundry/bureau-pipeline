@@ -215,9 +215,20 @@ class DecideInvocationTest(unittest.TestCase):
 
     def test_the_log_is_the_same_file_the_classifier_read(self):
         """One fetch of the failed log, shared: the DRE-2488 lesson was that a
-        second fetch during an outage classifies an empty log."""
-        body = yaml.safe_dump(_medic()["jobs"]["classify"])
-        self.assertEqual(1, body.count("--log-failed"), "the failed log is fetched once")
+        second fetch during an outage classifies an empty log.
+
+        DRE-8239 added one read of a DIFFERENT log — attempt 1's, on attempt 2
+        of a killed run, into a file of its own — which never stands in for
+        this attempt's."""
+        job = _medic()["jobs"]["classify"]
+        body = yaml.safe_dump(job)
+        runs = "\n".join(str(s.get("run", "")) for s in job["steps"]).splitlines()
+        this_attempt = [ln for ln in runs if "--log-failed" in ln and "--attempt" not in ln]
+        self.assertEqual(1, len(this_attempt), "the failed log is fetched once")
+        earlier = [ln for ln in runs if "--log-failed" in ln and "--attempt" in ln]
+        self.assertEqual(1, len(earlier), earlier)
+        self.assertIn("--attempt 1", earlier[0])
+        self.assertNotIn("/tmp/medic-log.txt", earlier[0])
         self.assertIn("--limit-log /tmp/medic-log.txt", body)
 
 
