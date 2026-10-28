@@ -6,12 +6,13 @@ from DRE-1354.
 WHERE THE CHOICES COME FROM (DRE-2316, DRE-6939)
 ------------------------------------------------
 The CHOICES — which models a group runs on and in what order, which group an
-agent is in, a project's own model — live in ONE home outside every
-repository: the GitHub Actions variable `BUREAU_MODEL_CHOICES` on
-dreadnought-foundry/bureau-pipeline, which the console writes. The CEO,
-2026-10-11: "These should all be externalized and all we're doing is changing
-the values of the configuration." `scripts/model_home.py` is its reader and
-its rules.
+agent is in, a group's label and purpose, a project's own model — live in ONE
+home outside every repository: the GitHub Actions variable
+`BUREAU_MODEL_CHOICES` on dreadnought-foundry/bureau-pipeline, which the
+console writes. A choice is changed on the console's Settings › Agents &
+models page and is in force from the next agent run. The CEO, 2026-10-11:
+"These should all be externalized and all we're doing is changing the values
+of the configuration." `scripts/model_home.py` is its reader and its rules.
 
 This module reads the home ONCE per process, when a choice is first asked for
 — the first call of one of the five CHOICE FUNCTIONS, `kind_for`,
@@ -24,24 +25,26 @@ below, `code_defaults()` — exactly as before the home; with a home that cannot
 be read they are the defaults too, LOUDLY: the note opens `DEGRADED` and ends
 with the home's clause (`selection_note`).
 
-The choices still written in `config/models.yaml` are never read by the
-selector: the home or the defaults, nothing between. That file is read for the
-CODE-SIDE FACTS (`effort`, `review_separation`, `discovery`, `retired`,
-`excluded`, `session_agents`, `about`, and the `rules` behind `BACKSTOP_ROLES`
-and `JUDGEMENT_ROLES`), a FILE in the public bureau-pipeline
-checkout the product-repo workflows already do (`.bureau-pipeline`), the same
-shape as `config/repo-map.json` (see config/README.md).
+`config/models.yaml` holds no choice (DRE-6983): the home or the defaults,
+nothing between. That file holds only the CODE-SIDE FACTS (`effort`,
+`review_separation`, `discovery`, `retired`, `excluded`, `session_agents`,
+`about`, and the `rules` behind `BACKSTOP_ROLES` and `JUDGEMENT_ROLES`), a
+FILE in the public bureau-pipeline checkout the product-repo workflows already
+do (`.bureau-pipeline`), the same shape as `config/repo-map.json` (see
+config/README.md). A choice key written back into it (`FILE_CHOICE_KEYS`) is
+refused by `policy_errors`, naming the key, and the file is not read.
 
 `CODE_DEFAULTS` is written by hand, and nothing generates it (DRE-6982): the
 home is where a choice is changed, and the defaults in the code are the
-document the fleet falls back on when the home cannot be read. Its code-side
+document the fleet falls back on when the home cannot be read — the one
+document literal in this file, which tests/test_no_choice_copies.py holds. Its code-side
 facts are held equal to that file's by `tests/test_model_fallback.py`, which
 names the key that differs.
 
 THE ROLE KINDS (DRE-2317, DRE-3015)
 -----------------------------------
-Every role is classified in that config as one of three KINDS, and a role is
-assigned a kind — never a raw ladder name:
+Every role is classified, in the home or the defaults in the code, as one of
+three KINDS, and a role is assigned a kind — never a raw ladder name:
 
   * `workhorse` — high-volume build work (engineer, frontend, devops,
     database-architect, fixer, repairer). Hundreds of turns per card: this is
@@ -76,15 +79,14 @@ subscription the probe stopped returning 404, the best-first ladder promoted
 the whole fleet onto it in a single TTL window, the subscription's rolling
 usage drained, and agents started dying `is_error` mid-run. AVAILABILITY IS NOT
 PERMISSION: a stronger model becoming available must never promote itself onto
-the build path — that is a spend decision belonging to a human editing
-config/models.yaml, not to a probe. Availability detection only decides how far
-DOWN a ladder we walk, never how far up.
+the build path — that is a spend decision belonging to a person choosing it on
+Settings › Agents & models, not to a probe. Availability detection only decides
+how far DOWN a ladder we walk, never how far up.
 
-That is why the planner's promotion is not a counter-example: it is a HUMAN
-edit to config/models.yaml in a reviewed PR, which is the sanctioned way up and
-the only one. The volume that caused the incident is absent by construction —
-the planner runs once per epic, not per card — and no build role's ladder
-gained a rung.
+That is why the planner's promotion is not a counter-example: it is a PERSON's
+choice, which is the sanctioned way up and the only one. The volume that caused
+the incident is absent by construction — the planner runs once per epic, not
+per card — and no build role's ladder gained a rung.
 
 `policy_errors()` below turns all of that from a convention into a validated
 invariant: a config that demotes the critic to a build kind, or declares
@@ -119,7 +121,7 @@ really make, and never falls back onto it.
 
 None of that touches the 2026-08-09 rule as the fleet runs today: Fable —
 the STRONGEST model we run, on the judgement ladder — is on no build ladder,
-and only a person's choice in a reviewed pull request could put it there.
+and only a person's choice on Settings › Agents & models could put it there.
 
 Why this replaced DRE-1354's per-role pair
 -------------------------------------------
@@ -131,7 +133,7 @@ first attempt) and the engineer's error-retry bounced to Fable→404→dead. Goo
 cards hit needs-human holds.
 
 The model is now chosen by a SINGLE ordered ladder shared by both roles (the
-`workhorse` ladder in config/models.yaml, best→worst).
+`workhorse` group's models, best→worst).
 
 `select()` walks the role's ladder top→bottom and returns the FIRST AVAILABLE
 model.
@@ -197,8 +199,8 @@ ADDED_GROUP_NAME = re.compile(r"[a-z][a-z0-9-]*")
 # `judgement` is absent for the same reason and it matters MORE, not less: the
 # planning ladder is the strongest one we run, so it is the most attractive
 # place for an unattended promotion to land. A newly-discovered model may never
-# reach a build OR a planning ladder by itself; a human editing
-# config/models.yaml is the only way up.
+# reach a build OR a planning ladder by itself; a person's choice in the home
+# is the only way up.
 DISCOVERY_TARGETS = (ADVISORY_KIND, "none")
 
 # The effort levels the CLI accepts (`claude --effort <level>`). A config
@@ -279,7 +281,7 @@ BACKSTOP_ROLES: tuple[str, ...] = _RULES["reviewers_only"]
 
 # The roles that may be assigned `judgement` (rule 10, DRE-6633). The kind
 # admits a role that runs once per epic; a role that runs per card on the
-# strongest model is the 2026-08-09 incident. config/models.yaml has said "ONE
+# strongest model is the 2026-08-09 incident. The planner's kind has been "ONE
 # role, deliberately" since DRE-3015, and nothing enforced it until this.
 # `rules.planners_may_hold` (DRE-6992).
 JUDGEMENT_ROLES: tuple[str, ...] = _RULES["planners_may_hold"]
@@ -288,7 +290,8 @@ JUDGEMENT_ROLES: tuple[str, ...] = _RULES["planners_may_hold"]
 # document the fleet runs on only when the home cannot be read (or none is
 # named). It is never edited to change a choice — a choice is changed in the
 # home, on Settings › Agents & models — and it is never consulted while the
-# home answers. Read it through `code_defaults()`; no other file names it. Its
+# home answers. Read it through `code_defaults()`; no other file names it, and
+# it is the one document literal anywhere (tests/test_no_choice_copies.py). Its
 # code-side facts (`effort`, `review_separation`, `discovery`, `retired`,
 # `excluded`, `session_agents`, `about`) are the last-known-good ones, used
 # only when config/models.yaml is missing/unreadable/malformed, so a truncated
@@ -388,12 +391,41 @@ def code_defaults() -> dict:
 _CHOICE_KEYS = ("default_ladder", "kinds", "ladders", "agents", "groups",
                 "ungrouped", "projects")
 
+# The keys config/models.yaml carried its choices under until DRE-6983 — a
+# group's label and purpose were under `kinds`. The file holds none of them
+# now, and one written back is refused by name (`policy_errors`), never read.
+FILE_CHOICE_KEYS = ("kinds", "ladders", "default_ladder", "agents", "ungrouped",
+                    "projects")
+
+
+def file_choice_error(key: str) -> str:
+    """The refusal of a choice written back into config/models.yaml."""
+    return f"{key} is a choice and lives in the home, not in this file"
+
+
+def _is_file_document(raw) -> bool:
+    """True for config/models.yaml's shape: a mapping that declares no
+    `groups`. A document of choices — `CODE_DEFAULTS`, or a config already
+    normalized — always declares them; the file never does."""
+    return isinstance(raw, Mapping) and "groups" not in raw
+
+
+def _with_default_choices(raw: Mapping) -> dict:
+    """config/models.yaml's code-side facts beside the choices of the defaults
+    in the code (DRE-6983). A choice key the file carries is not read."""
+    return {**{key: CODE_DEFAULTS[key] for key in _CHOICE_KEYS},
+            **{key: value for key, value in raw.items() if key not in FILE_CHOICE_KEYS}}
+
 
 def _normalize_config(raw) -> dict | None:
     """Coerce a parsed config document into the plain-id shape above, or None if
     it is unusable. Ladder rungs may be bare ids or `{model:, reason:}` mappings
-    (the canonical file uses the latter so each rung carries its justification);
-    a kind may be a bare ladder name or a `{ladder:, …}` mapping.
+    (`retired` and `excluded` use the latter so each id carries its reason); a
+    kind is a bare ladder name.
+
+    config/models.yaml (a mapping with no `groups`) holds only code-side facts
+    (DRE-6983): its choices are the defaults in the code's, and a choice key it
+    carries is not read — `policy_errors` refuses it by name.
 
     Normalization deliberately does NOT repair a policy violation — an agent
     pointed at something that is not a kind is carried through verbatim so
@@ -401,6 +433,8 @@ def _normalize_config(raw) -> dict | None:
     fall the role back to the default ladder and hide the exact class of edit
     DRE-2317 exists to catch.
     """
+    if _is_file_document(raw):
+        raw = _with_default_choices(raw)
     if not isinstance(raw, Mapping) or not isinstance(raw.get("ladders"), Mapping):
         return None
 
@@ -421,13 +455,8 @@ def _normalize_config(raw) -> dict | None:
     if default not in ladders:
         default = next(iter(ladders))
 
-    kinds: dict[str, str] = {}
-    for name, spec in (raw.get("kinds") or {}).items():
-        if isinstance(spec, Mapping):
-            ladder = spec.get("ladder")
-        else:
-            ladder = spec
-        kinds[str(name)] = str(ladder) if ladder is not None else ""
+    kinds = {str(name): "" if ladder is None else str(ladder)
+             for name, ladder in (raw.get("kinds") or {}).items()}
 
     agents = {str(name): str(kind) for name, kind in (raw.get("agents") or {}).items()}
 
@@ -487,14 +516,15 @@ def _normalize_config(raw) -> dict | None:
 def _normalize_groups(raw_kinds, raw_groups) -> dict:
     """`{kind: {"label": str, "purpose": str}}`, in the kinds' order (DRE-6633).
 
-    Read off each kind's mapping in the canonical file, or off
-    `CODE_DEFAULTS`' own `groups` block, where the kinds are bare ladder names. `label` defaults
-    to the key title-cased and `purpose` to empty — only when absent.
+    Read off the document's own `groups` block — `CODE_DEFAULTS`', or a
+    config's built from the home. A group's label and purpose left
+    config/models.yaml with its `kinds` (DRE-6983). `label` defaults to the
+    key title-cased and `purpose` to empty — only when absent.
     """
-    mirrored = raw_groups if isinstance(raw_groups, Mapping) else {}
+    declared = raw_groups if isinstance(raw_groups, Mapping) else {}
     groups: dict[str, dict] = {}
-    for name, spec in (raw_kinds or {}).items():
-        source = spec if isinstance(spec, Mapping) else mirrored.get(name)
+    for name in (raw_kinds or {}):
+        source = declared.get(name)
         source = source if isinstance(source, Mapping) else {}
         label, purpose = source.get("label"), source.get("purpose")
         groups[str(name)] = {
@@ -754,9 +784,14 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
     """Every way this config would put the strongest model on the build path,
     as plain-English strings. Empty list = the config is admissible.
 
-    Accepts either a raw parsed `config/models.yaml` document or the normalized
-    shape, so the CI check, the tests and the runtime loader all judge by ONE
-    set of rules. No network and no import cycle; what it reads off disk is
+    Accepts a raw parsed `config/models.yaml`, a document of choices
+    (`CODE_DEFAULTS`) or the normalized shape, so the CI check, the tests and
+    the runtime loader all judge by ONE set of rules. The file holds only
+    code-side facts (DRE-6983): it is judged with the choices of the defaults
+    in the code, and each choice key it carries — `kinds`, `ladders`,
+    `default_ladder`, `agents`, `ungrouped`, `projects` — is refused first,
+    `<key> is a choice and lives in the home, not in this file`, so a hand
+    edit cannot quietly put a choice back. No network and no import cycle; what it reads off disk is
     `config/model-prices.yaml` (rule 4b), through `declared_prices`, and — only
     when `projects` names one — `config/repo-map.json`, through
     `declared_repo_slugs`. Both degrade rather than raise; pass `prices` and
@@ -849,6 +884,9 @@ def policy_errors(config, prices=None, repo_slugs=None) -> list[str]:
     makes, every finding the fleet does not already carry reported as
     `projects.<slug>.<kind>: …`.
     """
+    if _is_file_document(config):
+        return ([file_choice_error(key) for key in FILE_CHOICE_KEYS if key in config]
+                + policy_errors(_with_default_choices(config), prices, repo_slugs))
     cfg = _normalize_config(config)
     if cfg is None:
         return ["config declares no usable ladders"]
@@ -1321,9 +1359,9 @@ KINDS: dict[str, str] = CONFIG["kinds"]
 # A session agent is left out, whatever group it is in (DRE-6833): it runs in a
 # person's session, not a pipeline workflow, so `kind_for`, `ladder_for` and
 # `select` answer it exactly as they answer an unknown name — the top of the
-# default (Builders) ladder, never the judgement one. Its group is a published
-# fact for the console (config/model-choices.json) and nothing on the dispatch
-# path reads it; that is also why rule 10 may exempt it.
+# default (Builders) ladder, never the judgement one. Its group is a choice in
+# the home, which the console shows, and nothing on the dispatch path reads
+# it; that is also why rule 10 may exempt it.
 SESSION_AGENTS: set[str] = _session_names(CONFIG)
 AGENT_KINDS: dict[str, str] = {
     role: kind for role, kind in CONFIG["agents"].items()
@@ -1347,8 +1385,8 @@ SEPARATION: dict = CONFIG["review_separation"]
 # what every build agent walks. FABLE is deliberately absent (2026-08-09): it is
 # excluded by POLICY — cost and subscription quota, ~2x Opus per token — not by
 # availability, so re-enabling it upstream must NOT put it back. Membership is
-# the spend decision and it is made in config/models.yaml; the probe only
-# decides how far down we walk. (Haiku is intentionally absent too: build work
+# the spend decision and it is made in the home; the probe only decides how
+# far down we walk. (Haiku is intentionally absent too: build work
 # realistically wants Sonnet-or-better.)
 LADDER: list[str] = LADDERS[CONFIG["default_ladder"]]
 
@@ -1811,10 +1849,10 @@ def _normalize_ladder(ladder) -> list[str]:
       * A bare string. `ladder: claude-opus-5` in YAML is a scalar, not a
         sequence, and a str is both truthy and iterable — walked unguarded it
         selects a single LETTER as the model id and hands it to the run.
-      * config/models.yaml's own ladder shape, a list of {model:, reason:}
-        mappings. Callers (and the console) read ladders out of YAML, so
-        accepting the shape it actually stores costs nothing and removes a
-        TypeError from the hot path.
+      * A list of {model:, reason:} mappings, the shape config/models.yaml
+        stored its ladders in until DRE-6983 and still stores `retired` and
+        `excluded` in. Accepting it costs nothing and removes a TypeError
+        from the hot path.
 
     Entries that are neither a string nor a mapping with a string `model` are
     dropped rather than fatal — one malformed row must not strand a dispatch.
@@ -1924,9 +1962,8 @@ def effort_for(model: str) -> str | None:
     the step passes no `--effort` argument at all, so adopting one model's
     level never moves another model's spend.
 
-    Read off the config, never a literal, for the same reason the model id is
-    (DRE-2316) — the level is a spend decision and it is made in
-    config/models.yaml, in a reviewed PR.
+    Read off the config, never a literal (DRE-2316) — the level is a spend
+    decision and it is made in config/models.yaml's `effort` block.
     """
     level = EFFORT.get(model or "")
     return level if level in EFFORT_LEVELS else None
@@ -1935,7 +1972,7 @@ def effort_for(model: str) -> str | None:
 def fallback_for(role: str, model: str, repo: str | None = None) -> str | None:
     """The rung directly below `model` on `role`'s ladder, or None when it is
     the last rung or not on the ladder at all (DRE-3970). What a step hands the
-    CLI as `--fallback-model` — read off the reviewed ladder, never a literal.
+    CLI as `--fallback-model` — read off the chosen ladder, never a literal.
 
     `repo` reads it off that project's walk (DRE-6634), the same walk `select`
     chose from, so the fallback and the capacity retry agree with it."""
@@ -2292,8 +2329,8 @@ def select(
     """The model the next attempt should use: the first AVAILABLE model walking
     that agent's ordered ladder best→worst.
 
-    `role` is an agent/role name from config/models.yaml (`engineer`, `planner`,
-    `critic`, `verifier`, `medic`, …). Every build role is classified
+    `role` is an agent/role name of the home or the defaults (`engineer`,
+    `planner`, `critic`, `verifier`, `medic`, …). Every build role is classified
     `workhorse` and walks that ladder; the advisory roles walk theirs and the
     planner walks the `judgement` one. An unrecognized name gets the workhorse
     ladder rather than an error.
@@ -2588,9 +2625,9 @@ def main(argv: list[str]) -> int:
                                    a card's labels
 
     `select` probes the live API using the CLAUDE token in the env. `<agent>` is
-    a name from config/models.yaml (`engineer`, `planner`, `critic`, `verifier`,
-    `medic`, `fixer`, `repairer`, …); an unknown name walks the workhorse
-    ladder.
+    an agent name of the home or the defaults (`engineer`, `planner`,
+    `critic`, `verifier`, `medic`, `fixer`, `repairer`, …); an unknown name
+    walks the workhorse ladder.
 
     STDOUT IS ONLY THE MODEL ID — every workflow does `MODEL=$(… select …)`.
     The note (which model ran, and why anything above it was skipped) goes to

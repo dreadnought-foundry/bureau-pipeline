@@ -1,11 +1,13 @@
 """The frozen model files, and a throwaway tree built from them (DRE-6859).
 
-The console rewrites `config/models.yaml` on every save — which model leads a
-group, which group an agent is in, which agents exist, which projects have a
-model of their own — so a rule test that read the committed file went red on a
-legitimate save. A RULE of the policy or of selection is proved against the
-frozen copy in `tests/fixtures/model-config-frozen/` instead (its README holds
-the two rules, and the refresh rule for when today's code stops accepting it).
+The console used to rewrite `config/models.yaml` on every save — which model
+leads a group, which group an agent is in, which agents exist, which projects
+have a model of their own — so a rule test that read the committed file went
+red on a legitimate save. A RULE of the policy or of selection is proved
+against the frozen copy in `tests/fixtures/model-config-frozen/` instead (its
+README holds the two rules, and the refresh rule for when today's code stops
+accepting it). Since DRE-6983 the frozen `models.yaml` and `agents.yaml` carry
+no choice at all: the frozen choices are `home.json`'s alone.
 
 This is a plain module, not a pytest fixture: the policy and selector tests are
 `unittest.TestCase` classes. Every test reaches the fixture through it, and
@@ -22,6 +24,7 @@ defaults in the code are the tree's own hand-written `CODE_DEFAULTS`.
 """
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -49,7 +52,8 @@ MODEL_FILE_NAMES = ("models.yaml", "agents.yaml", "model_fallback")
 
 
 def fixture_config() -> dict:
-    """The frozen `models.yaml`, parsed."""
+    """The frozen `models.yaml`, parsed: code-side facts only, no choice
+    (DRE-6983) — a choice is read off `fixture_home()`."""
     return yaml.safe_load(fixture_text())
 
 
@@ -72,12 +76,10 @@ def _rung_ids(rungs) -> list[str]:
     return [r["model"] if isinstance(r, dict) else r for r in rungs or []]
 
 
-def ladder(cfg_or_doc: dict, kind: str) -> list[str]:
-    """The rung ids `kind` walks: `groups.<kind>.models` of a home document,
-    or the ladder `kind` names in a raw config of the old shape."""
-    if "ladders" not in cfg_or_doc:
-        return _rung_ids(cfg_or_doc["groups"][kind]["models"])
-    return _rung_ids(cfg_or_doc["ladders"][cfg_or_doc["kinds"][kind]["ladder"]])
+def ladder(doc: dict, kind: str) -> list[str]:
+    """The rung ids `kind` walks: `groups.<kind>.models` of a home document.
+    The frozen `models.yaml` carries no choice to read one off (DRE-6983)."""
+    return _rung_ids(doc["groups"][kind]["models"])
 
 
 # --------------------------------------------------------------------------- #
@@ -215,9 +217,26 @@ def _read_home(module, tree: Path, doc: dict) -> None:
             os.environ[HOME_FILE_ENV] = before
 
 
+def _default_rung_ids(tree: Path) -> set[str]:
+    """The rung ids of `tree`'s defaults in the code — `CODE_DEFAULTS` in its
+    `scripts/model_fallback.py`, read as a literal, never imported. None when
+    the tree carries no such literal."""
+    path = Path(tree) / "scripts" / "model_fallback.py"
+    if not path.exists():
+        return set()
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "CODE_DEFAULTS" for t in node.targets):
+            defaults = ast.literal_eval(node.value)
+            return {m for rungs in (defaults.get("ladders") or {}).values()
+                    for m in _rung_ids(rungs)}
+    return set()
+
+
 def model_reading_tests(tree: Path) -> list[Path]:
     """The test files under `tree` that can read the model files: those naming
-    one of `MODEL_FILE_NAMES`, or a rung id of `tree/config/models.yaml`.
+    one of `MODEL_FILE_NAMES`, or a rung id of `tree`'s defaults in the code
+    (the file carries none since DRE-6983).
 
     The one derivation of that set: the harness (DRE-6865) runs exactly these
     inside each changed copy, and the guard (DRE-6866) scans exactly these for
@@ -225,9 +244,7 @@ def model_reading_tests(tree: Path) -> list[Path]:
     asserts a model id is in it whether or not it names a model file.
     """
     tree = Path(tree)
-    cfg = yaml.safe_load((tree / "config" / "models.yaml").read_text()) or {}
-    rungs = {m for rungs in (cfg.get("ladders") or {}).values() for m in _rung_ids(rungs)}
-    tokens = (*MODEL_FILE_NAMES, *sorted(rungs))
+    tokens = (*MODEL_FILE_NAMES, *sorted(_default_rung_ids(tree)))
     # The files `pytest tests` collects — the directories it skips are skipped
     # here by the same walk — narrowed to `test_*.py`.
     files = [tree / rel for rel in discover(tree) if Path(rel).name.startswith("test_")]

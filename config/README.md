@@ -8,11 +8,13 @@ of it is ever a runtime lookup. The one exception is the model CHOICES, which
 since DRE-6939 live in a repository variable every run reads with a token it
 mints (see `models.yaml` below).
 
-- **`models.yaml`** — the code-side facts of model selection; the choices live
-  in the home (see below).
+- **`models.yaml`** — the code-side facts of model selection, and nothing
+  else: the choices live in the home, or with no home in `CODE_DEFAULTS`, and
+  a person changes one on Settings › Agents & models (see below).
 - **`model-prices.yaml`** — the declared price of each model id, in USD per
-  million tokens (DRE-3895). An id absent from it has no price and cannot
-  adopt itself.
+  million tokens (DRE-3895). An id absent from it has no price: it cannot be
+  chosen — not in the home on Settings › Agents & models, the one way a
+  choice is changed, and not in `CODE_DEFAULTS` — and it cannot adopt itself.
 - **`turn-budgets.json`** — how many turns a build run gets (DRE-3097). A
   `turns:<n>` label picks a rung from a closed, reviewed set; absent that the
   `size:` label maps to one; absent both it is the default, **400 since
@@ -394,27 +396,30 @@ mints (see `models.yaml` below).
 
 ---
 
-# `models.yaml` — the ONE model config (DRE-2316 / DRE-2317 / DRE-3015)
+# `models.yaml` — the model config's code-side facts (DRE-2316 / DRE-2317 / DRE-3015 / DRE-6983)
 
 ## The choices live in the home (DRE-6939)
 
 The CHOICES — which models a group runs on and in what order, which group an
-agent is in, a project's own model — live in **the home**, not in this file:
+agent is in, a group's name and purpose, a project's own model — live in
+**the home**, and this file holds none of them (DRE-6983):
 the GitHub Actions repository variable **`BUREAU_MODEL_CHOICES`** on
 **`dreadnought-foundry/bureau-pipeline`**, one JSON document for the whole
 fleet, written by the console through the bureau App. Every selecting run reads
 it when it first asks which model to use (`scripts/model_home.py`, through
-`model_fallback.use_home`): the home first, **the defaults in the code**
-(`model_fallback.code_defaults()`, which returns `CODE_DEFAULTS`) otherwise, and
-**never the choices written in this file**.
+`model_fallback.use_home`): the home first, and **the defaults in the code**
+(`model_fallback.code_defaults()`, which returns `CODE_DEFAULTS` in
+`scripts/model_fallback.py`) otherwise. **A choice is changed on the console's
+Settings › Agents & models page**, which writes the home, and it is in force
+from the next agent run — a configuration value, with no pull request (the
+CEO's decision of 2026-10-11).
 
 Which of the two is in force is read off a run's `model-home:` line, never
 assumed. **`docs/model-choice-levers.md`** (DRE-7195) records the reading with
 the run lines that show it, when a change to this file reaches the fleet, and
 the one-step rollback each sibling of DRE-7184 pulls, and says which runs it
 could read. While a run reads `unreadable` or `not set`, the defaults in the
-code are in force, and the choices written in this file reach it not at all.
-Once a run reads `read`, a change
+code are in force. Once a run reads `read`, a change
 written to the home is in force on the next run in each organization, with
 no pull request.
 
@@ -479,11 +484,11 @@ note, and the note ends with the home's clause:
 (what each writer runs before it writes), and `render-defaults` prints the
 defaults in the code as a home document — what the operator seeds it with.
 
-What this file still carries is read for the **code-side facts** — `effort`,
+What this file carries is the **code-side facts** — `effort`,
 `review_separation`, `discovery`, `retired`, `excluded`, `session_agents`,
-`about` and `rules`. Nothing renders the defaults in the code from it any more
-(DRE-6982): `CODE_DEFAULTS` is hand-written, and a test holds its code-side
-facts to this file's (below).
+`about` and `rules` — and nothing else. Nothing renders the defaults in the
+code from it (DRE-6982): `CODE_DEFAULTS` is hand-written, and a test holds its
+code-side facts to this file's (below).
 
 **The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,
 verifier]`) and `planners_may_hold` (today `[planner]`): the agents that must stay Reviewers
@@ -505,27 +510,34 @@ already adopted (DRE-6992).
 ## The file
 
 `models.yaml` was **the only file a human edited to change which model an agent
-uses**, until the home above. It declares named, ordered fallback **ladders** (best → worst), classes
-every agent as one of three **role kinds**, and lists the ids that stay *readable
-but not selectable* (retired ids, and ids excluded by cost policy or because
-the CEO has said we do not use them).
+uses**, until the home above. Since DRE-6983 it carries no choice: the named,
+ordered **ladders**, the **role kind** of each agent, the groups' labels and
+purposes, the default ladder, the ungrouped roster and the per-project
+exceptions all left it — the six keys `kinds`, `ladders`, `default_ladder`,
+`agents`, `ungrouped` and `projects`. What it keeps is the ids that stay
+*readable but not selectable* (retired ids, and ids excluded by cost policy or
+because the CEO has said we do not use them) and the other code-side facts
+below. A choice key written back into it is refused by `policy_errors` with
+`<key> is a choice and lives in the home, not in this file`, the selector then
+runs on the facts in the code rather than read the file, and
+`tests/test_no_choice_copies.py` — the guard naming every place a choice was
+once copied — goes red.
 
-A retired id is named by no ladder and by no `projects.<slug>.<kind>` entry —
-`policy_errors` refuses one that is (DRE-6785). **The daily adoption retires
-nothing** (DRE-6943): it writes the home and edits no file, because this file's
-ladders still name the old id after the home has moved on, so an id appended
-under `retired:` would turn `policy_errors` and the model tests red. The old id stays priced and
-unretired. When it has left every group and every project of the home, the
-adoption's record card says so in one sentence, and retiring it is a code
-change a person makes once part 3 has taken the choices out of this file.
+A retired id is named by no rung and no project exception of the defaults in
+the code — `policy_errors` refuses one that is (DRE-6785) — and the home's
+reader sets one aside wherever the home names it. **The daily adoption retires
+nothing** (DRE-6943): it writes the home and edits no file, so the old id stays
+priced and unretired. When it has left every group and every project of the
+home, the adoption's record card says so in one sentence, and retiring it is a
+code change a person makes here, beside `CODE_DEFAULTS`.
 
 ## The role kinds — workhorse, advisory, judgement
 
 | kind | who | model | why |
 |---|---|---|---|
-| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (today Opus 5.5) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
-| `advisory` | critic, verifier, medic, both plan critics | today Sonnet 5.5 | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around — and Sonnet 5.5, its same-price successor, since 2026-09-28 (DRE-5116), with Sonnet 5 kept as the rung below. |
-| `judgement` | the planner, alone | the **strongest** model (today `claude-fable-5-1`) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
+| `workhorse` | engineer, frontend, devops, database-architect, fixer, repairer | cost-appropriate (Opus 5.5 in the defaults in the code) | The hot path. Hundreds of turns per card, every card, every repo — this is what drains the shared rolling session window. |
+| `advisory` | critic, verifier, medic, both plan critics | Sonnet 5.5 in the defaults in the code | Bounded consults at decision points. The critic gates **every unattended merge**; nobody human reads a diff, so a shallow review is a *silent* failure. Sonnet 5 since 2026-08-12, on measured cost — the critic fires on every PR push, which is not the bounded volume the ladder was designed around — and Sonnet 5.5, its same-price successor, since 2026-09-28 (DRE-5116), with Sonnet 5 kept as the rung below. |
+| `judgement` | the planner, alone | a **strong** model (`claude-opus-5-5`, falling to `claude-fable-5-1`, in the defaults in the code) | One run per epic, at a decision point, and the plan it writes is the specification every child card is built from — so a bad output costs a fix loop per child, not a retry. Low volume, highest leverage (CEO decision, 2026-09-03). |
 
 The allocation used to be exactly inverted — the cheapest model judging the most
 expensive one's work — and the priciest model sat on the hot path where it could
@@ -548,16 +560,18 @@ returning 404, and a best-first ladder promoted the **entire fleet** onto it
 inside one TTL window with no human deciding anything. Usage drained and agents
 started dying mid-run.
 
-So **nothing moves the fleet in a TTL window.** Adoption is a merged pull
-request to this file, reaching the fleet riding `stable` like every other commit
-on `main` — never a probe flip. The probe decides how far *down* a ladder we
-walk, never how far up.
+So **nothing moves the fleet in a TTL window.** Adoption is a choice written
+to the home — by a person on Settings › Agents & models, or by the daily
+adoption under the rule of 2026-09-14 — never a probe flip. The probe decides
+how far *down* a ladder we walk, never how far up. That incident is why
+`excluded` exists, and why nothing automatic climbs a list.
 
 What stands between an available model and the fleet, enforced by schema
 validation in `model_fallback.policy_errors()` rather than by convention — a
 config that breaks any of these is **refused**: the home's reader sets aside a
 home that breaks one (`model_home.home_errors`), and the selector keeps running
-the last-known-good facts in the code instead of honouring a file that does:
+the last-known-good facts in the code instead of honoring a file that does —
+or a file that carries a choice at all:
 
 - every rung of every ladder, and every project exception, has a **declared
   price** in `model-prices.yaml`. A price is never guessed, so an id with none
@@ -570,8 +584,8 @@ the last-known-good facts in the code instead of honouring a file that does:
 - the critic and verifier must stay `advisory`;
 - only the planner may be `judgement` — **rule 10** (DRE-6633), see *The
   console's keys* below; a session agent is exempt (DRE-6833);
-- `default_ladder` must be the workhorse ladder, so an unrecognized role lands on
-  the cheap side of the fence;
+- the default ladder of the defaults in the code must be the workhorse ladder,
+  so an unrecognized role lands on the cheap side of the fence;
 - `discovery.on_new_model` may be `advisory` or `none`, and `advisory` now
   means a **new family** may be proposed for the advisory ladder at most, after
   the CEO answers its `ask` question. `on_new_model: workhorse` and
@@ -579,9 +593,8 @@ the last-known-good facts in the code instead of honouring a file that does:
   the build path *is* the incident, and the planning ladder is the strongest
   one we run, which makes it the most attractive place for an unattended
   promotion to land. A newer version of a family already on a ladder is the
-  `adopt` rule, not this key: it replaces its own family's rung through a
-  trialed, reviewed pull request, and never adds one. `discovery.alert` must
-  be true.
+  `adopt` rule, not this key: after a trial it replaces its own family's model
+  in the home, and never adds one. `discovery.alert` must be true.
 
 ### An explicit choice is admissible (DRE-6785, CEO decision 2026-10-10)
 
@@ -598,17 +611,17 @@ them is the price. Nothing automatic changed: the probe still walks only down,
 discovery still proposes nothing for a build or planning ladder, and the daily
 adoption still adopts only a same-family successor at no higher price.
 
-What a choice from the console writes: the chosen model **first** on that
-group's ladder or that project's walk; an excluded model lifted from `excluded`
-in the same pull request; and **no reviewer rule**, because a reviewer skips
-the model that built the pull request on that project's walk
-(`model_fallback.reviewers_for`). DRE-6789's change-writer builds the writer;
-this is the contract it writes to.
+What a choice from the console writes, in the home: the chosen model
+**first** on that group's list or that project's walk, and **no reviewer
+rule**, because a reviewer skips the model that built the pull request on that
+project's walk (`model_fallback.reviewers_for`). An excluded model cannot be
+chosen there until a person lifts it from `excluded` in this file, a code
+change.
 
 **A group added from the console is a build group (DRE-6834).** The CEO's
 approved design has "+ Add a group" — a name, what it is for, a model — and
-`add_group` writes it as a new `kinds` entry with its `label` and `purpose` and
-a ladder of the same name whose first model is the one chosen; rule 1 now asks
+the console writes it into the home as a new group with its `label`,
+`purpose` and models, the one chosen first; rule 1 now asks
 for the three kinds and admits any kind beside them whose name is lowercase
 letters, digits and dashes, starting with a letter, on a ladder of its own
 name. Every safety rule has one answer for it: it is treated as the Builders
@@ -754,34 +767,31 @@ its model.
 
 ## The console's keys and the per-project exception (DRE-6633)
 
-The console's Settings › Agents & models page reads five more keys. Only
-`projects` reaches selection (DRE-6634, below). It shipped empty, and the
-console's Save changes writes it (DRE-6624), so the model tests read the
-committed map rather than assume one (DRE-6858).
+The console's Settings › Agents & models page shows a group's name and purpose,
+the agents in no group and each project's own model. Those are choices, and
+they are in the home (a group's `label` and `purpose`, the agents it leaves
+out of `agents`, and `projects`) or, with no home, in `CODE_DEFAULTS`. Of
+them only a project's own model reaches selection (DRE-6634, below). This file
+keeps the two keys that are code-side facts:
 
-- **`kinds.<kind>.label`** and **`kinds.<kind>.purpose`** — the group's name on
-  the page and the one line under it. `label` defaults to the key title-cased
-  (`Workhorse`) and `purpose` to empty. Today: Builders, Reviewers, Planners.
-- **`ungrouped`** — agents that exist but are in no group: today the
-  console's interactive agents (`designer`, `ux-ui-engineer`,
-  `fullstack-engineer`, `mobile`, `product-lead`). It is a roster the console
-  reads, not a dispatch table. A name may not be in both `agents` and
-  `ungrouped`; moving one into a group takes it off this list.
 - **`session_agents`** (DRE-6833) — the agents that run in a person's session
-  rather than a pipeline workflow: today the same five. Independent of
-  `ungrouped`: a name stays here after it is given a group, so the file still
-  knows it is not a pipeline role. Each must be in `agents` or `ungrouped` (a
-  record for nobody is refused). A session agent may join any group, an added
+  rather than a pipeline workflow: today the console's interactive agents
+  (`designer`, `ux-ui-engineer`, `fullstack-engineer`, `mobile`,
+  `product-lead`). A name stays here whatever group it is given, so the
+  pipeline still knows it is not a pipeline role. Each must be an agent the
+  defaults in the code name (a record for nobody is refused). A session agent may join any group, an added
   one too (DRE-6834), and its group never makes it a pipeline role: it has no
   `agents.yaml` entry, `model_fallback.AGENT_KINDS` leaves it out, and
   `kind_for`, `ladder_for` and `select` answer it exactly as an unknown name —
   the top of the Builders ladder, from the home or from `CODE_DEFAULTS`.
   Its group is a published fact for the console; making it run on that group's
   model is DRE-6784 in agent-bureau. `add_agent` appends every agent it adds.
-- **`about`** — agent name → one line, for every name in `agents` and
-  `ungrouped`. A line for a name in neither is refused.
-- **`projects`** — repo slug → `{ <kind>: <model id> }`, the per-project
-  exception. The slug must be a key of `config/repo-map.json`; when that file
+- **`about`** — agent name → one line, for every agent the defaults in the
+  code name. A line for a name they do not is refused.
+
+A project's own model, in the home, is the per-project exception: repo slug →
+`{ <group>: <model id> }`. The slug must be a key of `config/repo-map.json`;
+when that file
   cannot be read every entry is refused, naming it (fail closed). A model a
   project names is a **known model** (`model_fallback.KNOWN_MODELS`,
   `model_adoption._known_ids`), so an adoption never asks about it and a
@@ -840,10 +850,10 @@ the successor too. The document it would write is judged by
 
 **Rule 10 — `judgement` is the planner's kind.** `JUDGEMENT_ROLES` in
 `scripts/model_fallback.py` is `("planner",)`, read from `rules.planners_may_hold`
-(DRE-6992), and any other role assigned `judgement` is refused:
-`agents.engineer: judgement` would put Fable 5.1 on every build card, which is
-volume on the strongest model — the 2026-08-09 incident. The `kinds.judgement`
-comment said "ONE role, deliberately" from DRE-3015 on and nothing enforced it.
+(DRE-6992), and any other role assigned `judgement` is refused: the engineer
+in the Planners would put the strongest model on every build card, which is
+volume on the strongest model — the 2026-08-09 incident. The judgement kind
+was "ONE role, deliberately" from DRE-3015 on and nothing enforced it.
 The rule is one-directional: the planner moving to `advisory` or `workhorse` is
 a spend decrease and stays admissible. `agents.critic: judgement` is refused by
 rule 3 and rule 10, each with its own reason. A name in `session_agents` is
@@ -893,8 +903,9 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
   home (DRE-8022).
 - **`model-prices.yaml`**, the other way round: schema validation reads the
   declared price of every rung (DRE-3880, DRE-6785), so an entry deleted there
-  makes this config fail `policy_errors`, and the home's reader
-  sets aside a home model with no price. Importing `model_fallback` does not
+  makes the defaults in the code fail `policy_errors`, the home's reader sets
+  aside a home model with no price, and the page offers no model without
+  one. Importing `model_fallback` does not
   read it (DRE-6992): the load-time check keeps only this file's code-side
   facts, and the price rule is about the choices it does not keep.
 
@@ -907,7 +918,11 @@ never edited to change a choice, and never consulted while the home answers.
 Until DRE-6982 it was a literal a generator rendered from this file between
 `BEGIN generated` / `END generated` markers, beside a `model:` and `kind:`
 line per agent in `agents.yaml`; the generator, its markers and both copies
-are gone.
+are gone, and since DRE-6983 this file carries no choice either.
+`tests/test_no_choice_copies.py` names every place a copy once lived — this
+file, `agents.yaml`, the selector, the deleted snapshot, scripts and
+workflows, and any ladder list under `scripts/` or `config/` — and fails if a
+choice is back in one; `CODE_DEFAULTS` is the one document literal it allows.
 
 With no generator, nothing writes this file's code-side facts into the
 literal, so `tests/test_model_fallback.py` holds them together: it fails,
@@ -971,9 +986,9 @@ writes the chosen rung's level (empty when it declares none), so a run that
 step whose model arrives as an input rather than off a ladder (the trial run).
 
 Validation refuses a level the CLI does not accept (`low`, `medium`, `high`,
-`xhigh`, `max`) and an entry for an id no ladder names — the likeliest cause of
-the second being a typo in the id the fleet is meant to be running at that
-level.
+`xhigh`, `max`) and an entry for an id no ladder of the defaults in the code
+names — the likeliest cause of the second being a typo in the id the fleet is
+meant to be running at that level.
 
 **A model also needs a Claude Code new enough to run it.** On 2026-09-25 every
 run on Opus 5.5 died with `400 Claude Code 2.1.263 does not support this model;
@@ -1008,8 +1023,9 @@ first daily run after that PR merges.
 Where a change takes effect depends on which regime a run's `model-home:` line
 shows, and `docs/model-choice-levers.md` says which one held when it was last
 read. Once the home reads, a change written to it is in force on the next run
-(DRE-6939). Editing the choices in `models.yaml` changes nothing a run
-selects, and `CODE_DEFAULTS` is never edited to change a choice (DRE-6982). A
+(DRE-6939). `models.yaml` holds no choice to edit — one written back is
+refused (DRE-6983) — and `CODE_DEFAULTS` is never edited to change a choice
+(DRE-6982). A
 change to a code-side fact here — with the same change to `CODE_DEFAULTS` —
 reaches `@main` callers on the merge and tag-pinned callers when `stable` or
 the next `vN` moves past it, so treat it as a production change. Remember that

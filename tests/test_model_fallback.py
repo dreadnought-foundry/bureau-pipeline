@@ -631,8 +631,9 @@ class CommittedStateTest(unittest.TestCase):
     """What must hold for the committed files whatever the console saved."""
 
     def test_no_configured_ladder_references_a_retired_or_excluded_model(self):
-        """EVERY ladder draws from selectable models, read off the committed
-        file's own `retired` and `excluded` lists.
+        """EVERY ladder of the defaults in the code draws from selectable
+        models, read off the committed file's own `retired` and `excluded`
+        lists — the file carries no ladder since DRE-6983.
 
         Checking only engineer/planner by name is what let the Opus 5 rotation
         land with `repairer` still pinned to claude-opus-4-8: no test ever
@@ -642,8 +643,9 @@ class CommittedStateTest(unittest.TestCase):
         exists to shut."""
         cfg = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
         barred = set(rung_ids(cfg.get("retired"))) | set(rung_ids(cfg.get("excluded")))
-        self.assertTrue(cfg["ladders"])
-        for name, rungs in sorted(cfg["ladders"].items()):
+        ladders = mf.code_defaults()["ladders"]
+        self.assertTrue(ladders)
+        for name, rungs in sorted(ladders.items()):
             models = rung_ids(rungs)
             with self.subTest(ladder=name):
                 self.assertEqual(
@@ -771,12 +773,10 @@ class FableIsNotABuildModelTest(unittest.TestCase):
 
 class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
     """DRE-6939: the choices live in the home, and with no home the selector
-    runs on the defaults in the code — never on the choices still written in
-    config/models.yaml. That file is read for the code-side facts only."""
+    runs on the defaults in the code. config/models.yaml carries no choice
+    since DRE-6983 and is read for the code-side facts only."""
 
     def _edited(self, raw: dict) -> dict:
-        name = raw["kinds"]["workhorse"]["ladder"]
-        raw["ladders"][name] = list(reversed(raw["ladders"][name]))
         raw["excluded"] = list(raw.get("excluded") or []) + [
             {"model": "claude-test-excluded", "reason": "a code-side fact this test adds"}]
         return raw

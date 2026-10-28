@@ -109,15 +109,16 @@ class LadderTest(unittest.TestCase):
         # The literal is read through its one accessor, never by its name.
         self.assertEqual(mf.code_defaults()["effort"], _canonical()["effort"])
 
-    def test_every_rung_names_a_reason(self):
-        # The file's own style: a rung is a decision, and the decision carries
-        # its justification beside it.
+    def test_every_retired_and_excluded_id_names_a_reason(self):
+        # The file's own style: keeping an id out is a decision, and the
+        # decision carries its justification beside it. The file carries no
+        # ladder since DRE-6983; these two lists are what it still names.
         cfg = _canonical()
-        for name, rungs in cfg["ladders"].items():
-            for rung in rungs:
+        for name in ("retired", "excluded"):
+            for entry in cfg[name]:
                 self.assertTrue(
-                    str(rung.get("reason") or "").strip(),
-                    f"ladders.{name}: {rung.get('model')} has no reason",
+                    str(entry.get("reason") or "").strip(),
+                    f"{name}: {entry.get('model')} has no reason",
                 )
 
 

@@ -44,12 +44,12 @@ its group, and in every project choice that names a replaced id;
 `BUREAU_MODEL_HOME_WRITE_TOKEN`. `--check` judges the document it would write
 and writes nothing.
 
-It edits no file. `config/models.yaml` still carries today's route's ladders
-until part 3 takes the choices out of it (DRE-6983), and
-`model_fallback.policy_errors` refuses a `retired:` id one of them still names
-— so the old id stays priced and unretired, and when it has left every group
-and project of the home the record card says so in one sentence. Retiring it
-is a person's code change, never this workflow's edit.
+It edits no file. `config/models.yaml` holds no choice (DRE-6983), only
+code-side facts such as `retired:`, and `model_fallback.policy_errors` refuses
+a `retired:` id the defaults in the code still name — so the old id stays
+priced and unretired, and when it has left every group and project of the
+home the record card says so in one sentence. Retiring it is a person's code
+change, never this workflow's edit.
 
 THE LINEAR HALF COPIES `repair_card.py`
 ---------------------------------------
@@ -545,8 +545,8 @@ def not_retired_sentence(old: str) -> str:
     group and project of the home: it stays priced and unretired, and its
     retirement is a person's decision, later."""
     return (f"{old} is on no group and no project of the home and is not "
-            "retired; retiring it is a code change a person makes once part 3 "
-            "has taken the choices out of config/models.yaml")
+            "retired; retiring it is a code change a person makes in "
+            "config/models.yaml")
 
 
 def _now() -> str:

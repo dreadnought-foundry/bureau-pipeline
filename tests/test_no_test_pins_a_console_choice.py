@@ -393,11 +393,17 @@ def _doc() -> dict:
 
 
 def _plant(tmp_path: Path, files: dict[str, str]) -> Path:
-    """A tree holding the frozen `config/models.yaml` — whose rung ids say
-    which files are scanned — and `files` under `tests/`."""
+    """A tree holding the frozen `config/models.yaml`, a selector whose
+    defaults in the code are the frozen document's ladders — their rung ids
+    say which files are scanned, the file carrying none since DRE-6983 — and
+    `files` under `tests/`."""
     (tmp_path / "config").mkdir()
     shutil.copy2(model_fixture.FIXTURE_DIR / "models.yaml",
                  tmp_path / "config" / "models.yaml")
+    (tmp_path / "scripts").mkdir()
+    ladders = {key: list(group["models"]) for key, group in _doc()["groups"].items()}
+    (tmp_path / "scripts" / "model_fallback.py").write_text(
+        f"CODE_DEFAULTS = {{'ladders': {ladders!r}}}\n")
     (tmp_path / "tests").mkdir()
     for name, text in files.items():
         (tmp_path / "tests" / name).write_text(text)

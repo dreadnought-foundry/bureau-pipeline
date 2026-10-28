@@ -659,9 +659,9 @@ def test_apply_puts_a_known_models_row_in_the_minimum_table(tmp_path):
 # choices of the defaults in the code, plus `retired` and `excluded` out of
 # the tree's `config/models.yaml` — the set `model_fallback.KNOWN_MODELS` is,
 # which `test_every_row_is_a_model_this_config_knows` holds the minimum table
-# to. It reads no home. The trees are the frozen fixture, a byte copy of the
-# committed `config/models.yaml` of 2026-10-10, with `projects` emptied as it
-# stood then.
+# to. It reads no home. The trees are the frozen fixture's `models.yaml`,
+# which carries no choice since its re-freeze (DRE-6983): a choice a test needs
+# is read off the defaults in the code or a home document, never this file.
 HAIKU_55 = "claude-haiku-5-5"
 #: A model only a home names: priced (the test declares it), on no ladder of
 #: the defaults in the code.
@@ -674,7 +674,6 @@ def _models_tree(tmp_path: Path, edit=None) -> Path:
     import model_fixture
 
     raw = model_fixture.fixture_config()
-    raw["projects"] = {}
     if edit:
         edit(raw)
     (tmp_path / "config").mkdir(parents=True)
@@ -746,9 +745,10 @@ def test_known_models_are_the_defaults_plus_the_trees_retired_and_excluded(tmp_p
 
 
 def test_a_ladder_only_the_trees_file_names_is_not_known(tmp_path):
+    # A ladder written back into the file (DRE-6983) is not read.
     def edit(raw):
-        raw["ladders"]["workhorse"].insert(
-            0, {"model": "claude-only-in-the-file-1", "reason": "a hand edit"})
+        raw["ladders"] = {"workhorse": [
+            {"model": "claude-only-in-the-file-1", "reason": "a hand edit"}]}
 
     root = _models_tree(tmp_path, edit)
     assert "claude-only-in-the-file-1" not in _chosen_by_the_defaults()
