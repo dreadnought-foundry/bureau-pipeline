@@ -121,6 +121,35 @@ def test_the_frozen_config_is_after_session_agents_landed():
     assert "session_agents" in fixture_config()
 
 
+# The keys that left `config/models.yaml` (DRE-6983).
+CHOICE_KEYS = ("kinds", "ladders", "default_ladder", "agents", "ungrouped", "projects")
+
+
+def test_the_frozen_files_carry_no_choice_and_no_generated_region():
+    cfg = fixture_config()
+    for key in CHOICE_KEYS:
+        assert key not in cfg, key
+    for line in (FIXTURE_DIR / "agents.yaml").read_text().splitlines():
+        assert "BEGIN generated" not in line, line
+        if not line.lstrip().startswith("#"):
+            assert not re.match(r"^\s*(?:-\s+)?(model|kind)\s*:", line), line
+    assert "BEGIN generated" not in fixture_text()
+
+
+def test_the_readme_names_the_refreeze_and_the_documents_own_date():
+    """`models.yaml` and `agents.yaml` were re-frozen with no choice
+    (DRE-6983); `home.json` keeps the choices frozen on 2026-10-11."""
+    text = README.read_text()
+    commit = re.search(r"^- commit: `([0-9a-f]{40})`", text, re.M).group(1)
+    date = re.search(r"^- date: (\d{4}-\d{2}-\d{2})", text, re.M).group(1)
+    choices = re.search(r"^- choices commit: `([0-9a-f]{40})`", text, re.M).group(1)
+    choices_date = re.search(r"^- choices date: (\d{4}-\d{2}-\d{2})", text, re.M).group(1)
+    assert choices == "1652714673c14b5af0ffcaf85abe390ef6664abe"
+    assert choices_date == "2026-10-11"
+    assert commit != choices
+    assert date > choices_date
+
+
 # --------------------------------------------------------------------------- #
 # 1b. The frozen home document                                                 #
 # --------------------------------------------------------------------------- #
@@ -176,15 +205,16 @@ def test_the_readers_read_the_fixture_not_the_repo():
     assert fixture_prices() == prices["prices"]
 
 
-def test_ladder_is_the_rung_ids_of_a_kinds_ladder():
+def test_ladder_reads_only_a_document():
+    """The old file's shape — a kind naming a ladder of rungs — is not read:
+    the choices left `models.yaml` (DRE-6983), so there is nothing of that
+    shape left to read."""
     cfg = {
         "kinds": {"builders": {"ladder": "build"}},
         "ladders": {"build": [{"model": "m-1", "reason": "x"}, "m-2"]},
     }
-    assert ladder(cfg, "builders") == ["m-1", "m-2"]
-    cfg = fixture_config()
-    for kind, spec in cfg["kinds"].items():
-        assert ladder(cfg, kind) == _ids(cfg["ladders"][spec["ladder"]])
+    with pytest.raises(KeyError):
+        ladder(cfg, "builders")
 
 
 def test_ladder_answers_a_document_from_its_groups():

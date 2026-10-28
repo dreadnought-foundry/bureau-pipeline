@@ -111,6 +111,17 @@ WORKHORSE = "workhorse"
 ADVISORY = "advisory"
 JUDGEMENT = "judgement"
 
+# The six keys that left config/models.yaml (DRE-6983), each with a value a
+# hand edit might write back.
+FILE_CHOICES = {
+    "kinds": {WORKHORSE: {"ladder": WORKHORSE, "label": "Builders"}},
+    "ladders": {WORKHORSE: [{"model": "claude-x-1", "reason": "a hand edit"}]},
+    "default_ladder": WORKHORSE,
+    "agents": {"engineer": WORKHORSE},
+    "ungrouped": [],
+    "projects": {},
+}
+
 # Every workflow that selects a model, and the agent name it selects for.
 SELECTORS = {
     "agent-task.yml": '"$ROLE"',
@@ -726,6 +737,49 @@ class SchemaRejectsAutoPromotionTest(unittest.TestCase):
 
     def test_todays_config_passes_validation(self):
         self.assertEqual(mf.policy_errors(_committed()), [])
+
+    def test_the_committed_file_holds_only_code_side_facts(self):
+        # DRE-6983: the choices left the file. What it keeps is every code-side
+        # fact a reader still takes from it.
+        cfg = _committed()
+        for key in FILE_CHOICES:
+            with self.subTest(key=key):
+                self.assertNotIn(key, cfg)
+        for key in ("session_agents", "about", "effort", "review_separation",
+                    "discovery", "retired", "excluded", "rules"):
+            with self.subTest(key=key):
+                self.assertIn(key, cfg)
+
+    def test_a_choice_written_back_into_the_file_is_refused_by_name(self):
+        # A hand edit cannot quietly put a choice back: the file that carries
+        # one fails `policy_errors`, naming the key, whatever its value.
+        for key, value in FILE_CHOICES.items():
+            with self.subTest(key=key):
+                cfg = _committed()
+                cfg[key] = value
+                self.assertIn(
+                    f"{key} is a choice and lives in the home, not in this file",
+                    mf.policy_errors(cfg))
+        # The frozen file is held to the same rule.
+        cfg = _canonical()
+        cfg["ladders"] = FILE_CHOICES["ladders"]
+        self.assertIn("ladders is a choice and lives in the home, not in this file",
+                      fmf.policy_errors(cfg))
+
+    def test_a_file_with_a_choice_written_back_is_not_read(self):
+        # The selector refuses the whole file, says so, and runs on the facts
+        # in the code rather than half-honoring it.
+        with tempfile.TemporaryDirectory() as td:
+            tree = _copy_tree(Path(td))
+            path = tree / "config" / "models.yaml"
+            path.write_text(path.read_text() + "\nladders:\n  workhorse: [x-1]\n")
+            proc = subprocess.run(
+                [sys.executable, "-c", "import model_fallback"],
+                cwd=tree / "scripts", capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertIn("REFUSING model config", proc.stderr)
+            self.assertIn("ladders is a choice and lives in the home, not in this file",
+                          proc.stderr)
 
     def test_the_excluded_fable_on_a_build_ladder_is_rejected(self):
         # Excluded is a code-side fact; a document leading the builders with
