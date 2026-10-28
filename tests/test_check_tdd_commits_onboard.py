@@ -61,11 +61,13 @@ AGENT_BUREAU = (
     "console/web/src/components/flyout/cardMeta.ts",
     "demo/demo_library.py",
 )
-# The two console fact files DRE-7431 adds, which are not slug mirrors and
-# are relieved entry by entry (tests/test_check_tdd_commits_onboard_facts.py).
+# The console fact files DRE-7431 and DRE-8249 add, which are not slug
+# mirrors and are relieved entry by entry
+# (tests/test_check_tdd_commits_onboard_facts.py).
 CONSOLE_FACTS = (
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
+    "console/backend/org-tenants.json",
 )
 # The routing paths that classify as code without this card — the ones the
 # relief actually moves.
