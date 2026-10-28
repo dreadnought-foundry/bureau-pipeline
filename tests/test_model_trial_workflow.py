@@ -269,7 +269,7 @@ def test_claude_args_carry_the_cards_three_bounds():
 
 
 def test_no_literal_model_id_is_pinned_after_the_model_flag():
-    # tests/test_model_config.py::test_no_workflow_hardcodes_a_model_id sweeps
+    # tests/test_workflow_model_pins.py::test_no_workflow_hardcodes_a_model_id sweeps
     # the whole directory; this is the same assertion stated where the reader
     # of this file will look for it. The id arrives as an input.
     hits = re.findall(r"--model\s+(claude-[a-z0-9.-]+)", _text())

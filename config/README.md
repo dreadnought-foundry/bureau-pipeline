@@ -405,7 +405,7 @@ the GitHub Actions repository variable **`BUREAU_MODEL_CHOICES`** on
 fleet, written by the console through the bureau App. Every selecting run reads
 it when it first asks which model to use (`scripts/model_home.py`, through
 `model_fallback.use_home`): the home first, **the defaults in the code**
-(`model_fallback.code_defaults()`, the generated literal) otherwise, and
+(`model_fallback.code_defaults()`, which returns `CODE_DEFAULTS`) otherwise, and
 **never the choices written in this file**.
 
 Which of the two is in force is read off a run's `model-home:` line, never
@@ -413,8 +413,8 @@ assumed. **`docs/model-choice-levers.md`** (DRE-7195) records the reading with
 the run lines that show it, when a change to this file reaches the fleet, and
 the one-step rollback each sibling of DRE-7184 pulls, and says which runs it
 could read. While a run reads `unreadable` or `not set`, the defaults in the
-code are in force and this file reaches it only through the literal rendered
-from it. Once a run reads `read`, a change
+code are in force, and the choices written in this file reach it not at all.
+Once a run reads `read`, a change
 written to the home is in force on the next run in each organization, with
 no pull request.
 
@@ -481,8 +481,9 @@ defaults in the code as a home document — what the operator seeds it with.
 
 What this file still carries is read for the **code-side facts** — `effort`,
 `review_separation`, `discovery`, `retired`, `excluded`, `session_agents`,
-`about` and `rules` — and, until DRE-6982, the generator renders the defaults
-in the code from it.
+`about` and `rules`. Nothing renders the defaults in the code from it any more
+(DRE-6982): `CODE_DEFAULTS` is hand-written, and a test holds its code-side
+facts to this file's (below).
 
 **The `rules` block (DRE-6992).** `reviewers_only` (today `[critic,
 verifier]`) and `planners_may_hold` (today `[planner]`): the agents that must stay Reviewers
@@ -512,9 +513,8 @@ the CEO has said we do not use them).
 A retired id is named by no ladder and by no `projects.<slug>.<kind>` entry —
 `policy_errors` refuses one that is (DRE-6785). **The daily adoption retires
 nothing** (DRE-6943): it writes the home and edits no file, because this file's
-ladders are still today's route's and still name the old id after the home has
-moved on, so an id appended under `retired:` would turn `policy_errors`, the
-generator's `--check` and the model tests red. The old id stays priced and
+ladders still name the old id after the home has moved on, so an id appended
+under `retired:` would turn `policy_errors` and the model tests red. The old id stays priced and
 unretired. When it has left every group and every project of the home, the
 adoption's record card says so in one sentence, and retiring it is a code
 change a person makes once part 3 has taken the choices out of this file.
@@ -555,9 +555,9 @@ walk, never how far up.
 
 What stands between an available model and the fleet, enforced by schema
 validation in `model_fallback.policy_errors()` rather than by convention — a
-config that breaks any of these is **refused**: `sync_model_config.py --check`
-fails CI red, and the selector keeps running the last-known-good ladders
-instead of honouring it:
+config that breaks any of these is **refused**: the home's reader sets aside a
+home that breaks one (`model_home.home_errors`), and the selector keeps running
+the last-known-good facts in the code instead of honouring a file that does:
 
 - every rung of every ladder, and every project exception, has a **declared
   price** in `model-prices.yaml`. A price is never guessed, so an id with none
@@ -773,10 +773,9 @@ committed map rather than assume one (DRE-6858).
   knows it is not a pipeline role. Each must be in `agents` or `ungrouped` (a
   record for nobody is refused). A session agent may join any group, an added
   one too (DRE-6834), and its group never makes it a pipeline role: it has no
-  `agents.yaml` entry (`sync_model_config.py` skips it, and refuses one that
-  has a generated region), `model_fallback.AGENT_KINDS` leaves it out, and
+  `agents.yaml` entry, `model_fallback.AGENT_KINDS` leaves it out, and
   `kind_for`, `ladder_for` and `select` answer it exactly as an unknown name —
-  the top of the Builders ladder, from the YAML and from the degrade mirror.
+  the top of the Builders ladder, from the home or from `CODE_DEFAULTS`.
   Its group is a published fact for the console; making it run on that group's
   model is DRE-6784 in agent-bureau. `add_agent` appends every agent it adds.
 - **`about`** — agent name → one line, for every name in `agents` and
@@ -889,37 +888,41 @@ The wider design is recorded in `architecture/decisions/adr-model-policy.md` in
   runtime availability probe says is up. Every agent workflow — build agents *and* the
   critic, verifier and medic — takes its `--model` from that step. No workflow
   pins a model id; a test reads the workflow files and fails if one does.
-- **The console roster**, indirectly: `agents.yaml`'s per-agent `model:` line is
-  a **generated** mirror of this file.
+- **Not the console roster.** `agents.yaml` carries no `model:` or `kind:`
+  line since DRE-6982: the roster reads each agent's group and model from the
+  home (DRE-8022).
 - **`model-prices.yaml`**, the other way round: schema validation reads the
   declared price of every rung (DRE-3880, DRE-6785), so an entry deleted there
-  makes this config fail `sync_model_config.py --check`, and the home's reader
+  makes this config fail `policy_errors`, and the home's reader
   sets aside a home model with no price. Importing `model_fallback` does not
   read it (DRE-6992): the load-time check keeps only this file's code-side
   facts, and the price rule is about the choices it does not keep.
 
-## Generated mirrors and the drift gate
+## The defaults in the code are `CODE_DEFAULTS`
 
-Every copy sits between explicit `BEGIN generated …` / `END generated …`
-markers and is produced by one script:
+The defaults in the code are `CODE_DEFAULTS` in `scripts/model_fallback.py`,
+returned by `model_fallback.code_defaults()`: the document the fleet runs on
+only when the home cannot be read, or none is named. It is **hand-written**,
+never edited to change a choice, and never consulted while the home answers.
+Until DRE-6982 it was a literal a generator rendered from this file between
+`BEGIN generated` / `END generated` markers, beside a `model:` and `kind:`
+line per agent in `agents.yaml`; the generator, its markers and both copies
+are gone.
 
-```
-python3 scripts/sync_model_config.py          # regenerate the mirrors
-python3 scripts/sync_model_config.py --check  # CI: exit 1 if any mirror is stale
-```
+With no generator, nothing writes this file's code-side facts into the
+literal, so `tests/test_model_fallback.py` holds them together: it fails,
+naming the key, when `CODE_DEFAULTS`' `effort`, `review_separation`,
+`discovery`, `retired`, `excluded`, `session_agents` or `about` differs from
+this file's, or the code's `rules` defaults from this file's `rules:` block.
+Change a code-side fact in both places in one pull request.
+`python3 scripts/model_home.py render-defaults` renders `CODE_DEFAULTS` as a
+home document.
 
-The mirrors are `agents.yaml`'s `model:` lines and
-`model_fallback._FALLBACK_MODEL_CONFIG` — a last-known-good literal used **only**
-when the YAML is unreadable, so a truncated checkout degrades instead of
-stranding a dispatch. `tests/test_model_config.py` pins the markers, the
-byte-for-byte regeneration, the red `--check`, and that editing this file alone
-changes what the fleet selects.
-
-The literal carries `review_separation` too (DRE-3880): a degrade that dropped
-the fence would review a Sonnet build on the same Sonnet and look exactly like a
-healthy run. And it carries the console's `groups`, `ungrouped`, `about` and
-`projects` (DRE-6633), and `session_agents` beside `ungrouped` (DRE-6833), so
-the degrade path gives the same answer as a healthy checkout.
+The literal carries `review_separation` (DRE-3880) because a degrade that
+dropped the fence would review a Sonnet build on the same Sonnet and look
+exactly like a healthy run. It carries the console's `groups`, `ungrouped`,
+`about` and `projects` (DRE-6633), and `session_agents` beside `ungrouped`
+(DRE-6833), so the degrade path gives a whole answer.
 
 Until DRE-8020 the generator had a third target, a whole generated file the
 console's Settings › Agents & models page read. Nothing reads it now — the
@@ -1005,15 +1008,15 @@ first daily run after that PR merges.
 Where a change takes effect depends on which regime a run's `model-home:` line
 shows, and `docs/model-choice-levers.md` says which one held when it was last
 read. Once the home reads, a change written to it is in force on the next run
-(DRE-6939). The old route — edit `models.yaml`, run the sync script, commit
-both — changes the defaults in the code, which every run without
-a readable home runs on. Merging it to `main` puts it in force for `@main`
-callers at once, and for tag-pinned callers when `stable` or the next `vN`
-moves past the merge — treat it as a production change. Remember that
+(DRE-6939). Editing the choices in `models.yaml` changes nothing a run
+selects, and `CODE_DEFAULTS` is never edited to change a choice (DRE-6982). A
+change to a code-side fact here — with the same change to `CODE_DEFAULTS` —
+reaches `@main` callers on the merge and tag-pinned callers when `stable` or
+the next `vN` moves past it, so treat it as a production change. Remember that
 availability decides how far *down* a ladder we walk, never how far up: a model
 that is not on a ladder is never selected, however available it becomes. Ladder
-membership is the spend decision, and it is made here — in this file, in a
-reviewed pull request.
+membership is the spend decision, and a person makes it in the home, on
+Settings › Agents & models.
 
 One kind of change is made for you: the `adopt` rule above. The daily model
 adoption workflow (`.github/workflows/model-adoption.yml`, DRE-3898) trials a

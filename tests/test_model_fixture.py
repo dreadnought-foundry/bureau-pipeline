@@ -35,7 +35,6 @@ import model_fixture  # noqa: E402
 from model_fixture import (  # noqa: E402
     FIXTURE_DIR,
     FIXTURE_NAME,
-    FixtureStale,
     fixture_config,
     fixture_home,
     fixture_module,
@@ -51,11 +50,6 @@ from model_fixture import (  # noqa: E402
 )
 
 README = FIXTURE_DIR / "README.md"
-STALE_SENTENCE = (
-    "the frozen model fixture no longer regenerates under today's code — "
-    "re-freeze it in this pull request "
-    "(tests/fixtures/model-config-frozen/README.md, the refresh rule)"
-)
 
 
 def _ids(rungs) -> list[str]:
@@ -95,9 +89,9 @@ def test_the_readme_carries_both_rules():
     assert "tested against this frozen copy" in text
     assert "never from a literal" in text
     assert "No test asserts a choice the console can change" in text
-    # Rule 2: the refresh rule, in the words a stale fixture says.
+    # Rule 2: the refresh rule.
     assert "the refresh rule" in text
-    assert "re-freeze it in this pull request" in README.read_text()
+    assert "re-freezes the fixture in the same pull request" in text
     assert "needs no re-freeze" in text
 
 
@@ -107,24 +101,20 @@ def test_the_readme_carries_the_rule_for_documents():
     assert ("proved against the frozen document or a document built in the test"
             in text)
     assert "never compared with what `render-defaults` prints now" in text
-    # The refresh rule for the document: re-rendered inside a fixture tree.
+    # The refresh rule for the document: rewritten from the frozen files.
     assert "when `render-defaults` changes shape" in text
-    assert "inside a tree `fixture_tree` builds" in text
+    assert "rewritten by hand from the frozen files" in text
 
 
-def test_the_readme_says_how_a_tree_is_built_and_whom_the_default_serves():
+def test_the_readme_says_a_tree_is_copied_and_never_regenerated():
     text = " ".join(README.read_text().split())
     # The rule for documents, and the rule for the committed files.
-    assert "proved on a document, in a tree built with `regenerate=False`" in text
+    assert "proved on a document, in a tree `fixture_tree` copies" in text
     assert "checks only what must hold for any saved state" in text
-    # What the default still does, for which tests, and until when.
-    assert "`fixture_tree`'s default still regenerates the literal" in text
-    for name in ("tests/test_model_config_change.py", "tests/console_change_walk.py",
-                 "tests/test_console_*_keeps_the_suite_green.py",
-                 "tests/test_model_config.py", "tests/test_model_choices.py",
-                 "tests/test_model_caution.py"):
-        assert name in text, name
-    assert "until part 3 removes both" in text
+    # No generator is left to serve: a tree is copied, never regenerated.
+    assert "A tree is copied and never regenerated" in text
+    assert "`regenerate=True` raises `ValueError`" in text
+    assert "until part 3 removes both" not in text
 
 
 def test_the_frozen_config_is_after_session_agents_landed():
@@ -277,15 +267,8 @@ def test_the_tree_holds_todays_code_and_the_frozen_files(tree):
         assert (tree / "config" / name).read_bytes() == (FIXTURE_DIR / name).read_bytes()
     assert (tree / "config" / "repo-map.json").read_bytes() == (
         ROOT / "config" / "repo-map.json").read_bytes()
-    # The generator writes no file of the console's any more (DRE-8020).
-    assert not (tree / "config" / "model-choices.json").exists()
-
-
-def test_the_tree_is_in_sync(tree):
-    proc = subprocess.run(
-        [sys.executable, "scripts/sync_model_config.py", "--check"],
-        cwd=tree, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # No generator is left to write anything into it (DRE-6982).
+    assert not (tree / "scripts" / f"{OLD_ROUTE[0]}.py").exists()
 
 
 def test_the_tree_passes_the_policy(tree):
@@ -301,9 +284,10 @@ def test_the_module_runs_on_the_fixture_and_leaves_the_repo_module_alone(tree):
     mf = fixture_module(tree)
     assert Path(mf.__file__).resolve().parent == (tree / "scripts").resolve()
     assert mf is not repo_mf
-    cfg = fixture_config()
-    assert mf.CONFIG["ladders"] == {
-        name: _ids(rungs) for name, rungs in cfg["ladders"].items()}
+    # With no home read, its choices are the tree's own defaults in the code,
+    # and its code-side facts are the frozen file's.
+    assert mf.CONFIG["ladders"] == mf.code_defaults()["ladders"]
+    assert mf.CONFIG["excluded"] == mf._normalize_config(fixture_config())["excluded"]
     assert sys.modules["model_fallback"] is before
     assert Path(repo_mf.__file__).resolve() == ROOT / "scripts" / "model_fallback.py"
 
@@ -379,8 +363,8 @@ def test_fixture_module_without_a_document_reads_nothing_and_runs_on_the_tree(tr
     defaults in the code, with no `model-home` clause and no `DEGRADED`."""
     mf = fixture_module(tree)
     assert mf.HOME_STATUS == ""
-    top = ladder(yaml.safe_load((tree / "config" / "models.yaml").read_text()),
-                 "workhorse")[0]
+    defaults = mf.code_defaults()
+    top = defaults["ladders"][defaults["kinds"]["workhorse"]][0]
     decision = mf.select_with_reasons("engineer", probe=lambda model: True,
                                       clock=lambda: 0.0)
     assert decision["model"] == top
@@ -412,7 +396,7 @@ def test_fixture_module_with_a_document_hands_it_to_the_selector_the_module_impo
 
 
 # --------------------------------------------------------------------------- #
-# 3c. A tree built without the generator (DRE-6990)                            #
+# 3c. A tree is copied and never regenerated (DRE-6990, DRE-6982)              #
 # --------------------------------------------------------------------------- #
 
 def _record_subprocesses(monkeypatch) -> list:
@@ -424,29 +408,17 @@ def _record_subprocesses(monkeypatch) -> list:
         calls.append(([str(a) for a in args[0]], kwargs.get("cwd")))
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(model_fixture.subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "run", run)
     return calls
 
 
-def _stub_a_refusing_generator(monkeypatch) -> None:
-    copy = model_fixture._copy_into
-
-    def copy_then_stub(dest: Path) -> None:
-        copy(dest)
-        (dest / "scripts" / "sync_model_config.py").write_text(
-            "import sys\n"
-            "print('stub generator: refusing the frozen config', file=sys.stderr)\n"
-            "sys.exit(1)\n")
-
-    monkeypatch.setattr(model_fixture, "_copy_into", copy_then_stub)
-
-
-def test_regenerate_false_copies_the_tree_and_runs_no_subprocess(tmp_path, monkeypatch):
+@pytest.mark.parametrize("kwargs", [{}, {"regenerate": False}])
+def test_a_tree_is_copied_and_runs_no_subprocess(tmp_path, monkeypatch, kwargs):
     calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree", regenerate=False)
+    dest = fixture_tree(tmp_path / "tree", **kwargs)
     assert calls == []
     assert dest == tmp_path / "tree"
-    # Today's scripts as committed: no generated region was rewritten.
+    # Today's scripts as committed: nothing was rewritten.
     for path in sorted((ROOT / "scripts").glob("*.py")):
         assert (dest / "scripts" / path.name).read_bytes() == path.read_bytes(), path.name
     for name in ("models.yaml", "model-prices.yaml"):
@@ -454,71 +426,23 @@ def test_regenerate_false_copies_the_tree_and_runs_no_subprocess(tmp_path, monke
     assert (dest / "agents.yaml").read_bytes() == (FIXTURE_DIR / "agents.yaml").read_bytes()
     assert (dest / "config" / "repo-map.json").read_bytes() == (
         ROOT / "config" / "repo-map.json").read_bytes()
-    # The generator writes the console's choices file; nothing wrote it here.
-    assert not (dest / "config" / "model-choices.json").exists()
 
 
-def test_regenerate_false_never_meets_a_refusing_generator(tmp_path, monkeypatch):
-    _stub_a_refusing_generator(monkeypatch)
-    calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree", regenerate=False)
-    assert calls == []
-    assert (dest / "scripts" / "sync_model_config.py").is_file()
-
-
-def test_the_default_runs_the_generator_in_the_tree_exactly_once(tmp_path, monkeypatch):
-    calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree")
-    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-    assert not (dest / "config" / "model-choices.json").exists()
-
-
-def test_regenerate_true_is_the_default(tmp_path, monkeypatch):
-    calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree", regenerate=True)
-    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-
-
-# --------------------------------------------------------------------------- #
-# 4. Independent of today's choices                                            #
-# --------------------------------------------------------------------------- #
-
-def test_the_tree_selects_what_its_own_config_says(tmp_path):
-    dest = fixture_tree(tmp_path / "tree")
-    path = dest / "config" / "models.yaml"
-    raw = yaml.safe_load(path.read_text())
-    workhorse = raw["kinds"][raw["agents"]["engineer"]]["ladder"]
-    rungs = raw["ladders"][workhorse]
-    second = _ids(rungs)[1]
-    rungs[0], rungs[1] = rungs[1], rungs[0]
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    proc = subprocess.run([sys.executable, "scripts/sync_model_config.py"],
-                          cwd=dest, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    # The selector runs on the regenerated literal, never on the YAML's
-    # choices (DRE-6939). Its old bytecode goes with it: swapping two rungs
-    # keeps the file's size, so a same-second rewrite would load the old one.
-    shutil.rmtree(dest / "scripts" / "__pycache__", ignore_errors=True)
-
-    mf = fixture_module(dest)
-    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == second
-
-
-# --------------------------------------------------------------------------- #
-# 5. The refresh rule is what a stale fixture says                             #
-# --------------------------------------------------------------------------- #
-
-def test_a_generator_that_fails_raises_fixture_stale(tmp_path, monkeypatch):
-    _stub_a_refusing_generator(monkeypatch)
+def test_regenerate_true_raises_because_the_generator_is_gone(tmp_path, monkeypatch):
     calls = _record_subprocesses(monkeypatch)
     dest = tmp_path / "tree"
-    with pytest.raises(FixtureStale) as caught:
-        fixture_tree(dest)
-    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-    message = str(caught.value)
-    assert STALE_SENTENCE in message
-    assert "tests/fixtures/model-config-frozen/README.md" in message
-    assert "stub generator: refusing the frozen config" in message
+    with pytest.raises(ValueError) as caught:
+        fixture_tree(dest, regenerate=True)
+    assert "the generator is gone" in str(caught.value)
+    assert calls == []
+    assert not dest.exists()
+
+
+def test_the_fixture_module_keeps_no_trace_of_the_generator():
+    assert model_fixture.MODEL_FILE_NAMES == ("models.yaml", "agents.yaml", "model_fallback")
+    for name in OLD_ROUTE:
+        assert not hasattr(model_fixture, name), name
+    assert not hasattr(model_fixture, "STALE")
 
 
 # --------------------------------------------------------------------------- #
@@ -537,20 +461,16 @@ def test_model_reading_tests_on_a_planted_tree(tmp_path):
         "ladders": {"solo": [{"model": "vendor-model-9", "reason": "x"}]}}))
     rung = _plant(tmp_path, "tests/test_rung.py", 'MODEL = "vendor-model-9"\n')
     selector = _plant(tmp_path, "tests/nested/test_selector.py", "import model_fallback\n")
-    generator = _plant(tmp_path, "tests/test_generator.py",
-                       'CMD = ["python3", "scripts/sync_model_config.py"]\n')
+    roster = _plant(tmp_path, "tests/test_roster.py", 'PATH = "agents.yaml"\n')
     _plant(tmp_path, "tests/test_unrelated.py", "def test_nothing():\n    pass\n")
     _plant(tmp_path, "tests/node_modules/test_skipped.py", "import model_fallback\n")
     _plant(tmp_path, "tests/.hidden/test_hidden.py", 'MODEL = "vendor-model-9"\n')
     _plant(tmp_path, "tests/helper.py", "import model_fallback\n")
 
-    assert model_reading_tests(tmp_path) == sorted([rung, selector, generator])
+    assert model_reading_tests(tmp_path) == sorted([rung, selector, roster])
 
 
-@pytest.mark.parametrize("token", [
-    "models.yaml", "agents.yaml", "model-choices.json",
-    "model_fallback", "sync_model_config", "model_config_change",
-])
+@pytest.mark.parametrize("token", ["models.yaml", "agents.yaml", "model_fallback"])
 def test_each_named_file_puts_a_test_in_the_set(tmp_path, token):
     _plant(tmp_path, "config/models.yaml", yaml.safe_dump({"ladders": {"solo": ["m-1"]}}))
     named = _plant(tmp_path, "tests/test_named.py", f"# reads {token}\n")
@@ -666,9 +586,9 @@ def test_the_id_scan_reads_strings_and_docstrings_and_skips_comments():
 # 8. The rest of the model tests prove theirs on documents too (DRE-8018)      #
 # --------------------------------------------------------------------------- #
 
-# The eleven model tests that built their trees with the generator and are not
-# the old route's or the generator's own. When the generator goes (DRE-6982),
-# nothing here breaks: each builds its trees with `regenerate=False` and reads
+# The eleven model tests that built their trees with the generator and were not
+# the old route's or the generator's own. The generator is gone (DRE-6982) and
+# nothing here broke: each builds its trees with `regenerate=False` and reads
 # every choice off a home document or the tree's own `code_defaults()`.
 HOME_DOCUMENT_TREES = (
     "tests/test_model_policy.py",
@@ -687,7 +607,7 @@ HOME_DOCUMENT_TREES = (
 # that file with none of them, so a test reads them off `fixture_home()`.
 CHOICE_KEYS = ("ladders", "default_ladder", "agents", "ungrouped", "projects", "kinds")
 FROZEN_READERS = ("fixture_config", "fixture_text")
-LITERAL = "_FALLBACK_MODEL_CONFIG"
+LITERAL = "CODE_DEFAULTS"
 
 
 def _called(node, names) -> bool:
@@ -806,7 +726,7 @@ def frozen_choice_reads(text: str) -> list[tuple[int, str]]:
 
 
 def literal_mentions(text: str) -> list[int]:
-    """The lines of `text` naming the generated literal."""
+    """The lines of `text` naming the defaults literal."""
     return [n for n, line in enumerate(text.splitlines(), 1) if LITERAL in line]
 
 
@@ -835,16 +755,19 @@ def test_none_of_the_eleven_reads_a_choice_off_the_frozen_config():
     assert not any(found.values()), found
 
 
-def test_only_the_rename_pin_names_the_generated_literal():
-    """Renaming the literal (DRE-6982) touches no test of these but the one
-    assertion that `code_defaults()` is the normalized literal."""
+def test_only_the_selectors_own_tests_name_the_defaults_literal():
+    """Renaming the literal to `CODE_DEFAULTS` (DRE-6982) touched no test of
+    these but tests/test_model_fallback.py: its assertion that
+    `code_defaults()` is the normalized literal, and the tests that hold the
+    literal to the file's code-side facts. Every other one reads the defaults
+    through `code_defaults()`."""
     named = {rel: literal_mentions(_source(rel))
              for rel in (*HOME_DOCUMENT_TREES, "tests/test_model_effort.py")}
     pin = named.pop("tests/test_model_fallback.py")
     assert not any(named.values()), named
-    assert len(pin) == 1, pin
-    line = _source("tests/test_model_fallback.py").splitlines()[pin[0] - 1]
-    assert "code_defaults()" in line and "_normalize_config" in line, line
+    lines = _source("tests/test_model_fallback.py").splitlines()
+    assert any("code_defaults()" in lines[n - 1] and "_normalize_config" in lines[n - 1]
+               for n in pin), pin
 
 
 def test_the_choice_scan_finds_each_way_a_choice_is_read_off_the_frozen_file():

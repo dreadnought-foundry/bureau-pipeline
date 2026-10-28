@@ -669,7 +669,9 @@ class TheRoster(unittest.TestCase):
         advisory, like every other role that judges."""
         for name in (pc.AGENT_PRE, pc.AGENT_POST):
             self.assertEqual(self.models["agents"][name], "advisory")
-            self.assertEqual(self.entry(name)["kind"], "advisory")
+            # The registry carries no kind since DRE-6982: the group is read
+            # from the home when a run starts.
+            self.assertNotIn("kind", self.entry(name))
 
     def test_the_roles_the_workflow_selects_are_the_roles_the_config_names(self):
         for name in (pc.AGENT_PRE, pc.AGENT_POST):

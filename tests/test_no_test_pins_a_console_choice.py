@@ -54,9 +54,6 @@ _OWN_INPUT = (
 _ABSENT = (
     "The id is asserted absent: the text under test must name no model, and "
     "no console save can make it name one.")
-_SAMPLE_REGION = (
-    "The id sits in a sample generated region the test writes as its own diff "
-    "for the commit-order check, which reads that text and never a model file.")
 _CLI_TABLE = (
     "The id is the model the test asks the Claude Code pin tool about, "
     "answered from a pinned release's own model table or a faked Models API "
@@ -73,9 +70,6 @@ _OWN_LADDERS = (
 _FROZEN_LADDERS = (
     "The expected rungs are members of the frozen fixture's ladders, which the "
     "test classifies the candidate against and no console save touches.")
-_FROZEN_AGENTS = (
-    "The agents are read in the frozen fixture tree the test builds from "
-    "tests/fixtures/model-config-frozen, which no console save touches.")
 _ABSENT_KEY = (
     "The test deletes `projects` from a frozen-fixture config and asserts the "
     "normalizer's default for an absent key, not the committed map.")
@@ -95,8 +89,6 @@ _RECORDED_ON = (
 # that test is not a pin. One entry per test; every entry is checked to still
 # produce a finding.
 ALLOWED: dict[str, str] = {
-    "tests/test_agents_registry.py::AgentsRegistryTest.test_only_a_present_null_model_is_scripted":
-        _OWN_INPUT,
     "tests/test_card_snapshot.py::test_off_answers_what_the_two_reads_answered": _OWN_INPUT,
     "tests/test_claude_code_pin.py::test_apply_puts_a_known_models_row_in_the_minimum_table":
         _CLI_RECORD,
@@ -136,8 +128,6 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_adoption.py::test_load_prices_rejects_an_entry_missing_a_side": _OWN_INPUT,
     "tests/test_model_adoption.py::test_the_newer_opus_with_no_declared_price_is_ask":
         _FROZEN_LADDERS,
-    "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
-        _FROZEN_AGENTS,
     "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
         _ABSENT_KEY,
     "tests/test_model_rules_and_markers.py::test_a_planner_the_block_admits_may_hold_the_judgement_kind":
@@ -191,32 +181,6 @@ ALLOWED: dict[str, str] = {
         _OWN_INPUT,
     "tests/test_shadow_replay_unknown_builder.py::ClauseTest.test_an_empty_recorded_model_means_opus_5_5":
         _RECORDED_ON,
-    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_a_path_with_no_proving_generator_stays_code":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_generated_region_change_classifies_as_docs":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_marker_edit_stays_code":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_region_plus_an_outside_line_stays_code":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_a_line_outside_the_region_is_not":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_a_neighbour_of_a_proved_file_is_not_covered":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_a_region_with_no_closing_marker_is_not":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_added_file_has_no_base_version_and_is_not_generated":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_deleted_file_has_no_head_version_and_is_not_generated":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_deleting_the_region_is_not":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_editing_a_marker_line_is_not":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_regenerated_region_is_a_generated_change":
-        _SAMPLE_REGION,
-    "tests/test_tdd_commit_check.py::GeneratedRegionChangeTest.test_unparseable_after_fails_closed_to_code":
-        _SAMPLE_REGION,
     "tests/test_turn_exhaustion_not_outage.py::BuildRunTurnExhaustionTest.test_api_death_path_unchanged":
         _OWN_INPUT,
     "tests/test_turn_exhaustion_not_outage.py::BuildRunTurnExhaustionTest.test_model_fallback_cannot_fire_on_an_exhaustion_receipt":

@@ -5,24 +5,21 @@
 # parsing workflow YAML). Any change to an agent's budgets, trigger, or brief
 # in .github/workflows/ MUST update this file in the same PR.
 #
-# EXCEPT the model. `model:` is a GENERATED mirror of config/models.yaml
-# (DRE-2316), the file a human edits to change the defaults in the code. Since
-# DRE-6939 the CI path runs on the home (`BUREAU_MODEL_CHOICES`, read by
-# scripts/model_home.py) or on those defaults, never on the choices written in
-# that file, so a `model:` line is the default, not always what a run is on.
-# Each `model:` line sits inside a
-# marked generated region below; edit the config and then run
-# `python3 scripts/sync_model_config.py`. CI fails red on drift. The
-# ordered fallback LADDERS live in that config only: they used to be
-# copy-pasted five times into this file, where nothing on the CI path read them.
+# EXCEPT the model. Each agent's group and model are read from the home when a
+# run starts (`BUREAU_MODEL_CHOICES`, read by scripts/model_home.py), or from
+# the defaults in the code (`CODE_DEFAULTS` in scripts/model_fallback.py) when
+# the home cannot be read, and are not in this file (DRE-6939, DRE-6982). The
+# `kind:` and `model:` lines it used to carry were a generated mirror of
+# config/models.yaml (DRE-2316). Since DRE-8022 the console's roster reads the
+# names and the other fields here, and each agent's group and model from the
+# home, so the lines are gone. The ordered fallback LADDERS were copy-pasted
+# five times into this file before that.
 #
 # WHAT IS ENFORCED, AND BY WHAT (DRE-2729). Before this card only `model:`
 # had a check, so `tools:` was a comment asking people to remember and it had
 # drifted on two of ten entries — including the critic, the agent that gates
 # every unattended merge. Every behavioural field now has an owner:
 #
-#   model       — CI drift check against config/models.yaml (DRE-2316), plus
-#                 tests/test_model_config.py
 #   maxTurns    — tests/test_agents_registry.py::test_turns_match_workflow_text
 #   tools       — tests/test_agents_registry.py::test_tools_match_workflow_text
 #   credentials — tests/test_agents_registry.py::test_credentials_match_the_agent_step
@@ -44,26 +41,11 @@
 #               (product = planning/spec; development = building & code review;
 #               operations = devops, fixes, verification, pipeline health;
 #               marketing/sales reserved for future agents — no entries yet)
-#   kind      — GENERATED: the role kind from config/models.yaml (DRE-2317).
-#               `workhorse` = high-volume build work, the hot path, a
-#               cost-appropriate model. `advisory` = bounded consults at
-#               decision points (critic, verifier, medic) — the STRONGEST
-#               model, because the critic gates every unattended merge and a
-#               shallow review is a silent failure. A role is assigned a KIND,
-#               never a ladder, and the advisory model is unreachable from any
-#               build ladder at any availability.
-#   model     — GENERATED: the top of that kind's ladder in config/models.yaml.
-#               Selection walks that ladder at runtime and uses the first
-#               AVAILABLE model (DRE-1490); the probe decides how far DOWN a
-#               ladder to walk, never how far up — a model that is not ON a
-#               ladder is never selected, however available it becomes.
-#               Availability is not permission: that is what put the whole
-#               fleet on Fable on 2026-08-09 with nobody deciding.
-#               EXCEPT a SCRIPTED agent (DRE-5369): its workflow runs a
-#               script and no model, so it carries `kind: scripted` and
-#               `model: null` by hand and no generated region at all.
 #   trigger   — what starts a run (relay dispatch / GitHub event / sweep)
-#   maxTurns  — hard turn budget passed via claude_args
+#   maxTurns  — hard turn budget passed via claude_args. A SCRIPTED agent
+#               (DRE-5369) runs a script and no model, so it takes no turns:
+#               it declares `maxTurns: null`, and that null is the claim
+#               tests/test_agents_registry.py checks against its workflow.
 #   maxBudget — advisory dollars per run (console display; not enforced)
 #   tools     — allowedTools passed to the agent. EVERY entry carries
 #               `WebSearch` and `WebFetch` since DRE-2785 — the operator
@@ -100,13 +82,9 @@ agents:
   - name: engineer
     role: Engineer
     category: development
-    # Rides the WORKHORSE ladder (config/models.yaml), shared by every build
-    # agent — no role hardcodes a model. Selection probes availability at
+    # Rides the Builders group's models, shared by every build agent, as the
+    # home names them when a run starts — no role hardcodes a model. Selection probes availability at
     # runtime and uses the first AVAILABLE entry.
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
-    # END generated model
     trigger: "Linear card → Queued → In Progress → relay repository_dispatch (agent-execute)"
     # DRE-2785 granted the web and left this budget alone, on the reasoning
     # that a card whose research makes it expensive can take a rung rather
@@ -133,10 +111,6 @@ agents:
     # (Vite SPA, the static-asset/MIME proxy trap, esbuild Node-API, same-origin
     # /graphql, the **Design:** fidelity convention). Routed by an agent:frontend
     # label; runs on the shared agent-task.yml like the engineer.
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
-    # END generated model
     trigger: "Linear card (label agent:frontend) → Queued → In Progress → relay repository_dispatch (agent-execute)"
     # Web tools since DRE-2785; turn budget moves with the engineer's for the
     # same reason — it shares agent-task.yml's rung selection
@@ -162,10 +136,6 @@ agents:
     # satisfy the roster schema — NOTHING routes a Linear label here, so it can
     # never be auto-dispatched (label routing resolves only planner/devops/
     # frontend, else engineer; see scripts/model_fallback.py + validate_card.py).
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
-    # END generated model
     trigger: "Operator-launched (interactive Claude Code / VS Code task); CI auto-dispatch not yet wired"
     # Web tools since DRE-2785 — it is in the roster and the card grants ALL
     # ten, dispatched or not; leaving the one entry nobody routes to without
@@ -184,10 +154,6 @@ agents:
   - name: devops
     role: DevOps
     category: operations
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
-    # END generated model
     trigger: "Linear card (label agent:devops) → Queued → In Progress → relay repository_dispatch (agent-execute)"
     # Web tools since DRE-2785 — the role with the most to gain from them,
     # since a vendor's current behaviour is the whole subject of
@@ -211,10 +177,6 @@ agents:
     # patch the last attempt). It used to hardcode a pricier model here and in
     # agent-fix.yml; an attempt-gated escalation is still a build path, and the
     # workflow now selects from config/models.yaml like every other agent.
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
-    # END generated model
     trigger: "workflow_dispatch — merge-gate DIRTY path, conflict sweep, approved-but-red sweep, critic REQUEST_CHANGES"
     # Mirrors agent-fix.yml's --max-turns (DRE-2533); the roster is the
     # console's copy of the fleet's budgets and tests/test_agents_registry.py
@@ -239,10 +201,6 @@ agents:
   - name: critic
     role: QA Critic
     category: development
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: advisory
-    model: claude-sonnet-5-5  # top of the `advisory` ladder
-    # END generated model
     trigger: "agent PR opened/updated (head agent/*) or workflow_dispatch re-review"
     # 80 (DRE-2422), and the retry in qa-review.yml gets 120. 40 was sized
     # for an older, terser model; Sonnet 5 rides it — portico's critic runs
@@ -295,10 +253,6 @@ agents:
   - name: verifier
     role: Verifier
     category: operations
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: advisory
-    model: claude-sonnet-5-5  # top of the `advisory` ladder
-    # END generated model
     trigger: "agent PR opened/updated (head agent/*) on multi-system or UI (**Design:**) cards; scope-gated SKIP otherwise"
     # The FIRST attempt's ceiling (DRE-2429 set 80, was 60; DRE-2539 raised it
     # to 120). The crash retry runs at 160 — a retry against the ceiling that
@@ -337,10 +291,6 @@ agents:
     # and uses the first AVAILABLE model; falling to Opus is loud (DEGRADED).
     # No build role can reach the top of this ladder at any availability —
     # that guard is 2026-08-09's and it is untouched.
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: judgement
-    model: claude-opus-5-5  # top of the `judgement` ladder
-    # END generated model
     trigger: "Linear epic (label agent:planner) → In Progress → relay repository_dispatch (agent-plan)"
     # 50 → 80 with DRE-2720: the planner now writes the CEO-facing plan
     # artifact (seven sections, the ```kpis block, a token-built mockup for UI
@@ -395,10 +345,6 @@ agents:
   - name: plan-critic-pre
     role: Plan Critic (before approval)
     category: product
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: advisory
-    model: claude-sonnet-5-5  # top of the `advisory` ladder
-    # END generated model
     trigger: "Linear epic planned (agent-plan dispatch, plan route) — runs before the epic reaches Green Light"
     # Structural review of cards that already exist, with the mechanical half
     # (plan_critic.py mechanical) done for it before the first turn. Two of
@@ -420,10 +366,6 @@ agents:
   - name: plan-critic-post
     role: Plan Critic (before Green Light)
     category: product
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: advisory
-    model: claude-sonnet-5-5  # top of the `advisory` ladder
-    # END generated model
     trigger: "Review route (agent-plan dispatch) — runs after the first critic passes the plan, before Green Light (the activate route ran it after approval until DRE-5281, which made Approve mean go)"
     # The FLOOR of a band, not a literal: this review's ceiling is sized per
     # plan (`plan_critic.post_review_turns` — base + 4/card, floored, capped),
@@ -444,10 +386,6 @@ agents:
   - name: medic
     role: Pipeline Medic
     category: operations
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: advisory
-    model: claude-sonnet-5-5  # top of the `advisory` ladder
-    # END generated model
     trigger: "workflow_run failed twice (attempt 1 auto-retries without an agent)"
     # Ceiling 40 → 60 with DRE-2785's web grant. Diagnosis is the work the web helps
     # most with and the 40 was measured without it: a vendor's status page, a
@@ -469,10 +407,6 @@ agents:
     role: Red-Main Repair
     category: operations
     # Engineer ladder (DRE-1490): the repair agent is an engineer-tier fixer.
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: workhorse
-    model: claude-opus-5-5  # top of the `workhorse` ladder
-    # END generated model
     trigger: "workflow_run — default-branch CI conclusion=failure (event-driven; no polling; ≤2 attempts per failing SHA)"
     # Web tools since DRE-2785; ceiling unchanged at 100. A red main is
     # repaired against a failure this repo's own suite reproduces, and the
@@ -497,10 +431,6 @@ agents:
     # (scripts/proof_and_demo.py), and a role there is one the fleet picks up
     # for a PROOF card (DRE-3039). The Proof group's ladder since DRE-7284
     # (config/models.yaml), led by the Builders' first model.
-    # BEGIN generated model — canonical: config/models.yaml (regenerate: scripts/sync_model_config.py)
-    kind: proof
-    model: claude-opus-5-5  # top of the `proof` ladder
-    # END generated model
     trigger: "PROOF card in Hand-work with every blocker closed and its release live → sweep repository_dispatch (proof-execute)"
     # Web tools since DRE-2785, held from its first day like every agent's —
     # a criterion can name a vendor's status page or a released action's
@@ -525,15 +455,13 @@ agents:
     workflow: .github/workflows/proof-task.yml
 
   # The first SCRIPTED agent (DRE-5369): its workflow runs scripts/hygiene.py
-  # and never a model, so it has no generated model region — `model: null` is
-  # written out, because an entry with no `model` key is drift and an entry
-  # with a null one is a claim tests/test_agents_registry.py checks against
-  # the workflow (no agent step, credentials = the secrets the file names).
+  # and never a model, so `maxTurns: null` is written out — an entry with no
+  # `maxTurns` key is drift, and an entry with a null one is a claim
+  # tests/test_agents_registry.py checks against the workflow (no agent step,
+  # credentials = the secrets the file names).
   - name: hygiene
     role: Hygiene Agent
     category: operations
-    kind: scripted
-    model: null
     trigger: "schedule — hourly at :37, over every repo in config/repo-map.json"
     maxTurns: null
     maxBudget: 0
