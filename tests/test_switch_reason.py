@@ -81,7 +81,7 @@ ALSO_READ = {
     ("NAME_GUARD_LIVE", ".github/workflows/proof-task.yml", step)
     for step in ("Push the shadow record", "Refresh the record pull request's body",
                  "Report proof result to Linear")
-}
+} | {("NAME_GUARD_LIVE", ".github/workflows/qa-review.yml", "Post verdict or neutral status")}
 
 
 def _copy_tree(tmp_path: Path) -> Path:
@@ -125,7 +125,7 @@ class TestCatalog:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "check"],
             capture_output=True, text=True, cwd=ROOT)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert "13 switch read(s), 5 row(s), 0 problem(s)" in done.stdout
+        assert "14 switch read(s), 5 row(s), 0 problem(s)" in done.stdout
 
     def test_reads_are_discovered_from_the_workflows(self):
         # Each switch is read where it acts, and once more by the sweep's
