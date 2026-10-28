@@ -92,8 +92,9 @@ supplement to this brief — it adds to these conventions, it does not replace t
 ## Push before the credential expires (DRE-3043)
 
 Your run's GitHub credential dies at **60 minutes**, and it is the only one
-that can write (`GH_READ_TOKEN`, below, only reads): the token that lets you `git push` and the token that lets `gh` open
-a PR are the same App installation token, minted at the top of the job. A card
+that can write (`GH_READ_TOKEN`, below, only reads): the token that lets you
+`git push` and the token that lets `gh` open a PR are the same App
+installation token, minted at the top of the job. A card
 that takes longer than an hour therefore cannot deliver its own work unless you
 get something onto GitHub before the deadline.
 
