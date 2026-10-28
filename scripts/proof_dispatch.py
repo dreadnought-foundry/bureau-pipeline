@@ -307,7 +307,32 @@ There are two events, and only these two:
      and the line names the card and why — a release that cannot be read
      included; a card labelled for a repo outside the roster, or for none,
      is not a release this phase can read, so the operator's note is its
-     route. The set re-arms once: an earlier `re-armed` receipt naming every
+     route.
+
+     Two cards in the set have no pull request of their own (DRE-8250), and
+     each is read off the one request that reads the card — its children in
+     the shape the sweep reads an epic blocker in, and its relations. An
+     epic is read as the sweep reads one on a `blockedBy` relation (DRE-7774,
+     DRE-7831): Done or In Progress, and built out — at least one child, none
+     `epic_cap.buildable()`, no open child epic, the children read to the
+     end — so its PROOF and person-marked cards (`epic_cap.follow_on()`)
+     left open hold nothing. Then each build card, a child
+     `epic_cap.buildable()` would count were it open, is read as any fix
+     card is — Done, merged and live, in the repo its label names, else the
+     epic's — and a build card Canceled or Duplicate has nothing to ship; at
+     least one must be Done. A card `Duplicate` is read as its canonical
+     card, the one its `duplicate` relation names, read once more and never
+     chained past one hop; a duplicate with no such relation, one whose
+     canonical card cannot be read or is a duplicate too, refuses and names
+     it. An epic or a duplicate is one entry against `REARM_FIX_CARDS` — an
+     epic's children ride its own read, a duplicate's canonical card is one
+     more — and the reason names the set's entries, so the set re-arms once
+     however each was read. A refusal names the epic and the build card that
+     holds it (`the fix DRE-8158 is an epic whose build card DRE-8160's pull
+     request is not merged`), or the duplicate and its canonical card; a
+     re-arm names on its line each card it read in an entry's place.
+
+     The set re-arms once: an earlier `re-armed` receipt naming every
      card in it re-arms nothing, and a blocker related before that receipt
      is older than the newest receipt, so it is not in the set again.
   b. **A new `🔬 proof-observed`**, posted after the card's newest
@@ -443,8 +468,10 @@ for a card whose first relation page is full, up to
 re-arm's reads (DRE-7740) happen only on a spent budget: one read of the
 proof's relations with their times (DRE-8156, more pages only past a
 hundred), then, when the record or those relations name fix cards and only
-for a set not already re-armed, at most `REARM_FIX_CARDS` Linear card reads,
-each card's pull request on its own repo, and one release reading per repo.
+for a set not already re-armed, at most `REARM_FIX_CARDS` Linear card reads
+and one more for each duplicate's canonical card (DRE-8250), each card's —
+or each epic's build card's — pull request on its own repo, and one release
+reading per repo.
 A re-run spent with nothing new (DRE-7787) is not a candidate: it costs no
 read of its own, and however many there are they cost together one GitHub
 read of the open pull requests' heads and one Linear read of their relations
@@ -522,6 +549,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import canceled_check  # noqa: E402 — the workflow run a check belongs to (DRE-8177)
 import card_pr  # noqa: E402
+import epic_cap  # noqa: E402 — an epic in a fix set is built out as the sweep reads it (DRE-8250)
 import hold  # noqa: E402 — the sweep's review-cap stamp, read as the holds lane reads it
 import hold_deadline  # noqa: E402 — when an event hold is chased (DRE-7967)
 import lane_contract  # noqa: E402 — the queue's names, which the promotion receipt carries
@@ -758,9 +786,19 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
                  identifier title state { name } labels { nodes { name } } } } }
            } }""" % reconcile.INVERSE_RELATIONS_GQL
 
-#: A fix card, read for a re-arm (DRE-7740): only what shipping is read off.
-FIX_CARD_QUERY = """query($id: String!) { issue(id: $id) {
-                 identifier state { name } labels { nodes { name } } } }"""
+#: A fix card, read for a re-arm (DRE-7740): only what shipping is read off —
+#: and, in the same one request (DRE-8250), its children in the shape
+#: `epic_cap.buildable()` reads, the shape the sweep reads an epic blocker in
+#: (`epic_cap.IN_MOTION_NODE`), and its relations, a `duplicate` one naming
+#: the card a Duplicate is read as.
+FIX_CARD_QUERY = """query($id: String!) { issue(id: $id) {%s
+                 labels { nodes { name } }
+                 relations(first: 20) { nodes { type relatedIssue { identifier } } }
+                 } }""" % epic_cap.IN_MOTION_NODE
+#: The state of a card closed as another's duplicate, and the relation that
+#: names the other (DRE-8250).
+DUPLICATE_STATE = "Duplicate"
+DUPLICATE_RELATION = "duplicate"
 
 #: The proof's relations with the time each was made (DRE-8156): a card on a
 #: `blocks` relation made after the newest `🔬 proof-run` receipt is a fix
@@ -863,7 +901,8 @@ class LinearReads:
                                              "createdAt", whole=True)
 
     def fix_card(self, identifier: str) -> dict:
-        """A card a record row names as its fix (DRE-7740): its state and labels."""
+        """A card a record row names as its fix (DRE-7740): its state and
+        labels, its children and its relations (DRE-8250), in one request."""
         issue = (linear_ops.gql(FIX_CARD_QUERY, {"id": identifier}) or {}).get("issue")
         if not issue:
             raise LookupError(f"Linear answered no card for {identifier}")
@@ -1335,6 +1374,41 @@ def _named_fixes(read) -> list:
     """The distinct cards the record's unmet rows name by `fix:` (DRE-7740)."""
     return list(dict.fromkeys(card for _, result in read.unmet
                               for card in proof_record.row_fixes(result)))
+
+
+def _not_built_out(epic: dict) -> str | None:
+    """Why an epic in a fix set is not built out, or None when it is
+    (DRE-8250) — the sweep's reading of an epic blocker (`reconcile.
+    _not_built_out`, DRE-6407) on the children the fix card's read carries:
+    at least one child, none `epic_cap.buildable()`, no open child epic, and
+    the children page read to the end — `epic_cap.counts_against_cap` false
+    with roll-up parents counted, the one definition. Its state is read
+    apart, so an epic closed at build-done (DRE-7948) reads the same."""
+    children = epic_cap._children(epic)
+    if children and not epic_cap.counts_against_cap(
+            {**epic, "state": {"name": epic_cap.IN_PROGRESS}}, count_rollup_parents=True):
+        return None
+    if not children:
+        return "it has no children"
+    left = [c.get("identifier") or "?" for c in children if epic_cap.buildable(c)]
+    if left:
+        return f"a buildable child is open: {', '.join(left)}"
+    if epic_cap._truncated(epic.get("children")):
+        return "its children page was not read to the end"
+    epics = [c.get("identifier") or "?" for c in children
+             if epic_cap._is_open(c) and epic_cap._child_is_epic(c)]
+    return f"an open child epic: {', '.join(epics) or 'unnamed'}"
+
+
+def _build_card(child: dict) -> bool:
+    """A child `epic_cap.buildable()` would count were it open — not an epic,
+    not a proof, not marked for a person (DRE-8250). Its state is set aside,
+    so a closed build card is told from a closed proof by the one definition."""
+    return epic_cap.buildable({**child, "state": None})
+
+
+def _identifiers(cards: list) -> str:
+    return ", ".join(card.get("identifier") or "?" for card in cards)
 
 
 def _filed_fixes(voices: list) -> list:
@@ -2257,39 +2331,22 @@ class _Pass:
                 return None, (f"{cards} already re-armed the run of {earlier.at} "
                               "— a set re-arms once")
         merges: dict = {}
+        notes: list = []
         for card in named:
             try:
                 issue = self.linear.fix_card(card)
             except Exception as error:  # noqa: BLE001 — unread is never shipped
                 return None, f"the fix {card} could not be read: {error}"
-            state_name = (issue.get("state") or {}).get("name")
-            if state_name != SHIPPED_STATE:
-                return None, (f"the fix {card} is {state_name or 'in no state'}, "
-                              f"not {SHIPPED_STATE}")
-            slug = reconcile.card_repo(issue)
-            repo = (self.repo if slug == self.slug
-                    else validate_card._REPO_MAP.get(slug or ""))
-            if not repo:
-                return None, (f"the fix {card}'s repo: label names "
-                              f"{slug or 'no repo'}, not {self.slug} nor another "
-                              "repo in config/repo-map.json — its release is not "
-                              "this repo's to read; the operator's "
-                              "🔬 proof-observed is the route")
-            on = "" if repo == self.repo else f" on {repo}"
-            try:
-                pr = (self.find_pr(card) if repo == self.repo
-                      else self.find_pr(card, repo=repo))
-            except Exception as error:  # noqa: BLE001
-                return None, (f"the fix {card}'s pull request{on} could not be "
-                              f"read: {error}")
-            if card_pr.pr_state(pr) != card_pr.MERGED:
-                return None, f"the fix {card}'s pull request{on} is not merged"
-            sha = (pr.get("mergeCommit") or {}).get("oid")
-            if not sha:
-                return None, (f"the fix {card}'s #{pr.get('number')}{on} names no "
-                              "merge commit")
-            merges.setdefault(repo, []).append(
-                proof_release.Merge(card, pr["number"], sha, []))
+            said = f"the fix {card}"
+            if epic_cap._state(issue) == DUPLICATE_STATE:
+                issue, said, why = self._canonical(card, issue)
+                if why:
+                    return None, why
+                notes.append(f"the fix {card} is a duplicate of "
+                             f"{issue.get('identifier')}, read in its place")
+            why = self._shipped(issue, said, merges, notes)
+            if why:
+                return None, why
         readings = []
         for repo, carried in merges.items():
             on = "" if repo == self.repo else f" on {repo}"
@@ -2303,9 +2360,107 @@ class _Pass:
                 return None, (f"the release carrying {these}{on} is {got.state}: "
                               + "; ".join(got.lines))
             readings += [f"{repo}: {line}" if on else line for line in got.lines]
+        for note in notes:
+            print(f"{PREFIX} {ident} — {note}")
         for line in readings:
             print(f"{proof_release.TAG}: {ident} — {line}")
         return REARM_FIX_REASON.format(cards=cards), ""
+
+    def _canonical(self, card: str, issue: dict) -> tuple:
+        """`(canonical, said, "")` for a fix card closed as a duplicate: the
+        card its `duplicate` relation names, read in its place (DRE-8250) —
+        one hop, never chained. `(None, "", why)` when there is none to read."""
+        other = next(((rel.get("relatedIssue") or {}).get("identifier")
+                      for rel in ((issue.get("relations") or {}).get("nodes") or [])
+                      if rel.get("type") == DUPLICATE_RELATION
+                      and (rel.get("relatedIssue") or {}).get("identifier")), None)
+        if not other:
+            return None, "", (f"the fix {card} is {DUPLICATE_STATE} with no duplicate "
+                              "relation naming the card it duplicates")
+        said = f"the fix {card} is a duplicate whose canonical card {other}"
+        try:
+            canonical = self.linear.fix_card(other)
+        except Exception as error:  # noqa: BLE001 — unread is never shipped
+            return None, "", f"{said} could not be read: {error}"
+        if epic_cap._state(canonical) == DUPLICATE_STATE:
+            return None, "", (f"{said} is {DUPLICATE_STATE} too — a duplicate is read "
+                              "one hop, never chained")
+        return canonical, said, ""
+
+    def _shipped(self, issue: dict, said: str, merges: dict, notes: list,
+                 fallback: str | None = None) -> str:
+        """Why the fix card `issue` has not shipped, else "" with its merge
+        added to `merges`: Done, merged and live in its own repo — or, for an
+        epic, built out with each build card merged (`_epic_shipped`).
+        `said` opens the line; `fallback` is the repo slug of a card that
+        names none, an epic's for its child."""
+        if epic_cap._child_is_epic(issue):
+            return self._epic_shipped(issue, said, merges, notes)
+        state_name = epic_cap._state(issue)
+        if state_name != SHIPPED_STATE:
+            return f"{said} is {state_name or 'in no state'}, not {SHIPPED_STATE}"
+        card = issue.get("identifier")
+        if any(merge.card == card for carried in merges.values() for merge in carried):
+            return ""
+        slug = reconcile.card_repo(issue) or fallback
+        repo = (self.repo if slug == self.slug
+                else validate_card._REPO_MAP.get(slug or ""))
+        if not repo:
+            return (f"{said}'s repo: label names {slug or 'no repo'}, not "
+                    f"{self.slug} nor another repo in config/repo-map.json — its "
+                    "release is not this repo's to read; the operator's "
+                    "🔬 proof-observed is the route")
+        on = "" if repo == self.repo else f" on {repo}"
+        try:
+            pr = (self.find_pr(card) if repo == self.repo
+                  else self.find_pr(card, repo=repo))
+        except Exception as error:  # noqa: BLE001
+            return f"{said}'s pull request{on} could not be read: {error}"
+        if card_pr.pr_state(pr) != card_pr.MERGED:
+            return f"{said}'s pull request{on} is not merged"
+        sha = (pr.get("mergeCommit") or {}).get("oid")
+        if not sha:
+            return f"{said}'s #{pr.get('number')}{on} names no merge commit"
+        merges.setdefault(repo, []).append(proof_release.Merge(card, pr["number"], sha, []))
+        return ""
+
+    def _epic_shipped(self, issue: dict, said: str, merges: dict, notes: list) -> str:
+        """An epic has no pull request of its own (DRE-8250). It is read as the
+        sweep reads an epic blocker (DRE-7774, DRE-7831): Done or In Progress
+        and built out (`_not_built_out`) — its PROOF and person-marked cards
+        (`epic_cap.follow_on`) left open hold nothing — and then each build
+        card, a child `epic_cap.buildable()` would count were it open, read as
+        any fix card is: Done, merged and live. A build card Canceled or
+        Duplicate has nothing to ship; at least one must be Done."""
+        card = issue.get("identifier")
+        said = f"{said} is an epic"
+        state_name = epic_cap._state(issue)
+        if state_name not in EPIC_ACTIVE:
+            return (f"{said} that is {state_name or 'in no state'}, not "
+                    f"{' or '.join(reversed(EPIC_ACTIVE))}")
+        held = _not_built_out(issue)
+        if held:
+            return f"{said} not built out: {held}"
+        kids = epic_cap._children(issue)
+        builds = [kid for kid in kids if _build_card(kid)]
+        done = [kid for kid in builds if epic_cap._state(kid) == SHIPPED_STATE]
+        if not done:
+            return f"{said} with no build card {SHIPPED_STATE} — nothing of it shipped"
+        slug = reconcile.card_repo(issue)
+        for kid in done:
+            why = self._shipped(kid, f"{said} whose build card {kid.get('identifier')}",
+                                merges, notes, fallback=slug)
+            if why:
+                return why
+        closed = [kid for kid in builds if kid not in done]
+        carried = [kid for kid in kids if epic_cap.follow_on(kid)]
+        notes.append(f"the fix {card} is an epic, built out: its build cards "
+                     f"{_identifiers(done)} merged"
+                     + (f", {_identifiers(closed)} closed with nothing to ship"
+                        if closed else "")
+                     + (f"; {_identifiers(carried)} carry on by themselves"
+                        if carried else ""))
+        return ""
 
     def _new_note(self, voices: list, receipts: list):
         """Event (b): the newest `🔬 proof-observed` posted after the card's
