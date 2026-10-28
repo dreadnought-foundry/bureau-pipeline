@@ -1050,3 +1050,98 @@ class TestARowNamingItsFix:
     ])
     def test_nothing_else_names_a_fix(self, result):
         assert proof_record.row_fixes(result) == []
+
+
+# --------------------------------------------------------------------------
+# The record's blob, as a run found it and as it left it (DRE-8259)
+# --------------------------------------------------------------------------
+CARD = "DRE-8162"
+BRANCH = f"agent/{CARD}-proof-record"
+BLOB = "b" * 40
+BEFORE = "3d9a79e" + "0" * 33
+MERGED = "456b245" + "0" * 33
+DOCS_RECORD = "docs/proofs/desk-reply-ends-said.md"
+
+
+class _Routes:
+    """A `gh` seam that answers by the call: the record branch's ref, its
+    open pull requests, their files, and the contents API's blob sha."""
+
+    def __init__(self, *, head=BEFORE, prs=((4242,)), files=None, blob=BLOB,
+                 fail=()):
+        self.head, self.prs, self.blob, self.fail = head, prs, blob, set(fail)
+        self.files = [added(DOCS_RECORD)] if files is None else files
+        self.calls = []
+
+    def __call__(self, args):
+        self.calls.append(list(args))
+        joined = " ".join(args)
+        if f"git/ref/heads/{BRANCH}" in joined:
+            if self.head is None or "ref" in self.fail:
+                raise RuntimeError("Not Found (HTTP 404)")
+            return json.dumps({"ref": f"refs/heads/{BRANCH}",
+                               "object": {"sha": self.head, "type": "commit"}})
+        if args[:2] == ["pr", "list"]:
+            if "list" in self.fail:
+                raise RuntimeError("HTTP 502")
+            return json.dumps([{"number": n} for n in self.prs])
+        if args[:2] == ["pr", "view"]:
+            return json.dumps({"files": self.files})
+        if "/contents/" in joined:
+            if self.blob is None or "contents" in self.fail:
+                raise RuntimeError("Not Found (HTTP 404)")
+            return json.dumps({"type": "file", "path": DOCS_RECORD, "sha": self.blob,
+                               "encoding": "base64", "content": ""})
+        raise AssertionError(f"unexpected gh call: {args}")
+
+
+class TestRecordBlob:
+    def test_the_open_record_pull_request_names_the_file_and_the_blob_is_read_at_the_branch_head(self):
+        gh = _Routes()
+        assert proof_record.record_blob(REPO, CARD, gh=gh) == (
+            proof_record.Blob(DOCS_RECORD, BLOB, BEFORE), None)
+        assert [f"repos/{REPO}/contents/{DOCS_RECORD}?ref={BEFORE}"] == [
+            c[1] for c in gh.calls if "/contents/" in " ".join(c)]
+
+    def test_a_head_moved_only_by_a_merge_of_main_reads_the_same_blob(self):
+        """DRE-8162's shape: the run's one commit merged main, so the head
+        moved and the record's blob did not — the blob is the baseline, never
+        the head."""
+        before, _ = proof_record.record_blob(REPO, CARD, gh=_Routes(head=BEFORE))
+        after, _ = proof_record.record_blob(REPO, CARD, gh=_Routes(head=MERGED))
+        assert before.commit != after.commit
+        assert (before.path, before.sha) == (after.path, after.sha)
+
+    def test_with_no_open_pull_request_the_cards_files_line_names_the_record(self):
+        description = ("Observe the desk reply.\n\n"
+                       f"**Files:** `{DOCS_RECORD}`, `scripts/desk.py`\n\n"
+                       "## Acceptance criteria\n")
+        gh = _Routes(prs=())
+        blob, why = proof_record.record_blob(REPO, CARD, description, gh=gh)
+        assert blob == proof_record.Blob(DOCS_RECORD, BLOB, BEFORE), why
+
+    def test_a_first_run_has_no_branch_and_no_baseline(self):
+        gh = _Routes(head=None)
+        blob, why = proof_record.record_blob(REPO, CARD, gh=gh)
+        assert blob is None and BRANCH in why
+        assert len(gh.calls) == 1
+
+    def test_no_record_file_is_no_baseline(self):
+        assert proof_record.record_blob(REPO, CARD, gh=_Routes(blob=None))[0] is None
+        assert proof_record.record_blob(REPO, CARD, gh=_Routes(files=[]))[0] is None
+        assert proof_record.record_blob(REPO, CARD, "no files line\n",
+                                        gh=_Routes(prs=()))[0] is None
+
+    def test_a_read_that_fails_is_no_baseline_and_says_why(self):
+        for step in ("list", "contents"):
+            blob, why = proof_record.record_blob(REPO, CARD, gh=_Routes(fail={step}))
+            assert blob is None and why, step
+
+    def test_the_cli_prints_path_sha_and_commit_and_always_exits_0(self, monkeypatch, capsys):
+        monkeypatch.setattr(proof_record, "_gh", _Routes())
+        assert proof_record.main(["blob", "--repo", REPO, "--card", CARD]) == 0
+        assert capsys.readouterr().out == f"{DOCS_RECORD}\t{BLOB}\t{BEFORE}\n"
+        monkeypatch.setattr(proof_record, "_gh", _Routes(head=None))
+        assert proof_record.main(["blob", "--repo", REPO, "--card", CARD]) == 0
+        out = capsys.readouterr()
+        assert out.out == "" and "no baseline" in out.err

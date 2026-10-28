@@ -1007,6 +1007,32 @@ jobs:
           if [ "$NAME_GUARD_LIVE" = "true" ]; then LIVE=true; fi
           echo "name-guard: installed — live=$LIVE"
 
+      # THE RECORD AS THE RUN FOUND IT (DRE-8259). The record FILE's blob on
+      # `agent/<CARD>-proof-record`, never the branch head: a resumed run
+      # always moves the head with its merge of main, and DRE-8162's run
+      # delivered only that merge and was reported as a record. The result
+      # step reads the blob again at the head and fails a run that left it
+      # unchanged. `proof_record.py blob` prints nothing on a first run (no
+      # branch) or a read that failed, so the outputs are empty and the result
+      # step reports as it did before. It never stops the run.
+      - name: Read the record as the run found it
+        id: record_baseline
+        if: '!inputs.shadow'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.worker.outputs.token }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          REPO: ${{ github.repository }}
+          CARD_DESCRIPTION: ${{ steps.card.outputs.description }}
+        run: |
+          BLOB=$(python3 .bureau-pipeline/scripts/proof_record.py blob --repo "$REPO" --card "$CARD")
+          {
+            echo "path=$(printf '%s' "$BLOB" | cut -f1)"
+            echo "sha=$(printf '%s' "$BLOB" | cut -f2)"
+            echo "commit=$(printf '%s' "$BLOB" | cut -f3)"
+          } >> "$GITHUB_OUTPUT"
+          echo "record baseline: ${BLOB:-none}"
+
       # ---- THE AGENT STEP, AND THE ONE REFUSAL IT IS RETRIED FOR (DRE-4108) ----
       # agent-task.yml's design, copied: three attempts, each gated on
       # `claude_rate_limit_retry.py decide`, which fires ONLY when the step
@@ -2199,6 +2225,14 @@ jobs:
       #      park, no replan, no label. The dispatcher's second-dispatch rule
       #      (DRE-5926) is the only thing that acts on a dead run.
       #
+      # Exit 1 has one exception (DRE-8259): a record pull request OPEN, no
+      # escalation, and the record file's blob at the head equal to the one
+      # `Read the record as the run found it` read before the agent. That run
+      # took no reading — DRE-8162's delivered only its merge of main — so it
+      # posts the record-unchanged receipt, makes no move, prints `proof
+      # result: record unchanged` and fails the job. A first run has no
+      # baseline and reports as exit 1.
+      #
       # The escalation is read AFTER the pull request, on purpose: a run that
       # meets a CEO-only press opens its record first (briefs/proof.md), so
       # exit 3 must not shadow the receipt of the pull request it opened — the
@@ -2228,6 +2262,10 @@ jobs:
           RECORD_BRANCH: agent/${{ github.event.client_payload.identifier }}-proof-record
           ESCALATION_FILE: /tmp/agent-escalation.txt
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          # The record as the run found it (DRE-8259), empty on a first run.
+          RECORD_BASELINE_PATH: ${{ steps.record_baseline.outputs.path }}
+          RECORD_BASELINE_SHA: ${{ steps.record_baseline.outputs.sha }}
+          RECORD_BASELINE_COMMIT: ${{ steps.record_baseline.outputs.commit }}
           BUREAU_SERVER_URL: ${{ github.server_url }}
           BUREAU_REPOSITORY: ${{ github.repository }}
           BUREAU_RUN_ID: ${{ github.run_id }}

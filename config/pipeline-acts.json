@@ -2273,6 +2273,14 @@
       "why": "A REPORT about the run, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the card stays in Hand-work, and the dispatcher's second-dispatch rule (DRE-5926) is the only thing that acts on a dead proof run. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
     },
     {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "🤖 proof run ended with its record unchanged",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof run's record pull request is open but the run left its record file byte for byte as it found it, so it took no reading; the dispatcher reads the run off the card and decides whether to dispatch again, and the run is red (DRE-8259).",
+      "why": "A REPORT about the run, the no-record receipt's sibling, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the In Review move a record makes is the one thing it withholds. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
+    },
+    {
       "file": ".github/workflows/groomer.yml",
       "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
       "step": "Judgement receipt — the model that answered",

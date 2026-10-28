@@ -64,6 +64,9 @@ or read the hold. Both now do, through this module:
 `shortfall` is the one judgment both halves make over a record. `gather` is the
 merge gate's feed: `python3 proof_record.py gather` writes the record the gate
 reads with `--proof-record-file`, the same shape as `stacked_prs.py gather`.
+`blob` is the proof run's (DRE-8259): `python3 proof_record.py blob` prints the
+record file's path, blob sha and branch head, read before the agent and again
+by the result step, so a run that left its record unchanged reads red.
 
 A LEAF, on purpose: `reconcile` reads `os.environ["REPO"]` when it is imported,
 and neither the merge gate's `Evaluate and merge` step nor linear-sync's
@@ -79,6 +82,7 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import re
 import subprocess  # nosec B404 — one fixed argv, `gh`, no shell
 import sys
@@ -89,6 +93,7 @@ from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import linear_ops  # noqa: E402 — the proof line's mark and tags, spelled once
+import plan_footprint  # noqa: E402 — ONE parse of a card's `**Files:**` line
 import proof_reach  # noqa: E402 — the cause words, spelled once
 import spoken_thread  # noqa: E402 — who said each comment, signature checked
 
@@ -796,6 +801,62 @@ def fetch(repo: str, files, ref: str, gh=None) -> Record:
         return Record(path, None, f"{path} could not be read at {ref}: {_one_line(exc)}")
 
 
+#: The record file as a run found it or left it (DRE-8259): its path, its
+#: blob's sha, and the record branch's head commit it was read at.
+Blob = namedtuple("Blob", "path sha commit")
+
+
+def _blob_path(repo: str, branch: str, description: str, gh) -> tuple:
+    """`(path, None)` for the record the branch's open pull request adds
+    (`find_record`, the file the gate and the body read), else the one `.md`
+    under `RECORD_DIRS` the card's `**Files:**` line names; `(None, why)`."""
+    prs = json.loads(gh(["pr", "list", "--repo", repo, "--head", branch,
+                         "--state", "open", "--json", "number"]) or "null")
+    if not isinstance(prs, list):
+        return None, f"the open pull requests of {branch} could not be read"
+    if prs:
+        view = json.loads(gh(["pr", "view", str(prs[0]["number"]), "--repo", repo,
+                              "--json", "files"]) or "null")
+        return find_record(view.get("files") if isinstance(view, dict) else None)
+    try:
+        named = plan_footprint.declared_files(description or "")
+    except plan_footprint.FootprintMissing:
+        return None, f"no open pull request of {branch} and no **Files:** line"
+    records = sorted(p for p in named if p.startswith(RECORD_DIRS) and p.endswith(".md"))
+    if len(records) != 1:
+        return None, (f"no open pull request of {branch}, and the **Files:** line names "
+                      f"{len(records)} records")
+    return records[0], None
+
+
+def record_blob(repo: str, card: str, description: str = "", gh=None) -> tuple:
+    """`(Blob, None)` for the record file on `agent/<card>-proof-record` at
+    the branch's head now, or `(None, why)` — no branch (a first run), no
+    record file, or a read that failed. Never raises: a run with no baseline
+    reports as it did before one existed, so nothing is called unchanged
+    without both reads in hand. The BLOB is what a caller compares: a resumed
+    run always moves the head with its merge of main (DRE-8162)."""
+    gh = gh or _gh
+    branch = f"agent/{card}-proof-record"
+    try:
+        ref = json.loads(gh(["api", f"repos/{repo}/git/ref/heads/{branch}"]) or "null")
+        commit = ref["object"]["sha"]
+    except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+        return None, f"{branch} could not be read: {_one_line(exc)}"
+    try:
+        path, why = _blob_path(repo, branch, description, gh)
+        if path is None:
+            return None, why
+        doc = json.loads(gh(["api", f"repos/{repo}/contents/{quote(path)}?ref={commit}"])
+                         or "null")
+        sha = doc["sha"]
+    except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as exc:
+        return None, f"the record of {branch} could not be read at {commit}: {_one_line(exc)}"
+    if not isinstance(sha, str) or not sha:
+        return None, f"{path} came back without its blob sha"
+    return Blob(path, sha, commit), None
+
+
 def shortfall(record: Record, verdict=None, others=()) -> str | None:
     """Why this record does not prove its card, or None when every judged row
     is met or accepted, or every unmet row is a gap row (`all_unmet_gaps`,
@@ -877,9 +938,23 @@ def _cmd_gather(args) -> int:
     return 0
 
 
+def _cmd_blob(args) -> int:
+    blob, why = record_blob(args.repo, args.card, os.environ.get("CARD_DESCRIPTION", ""))
+    if blob is None:
+        print(f"proof_record: no baseline — {_one_line(why)}", file=sys.stderr)
+    else:
+        print("\t".join(blob))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
+    cmd = sub.add_parser("blob", help="print the record file's path, blob sha and commit "
+                                      "on the card's record branch (DRE-8259)")
+    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--card", required=True)
+    cmd.set_defaults(fn=_cmd_blob)
     cmd = sub.add_parser("gather", help="write the merge gate's proof record")
     cmd.add_argument("--repo", required=True)
     cmd.add_argument("--pr-view-file", required=True,
