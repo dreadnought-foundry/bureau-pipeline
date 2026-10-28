@@ -2158,8 +2158,11 @@ jobs:
           BUREAU_SERVER_URL: ${{ github.server_url }}
           BUREAU_REPOSITORY: ${{ github.repository }}
           BUREAU_RUN_ID: ${{ github.run_id }}
-          # The name guard's switch, which the comments this script posts are
-          # held to (DRE-8168).
+          # The name guard's switch, carried here for the escalation comment
+          # this script posts (DRE-8168). Nothing in the script reads it yet:
+          # the reporter goes through the name seam under DRE-8170, which
+          # leaves this workflow to the wiring card. Until then the comment
+          # is not guarded.
           NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: bash .bureau-pipeline/scripts/report_proof_result.sh
 

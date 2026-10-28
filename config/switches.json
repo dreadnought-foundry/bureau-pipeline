@@ -32,7 +32,7 @@
       "name": "NAME_GUARD_LIVE",
       "reader": ".github/workflows/proof-task.yml",
       "step": "Install the name guard",
-      "means": "The proof run's pushes, the shadow push, the proof run's comments and the critic's comment refuse a person's name from the live roster, instead of printing what they would refuse."
+      "means": "Every push the proof run makes (the agent's, the push rescue's and the shadow push) and the record pull request's body refresh refuse a person's name from the live roster, instead of printing what they would refuse."
     }
   ]
 }
