@@ -755,17 +755,19 @@ def test_none_of_the_eleven_reads_a_choice_off_the_frozen_config():
     assert not any(found.values()), found
 
 
-def test_only_the_rename_pin_names_the_defaults_literal():
+def test_only_the_selectors_own_tests_name_the_defaults_literal():
     """Renaming the literal to `CODE_DEFAULTS` (DRE-6982) touched no test of
-    these but the one assertion that `code_defaults()` is the normalized
-    literal."""
+    these but tests/test_model_fallback.py: its assertion that
+    `code_defaults()` is the normalized literal, and the tests that hold the
+    literal to the file's code-side facts. Every other one reads the defaults
+    through `code_defaults()`."""
     named = {rel: literal_mentions(_source(rel))
              for rel in (*HOME_DOCUMENT_TREES, "tests/test_model_effort.py")}
     pin = named.pop("tests/test_model_fallback.py")
     assert not any(named.values()), named
-    assert len(pin) == 1, pin
-    line = _source("tests/test_model_fallback.py").splitlines()[pin[0] - 1]
-    assert "code_defaults()" in line and "_normalize_config" in line, line
+    lines = _source("tests/test_model_fallback.py").splitlines()
+    assert any("code_defaults()" in lines[n - 1] and "_normalize_config" in lines[n - 1]
+               for n in pin), pin
 
 
 def test_the_choice_scan_finds_each_way_a_choice_is_read_off_the_frozen_file():

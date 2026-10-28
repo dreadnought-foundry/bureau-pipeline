@@ -847,8 +847,8 @@ def code_side_drift(literal: dict, rules: dict, raw: dict) -> list[str]:
 
 class CodeDefaultsTest(unittest.TestCase):
     """`CODE_DEFAULTS` is the hand-written document the fleet runs on when
-    the home cannot be read (DRE-6982). It was the generated
-    `_FALLBACK_MODEL_CONFIG`; the generator and its markers are gone."""
+    the home cannot be read (DRE-6982). It was a generated literal; the
+    generator and its markers are gone."""
 
     SOURCE = (ROOT / "scripts" / "model_fallback.py").read_text()
 
