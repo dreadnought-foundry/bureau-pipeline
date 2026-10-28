@@ -130,8 +130,9 @@ killed mid-review writes no execution file, so qa-review posts its neutral
 marker into the same log, and on three of portico's runs that made
 `critic_infra_crash` win and the medic told the card "an infrastructure
 rate-limit … deliberately NOT retrying". The kill keeps `infra_crash=false`,
-which is deliberate — a first kill on a LIGHT runner is entitled to the medic's
-one automatic retry. Every other case is refused by `medic_retry`, not here.
+which is deliberate — since DRE-8239 a run's first kill is entitled to the
+medic's one automatic retry on any runner. A second kill in the same run, and
+any attempt 3 or later, is refused by `medic_retry`, not here.
 
 SEVENTH CLASS — A STANDING CARD DEFECT (DRE-6467). The sweep goes red on
 purpose: `reconcile.py` keeps a third ledger, `_stale_defects`, for "nothing
