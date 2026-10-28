@@ -614,6 +614,275 @@ def test_a_lane_relation_read_that_fails_leaves_every_marked_card_unread(
     assert D7251 in out and "503" in out
 
 
+# --------------------------------------------------------------------------- #
+# DRE-8250: an epic and a duplicate in the fix set — DRE-7430 on 10-28         #
+# --------------------------------------------------------------------------- #
+
+#: The newest receipt: the run DRE-8032's shipping re-armed on 10-26.
+REARMED_7430 = run_receipt("2026-10-26T21:55:23Z", "2026-10-26 14:51 PT",
+                           "re-run after DRE-8032 shipped", "re-armed")
+#: That run amended the record; the critic approved the new head and the gate
+#: declined it, and the budget's hold came back.
+HEAD_1028 = "c4d5e6f" + "0" * 33
+THREAD_1028 = SPENT_7430 + [
+    REARMED_7430,
+    at("⏳ 5/5 amended", "2026-10-26T22:40:00Z"),
+    budget_hold("2026-10-26T23:46:00Z",
+                f"{GATE_HELD[1]} — the re-armed run of 2026-10-26 14:51 PT was its "
+                "event's one run"),
+]
+SPEED_ROW = ("The Desk loads in under two seconds",
+             "Not met. 9 s at 02:31 PT. fix: DRE-8158")
+#: Related before the newest receipt (adding nothing), then the two after it.
+RELATIONS_1028 = RELATIONS_7430 + [relation("DRE-8158", "2026-10-27T18:35:45Z"),
+                                   relation("DRE-8215", "2026-10-28T01:03:44Z")]
+BUILD_8158 = ("DRE-8159", "DRE-8160", "DRE-8161")
+PROOF_8158 = "DRE-8162"
+
+
+def child(ident: str, state_name: str = "Done", *, title: str | None = None,
+          labels=("repo:agent-bureau", "agent:engineer")) -> dict:
+    """An epic's child as the fix card's read carries it — the shape
+    `epic_cap.buildable()` reads."""
+    return {"identifier": ident, "title": title or f"Desk speed: step {ident}",
+            "state": {"name": state_name},
+            "labels": {"nodes": [{"name": n} for n in labels],
+                       "pageInfo": {"hasNextPage": False}},
+            "children": {"nodes": []}}
+
+
+def epic(ident: str, children: list, state_name: str = "Done") -> dict:
+    return {"identifier": ident, "title": "Desk speed: the Desk under two seconds",
+            "state": {"name": state_name},
+            "labels": {"nodes": [{"name": "repo:agent-bureau"}, {"name": "agent:planner"}]},
+            "children": {"nodes": children, "pageInfo": {"hasNextPage": False}},
+            "relations": {"nodes": []}}
+
+
+def duplicate(ident: str, of: str | None) -> dict:
+    rels = [{"type": "duplicate", "relatedIssue": {"identifier": of}}] if of else []
+    return {**fix(ident, "agent-bureau", "Duplicate"), "children": {"nodes": []},
+            "relations": {"nodes": [{"type": "related",
+                                     "relatedIssue": {"identifier": "DRE-7425"}}, *rels]}}
+
+
+def epic_8158(**states) -> dict:
+    """DRE-8158 on 10-28: its three build cards Done, its PROOF In Review."""
+    kids = [child(c, states.get(c, "Done")) for c in BUILD_8158]
+    kids.append(child(PROOF_8158, states.get(PROOF_8158, "In Review"),
+                      title="PROOF: the Desk loads in under two seconds",
+                      labels=("repo:agent-bureau", "agent:proof")))
+    return epic("DRE-8158", kids)
+
+
+CARDS_1028 = {"DRE-8158": epic_8158(), "DRE-8215": fix("DRE-8215", "agent-bureau"),
+              "DRE-8032": fix("DRE-8032", "agent-bureau"),
+              "DRE-7425": fix("DRE-7425", "agent-bureau")}
+PRS_1028 = {**{(AB_REPO, c): merged(4200 + i, f"{c[-4:]}aaa" + "0" * 33, c)
+               for i, c in enumerate(BUILD_8158)},
+            (AB_REPO, "DRE-8215"): merged(4248, "7e95e69b0" + "0" * 31, "DRE-8215",
+                                          "2026-10-28T15:02:11Z")}
+CONSOLE_1028 = ("ready — console: newest agent-bureau-console-v1.6.641 carries #4248 "
+                "(7e95e69) for DRE-8215")
+#: agent-bureau Reconcile at 17:06:00Z on 10-28, an hour after the release.
+NOW_1028 = _ts("2026-10-28T17:06:00Z")
+REARM_1028 = "re-run after DRE-8158, DRE-8215 shipped"
+
+
+def _pass_1028(monkeypatch, *, cards=None, prs=None, text=None, thread=None,
+               relations=None, head=HEAD_1028, declined="2026-10-26T23:45:10Z",
+               now=NOW_1028):
+    thread = THREAD_1028 if thread is None else thread
+    relations = RELATIONS_1028 if relations is None else relations
+    board = Relations(review=[_review(D7430, thread, relations)],
+                      threads={D7430: thread},
+                      fixes=CARDS_1028 if cards is None else cards,
+                      relations={D7430: relations})
+    pr = record_pr(D7430, PR_7430, head, opened="2026-10-23T15:35:00Z",
+                   approved="2026-10-26T23:40:00Z", declined=declined)
+    h = Fleet(monkeypatch, board, prs=PRS_1028 if prs is None else prs,
+              releases={AB_REPO: ("ready", [CONSOLE_1028])}, records={D7430: pr},
+              texts={PR_7430: record_text(D7430, MET_ROW, SPEED_ROW)
+                     if text is None else text},
+              states={D7430: state("finished", dispatches=1,
+                                   record={"number": PR_7430, "state": "open"})})
+    tally = h.sweep(now=now)
+    return h, tally
+
+
+def test_dre_7430_replayed_on_10_28_an_epic_and_its_fix_re_arm_one_run(monkeypatch, capsys):
+    """On `main` this pass printed `the fix DRE-8158's pull request is not
+    merged` and dispatched nothing: DRE-8158 is an epic and has no pull
+    request of its own. Built out, its three build cards merged and live, and
+    DRE-8215 merged and live: one run, naming both."""
+    h, tally = _pass_1028(monkeypatch)
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [(D7430, AB_REPO, REARM_1028, "proof-execute")], lines
+    assert tally.dispatched == 1
+    assert _receipt_reason(h) == f"{REARM_1028} (re-armed)"
+    # The epic's build cards and the second fix, each read for its pull
+    # request; the epic itself never is, and both release on one reading.
+    assert sorted(h.pr_reads) == sorted((AB_REPO, c) for c in (*BUILD_8158, "DRE-8215"))
+    assert h.release_calls == [(AB_REPO, [*BUILD_8158, "DRE-8215"])]
+    # One Linear read per fix card: the children ride the epic's own read.
+    assert [r for r in h.board.reads if r[0] == "fix_card"] == [
+        ("fix_card", "DRE-8158"), ("fix_card", "DRE-8215")]
+    assert any("DRE-8158 is an epic" in line and all(c in line for c in BUILD_8158)
+               for line in lines), lines
+
+
+def test_an_epic_whose_only_open_child_is_its_proof_is_not_held_by_it(monkeypatch, capsys):
+    """DRE-8162, the epic's own PROOF, is In Review: follow-on work, as the
+    sweep reads it (DRE-7774). It holds nothing and is never read for a pull
+    request — and the line names it as what carries on."""
+    h, _ = _pass_1028(monkeypatch)
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired and (AB_REPO, PROOF_8158) not in h.pr_reads
+    assert not any("not built out" in line for line in lines), lines
+    assert any("DRE-8158 is an epic" in line and PROOF_8158 in line for line in lines), lines
+
+
+@pytest.mark.parametrize("held", BUILD_8158)
+def test_an_epic_with_a_build_card_not_merged_re_arms_nothing_and_names_both(
+        monkeypatch, capsys, held):
+    prs = {**PRS_1028, (AB_REPO, held): {"number": 4210, "state": "OPEN",
+                                          "headRefName": f"agent/{held}-fix"}}
+    h, tally = _pass_1028(monkeypatch, prs=prs)
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [] and h.posted == [] and tally.held == 1
+    assert h.release_calls == []
+    assert any(f"the fix DRE-8158 is an epic whose build card {held}'s pull request "
+               "is not merged" in line for line in lines), lines
+
+
+def test_an_epic_with_a_build_card_open_is_not_built_out(monkeypatch, capsys):
+    cards = {**CARDS_1028, "DRE-8158": epic_8158(**{"DRE-8160": "In Progress"})}
+    h, tally = _pass_1028(monkeypatch, cards=cards)
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [] and tally.held == 1
+    assert not any(ident in BUILD_8158 for _, ident in h.pr_reads)
+    assert any("the fix DRE-8158 is an epic not built out" in line and "DRE-8160" in line
+               for line in lines), lines
+
+
+def test_an_epic_whose_children_were_not_read_to_the_end_is_not_built_out(
+        monkeypatch, capsys):
+    truncated = epic_8158()
+    truncated["children"]["pageInfo"] = {"hasNextPage": True}
+    h, _ = _pass_1028(monkeypatch, cards={**CARDS_1028, "DRE-8158": truncated})
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == []
+    assert any("DRE-8158 is an epic not built out" in line for line in lines), lines
+
+
+def test_an_epic_s_canceled_build_card_is_nothing_to_ship(monkeypatch, capsys):
+    """A build card Canceled is closed with nothing merged, as the sweep
+    reads it: it holds nothing, and no pull request is read for it."""
+    cards = {**CARDS_1028, "DRE-8158": epic_8158(**{"DRE-8161": "Canceled"})}
+    prs = {k: v for k, v in PRS_1028.items() if k != (AB_REPO, "DRE-8161")}
+    h, _ = _pass_1028(monkeypatch, cards=cards, prs=prs)
+    assert h.fired == [(D7430, AB_REPO, REARM_1028, "proof-execute")], _lines(capsys)
+    assert (AB_REPO, "DRE-8161") not in h.pr_reads
+    assert h.release_calls == [(AB_REPO, ["DRE-8159", "DRE-8160", "DRE-8215"])]
+
+
+def test_an_epic_not_done_nor_in_progress_re_arms_nothing(monkeypatch, capsys):
+    cards = {**CARDS_1028, "DRE-8158": {**epic_8158(), "state": {"name": "Canceled"}}}
+    h, _ = _pass_1028(monkeypatch, cards=cards)
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [] and h.pr_reads == []
+    assert any("DRE-8158 is an epic" in line and "Canceled" in line for line in lines), lines
+
+
+def test_an_epic_in_the_set_re_arms_once(monkeypatch, capsys):
+    """The run DRE-8158 and DRE-8215 re-armed amended the record and the gate
+    declined the new head. Both relations are now older than the newest
+    receipt, and the record still names DRE-8158: a set re-arms once."""
+    rearmed = run_receipt("2026-10-28T17:06:30Z", "2026-10-28 10:06 PT", REARM_1028,
+                          "re-armed")
+    thread = THREAD_1028 + [rearmed, at("⏳ 5/5 amended", "2026-10-28T17:50:00Z")]
+    h, tally = _pass_1028(monkeypatch, thread=thread, head="d9e8f7a" + "0" * 33,
+                          declined="2026-10-28T18:00:00Z", now=_ts("2026-10-28T18:21:00Z"))
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [] and tally.held == 1
+    assert not any(r[0] == "fix_card" for r in h.board.reads)
+    assert any("DRE-8158 already re-armed" in line and "a set re-arms once" in line
+               for line in lines), lines
+
+
+DUP_ROW = ("The Desk loads in under two seconds",
+           "Not met. 9 s at 02:31 PT. fix: DRE-8214")
+
+
+def test_a_duplicate_is_read_as_its_canonical_card_and_re_arms(monkeypatch, capsys):
+    cards = {**CARDS_1028, "DRE-8214": duplicate("DRE-8214", "DRE-8215")}
+    h, _ = _pass_1028(monkeypatch, cards=cards, relations=RELATIONS_7430,
+                      text=record_text(D7430, MET_ROW, DUP_ROW))
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [(D7430, AB_REPO, "re-run after DRE-8214 shipped",
+                        "proof-execute")], lines
+    assert h.pr_reads == [(AB_REPO, "DRE-8215")]
+    assert h.release_calls == [(AB_REPO, ["DRE-8215"])]
+    assert [r for r in h.board.reads if r[0] == "fix_card"] == [
+        ("fix_card", "DRE-8214"), ("fix_card", "DRE-8215")]
+    assert any("DRE-8214" in line and "duplicate" in line and "DRE-8215" in line
+               for line in lines), lines
+
+
+def test_a_duplicate_whose_canonical_card_is_not_merged_names_both(monkeypatch, capsys):
+    cards = {**CARDS_1028, "DRE-8214": duplicate("DRE-8214", "DRE-8215")}
+    prs = {(AB_REPO, "DRE-8215"): {"number": 4248, "state": "OPEN",
+                                   "headRefName": "agent/DRE-8215-fix"}}
+    h, tally = _pass_1028(monkeypatch, cards=cards, prs=prs, relations=RELATIONS_7430,
+                          text=record_text(D7430, MET_ROW, DUP_ROW))
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [] and tally.held == 1 and h.release_calls == []
+    assert any("the fix DRE-8214 is a duplicate whose canonical card DRE-8215's pull "
+               "request is not merged" in line for line in lines), lines
+
+
+@pytest.mark.parametrize("cards, why", [
+    ({"DRE-8214": duplicate("DRE-8214", None)}, "no duplicate relation"),
+    ({"DRE-8214": duplicate("DRE-8214", "DRE-8215"),
+      "DRE-8215": duplicate("DRE-8215", "DRE-8032")}, "read one hop"),
+    ({"DRE-8214": duplicate("DRE-8214", "DRE-8299")}, "could not be read"),
+])
+def test_a_duplicate_with_no_readable_canonical_card_refuses_and_names_it(
+        monkeypatch, capsys, cards, why):
+    h, tally = _pass_1028(monkeypatch, cards={**CARDS_1028, **cards},
+                          relations=RELATIONS_7430,
+                          text=record_text(D7430, MET_ROW, DUP_ROW))
+    lines = _about(_lines(capsys), D7430)
+    assert h.fired == [] and tally.held == 1 and h.pr_reads == []
+    assert any("the fix DRE-8214" in line and why in line for line in lines), lines
+    assert ("fix_card", "DRE-8032") not in h.board.reads
+
+
+def test_the_fix_card_read_carries_children_and_duplicate_relations_in_one_request(
+        monkeypatch):
+    calls: list = []
+
+    def gql(query, variables=None):
+        calls.append(query)
+        return {"issue": epic_8158()}
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    got = proof_dispatch.LinearReads().fix_card("DRE-8158")
+    assert got["identifier"] == "DRE-8158" and len(calls) == 1
+    query = " ".join(calls[0].split())
+    assert "children(" in query and "hasNextPage" in query and "labels" in query
+    assert "relations(" in query and "relatedIssue { identifier }" in query
+    assert "title" in query
+
+
+def test_the_docstring_says_an_epic_and_a_duplicate_are_read_as_the_sweep_reads_them():
+    doc = " ".join(proof_dispatch.__doc__.split())
+    section = doc.split("## The re-arm, once the budget is spent (DRE-7740)")[1].split("## ")[0]
+    assert "DRE-8250" in section and "built out" in section
+    assert "`epic_cap.buildable()`" in section and "Duplicate" in section
+    assert "canonical" in section
+
+
 def test_the_docstring_says_a_blocker_is_a_named_fix_read_in_its_own_repo():
     doc = " ".join(proof_dispatch.__doc__.split())
     section = doc.split("## The re-arm, once the budget is spent (DRE-7740)")[1].split("## ")[0]
