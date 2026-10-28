@@ -429,17 +429,15 @@ def main(argv: list[str]) -> int:
         )
     elif kind == "out_of_memory":
         # The plain-English line the 2026-09-24 operator did not have: WHICH
-        # machine, and what size it is — because that is what decides whether
-        # running it again can help.
+        # machine, and what size it is.
         kill = out_of_memory.from_log(log_text)
         print(
             f"medic classify: OUT OF MEMORY — {out_of_memory.describe(kill)}. "
             f"Not a code failure, not a credential failure, and not the "
             f"watchdog (it stops a silent run with exit "
             f"{stream_watchdog.STALL_EXIT} and writes a line saying so). A "
-            f"first kill on a light runner keeps the medic's one retry; a "
-            f"heavier or GitHub-hosted machine gets none, because the same "
-            f"work on the same size of machine dies the same way.",
+            f"run's first kill keeps the medic's one retry on any runner; "
+            f"its second gets none (DRE-8239).",
             file=sys.stderr,
         )
     elif environment is not None:
