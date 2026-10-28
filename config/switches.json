@@ -27,6 +27,12 @@
       "reader": ".github/workflows/triage-repair.yml",
       "step": "Decide dry run",
       "means": "The scheduled Triage Repair run claims parked cards and has the planner repair them, instead of printing what it would repair."
+    },
+    {
+      "name": "NAME_GUARD_LIVE",
+      "reader": ".github/workflows/qa-review.yml",
+      "step": "Post verdict or neutral status",
+      "means": "The critic's comment goes through the name redaction seam and guard before it posts, and a comment the guard still refuses is held behind a neutral status, instead of posting as composed."
     }
   ]
 }

@@ -21,6 +21,7 @@ This page is the version of that file a person reads.
 | `GREEN_LIGHT_REPLY_LIVE` | `reconcile.yml`, `Reply to the CEO's Green Light comments` | A comment the CEO leaves on an epic waiting in Green Light sends the plan back for a review. |
 | `HYGIENE_LIVE` | `hygiene.yml`, `Decide dry run` | The scheduled hygiene run writes to the board. |
 | `TRIAGE_REPAIR_LIVE` | `triage-repair.yml`, `Decide dry run` | The scheduled Triage Repair run claims parked cards and has the planner repair them. |
+| `NAME_GUARD_LIVE` | `qa-review.yml`, `Post verdict or neutral status` | The critic's comment goes through the name redaction seam and guard before it posts, and a comment the guard still refuses is held behind a neutral status. |
 
 `config/switches.json` is the source. If this table and the file disagree, the
 file is right.
