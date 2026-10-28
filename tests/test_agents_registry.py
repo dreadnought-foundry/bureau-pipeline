@@ -316,11 +316,12 @@ class AgentsRegistryTest(unittest.TestCase):
     def test_the_proof_runner_holds_the_engineers_credentials_and_the_read_token(self):
         """DRE-5924: the proof run holds the worker App token, the read-only
         App token, the Linear keys and the model credential — never a
-        person's key, and nothing the build agent does not already hold
-        beyond `GH_READ_TOKEN`. Read off the agent step, like every
-        credential check here. The one build credential it does not hold is
-        the plant probe (DRE-7513), a throwaway handed to the build agent
-        alone so a planted echo proves the build log scrub."""
+        person's key, and nothing the build agent does not already hold —
+        the build agent holds `GH_READ_TOKEN` too since DRE-8240, and the
+        union below keeps that true either way. Read off the agent step, like
+        every credential check here. The one build credential it does not
+        hold is the plant probe (DRE-7513), a throwaway handed to the build
+        agent alone so a planted echo proves the build log scrub."""
         roster = {a["name"]: a for a in load()}
         self.assertIn("proof", roster)
         proof = roster["proof"]
