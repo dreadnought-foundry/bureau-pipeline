@@ -36,6 +36,7 @@ UPLOAD_TRUSTED_REUSABLES = (
     "plan.yml",
     "medic.yml",
     "red-main-repair.yml",
+    "proof-task.yml",
 )
 
 
@@ -84,6 +85,8 @@ class SelfStubsGrantIdTokenTest(unittest.TestCase):
         self.assertEqual(callers.get("pr-review.yml"), ["qa-review.yml"])
         self.assertEqual(
             callers.get("self-red-main-repair.yml"), ["red-main-repair.yml"])
+        self.assertEqual(callers.get("self-proof-task.yml"), ["proof-task.yml"])
+        self.assertEqual(callers.get("self-proof-shadow.yml"), ["proof-task.yml"])
         self.assertEqual(
             sorted(callers.get("shadow-replay.yml") or []), ["qa-review.yml", "verify.yml"])
         self.assertEqual(
