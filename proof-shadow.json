@@ -1,0 +1,7 @@
+{
+  "card": "DRE-7827",
+  "model": "claude-sonnet-5-5",
+  "run_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/40663790658",
+  "dispatched_at": "2026-10-28T09:22:47Z",
+  "record_path": "docs/groomer-memory-proof.md"
+}
