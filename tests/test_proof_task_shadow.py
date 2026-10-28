@@ -161,6 +161,8 @@ PRE_CHANGE_STEPS = [
     ('Set the git identity every proof run commits as', None),
     # DRE-8168: the name guard, written as a pre-push hook before the agent.
     ('Install the name guard', None),
+    # DRE-8259: the record file's blob as the run found it, read before the agent.
+    ('Read the record as the run found it', None),
     ('Implement proof card', "steps.install_claude.outcome == 'success'"),
     ('Retry decision (attempt 1)', 'always()'),
     ('Back off before the agent retry (attempt 1)', "always() && steps.install_claude.outcome == 'success' && steps.retry1.outputs.retry == 'true'"),
