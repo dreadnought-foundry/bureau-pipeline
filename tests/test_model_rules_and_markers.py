@@ -88,12 +88,14 @@ def test_the_constants_are_todays_values_and_keep_their_type():
 def test_rule_3_and_rule_10_keep_their_words():
     # Which group an agent is in is a choice: the frozen document's agents,
     # one of them moved, in place of the file's own (DRE-8018).
+    # The frozen file carries no choice (DRE-6983), so each is judged as a
+    # whole config: the file's facts beside the defaults' choices.
     home = model_fixture.fixture_home()
-    critic = model_fixture.fixture_config()
+    critic = mf._normalize_config(model_fixture.fixture_config())
     critic["agents"] = model_fixture.move_agent(home, "critic", "workhorse")["agents"]
     assert RULE_3_CRITIC in mf.policy_errors(critic)
 
-    engineer = model_fixture.fixture_config()
+    engineer = mf._normalize_config(model_fixture.fixture_config())
     engineer["agents"] = model_fixture.move_agent(home, "engineer", "judgement")["agents"]
     assert RULE_10_ENGINEER in mf.policy_errors(engineer)
 
@@ -105,8 +107,8 @@ _PROBE = textwrap.dedent("""
     tree = Path(sys.argv[1])
     sys.path.insert(0, str(tree / "scripts"))
     import model_fallback as mf
-    cfg = yaml.safe_load((tree / "config" / "models.yaml").read_text())
-    cfg.get("agents", {})[sys.argv[2]] = sys.argv[3]
+    cfg = mf._normalize_config(yaml.safe_load((tree / "config" / "models.yaml").read_text()))
+    cfg["agents"][sys.argv[2]] = sys.argv[3]
     print(json.dumps({
         "backstop": list(mf.BACKSTOP_ROLES),
         "backstop_is_tuple": isinstance(mf.BACKSTOP_ROLES, tuple),
@@ -119,14 +121,23 @@ _PROBE = textwrap.dedent("""
 
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory):
-    """A tree on the frozen fixture, whose models.yaml has no `rules:` block."""
+    """A tree on the frozen fixture; `_with_rules` writes its models.yaml."""
     return model_fixture.fixture_tree(tmp_path_factory.mktemp("rules") / "tree",
                                       regenerate=False)
 
 
+def _without_rules_block(text: str) -> str:
+    """`text` with its top-level `rules:` block taken out. The frozen file
+    carries one since its re-freeze (DRE-6983)."""
+    raw = yaml.safe_load(text)
+    raw.pop("rules", None)
+    return yaml.safe_dump(raw, sort_keys=False)
+
+
 def _with_rules(tree: Path, block: str | None) -> None:
-    """The frozen models.yaml, with `block` appended when one is given."""
-    text = model_fixture.fixture_text()
+    """The frozen models.yaml with no `rules:` block, and `block` appended
+    when one is given."""
+    text = _without_rules_block(model_fixture.fixture_text())
     if block is not None:
         text = text.rstrip("\n") + "\n\n" + textwrap.dedent(block).strip() + "\n"
     (tree / "config" / "models.yaml").write_text(text)
@@ -143,8 +154,11 @@ def _probe(tree: Path, agent: str = "critic", group: str = "advisory") -> dict:
     return {**json.loads(proc.stdout), "stderr": proc.stderr}
 
 
-def test_the_frozen_fixture_has_no_rules_block():
-    assert "rules" not in model_fixture.fixture_config()
+def test_the_tree_helper_writes_a_file_with_no_rules_block(tree):
+    # The frozen file has the block; a tree written with none has none.
+    assert "rules" in model_fixture.fixture_config()
+    _with_rules(tree, None)
+    assert "rules" not in yaml.safe_load((tree / "config" / "models.yaml").read_text())
 
 
 def test_a_tree_with_no_rules_block_reads_todays_values(tree):
@@ -301,7 +315,7 @@ _IMPORT_COUNT = textwrap.dedent("""
     sys.setprofile(profile)
     import model_fallback as mf
     at_import = list(callers)
-    raw = yaml.safe_load((Path(sys.argv[1]).parent / "config" / "models.yaml").read_text())
+    raw = mf.code_defaults()
     raw["ladders"]["workhorse"].append(sys.argv[2])
     errors = mf.policy_errors(raw)
     sys.setprofile(None)

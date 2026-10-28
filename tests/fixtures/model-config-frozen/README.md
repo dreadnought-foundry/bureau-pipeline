@@ -1,19 +1,29 @@
 # The frozen model files (DRE-6859)
 
-`models.yaml`, `model-prices.yaml` and `agents.yaml` here are byte-for-byte
-copies of `config/models.yaml`, `config/model-prices.yaml` and `agents.yaml` as
-they stood on `main` at:
+`models.yaml` and `agents.yaml` here are byte-for-byte copies of
+`config/models.yaml` and `agents.yaml` as they stood on DRE-6983's branch,
+re-frozen once the choices left them:
 
-- commit: `1652714673c14b5af0ffcaf85abe390ef6664abe`
-- date: 2026-10-11
+- commit: `daf3d5ef063ec0431b4d38b6813a694cdf83609a`
+- date: 2026-10-28
 
-That commit is after DRE-6833 merged, so the frozen `models.yaml` carries
-`session_agents`. `home.json` beside them is the same frozen choices written
-as a home document (DRE-6972, the home contract on DRE-6939), with
-`written_by: operator` and the `written_at` of that date (Rule 3). Every test
-reaches these files through `tests/model_fixture.py` — never by spelling this
-directory's name — and that module's `fixture_tree` copies a throwaway tree
-from them with today's `scripts/`, and never regenerates it (Rule 4).
+They carry no choice — no `kinds`, `ladders`, `default_ladder`, `agents`,
+`ungrouped` or `projects`, no `model:` or `kind:` line, and no generated
+region — only the code-side facts (`session_agents`, `about`, `rules`,
+`review_separation`, `effort`, `discovery`, `retired`, `excluded`).
+
+`model-prices.yaml` and `home.json` are still the copies frozen on `main` at:
+
+- choices commit: `1652714673c14b5af0ffcaf85abe390ef6664abe`
+- choices date: 2026-10-11
+
+`home.json` is the frozen choices of that commit written as a home document
+(DRE-6972, the home contract on DRE-6939), with `written_by: operator` and the
+`written_at` of that date (Rule 3); since DRE-6983 it is where the frozen
+choices are, and the only place. Every test reaches these files through
+`tests/model_fixture.py` — never by spelling this directory's name — and that
+module's `fixture_tree` copies a throwaway tree from them with today's
+`scripts/`, and never regenerates it (Rule 4).
 
 ## Rule 1: what a test may read the model files for
 
@@ -30,8 +40,8 @@ console save changes every one of them and would turn a rule test red.
 The fixture pairs frozen data with today's code, so a change to the selector,
 the schema or the policy that makes the frozen files fail `policy_errors`, or
 `home.json` fail `model_home.py check`, re-freezes the fixture in the same pull
-request. Copy the three files again from that branch, rewrite the sha and the
-date above, and nothing else moves, because every test reads the fixture
+request. Copy the files again from that branch, rewrite the sha and the date
+above, and nothing else moves, because every test reads the fixture
 through `tests/model_fixture.py` and derives every id from it. A schema
 addition today's code tolerates (a missing optional key) needs no re-freeze. The directory is named for what it is rather than for a date, so a
 re-freeze overwrites it in place and renames nothing.
@@ -51,13 +61,13 @@ literal the generator of that day had regenerated from the frozen
 `models.yaml`, with `written_at` then fixed to the date above. It is never
 compared with what `render-defaults` prints now: that stamps the moment it
 runs, and renders the live defaults in the code, `CODE_DEFAULTS`, which are
-not the frozen choices. What pins it is the frozen files: a test compares its
-groups, agents and projects with the frozen `models.yaml` alone, and
-`model_home.py check` accepts it inside a fixture tree. No generator is left
-to put the frozen choices in a tree's literal (DRE-6982), so when
-`render-defaults` changes shape or the three files are re-frozen, the
-document is rewritten by hand from the frozen files, in the shape
-`render-defaults` prints, and the same two checks hold it.
+not the frozen choices. What pins it is the choices commit above: its groups,
+agents and projects are that commit's, and `model_home.py check` accepts it
+inside a fixture tree. No generator is left to put the frozen choices in a
+tree's literal (DRE-6982), and since DRE-6983 the frozen files carry none to
+compare it with, so when `render-defaults` changes shape the document is
+rewritten by hand from the frozen files of the choices commit, in the shape
+`render-defaults` prints, and the same check holds it.
 
 ## Rule 4: how a tree is built
 
@@ -75,5 +85,5 @@ files. The planner's path (`PLANNER_PATH`, DRE-6990) and the rest of the model
 tests (`HOME_DOCUMENT_TREES`, DRE-8018), both in
 `tests/test_model_fixture.py`, are held to this: every tree they build passes
 `regenerate=False`, none names the generator, and none reads a choice off the
-frozen `models.yaml` — they read it off `home.json`, or off a tree's own
-`code_defaults()` when no home is read.
+frozen `models.yaml`, which carries none — they read it off `home.json`, or
+off a tree's own `code_defaults()` when no home is read.

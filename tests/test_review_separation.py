@@ -123,10 +123,6 @@ def _rung_ids(rungs) -> list:
     return [r["model"] if isinstance(r, dict) else r for r in (rungs or [])]
 
 
-def _ladder(cfg, kind) -> list:
-    return _rung_ids(cfg["ladders"][cfg["kinds"][kind]["ladder"]])
-
-
 def _successor(model: str) -> str:
     """The same-family id one version above `model`."""
     head, _, version = model.rpartition("-")
@@ -196,16 +192,11 @@ def _copy_tree(tmp: Path) -> Path:
     return model_fixture.fixture_tree(tmp / "tree", regenerate=False)
 
 
-def _choices(cfg: dict) -> dict:
-    norm = mf._normalize_config(cfg)
-    return {key: norm[key] for key in mf._CHOICE_KEYS}
-
-
 def _write_code_side(tree: Path, cfg: dict) -> None:
-    """`cfg` as `tree`'s `config/models.yaml` — refused unless its choices are
-    the frozen file's, so only a code-side fact can change this way. A choice
-    is changed on a document."""
-    assert _choices(cfg) == _choices(_fixture()), "a choice is changed on a document"
+    """`cfg` as `tree`'s `config/models.yaml` — refused when it carries a
+    choice, as the file never does (DRE-6983), so only a code-side fact can
+    change this way. A choice is changed on a document."""
+    assert not set(cfg) & set(mf.FILE_CHOICE_KEYS), "a choice is changed on a document"
     (tree / "config" / "models.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
 
 
@@ -314,15 +305,16 @@ class TheFixtureHoldsTheOverlapTest(unittest.TestCase):
 
 
 class LaddersAsDataTest(unittest.TestCase):
-    """What holds for the committed ladders whatever the console last saved."""
+    """What holds for the ladders of the defaults in the code, beside the
+    committed file's code-side facts — the file carries no ladder (DRE-6983)."""
 
     def test_every_committed_rung_is_selectable_where_it_is_named(self):
         # No rung of a ladder is retired or excluded, every rung is a model
         # the selector knows, and the loaded ladders put each one exactly
-        # where the file names it.
+        # where the defaults in the code name it.
         cfg = _committed()
         out = set(_rung_ids(cfg.get("retired"))) | set(_rung_ids(cfg.get("excluded")))
-        named = {name: _rung_ids(rungs) for name, rungs in cfg["ladders"].items()}
+        named = mf.code_defaults()["ladders"]
         for name, rungs in named.items():
             for model in rungs:
                 with self.subTest(ladder=name, model=model):
@@ -341,20 +333,20 @@ class LaddersAsDataTest(unittest.TestCase):
         # rung is reviewed on another model, and no rule reviews on the build
         # model. A rule is optional since DRE-6785, and a console save that
         # puts a build model on the Reviewers' walk writes none (DRE-6789).
-        cfg = _committed()
-        advice = _ladder(cfg, ADVISORY)
+        cfg, side = mf.code_defaults(), _committed()
+        advice = cfg["ladders"][cfg["kinds"][ADVISORY]]
         for model in advice[:-1]:
-            if model in _ladder(cfg, WORKHORSE):
+            if model in cfg["ladders"][cfg["kinds"][WORKHORSE]]:
                 with self.subTest(model=model):
-                    self.assertNotEqual(mf.reviewers_for(cfg, model)[0], model)
-                    self.assertNotEqual(_rules(cfg).get(model), model)
+                    self.assertNotEqual(mf.reviewers_for(side, model)[0], model)
+                    self.assertNotEqual(_rules(side).get(model), model)
 
     def test_the_committed_reviewer_roles_are_advisory_as_written(self):
         cfg = _committed()
         self.assertTrue(_separation(cfg)["roles"])
         for role in _separation(cfg)["roles"]:
             with self.subTest(role=role):
-                self.assertEqual(cfg["agents"][role], ADVISORY)
+                self.assertEqual(mf.code_defaults()["agents"][role], ADVISORY)
 
 
 class SchemaPermitsTheOverlapOnlyWithTheRuleTest(unittest.TestCase):

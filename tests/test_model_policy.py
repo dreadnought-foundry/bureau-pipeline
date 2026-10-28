@@ -115,7 +115,7 @@ JUDGEMENT = "judgement"
 # hand edit might write back.
 FILE_CHOICES = {
     "kinds": {WORKHORSE: {"ladder": WORKHORSE, "label": "Builders"}},
-    "ladders": {WORKHORSE: [{"model": "claude-x-1", "reason": "a hand edit"}]},
+    "ladders": {WORKHORSE: [{"model": "x-hand-edited-1", "reason": "a hand edit"}]},
     "default_ladder": WORKHORSE,
     "agents": {"engineer": WORKHORSE},
     "ungrouped": [],
@@ -282,17 +282,18 @@ class RoleKindsTest(unittest.TestCase):
         fmf.clear_availability_cache()
 
     def test_config_declares_the_three_kinds_and_any_added_group_on_its_own_ladder(self):
-        # The committed file, in any saved state: the kinds the code knows,
-        # each on a ladder of its own. Since DRE-6834 a save may add a group
+        # The defaults in the code, as they stand: the kinds the code knows,
+        # each on a ladder of its own. Since DRE-6834 a group may be added
         # beside them, and an added group walks the ladder of its own name.
-        cfg = _committed()
+        # The file carries no kind since DRE-6983.
+        cfg = mf.code_defaults()
         self.assertTrue(
             set(mf.ROLE_KINDS) <= set(cfg["kinds"]),
-            "config/models.yaml declares every role kind the selector knows",
+            "the defaults in the code declare every role kind the selector knows",
         )
         for kind in set(cfg["kinds"]) - set(mf.ROLE_KINDS):
-            self.assertEqual(cfg["kinds"][kind]["ladder"], kind, kind)
-        ladders = {kind: spec["ladder"] for kind, spec in cfg["kinds"].items()}
+            self.assertEqual(cfg["kinds"][kind], kind, kind)
+        ladders = dict(cfg["kinds"])
         for kind, ladder in ladders.items():
             self.assertIn(ladder, cfg["ladders"], f"kind {kind}: unknown ladder")
         self.assertEqual(
@@ -302,7 +303,10 @@ class RoleKindsTest(unittest.TestCase):
         )
 
     def test_every_agent_role_is_classified(self):
-        cfg = _committed()
+        # The defaults in the code name every role's kind; which agents run in
+        # a person's session is the committed file's code-side fact.
+        cfg = {**mf.code_defaults(),
+               "session_agents": _committed().get("session_agents")}
         # A scripted entry (`maxTurns: null`, DRE-5369) runs no model and has
         # no kind to classify; test_agents_registry.py holds it to that claim.
         registry = {a["name"] for a in yaml.safe_load(AGENTS.read_text())["agents"]
@@ -313,7 +317,7 @@ class RoleKindsTest(unittest.TestCase):
         session = set(cfg.get("session_agents") or [])
         self.assertLessEqual(
             registry, set(cfg["agents"]),
-            "every agents.yaml role needs a kind in config/models.yaml",
+            "every agents.yaml role needs a kind in the defaults in the code",
         )
         self.assertLessEqual(
             set(cfg["agents"]), registry | session,
@@ -486,12 +490,12 @@ class JudgementKindTest(unittest.TestCase):
         fmf.clear_availability_cache()
 
     def test_only_a_judgement_role_holds_the_judgement_kind(self):
-        # The committed file, in any saved state: of the PIPELINE-run roles
+        # The defaults in the code, as they stand: of the PIPELINE-run roles
         # (DRE-6889), only one rule 10 names may be in Planners — or none, the
         # planner moving to a cheaper kind is admissible. A session-run agent
         # the CEO put in Planners selects nothing from it (rule 10 exempts it).
-        cfg = _committed()
-        session = set(cfg.get("session_agents") or [])
+        cfg = mf.code_defaults()
+        session = set(_committed().get("session_agents") or [])
         holders = {r for r, k in cfg["agents"].items()
                    if k == JUDGEMENT and r not in session}
         self.assertLessEqual(
@@ -675,17 +679,19 @@ class JudgementKindTest(unittest.TestCase):
             self.assertIn(_rule_10(role), proc.stdout.splitlines())
             self.assertEqual(_cli_check(tree, fixture_home()).returncode, 0)
 
-    def test_the_registry_shows_the_planners_kind_and_model(self):
-        # The roster is the surface a human reads to ask "what is the planner
-        # running on, and why is it allowed to be the expensive one?" — the
-        # frozen tree's roster says what the frozen document says.
+    def test_the_registry_carries_no_kind_or_model_and_the_home_says_both(self):
+        # The roster no longer answers "what is the planner running on?"
+        # (DRE-6982, DRE-6983): its entry names neither a kind nor a model,
+        # and the selector that read the frozen document answers both.
         with tempfile.TemporaryDirectory() as td:
             tree = _copy_tree(Path(td))
             roster = {a["name"]: a
                       for a in yaml.safe_load((tree / "agents.yaml").read_text())["agents"]}
             planner = roster[_role_of(JUDGEMENT)]
-            self.assertEqual(planner["kind"], JUDGEMENT)
-            self.assertEqual(planner["model"], _judgement_ladder()[0])
+            self.assertNotIn("kind", planner)
+            self.assertNotIn("model", planner)
+            self.assertEqual(fmf.kind_for(planner["name"]), JUDGEMENT)
+            self.assertEqual(fmf.ladder_for(planner["name"])[0], _judgement_ladder()[0])
 
     def test_the_strongest_model_is_a_known_model_and_the_old_fable_still_is_too(self):
         # Attribution: markers in flight carry either id.

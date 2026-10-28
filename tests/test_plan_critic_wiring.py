@@ -647,11 +647,15 @@ class APersonsCardIsRoutedBeforeTheCritic(unittest.TestCase):
 
 
 class TheRoster(unittest.TestCase):
-    """agents.yaml is the console's contract; config/models.yaml is the ladder."""
+    """agents.yaml is the console's contract; the defaults in the code name
+    each agent's kind when no home is read (config/models.yaml carries none
+    since DRE-6983)."""
 
     def setUp(self):
+        import model_fallback
+
         self.registry = yaml.safe_load(open(os.path.join(ROOT, "agents.yaml")))["agents"]
-        self.models = yaml.safe_load(open(os.path.join(ROOT, "config", "models.yaml")))
+        self.models = model_fallback.code_defaults()
 
     def entry(self, name):
         for a in self.registry:
@@ -678,8 +682,9 @@ class TheRoster(unittest.TestCase):
             self.assertIn(f"model_fallback.py select {name}", wf_src())
 
     def test_the_one_off_stage_added_no_role(self):
-        """DRE-3041: `No new role in config/models.yaml.` Every stage's agent
-        is one of the two the roster already carries."""
+        """DRE-3041: `No new role in config/models.yaml` — the defaults in the
+        code since DRE-6983. Every stage's agent is one of the two the roster
+        already carries."""
         for stage in pc.STAGES:
             self.assertIn(pc.agent(stage), (pc.AGENT_PRE, pc.AGENT_POST))
             self.assertIn(pc.agent(stage), self.models["agents"])

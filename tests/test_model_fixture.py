@@ -154,25 +154,27 @@ def test_the_readme_names_the_refreeze_and_the_documents_own_date():
 # 1b. The frozen home document                                                 #
 # --------------------------------------------------------------------------- #
 
-def test_the_frozen_document_is_the_frozen_files_written_as_a_home():
-    """Compared with the frozen files alone, `written_at` and `written_by` set
-    aside: neither the live config nor the live defaults in the code enters
-    it, so a legitimate save cannot turn it red."""
+def test_the_frozen_document_holds_the_frozen_choices_and_the_files_none():
+    """The frozen choices are `home.json`'s alone (DRE-6983): the three groups,
+    each with its label, purpose and models, the agents and the projects —
+    and the frozen `models.yaml` carries none of them to disagree with. No
+    live config and no live default enters either, so a legitimate save
+    cannot turn this red."""
     doc, cfg = fixture_home(), fixture_config()
     for kind in ("workhorse", "advisory", "judgement"):
         group = doc["groups"][kind]
-        assert group["models"] == ladder(cfg, kind), kind
-        assert group["label"] == cfg["kinds"][kind]["label"], kind
-        assert group["purpose"] == cfg["kinds"][kind]["purpose"], kind
-    assert doc["agents"] == cfg["agents"]
-    assert doc["projects"] == cfg["projects"]
+        assert ladder(doc, kind), kind
+        assert group["label"] and group["purpose"], kind
+    assert doc["agents"] and isinstance(doc["projects"], dict)
     assert doc["added_agents"] == {}
+    for key in CHOICE_KEYS:
+        assert key not in cfg, key
 
 
-def test_the_frozen_document_is_written_by_the_operator_on_the_freeze_date():
+def test_the_frozen_document_is_written_by_the_operator_on_the_choices_date():
     doc = fixture_home()
     assert doc["written_by"] == "operator"
-    date = re.search(r"- date: (\d{4}-\d{2}-\d{2})", README.read_text()).group(1)
+    date = re.search(r"- choices date: (\d{4}-\d{2}-\d{2})", README.read_text()).group(1)
     assert doc["written_at"].startswith(date)
 
 
@@ -223,10 +225,10 @@ def test_ladder_answers_a_document_from_its_groups():
     assert ladder(doc, "workhorse") == ["m-1", "m-2"]
 
 
-def test_ladder_answers_the_same_list_for_the_frozen_document_and_config():
-    doc, cfg = fixture_home(), fixture_config()
-    for kind in cfg["kinds"]:
-        assert ladder(doc, kind) == ladder(cfg, kind), kind
+def test_ladder_answers_each_group_of_the_frozen_document():
+    doc = fixture_home()
+    for kind, group in doc["groups"].items():
+        assert ladder(doc, kind) == group["models"], kind
     # Not the same list everywhere: the document's own models are answered.
     assert ladder(doc, "workhorse") != ladder(doc, "advisory")
 
@@ -332,10 +334,11 @@ def test_a_module_from_one_tree_is_not_a_module_from_another(tmp_path, tree):
 # --------------------------------------------------------------------------- #
 
 def _demoted_rung(tree: Path) -> str:
-    """A Builders rung of the tree's own config that is not its top, so a
-    document leading with it cannot be confused with the defaults."""
-    rungs = ladder(yaml.safe_load((tree / "config" / "models.yaml").read_text()),
-                   "workhorse")
+    """A Builders rung of the tree's own defaults in the code that is not
+    their top, so a document leading with it cannot be confused with the
+    defaults."""
+    defaults = fixture_module(tree).code_defaults()
+    rungs = defaults["ladders"][defaults["kinds"]["workhorse"]]
     assert len(rungs) > 1
     return rungs[-1]
 
@@ -487,8 +490,10 @@ def _plant(root: Path, rel: str, text: str) -> Path:
 
 
 def test_model_reading_tests_on_a_planted_tree(tmp_path):
-    _plant(tmp_path, "config/models.yaml", yaml.safe_dump({
-        "ladders": {"solo": [{"model": "vendor-model-9", "reason": "x"}]}}))
+    # A rung id is one of the tree's defaults in the code — the file carries
+    # none (DRE-6983).
+    _plant(tmp_path, "scripts/model_fallback.py",
+           'CODE_DEFAULTS = {"ladders": {"solo": ["vendor-model-9"]}}\n')
     rung = _plant(tmp_path, "tests/test_rung.py", 'MODEL = "vendor-model-9"\n')
     selector = _plant(tmp_path, "tests/nested/test_selector.py", "import model_fallback\n")
     roster = _plant(tmp_path, "tests/test_roster.py", 'PATH = "agents.yaml"\n')
@@ -502,7 +507,8 @@ def test_model_reading_tests_on_a_planted_tree(tmp_path):
 
 @pytest.mark.parametrize("token", ["models.yaml", "agents.yaml", "model_fallback"])
 def test_each_named_file_puts_a_test_in_the_set(tmp_path, token):
-    _plant(tmp_path, "config/models.yaml", yaml.safe_dump({"ladders": {"solo": ["m-1"]}}))
+    _plant(tmp_path, "scripts/model_fallback.py",
+           'CODE_DEFAULTS = {"ladders": {"solo": ["m-1"]}}\n')
     named = _plant(tmp_path, "tests/test_named.py", f"# reads {token}\n")
     assert model_reading_tests(tmp_path) == [named]
 

@@ -519,10 +519,10 @@ class TestApply:
 
 
 class TestApplyEditsNoFile:
-    """In a tree whose `config/models.yaml` still names Opus 5.5 on its
-    ladders, as the committed file will until part 3, an adoption that takes
-    Opus 5.5 off every group and project of the home leaves that file — and
-    every other file of the tree — byte for byte as it was."""
+    """In a tree whose defaults in the code still name Opus 5.5 on their
+    ladders — `config/models.yaml` carries none since DRE-6983 — an adoption
+    that takes Opus 5.5 off every group and project of the home leaves that
+    file, and every other file of the tree, byte for byte as it was."""
 
     def test_the_tree_is_untouched_and_still_validates(self, tmp_path, monkeypatch,
                                                        capsys):
@@ -531,8 +531,8 @@ class TestApplyEditsNoFile:
         config = tree / "config" / "models.yaml"
         text = config.read_text()
         cfg = yaml.safe_load(text)
-        assert OPUS55 in {m for kind in ("workhorse", "advisory", "judgement")
-                          for m in model_fixture.ladder(cfg, kind)}
+        defaults = actions.mf.code_defaults()
+        assert OPUS55 in {m for rungs in defaults["ladders"].values() for m in rungs}
         retired_before = model_catalog_ids(cfg.get("retired"))
         assert OPUS55 not in retired_before
 
