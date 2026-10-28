@@ -12,9 +12,9 @@ WHAT THIS FILE PINS, and why each half is here:
     already answers "which reusable workflow jobs run a model" from the files
     themselves (DRE-4340), so this guard asks it rather than keeping a second
     list that drifts. Every job it finds must be classified — either it uploads
-    its working log, or it is named here with the reason it does not. Add an
-    eighth agent workflow and this test fails until someone decides which.
-  * THE SHAPE of the step, on each of the seven: `always()`, `continue-on-error`,
+    its working log, or it is named here with the reason it does not. Add a
+    new agent workflow and this test fails until someone decides which.
+  * THE SHAPE of the step, on each of the eight: `always()`, `continue-on-error`,
     after the last model step, no `${{ }}` in the body (the 21,000-character
     expression ceiling, DRE-3484) — and the run's own `effort_arg` handed to
     the upload, on every job but those `EFFORT_PENDING` names (DRE-5356).
@@ -75,13 +75,14 @@ import check_death_receipts as receipts  # noqa: E402
 from model_fallback import EFFORT_LEVELS  # noqa: E402
 
 #: The reusable workflow jobs that run an agent for a card and so keep a
-#: working log. The first seven are the seven in `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
+#: working log. All eight are the eight in `BUREAU_PIPELINE_AGENT_WORKFLOWS` in
 #: agent-bureau's `infra/lib/agent-log-stack.ts` — the upload roles trust
 #: exactly these `job_workflow_ref`s (DRE-4343), so a workflow added here and
 #: not there is refused at AssumeRoleWithWebIdentity and shows up only as gaps.
 #: The epic's six (engineer, fix, critic, verifier, planner, medic), and the
 #: red-main repair agent, reviewed for an upload role and added by DRE-5353 —
-#: agent-bureau's DRE-5351 trusts it at the store.
+#: agent-bureau's DRE-5351 trusts it at the store. The eighth is the proof run
+#: (DRE-5924), which agent-bureau's DRE-8260 trusts there.
 UPLOADS = {
     ("agent-task.yml", "execute"),
     ("agent-fix.yml", "fix"),
@@ -90,9 +91,9 @@ UPLOADS = {
     ("plan.yml", "plan"),
     ("medic.yml", "diagnose"),
     ("red-main-repair.yml", "repair"),
-    # The proof run (DRE-5924) keeps its log the way agent-task.yml does. Until
-    # agent-bureau's BUREAU_PIPELINE_AGENT_WORKFLOWS trusts proof-task.yml the
-    # store refuses the role, and each run records a gap rather than a log.
+    # The proof run (DRE-5924) keeps its log the way agent-task.yml does, and
+    # agent-bureau's BUREAU_PIPELINE_AGENT_WORKFLOWS trusts proof-task.yml at
+    # the store (DRE-8260).
     ("proof-task.yml", "execute"),
 }
 
@@ -161,7 +162,7 @@ def _upload_steps(mj):
 
 class DiscoveryTest(unittest.TestCase):
     def test_every_job_that_runs_a_model_is_classified(self):
-        """A seventh agent workflow must not slip in unlogged and unnoticed."""
+        """A new agent workflow must not slip in unlogged and unnoticed."""
         found = {(mj.filename, mj.job) for mj in _model_jobs()}
         self.assertEqual(
             found, UPLOADS | NOT_UPLOADING,

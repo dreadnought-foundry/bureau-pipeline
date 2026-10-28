@@ -11,13 +11,15 @@ looks shipped while uploading nothing.
 Which callers need it is DISCOVERED from each workflow's `uses:` line, never
 listed: the stub nobody remembered is exactly the one still missing the grant.
 
-The seven reusables are the ones the upload roles trust
+The eight reusables are the ones the upload roles trust
 (`BUREAU_PIPELINE_AGENT_WORKFLOWS` in agent-bureau's
 `infra/lib/agent-log-stack.ts`, DRE-4343). That list lives in another repo and CI
 checks out one, so it is a COPY here under the two-copies rule: change one,
 change the other. `red-main-repair.yml` joined both after it was reviewed for
-upload (DRE-5353 here, DRE-5351 in agent-bureau). `model-trial.yml` also runs an
-agent and is deliberately absent from both — nobody has reviewed it for upload.
+upload (DRE-5353 here, DRE-5351 in agent-bureau), and `proof-task.yml` (the
+proof run, DRE-5924) joined both here and in agent-bureau (DRE-8260).
+`model-trial.yml` also runs an agent and is deliberately absent from both —
+nobody has reviewed it for upload.
 """
 
 import unittest
@@ -77,9 +79,11 @@ class SelfStubsGrantIdTokenTest(unittest.TestCase):
     def test_the_discovery_finds_the_stubs_it_exists_for(self):
         # Guard the guard: a discovery that finds nothing passes everything, and
         # one that silently narrows passes almost everything. The count is a
-        # tripwire, not the source of truth — an eighth caller is meant to trip
-        # it so whoever adds it grants the token too. The seventh is Shadow
-        # Replay (DRE-7197), which calls both qa-review.yml and verify.yml.
+        # tripwire, not the source of truth — a tenth caller is meant to trip
+        # it so whoever adds it grants the token too. Shadow Replay (DRE-7197)
+        # calls both qa-review.yml and verify.yml. The eighth and ninth are the
+        # proof run (self-proof-task.yml, DRE-5924) and the proof shadow
+        # (self-proof-shadow.yml, DRE-7287), both calling proof-task.yml.
         callers = _callers()
         self.assertIn("self-agent-task.yml", callers)
         self.assertEqual(callers.get("pr-review.yml"), ["qa-review.yml"])
@@ -90,8 +94,8 @@ class SelfStubsGrantIdTokenTest(unittest.TestCase):
         self.assertEqual(
             sorted(callers.get("shadow-replay.yml") or []), ["qa-review.yml", "verify.yml"])
         self.assertEqual(
-            len(callers), 7,
-            f"discovery found {sorted(callers)}; this repo has seven stubs calling "
+            len(callers), 9,
+            f"discovery found {sorted(callers)}; this repo has nine stubs calling "
             f"a trusted reusable. A new one needs `id-token: write` too — update "
             f"this count once it has it.",
         )
