@@ -92,7 +92,7 @@ supplement to this brief — it adds to these conventions, it does not replace t
 ## Push before the credential expires (DRE-3043)
 
 Your run's GitHub credential dies at **60 minutes**, and it is the only one
-you have: the token that lets you `git push` and the token that lets `gh` open
+that can write (`GH_READ_TOKEN`, below, only reads): the token that lets you `git push` and the token that lets `gh` open
 a PR are the same App installation token, minted at the top of the job. A card
 that takes longer than an hour therefore cannot deliver its own work unless you
 get something onto GitHub before the deadline.
@@ -130,6 +130,28 @@ first, and a WIP checkpoint pushed after it is just the same commits, earlier.
 (Origin: bureau-pipeline run 33822932627. The agent finished DRE-3029 at 18:53
 with 5,001 tests green and a credential that had died at 18:43. ~$20 and 70
 minutes of correct work were rebuilt from scratch.)
+
+## Reading another repository: `GH_READ_TOKEN` (DRE-8240)
+
+Your worker token — `GH_TOKEN`, the one `git push` and `gh pr create` use —
+reaches only the repository this run is in. A card whose criteria read
+another repository in the same organization (a sibling's release record, a
+tag, a merged pull request) needs a second token, and the run hands you one:
+`GH_READ_TOKEN`, the read-only identity proof runs hold under the same name.
+It reaches every repository in the caller's organization that the App's
+installation covers, and none in another organization.
+
+Make every such read as it, never with the worker token:
+
+    GH_TOKEN=$GH_READ_TOKEN gh api repos/<owner>/<repo>/releases/latest
+    GH_TOKEN=$GH_READ_TOKEN python3 .bureau-pipeline/scripts/proof_release.py check --repo <owner>/<repo> --merge <CARD>:<pr>:<merge sha>
+
+It can only read, and you use it never to write: no push, no comment, no
+pull request, no label — those stay on the worker token, in this repository.
+When `GH_READ_TOKEN` is empty the mint was refused, and a read the card needs
+is still a blocker, exactly as it was before this token existed: name the read
+and the empty token in the blocker note, and do not retry it with `GH_TOKEN`.
+It is minted at the top of the job, so the 60-minute expiry applies to it too.
 
 ## Build by default; escalate by exception (DRE-1655)
 You are **autonomous by default**. Research the card, and if you are confident
