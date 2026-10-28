@@ -14,6 +14,12 @@ the card is Done, merged and live, DRE-7740's re-arm gives one more run.
 
 The critic's spent trigger (`RERUN_EXHAUSTED_*`) is unchanged and alarms.
 
+A fix already filed against the proof — a blocker related after its first
+`🔬 proof-run` receipt, not Canceled or a duplicate — is held on and never
+filed again (DRE-8251), replayed off agent-bureau's DRE-8162 and its record
+#4242: pipeline lines, relation rows, card states, descriptions written here,
+pull request rows and times — no person's name or email.
+
 Every fixture is `tests/test_proof_dispatch.py`'s, imported: the board, the
 harness, its recorded writes and its filer.
 """
@@ -39,6 +45,7 @@ import proof_record  # noqa: E402
 import proof_run_state  # noqa: E402
 import reconcile  # noqa: E402
 import test_proof_dispatch as tpd  # noqa: E402 — the fixtures, imported
+import test_proof_dispatch_blocker_rearm as rearm  # noqa: E402 — the relations board
 
 SHA7 = tpd.SHA7
 IDENT = "DRE-5930"
@@ -286,3 +293,181 @@ def test_defect_the_shipped_wording_is_an_event_wording():
     assert proof_dispatch.FIX_SHIPPED_NEEDS not in proof_dispatch.OPERATOR_NEEDS
     assert proof_dispatch.FIX_SHIPPED_NEEDS.format(card=CARD) == SHIPPED[1]
     assert proof_record.time_only(linear_ops.proof_waiting_line(*SHIPPED)) is None
+
+
+# --------------------------------------------------------------------------- #
+# 4. a fix already filed against the proof is held on, never filed again      #
+#    (DRE-8251) — agent-bureau's DRE-8162, record #4242, replayed              #
+# --------------------------------------------------------------------------- #
+
+D8162 = "DRE-8162"
+PR_8162 = 4242
+HEAD_8162 = "4e5d6c7" + "0" * 33
+FIX_8215 = "DRE-8215"
+#: The pass that filed DRE-8230 instead: 10-27 7:07 PM PT.
+NOW_8162 = rearm._ts("2026-10-28T02:07:00Z")
+#: The first proof run, which opened the record, and the two re-runs that
+#: spent the budget — the newest at 01:35:31Z, after DRE-8215 was related.
+THREAD_8162 = [
+    rearm.run_receipt("2026-10-27T23:22:58Z", "2026-10-27 16:22 PT", "first proof run",
+                      "dispatch 1 of 2"),
+    rearm.at("⏳ 5/5 PR opened", "2026-10-27T23:58:00Z"),
+    rearm.run_receipt("2026-10-28T00:46:24Z", "2026-10-27 17:46 PT",
+                      "re-run after the gate's decline at 1a2b3c4", "re-run 1 of 2"),
+    rearm.at("⏳ 5/5 amended", "2026-10-28T01:12:00Z"),
+    rearm.run_receipt("2026-10-28T01:35:31Z", "2026-10-27 18:35 PT",
+                      "re-run after the gate's decline at 5d6e7f8", "re-run 2 of 2"),
+    rearm.at("⏳ 5/5 amended", "2026-10-28T01:54:00Z"),
+]
+#: The one row the record fails, a plain `Not met.` naming no fix.
+SPEED_ROW = ("The Desk's first paint lands under two seconds", "Not met. 3.4 s at 18:20 PT")
+TEXT_8162 = rearm.record_text(D8162, tpd.MET_ROW, SPEED_ROW)
+
+
+def blocker(ident: str, stamp: str, state_name: str, description: str) -> dict:
+    """A `blocks` relation on the proof, with its time and the blocking card's
+    state, as `LinearReads.blocking` reads it."""
+    return {"type": "blocks", "createdAt": stamp,
+            "issue": {"identifier": ident, "state": {"name": state_name},
+                      "description": description}}
+
+
+#: The epic's build cards, related at 11:44 AM PT, Done, naming no record.
+BUILD_8162 = [blocker(f"DRE-{n}", "2026-10-27T18:44:00Z", "Done",
+                      f"agent-bureau: build part {n - 8158} of the epic DRE-8158.")
+              for n in (8159, 8160, 8161)]
+#: The fix filed for the failing speed row, related before the newest receipt.
+FIXED_8215 = blocker(FIX_8215, "2026-10-28T01:03:44Z", "Planning",
+                     f"The proof {D8162} fails its speed row in agent-bureau #{PR_8162}.")
+
+
+class _Filer(rearm.Fleet):
+    """One agent-bureau pass whose fix-card filer is recorded (DRE-7953)."""
+
+    def __init__(self, monkeypatch, board, **kw):
+        super().__init__(monkeypatch, board, **kw)
+        monkeypatch.setattr(proof_gap, "file_fix_card", self.file_fix)
+
+
+def _pass_8162(monkeypatch, *, relations=None, thread=None, cards=None, now=NOW_8162,
+               live=True):
+    thread = THREAD_8162 if thread is None else thread
+    relations = BUILD_8162 + [FIXED_8215] if relations is None else relations
+    board = rearm.Relations(review=[rearm._review(D8162, thread)], threads={D8162: thread},
+                            fixes=cards or {}, relations={D8162: relations})
+    pr = rearm.record_pr(D8162, PR_8162, HEAD_8162, opened="2026-10-27T23:58:00Z",
+                         approved="2026-10-28T01:58:00Z", declined="2026-10-28T02:00:00Z")
+    h = _Filer(monkeypatch, board, records={D8162: pr}, texts={PR_8162: TEXT_8162},
+               prs={(rearm.AB_REPO, FIX_8215): rearm.merged(
+                   4248, "7e95e69b0" + "0" * 31, FIX_8215, "2026-10-28T15:02:00Z")},
+               states={D8162: tpd.state("finished", dispatches=1,
+                                        record={"number": PR_8162, "state": "open"})})
+    tally = h.sweep(now=now, live=live)
+    return h, tally
+
+
+def test_dre_8162_replayed_the_fix_already_filed_is_held_on_and_nothing_is_filed(
+        monkeypatch, capsys):
+    """On `main` at 098f1a5e this pass filed a second card (DRE-8230) and held
+    on it. DRE-8215 was related after the first proof run, so it is a fix for
+    this record: the hold names it, and nothing is filed or receipted."""
+    h, tally = _pass_8162(monkeypatch)
+    lines = tpd._about(tpd._lines(capsys), D8162)
+    assert h.filings == [], lines
+    assert h.holds == [(D8162, rearm.GATE_HELD[0], f"{FIX_8215} shipped")]
+    assert linear_ops.proof_waiting_line(*h.holds[0][1:]).endswith(
+        f"— needs {FIX_8215} shipped")
+    assert h.posted == [] and h.fired == []
+    assert not any(proof_gap.RECEIPT_MARK in body for _, body in h.posted)
+    assert tally.held == 1 and tally.failures == []
+    assert any(FIX_8215 in line and "filed nothing" in line for line in lines), lines
+
+
+def test_dre_8162_the_build_cards_are_never_the_fix(monkeypatch, capsys):
+    """The epic's build cards were related before the first proof run: never
+    held on, beside DRE-8215 or without it — without it the pass files, as
+    before."""
+    h, _ = _pass_8162(monkeypatch)
+    [(_, _, needs)] = h.holds
+    assert not any(f"DRE-{n}" in needs for n in (8159, 8160, 8161))
+    capsys.readouterr()
+
+    h, tally = _pass_8162(monkeypatch, relations=BUILD_8162)
+    assert [f[0] for f in h.filings] == [D8162]
+    assert h.holds == [(D8162, rearm.GATE_HELD[0], f"{tpd.DEFECT_CARD} shipped")]
+    assert tally.failures == []
+
+
+@pytest.mark.parametrize("gone", ["Canceled", "Duplicate"])
+def test_dre_8162_a_blocker_canceled_or_duplicate_is_never_the_fix(
+        monkeypatch, capsys, gone):
+    h, _ = _pass_8162(monkeypatch,
+                      relations=BUILD_8162 + [{**FIXED_8215, "issue": {
+                          **FIXED_8215["issue"], "state": {"name": gone}}}])
+    assert [f[0] for f in h.filings] == [D8162]
+    assert h.holds == [(D8162, rearm.GATE_HELD[0], f"{tpd.DEFECT_CARD} shipped")]
+
+
+def test_dre_8162_two_fixes_filed_hold_on_the_newest_and_the_line_names_both(
+        monkeypatch, capsys):
+    later = blocker("DRE-8217", "2026-10-28T01:20:00Z", "Intake",
+                    f"A second look at {D8162}'s speed row.")
+    h, _ = _pass_8162(monkeypatch, relations=BUILD_8162 + [later, FIXED_8215])
+    lines = tpd._about(tpd._lines(capsys), D8162)
+    assert h.filings == []
+    assert h.holds == [(D8162, rearm.GATE_HELD[0], "DRE-8217 shipped")]
+    assert any(FIX_8215 in line and "DRE-8217" in line and "filed nothing" in line
+               for line in lines), lines
+
+
+def test_dre_8162_relations_not_read_file_nothing_and_hold_nothing(monkeypatch, capsys):
+    h, tally = _pass_8162(monkeypatch, relations=RuntimeError("Linear: 503"))
+    lines = tpd._about(tpd._lines(capsys), D8162)
+    assert h.filings == [] and h.holds == [] and h.posted == [] and h.fired == []
+    assert len(tally.failures) == 1 and "503" in tally.failures[0]
+    assert any("relations could not be read" in line and "503" in line
+               and "nothing filed" in line for line in lines), lines
+
+
+def test_dre_8162_the_dry_run_would_hold_on_the_fix_and_writes_nothing(monkeypatch, capsys):
+    h, _ = _pass_8162(monkeypatch, live=False)
+    lines = tpd._lines(capsys)
+    assert h.filings == [] and h.holds == [] and h.posted == []
+    assert not any(line.startswith("would: file a fix card") for line in lines), lines
+    assert any(FIX_8215 in line and "filed nothing" in line for line in lines), lines
+
+
+def test_dre_8162_with_dre_8215_shipped_the_next_pass_dispatches_one_re_armed_run(
+        monkeypatch, capsys):
+    """The hold the replay posts, then 10-28 after v1.6.641: DRE-8215 Done,
+    #4248 merged at 7e95e69b0 and its release ready — one re-armed run."""
+    h, _ = _pass_8162(monkeypatch)
+    [(_, observed, needs)] = h.holds
+    held = rearm.at(linear_ops.proof_waiting_line(observed, needs), "2026-10-28T02:07:30Z")
+    capsys.readouterr()
+
+    h, tally = _pass_8162(monkeypatch, thread=THREAD_8162 + [held],
+                          cards={FIX_8215: rearm.fix(FIX_8215, rearm.AB)},
+                          now=rearm._ts("2026-10-28T16:10:00Z"))
+    reason = f"re-run after {FIX_8215} shipped"
+    assert h.fired == [(D8162, rearm.AB_REPO, reason, "proof-execute")]
+    assert tally.dispatched == 1 and h.holds == [] and h.filings == []
+    assert (rearm.AB_REPO, FIX_8215) in h.pr_reads
+    assert h.release_calls == [(rearm.AB_REPO, [FIX_8215])]
+
+
+def test_the_proofs_relations_are_read_with_each_blockers_state(monkeypatch):
+    """A Canceled or Duplicate blocker is never the fix, so the relations read
+    carries each blocking card's state (DRE-8251)."""
+    queries: list = []
+
+    def gql(query, variables=None):
+        queries.append(query)
+        return {"issue": {"inverseRelations": {
+            "pageInfo": {"hasNextPage": False, "endCursor": None},
+            "nodes": BUILD_8162 + [FIXED_8215]}}}
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    assert proof_dispatch.LinearReads().blocking(D8162) == BUILD_8162 + [FIXED_8215]
+    [query] = queries
+    assert "issue { identifier state { name } }" in " ".join(query.split())
