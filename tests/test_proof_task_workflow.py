@@ -1732,5 +1732,187 @@ class NameGuardHookExecutedTest(unittest.TestCase):
         self.assertEqual("ghs_fresh_token", seen["env"]["GH_TOKEN"])
 
 
+
+# --- the record as the run found it, and a run that left it unchanged ------
+# (DRE-8259)
+
+BASELINE_STEP = "Read the record as the run found it"
+BASELINE_ID = "record_baseline"
+UNCHANGED = "🤖 proof run ended with its record unchanged"
+PR_LINE = "OPEN\thttps://github.example/acme/widgets/pull/9"
+BLOB_PATH = "docs/proofs/desk-reply-ends-said.md"
+#: DRE-8162: the record as the previous run left it, at 3d9a79e …
+BASELINE = (BLOB_PATH, "b" * 40, "3d9a79e" + "0" * 33)
+#: … and the run's one commit, 456b245, a merge of main: the head moved and
+#: the blob did not.
+MERGE_ONLY = f"{BLOB_PATH}\t{'b' * 40}\t456b245{'0' * 33}"
+AMENDED = f"{BLOB_PATH}\t{'a' * 40}\t456b245{'0' * 33}"
+
+#: `proof_record.py blob`, stubbed: it records its argv and prints FAKE_BLOB.
+_PROOF_RECORD_STUB = """\
+import json, os, sys
+open(os.environ["CALLS"], "a").write(json.dumps(["proof_record"] + sys.argv[1:]) + "\\n")
+answer = os.environ.get("FAKE_BLOB", "")
+if answer:
+    print(answer)
+"""
+
+
+class RecordBaselineStepTest(_StepHarness):
+    """The baseline is the record FILE's blob on the record branch, read before
+    the first agent step: a resumed run always moves the head with its merge
+    of main, so a head comparison would pass DRE-8162's run."""
+
+    STEP = BASELINE_STEP
+    _HARNESS = _StepHarness._HARNESS + ("FAKE_BLOB", "GITHUB_OUTPUT")
+
+    def setUp(self):
+        super().setUp()
+        (self.tmp / ".bureau-pipeline" / "scripts" / "proof_record.py").write_text(
+            _PROOF_RECORD_STUB)
+        self.output = self.tmp / "output.txt"
+
+    def _outputs(self, blob: str) -> dict:
+        done, calls, _ = self._exec({
+            "FAKE_BLOB": blob, "GITHUB_OUTPUT": str(self.output),
+            "CARD": "DRE-77", "REPO": "acme/widgets", "CARD_DESCRIPTION": DESCRIPTION,
+            "GH_TOKEN": "ghs_worker"})
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([["proof_record", "blob", "--repo", "acme/widgets",
+                           "--card", "DRE-77"]], calls)
+        return dict(l.split("=", 1) for l in self.output.read_text().splitlines())
+
+    def test_it_comes_before_every_agent_attempt(self):
+        at = _index(BASELINE_STEP)
+        self.assertEqual(at + 1, _index("Implement proof card"))
+        self.assertTrue(all(at < i for i, _ in _agent_steps()))
+
+    def test_it_never_stops_the_run_and_never_runs_in_a_shadow(self):
+        step = _step(BASELINE_STEP)
+        self.assertEqual(BASELINE_ID, step["id"])
+        self.assertIs(True, step.get("continue-on-error"))
+        self.assertIn("!inputs.shadow", step["if"])
+
+    def test_the_blob_path_and_commit_are_outputs(self):
+        self.assertEqual({"path": BASELINE[0], "sha": BASELINE[1], "commit": BASELINE[2]},
+                         self._outputs("\t".join(BASELINE)))
+
+    def test_no_branch_or_no_file_is_an_empty_baseline(self):
+        self.assertEqual({"path": "", "sha": "", "commit": ""}, self._outputs(""))
+
+    def test_the_result_step_receives_it_through_env(self):
+        env = _step(RESULT_STEP)["env"]
+        for name, output in (("RECORD_BASELINE_PATH", "path"),
+                             ("RECORD_BASELINE_SHA", "sha"),
+                             ("RECORD_BASELINE_COMMIT", "commit")):
+            self.assertEqual(f"${{{{ steps.{BASELINE_ID}.outputs.{output} }}}}", env[name])
+
+
+class RecordUnchangedResultTest(_StepHarness):
+    """A run that left its record file byte for byte as it found it is a failed
+    run, never `record pull request` (DRE-8259). The escalation branches, a
+    first run and a changed record behave exactly as before."""
+
+    STEP = RESULT_STEP
+    _HARNESS = _StepHarness._HARNESS + ("FAKE_BLOB",)
+
+    def setUp(self):
+        super().setUp()
+        (self.tmp / ".bureau-pipeline" / "scripts" / "proof_record.py").write_text(
+            _PROOF_RECORD_STUB)
+
+    def _run(self, *, now: str, baseline=BASELINE, escalation: str | None = None,
+             description: str = DESCRIPTION):
+        if escalation is not None:
+            self.escalation.write_text(escalation)
+        env = {
+            "FAKE_PR": PR_LINE, "FAKE_BLOB": now,
+            "CARD": "DRE-77", "CARD_DESCRIPTION": description,
+            "RECORD_BRANCH": "agent/DRE-77-proof-record",
+            "ESCALATION_FILE": str(self.escalation),
+            "BUREAU_SERVER_URL": "https://github.example",
+            "BUREAU_REPOSITORY": "acme/widgets", "BUREAU_RUN_ID": "42",
+            "CLAUDE_EXECUTION_FILE": "",
+            "RECORD_BASELINE_PATH": baseline[0], "RECORD_BASELINE_SHA": baseline[1],
+            "RECORD_BASELINE_COMMIT": baseline[2],
+        }
+        done, posted, _ = self._exec(env)
+        self.reads = [c for c in posted if c[0] == "proof_record"]
+        self.posted = [c for c in posted if c[0] == "linear_ops"]
+        self.summary_text = self.summary.read_text() if self.summary.exists() else ""
+        return done
+
+    def _comments(self) -> list:
+        return [c[3] for c in self.posted if c[1] == "comment"]
+
+    def _moves(self) -> list:
+        return [tuple(c[3:]) for c in self.posted if c[1] == "advance"]
+
+    def test_a_head_moved_only_by_a_merge_of_main_reads_record_unchanged(self):
+        done = self._run(now=MERGE_ONLY)
+        self.assertNotEqual(0, done.returncode, "the run reads red, never success")
+        self.assertEqual([["proof_record", "blob", "--repo", "acme/widgets",
+                           "--card", "DRE-77"]], self.reads)
+        self.assertFalse(any(c.startswith("🤖 PR opened") for c in self._comments()))
+        self.assertEqual([], self._moves(), "no In Review move")
+        self.assertEqual(
+            [f"{UNCHANGED} ({BLOB_PATH} as at 3d9a79e) — the dispatcher reads this run "
+             f"off the card and decides whether to dispatch again. Run: {RUN_URL}"],
+            self._comments())
+        self.assertIn("proof result: record unchanged\n", self.summary_text)
+        self.assertNotIn("proof result: record pull request", self.summary_text)
+        self.assertNotIn("no record", self.summary_text)
+
+    def test_a_changed_record_blob_reads_record_pull_request_as_today(self):
+        done = self._run(now=AMENDED)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(
+            [f"🤖 PR opened: https://github.example/acme/widgets/pull/9 — CI + critic "
+             f"review running. Run: {RUN_URL}"], self._comments())
+        self.assertEqual([("In Review", "Hand-work")], self._moves())
+        self.assertIn("proof result: record pull request\n", self.summary_text)
+
+    def test_a_first_run_has_no_baseline_and_reads_record_pull_request_as_today(self):
+        done = self._run(now=MERGE_ONLY, baseline=("", "", ""))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([], self.reads, "no baseline, nothing to compare")
+        self.assertTrue(self._comments()[0].startswith("🤖 PR opened:"))
+        self.assertEqual([("In Review", "Hand-work")], self._moves())
+        self.assertIn("proof result: record pull request\n", self.summary_text)
+
+    def test_a_head_that_could_not_be_read_is_never_called_unchanged(self):
+        done = self._run(now="")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertTrue(self._comments()[0].startswith("🤖 PR opened:"))
+        self.assertIn("proof result: record pull request\n", self.summary_text)
+
+    def test_an_escalation_still_parks_exactly_as_today_whether_or_not_the_record_changed(self):
+        for now in (MERGE_ONLY, AMENDED):
+            done = self._run(now=now, escalation="Approve the release in the console?\n")
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
+                             [c[1] for c in self.posted], now)
+            self.assertTrue(self._comments()[0].startswith("🤖 PR opened:"))
+            self.assertTrue(self._comments()[1].startswith(PARK_RECEIPT))
+            self.assertFalse(any(c.startswith(UNCHANGED) for c in self._comments()))
+            self.assertIn("proof result: record pull request, then the park in Green Light",
+                          self.summary_text)
+            self.calls.unlink()
+            self.summary.unlink()
+
+    def test_cause_rows_still_go_to_the_gate_whether_or_not_the_record_changed(self):
+        scripts = self.tmp / ".bureau-pipeline" / "scripts"
+        (scripts / "proof_cause_park.py").write_text(_PROOF_CAUSE_PARK_STUB)
+        shutil.copy(ROOT / "scripts" / "console_escalation.py", scripts)
+        for now in (MERGE_ONLY, AMENDED):
+            done = self._run(now=now, escalation=CAUSE_FILE, description=NO_PRESS)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertEqual(["comment", "advance"], [c[1] for c in self.posted], now)
+            self.assertIn("left to the gate, nothing asked", self.summary_text)
+            self.assertIn("proof result: record pull request\n", self.summary_text)
+            self.calls.unlink()
+            self.summary.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()
