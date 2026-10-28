@@ -59,7 +59,24 @@ if python3 .bureau-pipeline/scripts/check_agent_result.py "" "" "" "" \
   ESCALATED="yes"
 fi
 TOOK=""
-if [ "$PR_STATE" = "OPEN" ]; then
+# A run that left its record file unchanged (DRE-8259): with the record
+# pull request OPEN, a baseline read before the agent and no escalation,
+# the record's blob at the head now equal to it is a failed run, never a
+# record — DRE-8162's run delivered only its merge of main. A head that
+# cannot be read is never called unchanged. An escalation parks as before.
+UNCHANGED=""
+if [ "$PR_STATE" = "OPEN" ] && [ -n "${RECORD_BASELINE_SHA:-}" ] && [ -z "$ESCALATED" ]; then
+  NOW=$(python3 .bureau-pipeline/scripts/proof_record.py blob --repo "$BUREAU_REPOSITORY" --card "$CARD" || true)
+  if [ -n "$NOW" ] && [ "$(printf '%s' "$NOW" | cut -f1)" = "$RECORD_BASELINE_PATH" ] \
+     && [ "$(printf '%s' "$NOW" | cut -f2)" = "$RECORD_BASELINE_SHA" ]; then
+    UNCHANGED="yes"
+  fi
+fi
+if [ -n "$UNCHANGED" ]; then
+  TOOK="record unchanged"
+  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+    "🤖 proof run ended with its record unchanged ($RECORD_BASELINE_PATH as at ${RECORD_BASELINE_COMMIT:0:7}) — the dispatcher reads this run off the card and decides whether to dispatch again. Run: $RUN_URL"
+elif [ "$PR_STATE" = "OPEN" ]; then
   TOOK="record pull request"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "🤖 PR opened: $PR_URL — CI + critic review running. Run: $RUN_URL"
@@ -232,3 +249,7 @@ if [ -z "$TOOK" ]; then
     "🤖 proof run ended with no record — the dispatcher reads this run off the card and decides whether to dispatch again.$UNREAD Run: $RUN_URL"
 fi
 echo "proof result: $TOOK" | tee -a "$GITHUB_STEP_SUMMARY"
+if [ -n "$UNCHANGED" ]; then
+  echo "::error::the proof run left $RECORD_BASELINE_PATH as it found it — no reading was taken, so the run is red"
+  exit 1
+fi
