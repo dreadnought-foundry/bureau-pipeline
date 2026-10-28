@@ -20,21 +20,6 @@ never a hand edit:
 The ladders themselves live ONLY in the canonical file: the registry's 5x
 copy-pasted ``ladder:`` block is gone.
 
-A third target is a whole generated file (DRE-6635):
-
-  * ``config/model-choices.json`` — what the console's Settings › Agents &
-    models page reads: every priced model, every group with the choices it
-    allows, every agent with the moves it allows, and the per-project
-    exceptions. Every ``allowed`` / ``reason`` is ``policy_errors``' answer on
-    a copy of the canonical config carrying that one option as a real entry,
-    so the page is read off the gate a pull request meets. Since DRE-6786 a
-    group's choice also carries a plain-English ``caution`` with both prices
-    (``scripts/model_choice.py``), and the one choice refused outright is a
-    model the pinned Claude Code cannot run. An agent's move is
-    judged as ``model_config_change.py`` judges it, on the edit it would make,
-    and a refused move publishes the plain line that script prints for it
-    (DRE-6833).
-
 Usage:
 
     python3 scripts/sync_model_config.py          # rewrite the regions in place
@@ -50,7 +35,6 @@ failure message that names the one repair command.
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import sys
 from pathlib import Path
@@ -60,21 +44,15 @@ from pathlib import Path
 # drift the day one side gains a rule, and the whole point of DRE-2317 is that
 # the rule cannot be edited away by accident.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from model_fallback import WORKHORSE_KIND, _normalize_config  # noqa: E402
+from model_fallback import _normalize_config  # noqa: E402
 from model_fallback import _normalize_separation  # noqa: E402
 from model_fallback import declared_prices  # noqa: E402
-from model_fallback import declared_repo_slugs  # noqa: E402
 from model_fallback import policy_errors as _policy_errors  # noqa: E402
-# The words a choice is shown with live once (DRE-6786): the console's
-# change-writer imports the same module, so the page and the pull request say
-# the same thing.
-from model_choice import caution_for, model_label  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "config" / "models.yaml"
 FALLBACK_TARGET = ROOT / "scripts" / "model_fallback.py"
 REGISTRY_TARGET = ROOT / "agents.yaml"
-CHOICES_TARGET = ROOT / "config" / "model-choices.json"
 # The two floor tables the ladders are held to (MINIMUM_CLAUDE_CODE and
 # AHEAD_OF_ADOPTION), read through `claude_code_pin.model_floors` (DRE-6786).
 FLOORS_SOURCE = ROOT / "tests" / "test_model_cli_support.py"
@@ -85,10 +63,6 @@ _YAML_BEGIN = "BEGIN generated model"
 _YAML_END = "END generated model"
 
 REPAIR_COMMAND = "python3 scripts/sync_model_config.py"
-
-# The slug a choice is probed under (DRE-6635). Injected into the repo slugs the
-# probe is judged against, so it can never collide with a real project entry.
-PROBE_SLUG = "__choice__"
 
 
 # --------------------------------------------------------------------------- #
@@ -285,196 +259,8 @@ def render_registry_model(cfg: dict, agent: str) -> str:
     )
 
 
-def render_choices(raw: dict, cfg: dict, prices: dict,
-                   registry: set[str] | None = None, *,
-                   floors: dict[str, str] | None = None,
-                   installed: str | None = None) -> str:
-    """config/model-choices.json, the console's contract (DRE-6635): key order
-    fixed, 2-space indent, trailing newline.
-
-    No rule is restated here. A group's choice is ``policy_errors``' answer on
-    the change the console would make for it (DRE-6786): a deep copy of
-    ``raw`` with that model lifted from ``excluded`` and set as an exception
-    under ``projects[PROBE_SLUG]``, filtered to that entry's own prefix so an
-    error elsewhere in the config never reaches it. Each choice is
-    ``{model, allowed, reason, caution}``: ``caution`` is
-    ``model_choice.caution_for``'s sentence for an allowed choice and None for
-    a refused one.
-
-    A model the pinned Claude Code cannot run is refused before the policy is
-    asked, in one plain sentence. ``floors`` (model id → the oldest Claude
-    Code that runs it) and ``installed`` (the pinned version) are read off this
-    tree by ``claude_code_pin`` when not given — the tables
-    tests/test_model_cli_support.py holds the ladders to.
-
-    An agent's move is judged as the change script judges it (DRE-6833): every
-    agent, grouped or not, gets one move per group it is not in, and each is
-    ``model_config_change``'s pre-flight checks, else the errors its own edit
-    (``edit_data`` of that ``move_agent``, which edits a deep copy of ``raw``)
-    ADDS to the canonical config's. A bare ``agents[name] = group`` would leave an
-    ungrouped agent in ``ungrouped`` too, which the validator refuses. A
-    refused move's ``reason`` is the plain line the change script prints for
-    it. ``registry`` is the agents.yaml names with a generated region, read
-    off ``REGISTRY_TARGET`` when not given.
-
-    ``add_group`` (DRE-6834) says whether the pipeline takes a new group, as
-    ``{allowed, reason}``: the change script's answer for an ``add_group``
-    under a free name on the Builders' default model, judged exactly as a
-    move is, and a refused one's ``reason`` says why in plain words without
-    the probe's own words. A group added from the console is then one more
-    entry under ``groups``, and every agent's ``moves`` names it like any
-    other.
-    """
-    # The change script imports this module, so this one imports it late.
-    import model_config_change as mcc
-
-    if registry is None:
-        registry = mcc.registry_agents(REGISTRY_TARGET.read_text(encoding="utf-8"))
-    floors, installed = _claude_code_floors(floors, installed)
-    excluded = {
-        entry["model"]: entry.get("reason")
-        for entry in raw.get("excluded") or []
-        if isinstance(entry, dict) and isinstance(entry.get("model"), str)
-    }
-    # Only a priced model is offered: a price is never invented.
-    models = [
-        {
-            "id": model,
-            "label": model_label(model),
-            "input": price["input"],
-            "output": price["output"],
-            "excluded": excluded.get(model),
-        }
-        for model, price in prices.items()
-    ]
-
-    probe_slugs = (declared_repo_slugs() or set()) | {PROBE_SLUG}
-    groups = []
-    for kind, words in cfg["groups"].items():
-        ladder = cfg["ladders"][cfg["kinds"][kind]]
-        prefix = f"projects.{PROBE_SLUG}.{kind}: "
-        choices = []
-        for model in models:
-            refused = _cannot_run(model["id"], floors, installed)
-            if not refused:
-                trial = copy.deepcopy(raw)
-                trial["excluded"] = [
-                    entry for entry in trial.get("excluded") or []
-                    if _entry_id(entry) != model["id"]
-                ]
-                trial["projects"] = {PROBE_SLUG: {kind: model["id"]}}
-                refused = [
-                    error[len(prefix):]
-                    for error in _policy_errors(trial, prices, repo_slugs=probe_slugs)
-                    if error.startswith(prefix)
-                ]
-            choices.append({
-                "model": model["id"],
-                "allowed": not refused,
-                "reason": "; ".join(refused) if refused else None,
-                "caution": None if refused else caution_for(raw, prices, kind, model["id"]),
-            })
-        groups.append({
-            "key": kind,
-            "label": words["label"],
-            "purpose": words["purpose"],
-            "default_model": ladder[0],
-            "fallbacks": ladder[1:],
-            "choices": choices,
-        })
-
-    repo_slugs = declared_repo_slugs()
-    baseline = set(_policy_errors(raw, prices, repo_slugs=repo_slugs))
-    agents = []
-    roster = [(name, kind) for name, kind in cfg["agents"].items()]
-    roster += [(name, None) for name in cfg["ungrouped"]]
-    for name, kind in roster:
-        moves = []
-        for other in cfg["groups"]:
-            if other == kind:
-                continue
-            change = {"op": "move_agent", "agent": name, "group": other}
-            refused = mcc._problems(change, raw, prices, registry) or [
-                error
-                for error in _policy_errors(
-                    mcc.edit_data(raw, change, ""), prices, repo_slugs=repo_slugs)
-                if error not in baseline
-            ]
-            moves.append({
-                "group": other,
-                "allowed": not refused,
-                "reason": " ".join(mcc.plain_lines(change, refused, raw))
-                if refused else None,
-            })
-        agents.append(_agent_entry(cfg, name, kind, moves))
-
-    document = {
-        "generated_from": "config/models.yaml",
-        "models": models,
-        "groups": groups,
-        "add_group": _add_group(raw, cfg, prices, registry, baseline, repo_slugs,
-                                floors, installed),
-        "agents": agents,
-        "projects": [
-            {"slug": slug, "exceptions": dict(entry)}
-            for slug, entry in cfg["projects"].items()
-        ],
-    }
-    return json.dumps(document, indent=2, ensure_ascii=False) + "\n"
-
-
-#: The group `_add_group` asks the change script about. Its words select
-#: nothing; the name is the first free one of `ADD_GROUP_PROBE`, `-2`, `-3`, ….
-ADD_GROUP_PROBE = "new-group"
-
-
-def _add_group(raw: dict, cfg: dict, prices: dict, registry: set[str],
-               baseline: set[str], repo_slugs, floors, installed) -> dict:
-    """``{allowed, reason}`` for a new group (DRE-6834): the change script's
-    pre-flight checks, the pinned Claude Code, then the errors its own edit
-    adds to ``baseline`` — the same three a Save meets."""
-    import model_config_change as mcc
-
-    taken = set(raw.get("kinds") or {}) | set(raw.get("ladders") or {})
-    name, n = ADD_GROUP_PROBE, 1
-    while name in taken:
-        n += 1
-        name = f"{ADD_GROUP_PROBE}-{n}"
-    model = cfg["ladders"][cfg["kinds"][WORKHORSE_KIND]][0]
-    change = {"op": "add_group", "group": name, "label": "New group",
-              "purpose": "A group added from the console.", "model": model}
-    refused = (mcc._problems(change, raw, prices, registry)
-               or _cannot_run(model, floors, installed)
-               or [error for error in _policy_errors(
-                   mcc.edit_data(raw, change, ""), prices, repo_slugs=repo_slugs)
-                   if error not in baseline])
-    return {
-        "allowed": not refused,
-        "reason": _add_group_reason(change, refused, raw) if refused else None,
-    }
-
-
-def _add_group_reason(change: dict, refused: list[str], raw: dict) -> str:
-    """Why no group can be added, for the console: the change script's why for
-    each finding, after one opening sentence. The probe's name, label and
-    purpose are this generator's own words, never the CEO's, so the change it
-    describes is never read back to him."""
-    import model_config_change as mcc
-
-    sentences = ["A new group cannot be added right now."]
-    for reason in refused:
-        why = mcc._why(reason, change, raw).rstrip(".")
-        sentence = f"{why[:1].upper()}{why[1:]}."
-        if sentence not in sentences:
-            sentences.append(sentence)
-    return " ".join(sentences)
-
-
-def _entry_id(entry) -> str | None:
-    """The model id of an `excluded` entry, `{model, reason}` or bare."""
-    return entry.get("model") if isinstance(entry, dict) else entry
-
-
+# The console's change script asks these two about the pinned Claude Code; the
+# generator itself no longer does, and both leave with it (DRE-6982).
 def _claude_code_floors(floors: dict[str, str] | None,
                         installed: str | None) -> tuple[dict[str, str], str | None]:
     """(floors, installed), each read off this tree the way `claude_code_pin`
@@ -498,9 +284,12 @@ def _claude_code_floors(floors: dict[str, str] | None,
     return floors, installed
 
 
-def _cannot_run(model: str, floors: dict[str, str], installed: str | None) -> list[str]:
+def _cannot_run(model: str, floors: dict[str, str], installed: str | None,
+                label: str) -> list[str]:
     """The one refusal a priced model still meets (DRE-6786): the pinned
-    Claude Code is older than its floor."""
+    Claude Code is older than its floor. ``label`` is the model's name in
+    plain words, which the caller supplies: this module imports none of the
+    old save route's words (DRE-8020)."""
     floor = floors.get(model)
     if not floor:
         return []
@@ -508,20 +297,7 @@ def _cannot_run(model: str, floors: dict[str, str], installed: str | None) -> li
 
     if claude_code_pin.version_key(installed) >= claude_code_pin.version_key(floor):
         return []
-    return [f"Our pinned Claude Code cannot run {model_label(model)} yet."]
-
-
-def _agent_entry(cfg: dict, name: str, kind: str | None, moves: list) -> dict:
-    return {
-        "name": name,
-        "label": name.replace("-", " ").title(),
-        "about": cfg["about"].get(name),
-        "group": kind,
-        # Where it runs (DRE-6833): `session` for a name in `session_agents`,
-        # whose group the console shows and nothing selects on.
-        "runs_in": "session" if name in cfg["session_agents"] else "pipeline",
-        "moves": moves,
-    }
+    return [f"Our pinned Claude Code cannot run {label} yet."]
 
 
 # --------------------------------------------------------------------------- #
@@ -628,12 +404,6 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     cfg = load_config()
-    # The raw document, beside the normalized one: a choice is judged on a deep
-    # copy of it carrying that one option (DRE-6635). load_config validated it.
-    import yaml
-
-    raw = yaml.safe_load(CONFIG.read_text())
-    choices = render_choices(raw, cfg, declared_prices())
     targets = [
         (
             FALLBACK_TARGET,
@@ -646,8 +416,6 @@ def main(argv: list[str] | None = None) -> int:
             ),
         ),
         (REGISTRY_TARGET, lambda text: splice_registry(text, cfg)),
-        # A whole generated file, so a missing one is stale, not an error.
-        (CHOICES_TARGET, lambda text: choices),
     ]
 
     stale = False

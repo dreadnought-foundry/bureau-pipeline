@@ -73,22 +73,12 @@ _OWN_LADDERS = (
 _FROZEN_LADDERS = (
     "The expected rungs are members of the frozen fixture's ladders, which the "
     "test classifies the candidate against and no console save touches.")
-_FROZEN_CAUTIONS = (
-    "The ids are read against the frozen fixture's ladders, prices and "
-    "set-aside list, the files of 2026-10-10, which no console save touches.")
 _FROZEN_AGENTS = (
     "The agents are read in the frozen fixture tree the test builds from "
     "tests/fixtures/model-config-frozen, which no console save touches.")
-_FROZEN_CHANGES = (
-    "The change set is applied to the frozen fixture's models.yaml of "
-    "2026-10-10 and the ids and projects are read back from the text it "
-    "writes, which no console save touches.")
 _ABSENT_KEY = (
     "The test deletes `projects` from a frozen-fixture config and asserts the "
     "normalizer's default for an absent key, not the committed map.")
-_OWN_MOVE = (
-    "The agent and group are the move the test's own change set makes, read "
-    "back from the file that change set wrote.")
 _RULES_BLOCK = (
     "The names are the contracted values of config/models.yaml's `rules:` "
     "block (DRE-6992), which the console reads and never writes.")
@@ -146,33 +136,8 @@ ALLOWED: dict[str, str] = {
     "tests/test_model_adoption.py::test_load_prices_rejects_an_entry_missing_a_side": _OWN_INPUT,
     "tests/test_model_adoption.py::test_the_newer_opus_with_no_declared_price_is_ask":
         _FROZEN_LADDERS,
-    "tests/test_model_caution.py::test_a_dearer_model_names_both_prices": _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_a_standing_exception_is_current_when_given":
-        _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_dearer_on_one_side_is_dearer": _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_model_label_moved_and_the_generator_imports_it":
-        _OWN_INPUT,
-    "tests/test_model_caution.py::test_set_aside_date_is_the_first_date_in_the_excluded_reason":
-        _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_the_current_model_and_a_cheaper_one_carry_no_caution":
-        _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_the_dearest_model_for_builders_names_the_busiest_group":
-        _FROZEN_CAUTIONS,
-    "tests/test_model_caution.py::test_the_nine_cautioned_pairs_of_2026_10_10": _FROZEN_CAUTIONS,
     "tests/test_model_config.py::ConfigDrivesTheFleetTest.test_selector_degrades_to_the_mirror_when_the_config_is_unreadable":
         _FROZEN_AGENTS,
-    "tests/test_model_config_change.py::test_a_project_builder_on_a_reviewer_model_says_where_it_is_reviewed":
-        _FROZEN_CHANGES,
-    "tests/test_model_config_change.py::test_an_added_group_on_fable_5_1_is_cautioned_against_the_builders_default":
-        _FROZEN_CAUTIONS,
-    "tests/test_model_config_change.py::test_clearing_the_only_exception_leaves_projects_empty_and_sets_aside":
-        _FROZEN_CHANGES,
-    "tests/test_model_config_change.py::test_replacing_a_project_choice_sets_the_replaced_model_aside_again":
-        _FROZEN_CHANGES,
-    "tests/test_model_config_change.py::test_reviewers_on_opus_5_5_say_where_an_opus_build_is_reviewed":
-        _FROZEN_CHANGES,
-    "tests/test_model_config_change.py::test_the_dre_6789_ids_are_where_the_frozen_file_puts_them":
-        _FROZEN_CHANGES,
     "tests/test_model_projects_schema.py::TestNormalizedShape.test_a_kind_with_no_label_or_purpose_gets_the_defaults":
         _ABSENT_KEY,
     "tests/test_model_rules_and_markers.py::test_a_planner_the_block_admits_may_hold_the_judgement_kind":
@@ -224,10 +189,6 @@ ALLOWED: dict[str, str] = {
         _ABSENT,
     "tests/test_qa_review_shadow.py::ShadowVerdictFileTest.test_a_real_approve_is_written_with_the_eight_keys_and_one_line":
         _OWN_INPUT,
-    "tests/test_session_agents.py::test_a_session_agent_can_be_moved_again_from_group_to_group":
-        _OWN_MOVE,
-    "tests/test_session_agents.py::test_the_change_set_of_run_38114763170_validates_and_applies":
-        _OWN_MOVE,
     "tests/test_shadow_replay_unknown_builder.py::ClauseTest.test_an_empty_recorded_model_means_opus_5_5":
         _RECORDED_ON,
     "tests/test_tdd_commit_check.py::ClassifyPathGeneratedRegionTest.test_a_path_with_no_proving_generator_stays_code":

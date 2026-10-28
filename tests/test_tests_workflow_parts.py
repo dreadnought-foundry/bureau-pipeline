@@ -3,7 +3,7 @@ job leave Pipeline Tests, with the scripts that decided when they ran.
 
 The walks (`tests/*_keeps_the_suite_green.py`, through
 `tests/console_change_walk.py`) copied the tree, applied a console save the
-way `model-config-change.yml` did and ran the model tests inside the copy, once
+way the old pull-request save route did and ran the model tests inside the copy, once
 per case. They ran in jobs of their own (DRE-6909), one walk to a job
 (DRE-6935), across shards (DRE-7907), only when a change could reach them
 (DRE-7908); the suite-green job (DRE-6873) ran the change walk's cases in four
@@ -138,9 +138,10 @@ def test_no_step_runs_a_walk_or_its_reach_script():
 
 
 def test_the_durations_refresh_says_why_it_mints_first_in_its_own_words():
-    # The route it pointed to is gone: model-config-change.yml carries
-    # nothing since DRE-6977 and is deleted by DRE-8021.
-    assert "model-config-change.yml" not in TESTS_WF.read_text(encoding="utf-8")
+    # The route it pointed to is gone: the console's pull-request save route
+    # carried nothing since DRE-6977, and DRE-8021 deleted its workflow.
+    assert not list(TESTS_WF.parent.glob("model-config-*.yml"))
+    assert "model-config-" not in TESTS_WF.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

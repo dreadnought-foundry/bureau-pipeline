@@ -955,6 +955,58 @@ jobs:
           git config --global user.name "claude[bot]"
           git config --global user.email "41898282+claude[bot]@users.noreply.github.com"
 
+      # THE NAME GUARD, AT GIT'S OWN SEAM (DRE-8168). The record branch must
+      # not reach GitHub while it carries a form from the live roster
+      # (scripts/name_redact.py, DRE-8166). The agent pushes its own branch
+      # inside its step, so a step after it could not stop that push: the
+      # guard is a pre-push hook, agent-fix.yml's `Refuse a push onto a merged
+      # pull request` shape — written AFTER the checkout (which would
+      # overwrite it) and BEFORE the agent. Every push the job makes runs it:
+      # the agent's, the push rescue's and the shadow push's, all in this
+      # checkout. The record's pull request body is rebuilt from the record at
+      # the pushed head (DRE-7813), so a guarded record is a guarded body.
+      #
+      # A hook does not inherit the environment of the step that installed
+      # it, so every value is baked in. The token is the worker's, whose App
+      # reads the organization's members — on a proof run only: the agent
+      # can read the hook, and a shadow's agent holds a read-only token on
+      # purpose (DRE-7286), so a shadow bakes none. A push step that holds
+      # its own fresh mint as PUSH_TOKEN — the rescue, the shadow push — hands
+      # the hook that one instead, because the worker token is an hour old by
+      # then (DRE-3043) and a roster read on a dead token is a refusal.
+      #
+      # Behind the switch: `name_redact.live` reads NAME_GUARD_LIVE, so until
+      # the repository variable is exactly `true` the hook prints what it
+      # would refuse and lets the push through (config/switches.json). The
+      # step prints one line and never a credential. Every `${{ }}` in env:,
+      # none in the script.
+      - name: Install the name guard
+        env:
+          GH_TOKEN: ${{ !inputs.shadow && steps.worker.outputs.token || '' }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
+          GUARD_OWNER: ${{ github.repository_owner }}
+          GUARD_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GUARD_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          HOOKS=$(git rev-parse --git-path hooks)
+          mkdir -p "$HOOKS"
+          {
+            echo '#!/usr/bin/env bash'
+            printf 'export GH_TOKEN=${PUSH_TOKEN:-%q}\n' "$GH_TOKEN"
+            for name in LINEAR_API_KEY LINEAR_API_KEY_FALLBACK NAME_GUARD_LIVE GITHUB_ACTOR GITHUB_TRIGGERING_ACTOR; do
+              printf 'export %s=%q\n' "$name" "${!name:-}"
+            done
+            printf 'exec python3 %q guard --pre-push --default-ref %q --owner %q --actor "$GITHUB_ACTOR" --actor "$GITHUB_TRIGGERING_ACTOR"\n' \
+              "$GUARD_ROOT/.bureau-pipeline/scripts/name_redact.py" "origin/$GUARD_DEFAULT_BRANCH" "$GUARD_OWNER"
+          } > "$HOOKS/pre-push"
+          chmod +x "$HOOKS/pre-push"
+          LIVE=false
+          if [ "$NAME_GUARD_LIVE" = "true" ]; then LIVE=true; fi
+          echo "name-guard: installed — live=$LIVE"
+
       # ---- THE AGENT STEP, AND THE ONE REFUSAL IT IS RETRIED FOR (DRE-4108) ----
       # agent-task.yml's design, copied: three attempts, each gated on
       # `claude_rate_limit_retry.py decide`, which fires ONLY when the step
@@ -1926,6 +1978,8 @@ jobs:
           MODEL: ${{ steps.shadow_model.outputs.model }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DISPATCHED_AT: ${{ github.event.client_payload.dispatched_at }}
+          # The name guard's switch, which proof_shadow.py push reads (DRE-8168).
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: |
           python3 - <<'PY'
           import os
@@ -2037,6 +2091,8 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           CARD_URL: ${{ github.event.client_payload.url }}
           REPO: ${{ github.repository }}
+          # The name guard's switch, which proof_pr_body.py reads (DRE-8168).
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: |
           python3 .bureau-pipeline/scripts/proof_pr_body.py refresh \
             --repo "$REPO" --card "$CARD" --card-url "$CARD_URL"
@@ -2102,6 +2158,12 @@ jobs:
           BUREAU_SERVER_URL: ${{ github.server_url }}
           BUREAU_REPOSITORY: ${{ github.repository }}
           BUREAU_RUN_ID: ${{ github.run_id }}
+          # The name guard's switch, carried here for the escalation comment
+          # this script posts (DRE-8168). Nothing in the script reads it yet:
+          # the reporter goes through the name seam under DRE-8170, which
+          # leaves this workflow to the wiring card. Until then the comment
+          # is not guarded.
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: bash .bureau-pipeline/scripts/report_proof_result.sh
 
       # The local run's teardown (DRE-6027), on every outcome: it ends the

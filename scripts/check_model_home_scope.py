@@ -53,8 +53,7 @@ mint therefore asks for no subset, and its token carries the installation's
 own permissions on the one repository, variables included. Should a pinned
 release declare a variables input, it goes in `VARIABLES_INPUTS` and a mint
 may ask for that one input. The write mints keep no `continue-on-error`, so
-a refused write is red; tests/test_model_home_carry.py and
-tests/test_model_adoption_workflow.py hold that.
+a refused write is red; tests/test_model_adoption_workflow.py holds that.
 
 THE DECLARATIONS ARE DERIVED, never listed. Walking the source of `scripts/`
 by AST, the check finds every script with a function that reaches the home in

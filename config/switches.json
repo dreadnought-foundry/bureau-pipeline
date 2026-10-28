@@ -30,9 +30,9 @@
     },
     {
       "name": "NAME_GUARD_LIVE",
-      "reader": ".github/workflows/qa-review.yml",
-      "step": "Post verdict or neutral status",
-      "means": "The critic's comment goes through the name redaction seam and guard before it posts, and a comment the guard still refuses is held behind a neutral status, instead of posting as composed."
+      "reader": ".github/workflows/proof-task.yml",
+      "step": "Install the name guard",
+      "means": "Every push the proof run makes (the agent's, the push rescue's and the shadow push) and the record pull request's body refresh refuse a person's name from the live roster, instead of printing what they would refuse."
     }
   ]
 }
