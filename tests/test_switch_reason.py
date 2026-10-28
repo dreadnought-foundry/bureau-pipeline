@@ -71,6 +71,9 @@ ON_MAIN = {
     "HYGIENE_LIVE": (".github/workflows/hygiene.yml", "Decide dry run"),
     # DRE-7179: the Triage Repair run, read the way hygiene.yml reads its own.
     "TRIAGE_REPAIR_LIVE": (".github/workflows/triage-repair.yml", "Decide dry run"),
+    # DRE-8170: the name guard, read where the critic's comment posts.
+    "NAME_GUARD_LIVE": (".github/workflows/qa-review.yml",
+                        "Post verdict or neutral status"),
 }
 
 
@@ -94,10 +97,10 @@ class TestCatalog:
         assert doc["companion_suffix"] == "_OFF_UNTIL"
         assert doc["alarm_after_hours"] == 12
 
-    def test_it_declares_exactly_the_four_switches_on_main(self):
+    def test_it_declares_exactly_the_five_switches_on_main(self):
         rows = switch_reason.load()["switches"]
         assert {r["name"]: (r["reader"], r["step"]) for r in rows} == ON_MAIN
-        assert len(rows) == 4
+        assert len(rows) == 5
         for row in rows:
             assert set(row) == {"name", "reader", "step", "means"}
             assert row["means"].strip().endswith(".")
@@ -115,7 +118,7 @@ class TestCatalog:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "check"],
             capture_output=True, text=True, cwd=ROOT)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert "8 switch read(s), 4 row(s), 0 problem(s)" in done.stdout
+        assert "10 switch read(s), 5 row(s), 0 problem(s)" in done.stdout
 
     def test_reads_are_discovered_from_the_workflows(self):
         # Each switch is read where it acts, and once more by the sweep's
@@ -491,7 +494,7 @@ class TestMain:
         assert len(gql.calls) == 2
         assert ("switches: HYGIENE_LIVE is off — until DRE-1, DRE-2 land: "
                 "DRE-1 Todo, DRE-2 unread") in lines
-        assert len(_switch_lines(lines)) == 4
+        assert len(_switch_lines(lines)) == 5
 
     def test_the_budget_trailer_is_last(self, capsys):
         _, lines, _ = _main(capsys, {COMPANION: THREE},
@@ -507,7 +510,7 @@ class TestMain:
             capture_output=True, text=True, cwd=ROOT, env=env)
         assert done.returncode == 0, done.stdout + done.stderr
         lines = done.stdout.splitlines()
-        assert len(_switch_lines(lines)) == 4
+        assert len(_switch_lines(lines)) == 5
         assert lines[-1].startswith("linear-budget:")
 
 
@@ -556,7 +559,7 @@ class TestStep:
         assert _unplumbed(_read_step(), switch_reason.load()["switches"]) == []
         env = _read_step()["env"]
         for name in ("PROOF_DISPATCH_LIVE", "GREEN_LIGHT_REPLY_LIVE", "HYGIENE_LIVE",
-                     "TRIAGE_REPAIR_LIVE"):
+                     "TRIAGE_REPAIR_LIVE", "NAME_GUARD_LIVE"):
             assert env[name] == f"${{{{ vars.{name} }}}}"
             assert env[f"{name}_OFF_UNTIL"] == f"${{{{ vars.{name}_OFF_UNTIL }}}}"
 
@@ -1123,7 +1126,7 @@ class TestDryRun:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "--dry-run"],
             capture_output=True, text=True, cwd=ROOT, env=env)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert len(_switch_lines(done.stdout.splitlines())) == 4
+        assert len(_switch_lines(done.stdout.splitlines())) == 5
 
 
 class TestActRow:
