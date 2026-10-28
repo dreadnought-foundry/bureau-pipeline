@@ -164,6 +164,12 @@ The rule (engineering standard: "commit the failing test FIRST"):
     the step writes, and nothing else: a changed existing entry, a second
     entry, a comment or an edited function beside it is code. The opener and
     branch conditions are the mirror rule's, unchanged.
+  • So is the owner org's tenant (DRE-8249). Since DRE-8210 the step also
+    appends one `"<org lowercased>": "<tenant slug>"` member to `orgs` in
+    `console/backend/org-tenants.json` when the org has none, and
+    `is_routing_entry_change` relieves that one member with the same
+    exactness: an existing entry rewritten or removed, a second entry or an
+    edited `_comment` is code.
   • The same facts REMOVED are not code either (DRE-7866). Since DRE-7537
     retirement's `50_retire_route.py` opens its own routing PR on that branch
     and takes out the one `REPO_IDS` entry, the one `PROJECT_IDENTITIES`
@@ -171,7 +177,9 @@ The rule (engineering standard: "commit the failing test FIRST"):
     onboarding wrote. `is_routing_entry_removal` relieves exactly that one
     entry, as `is_routing_entry_change` read backwards — the same exactness
     and the same opener and branch conditions. It matters most for the first
-    of those commits, which deletion detection never covers.
+    of those commits, which deletion detection never covers. An
+    `org-tenants.json` removal is not relieved: retirement leaves the org's
+    entry in place, so nothing on that branch writes one.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -387,7 +395,8 @@ ONBOARD_BOT = "agent-bureau-bot"
 # neighboring file is held to the rule. Since DRE-7379 the same PR also writes
 # three per-repo console facts, one entry each, and `is_routing_entry_change`
 # relieves exactly that entry (DRE-7431): `sources.py` is a mirror that also
-# holds one of them, and the last two paths are fact files and nothing else.
+# holds one of them, and the last three paths are fact files and nothing else.
+# The owner org's tenant in `org-tenants.json` is the fourth fact (DRE-8249).
 ONBOARD_ROUTING_PATHS = frozenset({
     # bureau-pipeline
     "config/repo-map.json",
@@ -401,6 +410,7 @@ ONBOARD_ROUTING_PATHS = frozenset({
     "demo/demo_library.py",
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
+    "console/backend/org-tenants.json",
 })
 
 # The markers agent-bureau's mirror generator splices between — the region its
@@ -413,9 +423,12 @@ _END_REPO_MIRROR = "END generated repo mirror"
 _ROUTING_FACT_FILES = frozenset({
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
+    "console/backend/org-tenants.json",
 })
 # The fact file whose one relieved change is a new repo under `repos`.
 _RUNNER_ROUTING = "console/backend/runner-routing.json"
+# The fact file whose one relieved change is a new org under `orgs` (DRE-8249).
+_ORG_TENANTS = "console/backend/org-tenants.json"
 # Decimal GitHub ids, the way `80_routing` writes them into `REPO_IDS`.
 _DECIMAL_ID = re.compile(r"[0-9]+")
 
@@ -879,24 +892,40 @@ def _json_document(text: str):
         return None
 
 
-def _adds_one_runner_routing_repo(before: str, after: str) -> bool:
-    """True iff `after` is `before` with ONE new repo, an object, added under
-    the top-level `repos` object, and nothing else changed — every other
-    member, value and member order compared as JSON."""
+def _adds_one_json_member(before: str, after: str, container: str,
+                          member_ok) -> bool:
+    """True iff `after` is `before` with ONE new member added under the
+    top-level object `container`, `member_ok(name, value)` for it, and
+    nothing else changed — every other member, value and member order
+    compared as JSON."""
     doc_before, doc_after = _json_document(before), _json_document(after)
     if not isinstance(doc_before, dict) or not isinstance(doc_after, dict):
         return False
-    repos_before, repos_after = doc_before.get("repos"), doc_after.get("repos")
-    if not isinstance(repos_before, dict) or not isinstance(repos_after, dict):
+    in_before, in_after = doc_before.get(container), doc_after.get(container)
+    if not isinstance(in_before, dict) or not isinstance(in_after, dict):
         return False
-    added = [k for k in repos_after if k not in repos_before]
-    if len(added) != 1 or len(repos_after) != len(repos_before) + 1:
+    added = [k for k in in_after if k not in in_before]
+    if len(added) != 1 or len(in_after) != len(in_before) + 1:
         return False
-    if not isinstance(repos_after[added[0]], dict):
+    if not member_ok(added[0], in_after[added[0]]):
         return False
-    rest = {**doc_after, "repos": {
-        k: v for k, v in repos_after.items() if k != added[0]}}
+    rest = {**doc_after, container: {
+        k: v for k, v in in_after.items() if k != added[0]}}
     return json.dumps(rest) == json.dumps(doc_before)
+
+
+def _adds_one_runner_routing_repo(before: str, after: str) -> bool:
+    """One new repo, an object, under `repos` in runner-routing.json."""
+    return _adds_one_json_member(
+        before, after, "repos", lambda _name, value: isinstance(value, dict))
+
+
+def _adds_one_org_tenant(before: str, after: str) -> bool:
+    """One new org under `orgs` in org-tenants.json, the way `80_routing`
+    writes it (DRE-8210): the org lowercased, its tenant slug a string."""
+    return _adds_one_json_member(
+        before, after, "orgs",
+        lambda name, value: name == name.lower() and isinstance(value, str))
 
 
 def is_routing_entry_change(
@@ -913,7 +942,10 @@ def is_routing_entry_change(
         mirror and the step writes it once, so its repo-mirror regions are
         put back to `before`'s first — the region is `is_routing_mirror_change`'s
         to prove, and everything outside it must be the entry alone;
-      * `console/backend/runner-routing.json` — one new repo under `repos`.
+      * `console/backend/runner-routing.json` — one new repo under `repos`;
+      * `console/backend/org-tenants.json` — one new org under `orgs`,
+        `"<org lowercased>": "<tenant slug>"`, `_comment` and every other
+        org unchanged (DRE-8249).
 
     Entry-only, never a whole-file pass: any other line of the file is code.
     Fail-closed like the mirror rule: a path outside the set, a missing
@@ -924,6 +956,8 @@ def is_routing_entry_change(
         return False
     if path == _RUNNER_ROUTING:
         return _adds_one_runner_routing_repo(before, after)
+    if path == _ORG_TENANTS:
+        return _adds_one_org_tenant(before, after)
     literal = _ROUTING_FACT_LITERALS.get(path)
     if literal is None:
         return False
@@ -947,7 +981,11 @@ def is_routing_entry_removal(
     `before`, so this is that rule read backwards, with all of its exactness:
     one entry, in the shape the step writes, from exactly that literal, and
     no other line changed. In `sources.py` the repo-mirror regions are
-    likewise left for `is_routing_mirror_change` to prove."""
+    likewise left for `is_routing_mirror_change` to prove. `org-tenants.json`
+    is never relieved here (DRE-8249): retirement leaves the org's entry in
+    place, so a removal there is code."""
+    if path == _ORG_TENANTS:
+        return False
     return is_routing_entry_change(path, after, before)
 
 
