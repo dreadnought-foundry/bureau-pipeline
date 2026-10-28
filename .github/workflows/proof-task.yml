@@ -1061,6 +1061,30 @@ jobs:
           # linear_ops.py and spoken_thread.py, not a lock on Linear: the key
           # above stays, because a shadow reads the card as the real run does.
           BUREAU_LINEAR_READ_ONLY: ${{ inputs.shadow && '1' || '' }}
+          # BACKGROUND TASKS OFF (DRE-8258). On 2026-10-28 (agent-bureau run
+          # 40746950893, card DRE-8162) the proof agent started the card's
+          # five-minute desk_speed.py run in the background and ended its
+          # turn: "Both runs are still going. I'll pick up when they finish."
+          # In a headless run the session ends at the final message: the
+          # runner terminated the orphaned process, the speed run never
+          # finished, and the record was never written. The fifth model step
+          # to do it — DRE-5271 fixed agent-fix.yml's Fix step, DRE-5564 the
+          # planner, DRE-6523 the repair agent, DRE-6959 the build.
+          #
+          # CHECKED, NOT GUESSED, by the Fix step's comment in agent-fix.yml:
+          # https://code.claude.com/docs/en/env-vars documents
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS — "Set to `1` to disable all
+          # background task functionality, including the `run_in_background`
+          # parameter on Bash and subagent tools, auto-backgrounding, and the
+          # Ctrl+B shortcut" — so a command that reaches its timeout is
+          # stopped and handed back in the foreground, and the agent keeps
+          # its turn to write what it saw. The per-command limit is not
+          # raised, for the reason agent-fix.yml gives; the prompt's item 2
+          # has the agent pass a long observation a Bash `timeout` up to the
+          # tool's 600-second ceiling instead, and write a command that
+          # cannot finish in that as a `Not observed.` row. In `env:`, never
+          # `with:`. Pinned by tests/test_proof_run_no_background_wait.py.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1150,6 +1174,19 @@ jobs:
             2. Observe every acceptance criterion as the read-only identities —
                the one exception is the sandbox presses briefs/proof.md names,
                which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Background tasks are off in this run, so a command that
+               outlasts its timeout is stopped rather than moved to the
+               background. Never end your turn while a background task is
+               still running — in this headless run your session ends at your
+               final message, no notification ever arrives, and an observation
+               still running when you stop is lost with the runner. Run every
+               command a criterion needs in the foreground, to completion, and
+               write the record only from its finished output. Give a long
+               observation a Bash `timeout` long enough for it, up to the
+               tool's 600-second ceiling: a five-minute command fits. A command
+               that cannot finish within 600 seconds is never backgrounded —
+               its row reads
+               `Not observed. cause: out-of-reach — <the command did not finish in 600 seconds, and what it printed by then>`.
                Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
@@ -1308,6 +1345,11 @@ jobs:
           # linear_ops.py and spoken_thread.py, not a lock on Linear: the key
           # above stays, because a shadow reads the card as the real run does.
           BUREAU_LINEAR_READ_ONLY: ${{ inputs.shadow && '1' || '' }}
+          # Background tasks off, as in attempt 1 (DRE-8258):
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, documented at
+          # https://code.claude.com/docs/en/env-vars — attempt 1's comment
+          # gives the incident and the reasoning.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1397,6 +1439,19 @@ jobs:
             2. Observe every acceptance criterion as the read-only identities —
                the one exception is the sandbox presses briefs/proof.md names,
                which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Background tasks are off in this run, so a command that
+               outlasts its timeout is stopped rather than moved to the
+               background. Never end your turn while a background task is
+               still running — in this headless run your session ends at your
+               final message, no notification ever arrives, and an observation
+               still running when you stop is lost with the runner. Run every
+               command a criterion needs in the foreground, to completion, and
+               write the record only from its finished output. Give a long
+               observation a Bash `timeout` long enough for it, up to the
+               tool's 600-second ceiling: a five-minute command fits. A command
+               that cannot finish within 600 seconds is never backgrounded —
+               its row reads
+               `Not observed. cause: out-of-reach — <the command did not finish in 600 seconds, and what it printed by then>`.
                Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
@@ -1553,6 +1608,11 @@ jobs:
           # linear_ops.py and spoken_thread.py, not a lock on Linear: the key
           # above stays, because a shadow reads the card as the real run does.
           BUREAU_LINEAR_READ_ONLY: ${{ inputs.shadow && '1' || '' }}
+          # Background tasks off, as in attempt 1 (DRE-8258):
+          # CLAUDE_CODE_DISABLE_BACKGROUND_TASKS, documented at
+          # https://code.claude.com/docs/en/env-vars — attempt 1's comment
+          # gives the incident and the reasoning.
+          CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -1642,6 +1702,19 @@ jobs:
             2. Observe every acceptance criterion as the read-only identities —
                the one exception is the sandbox presses briefs/proof.md names,
                which you make yourself as item 4 says (`⏳ 2/5 observing`).
+               Background tasks are off in this run, so a command that
+               outlasts its timeout is stopped rather than moved to the
+               background. Never end your turn while a background task is
+               still running — in this headless run your session ends at your
+               final message, no notification ever arrives, and an observation
+               still running when you stop is lost with the runner. Run every
+               command a criterion needs in the foreground, to completion, and
+               write the record only from its finished output. Give a long
+               observation a Bash `timeout` long enough for it, up to the
+               tool's 600-second ceiling: a five-minute command fits. A command
+               that cannot finish within 600 seconds is never backgrounded —
+               its row reads
+               `Not observed. cause: out-of-reach — <the command did not finish in 600 seconds, and what it printed by then>`.
                Write the record at the path the card's
                `**Files:**` line names, in the shape briefs/proof.md gives:
                one row per criterion, each opening `Met.`, `Not met.` or
