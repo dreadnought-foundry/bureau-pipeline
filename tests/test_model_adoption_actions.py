@@ -354,8 +354,8 @@ class TestApply:
         sentence = maa.not_retired_sentence(OPUS55)
         assert sentence == (
             f"{OPUS55} is on no group and no project of the home and is not "
-            "retired; retiring it is a code change a person makes once part 3 "
-            "has taken the choices out of config/models.yaml")
+            "retired; retiring it is a code change a person makes in "
+            "config/models.yaml")
         assert sentence in out.out
         result = json.loads((tmp_path / "applied.json").read_text())
         assert sentence in result["sentences"]
