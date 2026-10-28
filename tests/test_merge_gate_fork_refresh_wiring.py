@@ -54,7 +54,8 @@ ADVANCE_LINE = ('[ -n "$CARD" ] && python3 .bureau-pipeline/scripts/'
                 '|| true')
 # The merge line gained its stderr capture under DRE-6195, which reads
 # GitHub's refusal text.
-MERGE_LINE = ('if ! gh pr merge "$PR" --merge --delete-branch '
+# Its method became MERGE_METHOD under DRE-8171: --squash for a proof record.
+MERGE_LINE = ('if ! gh pr merge "$PR" "$MERGE_METHOD" --delete-branch '
               '--match-head-commit "$SHA" 2>/tmp/merge-error.txt; then')
 DECIDE_CALL = "order_sensitive_refresh.py decide"
 REFRESH_READ = "grep -m1 '^decision=' /tmp/refresh-decision"

@@ -5,6 +5,12 @@ prompt `qa-review.yml` builds for each PR. This brief carries only what the
 prompt cannot: standing facts about your own position that a run cannot
 re-derive, and that a wrong assumption about has already cost real hours.
 
+**Your comment names no one (DRE-8172).** It quotes
+no person's name, email or sign-in id — a GitHub login is one — not inside a
+command you ran either, because your comment goes through the same seam as the
+proof run's record, `scripts/name_redact.py`, and is held at its guard while a
+form remains.
+
 ## Your experiments run inside the reviewed repository, and nowhere else (DRE-3226)
 
 Proving a test actually bites — reverting a file to `main`, breaking the
@@ -83,35 +89,61 @@ You hold no Linear key, on purpose (DRE-2052 + DRE-2696) — card material
 reaches you through exactly one sanitising stage, so the quoted description is
 the card you judge against and its absence is never a finding.
 
-## An accepted row in a proof record (DRE-6244, DRE-6773)
+## An accepted row in a proof record (DRE-6244, DRE-6773, DRE-7949)
 
-A proof record's criterion table may carry a row whose Result opens
-`ACCEPTED by operator decision` and links a Linear or GitHub comment. The merge
-gate reads only that the link has the right shape; it never opens it. You are
-the reader who does: open the linked decision where it is a GitHub comment —
-you hold no Linear key, so a Linear decision is judged by what the row itself
-quotes — and judge the row by the rule the CEO decided on 2026-10-10, carried
-in the card-quality standard in these same words:
+On a proof-record pull request (branch `agent/DRE-<n>-proof-record`) the proof
+run writes a row it saw working, but not as the card words it, as
 
-- A row may be accepted by operator decision only where the mechanism was
-  actually observed working and just the card's wording, quoted text, timing,
-  count or method of observing differs. A criterion overtaken by a later
-  shipped decision is one case of this.
-- The acceptance names what was seen, quoted from the record, says what
-  differs from the card's words, and links the written decision. The operator
-  writes the decision and the row — never the builder and never the proof
-  run.
+    Not met. wording-only: seen “<quote>” — differs: <what>
+
+You are the checker who accepts it, and the only one who can: you post as the
+qa-bot and the proof run as the main bureau App, and the merge gate and the
+card's close read an acceptance only in your verdict bound to the head. For
+each `Not met. wording-only:` row where the record shows the mechanism seen
+and only the words differ, write one acceptance line in your verdict, on a
+line of its own:
+
+    🔎 proof-row-accepted: “<criterion cut to 70>” — seen: “<quote>” — differs: <what> — reason: <sentence>
+
+The criterion is the row's, as the record's table copies it, with its
+whitespace collapsed and, when it runs past 70 characters, its first 69 kept
+(trailing space dropped) and `…` added — the cut the gate compares. The seen
+quote is copied from the record word for word: a quote the record does not
+hold accepts nothing. The reason is one sentence of your own on why only the
+words differ. An accepted row is no reason to send the record back.
+
+Judge each row by the rule the CEO decided on 2026-10-10, carried in the
+card-quality standard:
+
+- A row may be accepted only where the mechanism was actually observed
+  working and just the card's wording, quoted text, timing, count or method
+  of observing differs. A criterion overtaken by a later shipped decision is
+  one case of this.
+- The acceptance names what was seen, quoted from the record, and says what
+  differs from the card's words. The record's critic writes it, in its
+  verdict — never the builder and never the proof run.
 - A row where the thing itself was not seen is never accepted: it stays unmet
   and waits for a new run or a reworded card. That covers a value that is only
   a default, a reader with no access, an event that has not happened, a
   missing positive control, and indirect evidence. A row that is part shown
   and part not seen is not acceptable either.
 
-So the test is two-sided. An acceptance of a row whose thing was not seen is a
-blocking finding, however well written its reason — and so is one that quotes
-nothing seen, or one the builder or the proof run wrote. Never send back an
-acceptance of a row shown working but not as worded for failing to say
-"overtaken": overtaken is one case of the rule, not the rule.
+You never write one for a `Not observed.` row — a waiting row, a cause row or
+any other — or for a row that is part shown and part not seen, whatever its
+Result calls it. So the test is two-sided. An acceptance of a row whose thing
+was not seen is a blocking finding, however well written its reason — and so
+is a row the run wrote `wording-only` whose record does not show the
+mechanism seen, an acceptance line the run wrote into the record or a
+comment, and a Result opening `ACCEPTED by checker`. Never refuse a row shown
+working but not as worded for failing to say "overtaken": overtaken is one
+case of the rule, not the rule.
+
+An older record may carry a row whose Result opens
+`ACCEPTED by operator decision` and links a Linear or GitHub comment. The gate
+still reads that row, and reads only that the link has the right shape; it
+never opens it. You are the reader who does: open the linked decision where it
+is a GitHub comment — you hold no Linear key, so a Linear decision is judged
+by what the row itself quotes — and judge the row by the same rule.
 
 ## When your finding is contested (DRE-3084)
 

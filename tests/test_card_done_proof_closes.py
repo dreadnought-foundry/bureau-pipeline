@@ -304,6 +304,70 @@ def test_proof_title_match_is_anchored_and_case_insensitive():
 
 
 # --------------------------------------------------------------------------
+# card-done: a SQUASHED record closes the same way (DRE-8171)
+# --------------------------------------------------------------------------
+#: The squash commit the merge gate puts on `main` for a record branch — a
+#: new commit, never the branch head the critic reviewed.
+SQUASH = "c" * 40
+
+
+def _squashed_pr(comments) -> dict:
+    """The merged record as `gh pr view` renders a squash: `mergeCommit.oid`
+    is the commit on `main`, `headRefOid` the branch head, unchanged."""
+    return dict(_merged_pr(comments), mergeCommit={"oid": SQUASH})
+
+
+def _card_done_reading_the_record(pr):
+    """cmd_card_done over `pr`, keeping the contents read so the test can
+    say at which commit the record was opened."""
+    contents, _, patches = _reads()
+    buf = io.StringIO()
+    with patch.object(
+        linear_ops, "get_issue", return_value=_issue(PROOF_TITLE, PROOF_LABELS)
+    ), patch.object(linear_ops, "cmd_state") as state, patch.object(
+        linear_ops, "cmd_comment"
+    ) as comment, patch.object(
+        linear_ops, "read_merged_pr", return_value=pr
+    ), patches[0], patches[1], patches[2], redirect_stdout(buf):
+        linear_ops.cmd_card_done(CARD, PR_URL)
+    return buf.getvalue(), state, comment, contents
+
+
+def test_a_squashed_record_approved_at_its_branch_head_closes_its_card():
+    """The merge gate squashes `agent/DRE-<n>-proof-record`, so the commit on
+    `main` is not the head the critic reviewed. The APPROVE binds to
+    `headRefOid`, which the squash leaves alone, and the record is read at
+    that same head: the card closes, naming the approved commit."""
+    pr = _squashed_pr([_verdict("APPROVE", HEAD)])
+    assert pr["mergeCommit"]["oid"] != pr["headRefOid"]
+    out, state, comment, contents = _card_done_reading_the_record(pr)
+    state.assert_called_once_with(CARD, "Done")
+    body = comment.call_args.args[1]
+    assert body.startswith(f"✅ Merged: {PR_URL}")
+    assert HEAD in body
+    assert SQUASH not in body
+    assert contents.calls == [
+        ["api", f"repos/dreadnought-foundry/portico/contents/{RECORD_PATH}?ref={HEAD}"]
+    ]
+    assert "AUTO-DONE SKIPPED" not in out
+
+
+def test_a_squashed_record_approved_at_the_squash_commit_stays_open():
+    """The critic never reviewed the squash commit, so an APPROVE naming it
+    binds to nothing and the card stays open, naming the gap."""
+    pr = _squashed_pr([_verdict("APPROVE", SQUASH)])
+    out, state, comment, _ = _card_done_reading_the_record(pr)
+    state.assert_not_called()
+    comment.assert_called_once_with(
+        CARD,
+        linear_ops.merged_not_closed_comment(
+            PR_URL, linear_ops.proof_evidence_gap(CARD, pr, None, None)
+        ),
+    )
+    assert "AUTO-DONE SKIPPED" in out
+
+
+# --------------------------------------------------------------------------
 # card-done: without the evidence the PROOF card stays open, exactly as today
 # --------------------------------------------------------------------------
 STAYS_OPEN = [

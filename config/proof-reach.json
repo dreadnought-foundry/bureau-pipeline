@@ -121,12 +121,6 @@
       "when": "every selecting run since DRE-6939: the selector reads the home when it first answers a choice, before it prints the model id, and the reader prints the line to stderr, so it is in the `Select model` step's log above the note"
     },
     {
-      "tag": "model-home-carry:",
-      "printed_by": "scripts/model_home_carry.py",
-      "constant": "TAG",
-      "when": "every run of `model-home-carry.yml` since DRE-6986, in its `Carry the merged choices into the home` step's log"
-    },
-    {
       "tag": "shadow-verdict:",
       "printed_by": ".github/workflows/qa-review.yml",
       "constant": null,
@@ -179,6 +173,18 @@
       "printed_by": "scripts/groomer.py",
       "constant": "MEMORY_TAG",
       "when": "every groomer propose run since DRE-7824, one line in the Groom step's log"
+    },
+    {
+      "tag": "name-roster:",
+      "printed_by": "scripts/name_roster.py",
+      "constant": "TAG",
+      "when": "every `check` run since DRE-8165, one line on stdout: the counts of people and forms when the live roster is read in full, or the read that failed — never a name"
+    },
+    {
+      "tag": "name-guard:",
+      "printed_by": "scripts/name_redact.py",
+      "constant": "TAG",
+      "when": "every `guard`, `self-test` and `redact` run since DRE-8166: the file, line and kind of a form that remains, the read that failed, or the count of lines read — never a name; `dry` while NAME_GUARD_LIVE is not `true`"
     }
   ],
   "causes": [

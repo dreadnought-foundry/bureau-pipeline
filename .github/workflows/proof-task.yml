@@ -385,9 +385,8 @@ jobs:
             after you finish.
           - Write nothing else: no \`⏳\` heartbeats, no actor marker, no
             /tmp/agent-escalation.txt, no branch, no commit, no push and no pull
-            request. A row that needs the CEO's or the operator's press, and a
-            cause row, is written in the record as the brief says and never
-            asked.
+            request. A row that needs the CEO's press, and a cause row, is
+            written in the record as the brief says and never asked.
           - Make no sandbox press: the real run beside you makes them, and a
             second run would file a second Intake card. Your \`Sandbox press:\`
             rows read \`Not observed. cause: out-of-reach — a shadow run makes no sandbox press\`.
@@ -956,6 +955,58 @@ jobs:
           git config --global user.name "claude[bot]"
           git config --global user.email "41898282+claude[bot]@users.noreply.github.com"
 
+      # THE NAME GUARD, AT GIT'S OWN SEAM (DRE-8168). The record branch must
+      # not reach GitHub while it carries a form from the live roster
+      # (scripts/name_redact.py, DRE-8166). The agent pushes its own branch
+      # inside its step, so a step after it could not stop that push: the
+      # guard is a pre-push hook, agent-fix.yml's `Refuse a push onto a merged
+      # pull request` shape — written AFTER the checkout (which would
+      # overwrite it) and BEFORE the agent. Every push the job makes runs it:
+      # the agent's, the push rescue's and the shadow push's, all in this
+      # checkout. The record's pull request body is rebuilt from the record at
+      # the pushed head (DRE-7813), so a guarded record is a guarded body.
+      #
+      # A hook does not inherit the environment of the step that installed
+      # it, so every value is baked in. The token is the worker's, whose App
+      # reads the organization's members — on a proof run only: the agent
+      # can read the hook, and a shadow's agent holds a read-only token on
+      # purpose (DRE-7286), so a shadow bakes none. A push step that holds
+      # its own fresh mint as PUSH_TOKEN — the rescue, the shadow push — hands
+      # the hook that one instead, because the worker token is an hour old by
+      # then (DRE-3043) and a roster read on a dead token is a refusal.
+      #
+      # Behind the switch: `name_redact.live` reads NAME_GUARD_LIVE, so until
+      # the repository variable is exactly `true` the hook prints what it
+      # would refuse and lets the push through (config/switches.json). The
+      # step prints one line and never a credential. Every `${{ }}` in env:,
+      # none in the script.
+      - name: Install the name guard
+        env:
+          GH_TOKEN: ${{ !inputs.shadow && steps.worker.outputs.token || '' }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
+          GUARD_OWNER: ${{ github.repository_owner }}
+          GUARD_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          GUARD_ROOT: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          HOOKS=$(git rev-parse --git-path hooks)
+          mkdir -p "$HOOKS"
+          {
+            echo '#!/usr/bin/env bash'
+            printf 'export GH_TOKEN=${PUSH_TOKEN:-%q}\n' "$GH_TOKEN"
+            for name in LINEAR_API_KEY LINEAR_API_KEY_FALLBACK NAME_GUARD_LIVE GITHUB_ACTOR GITHUB_TRIGGERING_ACTOR; do
+              printf 'export %s=%q\n' "$name" "${!name:-}"
+            done
+            printf 'exec python3 %q guard --pre-push --default-ref %q --owner %q --actor "$GITHUB_ACTOR" --actor "$GITHUB_TRIGGERING_ACTOR"\n' \
+              "$GUARD_ROOT/.bureau-pipeline/scripts/name_redact.py" "origin/$GUARD_DEFAULT_BRANCH" "$GUARD_OWNER"
+          } > "$HOOKS/pre-push"
+          chmod +x "$HOOKS/pre-push"
+          LIVE=false
+          if [ "$NAME_GUARD_LIVE" = "true" ]; then LIVE=true; fi
+          echo "name-guard: installed — live=$LIVE"
+
       # ---- THE AGENT STEP, AND THE ONE REFUSAL IT IS RETRIED FOR (DRE-4108) ----
       # agent-task.yml's design, copied: three attempts, each gated on
       # `claude_rate_limit_retry.py decide`, which fires ONLY when the step
@@ -1122,13 +1173,15 @@ jobs:
                but agent-bureau today) makes no press and writes the row as the
                console proof-reader bullet under Identities in briefs/proof.md
                says, `Not observed. cause: out-of-reach — …`. A press the live
-               console refuses is written as the operator's row with the console's
-               reason, as briefs/proof.md's "When the console is not ready" says.
-               Every other press the card's words give the operator — one under
-               the operator's standing permission of 2026-10-07, or a sandbox
-               press not on the standard's list — is the operator's row, with no
-               escalation file:
-               `Not observed. waiting for the operator's press: <the press>`.
+               console refuses is the same cause row with the console's reason,
+               as briefs/proof.md's "When the console is not ready" says. A
+               press outside the sandbox is never a row of yours: it is an
+               OPERATOR card the proof is blocked by, and you read its result
+               like any other row. A criterion that still words a person's press
+               as a wait — one under the operator's standing permission of
+               2026-10-07, or a sandbox press not on the standard's list — reads
+               `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
+               with no escalation file, and the record closes with a fix card.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
                the press and the one decision asked, with your recommendation, to
@@ -1136,14 +1189,10 @@ jobs:
                asked and not yet answered.
             5. A row you cannot observe as worded reads
                `Not observed. cause: <cause-word> — <what the run saw instead>`,
-               with one of the four words briefs/proof.md gives. AFTER the pull
-               request is open, when the record carries at least one such row,
-               write /tmp/agent-escalation.txt once for the card in the three
-               declared lines (`🔎 Finding:`, `❓ Question:`,
-               `💡 Recommendation: <answer> — <why>`), then one line per row:
-               `cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>`.
-               A press and cause rows share the one file: the press sentence
-               first, then the cause lines. Never ask twice.
+               with one of the four words briefs/proof.md gives. It asks nobody:
+               write no escalation file for it. A record whose unmet rows are all
+               such rows, or history rows, closes its card on its approved merge,
+               and one fix card is filed for them.
             6. Last, post the marker:
                `python3 .bureau-pipeline/scripts/linear_ops.py actor ${{ github.event.client_payload.identifier }} proof`.
 
@@ -1371,13 +1420,15 @@ jobs:
                but agent-bureau today) makes no press and writes the row as the
                console proof-reader bullet under Identities in briefs/proof.md
                says, `Not observed. cause: out-of-reach — …`. A press the live
-               console refuses is written as the operator's row with the console's
-               reason, as briefs/proof.md's "When the console is not ready" says.
-               Every other press the card's words give the operator — one under
-               the operator's standing permission of 2026-10-07, or a sandbox
-               press not on the standard's list — is the operator's row, with no
-               escalation file:
-               `Not observed. waiting for the operator's press: <the press>`.
+               console refuses is the same cause row with the console's reason,
+               as briefs/proof.md's "When the console is not ready" says. A
+               press outside the sandbox is never a row of yours: it is an
+               OPERATOR card the proof is blocked by, and you read its result
+               like any other row. A criterion that still words a person's press
+               as a wait — one under the operator's standing permission of
+               2026-10-07, or a sandbox press not on the standard's list — reads
+               `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
+               with no escalation file, and the record closes with a fix card.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
                the press and the one decision asked, with your recommendation, to
@@ -1385,14 +1436,10 @@ jobs:
                asked and not yet answered.
             5. A row you cannot observe as worded reads
                `Not observed. cause: <cause-word> — <what the run saw instead>`,
-               with one of the four words briefs/proof.md gives. AFTER the pull
-               request is open, when the record carries at least one such row,
-               write /tmp/agent-escalation.txt once for the card in the three
-               declared lines (`🔎 Finding:`, `❓ Question:`,
-               `💡 Recommendation: <answer> — <why>`), then one line per row:
-               `cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>`.
-               A press and cause rows share the one file: the press sentence
-               first, then the cause lines. Never ask twice.
+               with one of the four words briefs/proof.md gives. It asks nobody:
+               write no escalation file for it. A record whose unmet rows are all
+               such rows, or history rows, closes its card on its approved merge,
+               and one fix card is filed for them.
             6. Last, post the marker:
                `python3 .bureau-pipeline/scripts/linear_ops.py actor ${{ github.event.client_payload.identifier }} proof`.
 
@@ -1618,13 +1665,15 @@ jobs:
                but agent-bureau today) makes no press and writes the row as the
                console proof-reader bullet under Identities in briefs/proof.md
                says, `Not observed. cause: out-of-reach — …`. A press the live
-               console refuses is written as the operator's row with the console's
-               reason, as briefs/proof.md's "When the console is not ready" says.
-               Every other press the card's words give the operator — one under
-               the operator's standing permission of 2026-10-07, or a sandbox
-               press not on the standard's list — is the operator's row, with no
-               escalation file:
-               `Not observed. waiting for the operator's press: <the press>`.
+               console refuses is the same cause row with the console's reason,
+               as briefs/proof.md's "When the console is not ready" says. A
+               press outside the sandbox is never a row of yours: it is an
+               OPERATOR card the proof is blocked by, and you read its result
+               like any other row. A criterion that still words a person's press
+               as a wait — one under the operator's standing permission of
+               2026-10-07, or a sandbox press not on the standard's list — reads
+               `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
+               with no escalation file, and the record closes with a fix card.
                briefs/proof.md says which press is whose. For the CEO's press,
                AFTER the pull request is open, write one plain sentence naming
                the press and the one decision asked, with your recommendation, to
@@ -1632,14 +1681,10 @@ jobs:
                asked and not yet answered.
             5. A row you cannot observe as worded reads
                `Not observed. cause: <cause-word> — <what the run saw instead>`,
-               with one of the four words briefs/proof.md gives. AFTER the pull
-               request is open, when the record carries at least one such row,
-               write /tmp/agent-escalation.txt once for the card in the three
-               declared lines (`🔎 Finding:`, `❓ Question:`,
-               `💡 Recommendation: <answer> — <why>`), then one line per row:
-               `cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>`.
-               A press and cause rows share the one file: the press sentence
-               first, then the cause lines. Never ask twice.
+               with one of the four words briefs/proof.md gives. It asks nobody:
+               write no escalation file for it. A record whose unmet rows are all
+               such rows, or history rows, closes its card on its approved merge,
+               and one fix card is filed for them.
             6. Last, post the marker:
                `python3 .bureau-pipeline/scripts/linear_ops.py actor ${{ github.event.client_payload.identifier }} proof`.
 
@@ -1933,6 +1978,8 @@ jobs:
           MODEL: ${{ steps.shadow_model.outputs.model }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           DISPATCHED_AT: ${{ github.event.client_payload.dispatched_at }}
+          # The name guard's switch, which proof_shadow.py push reads (DRE-8168).
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: |
           python3 - <<'PY'
           import os
@@ -2044,6 +2091,8 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           CARD_URL: ${{ github.event.client_payload.url }}
           REPO: ${{ github.repository }}
+          # The name guard's switch, which proof_pr_body.py reads (DRE-8168).
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: |
           python3 .bureau-pipeline/scripts/proof_pr_body.py refresh \
             --repo "$REPO" --card "$CARD" --card-url "$CARD_URL"
@@ -2109,6 +2158,12 @@ jobs:
           BUREAU_SERVER_URL: ${{ github.server_url }}
           BUREAU_REPOSITORY: ${{ github.repository }}
           BUREAU_RUN_ID: ${{ github.run_id }}
+          # The name guard's switch, carried here for the escalation comment
+          # this script posts (DRE-8168). Nothing in the script reads it yet:
+          # the reporter goes through the name seam under DRE-8170, which
+          # leaves this workflow to the wiring card. Until then the comment
+          # is not guarded.
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
         run: bash .bureau-pipeline/scripts/report_proof_result.sh
 
       # The local run's teardown (DRE-6027), on every outcome: it ends the

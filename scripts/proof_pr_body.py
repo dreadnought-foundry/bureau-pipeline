@@ -16,6 +16,14 @@ the pushed one — the way the merge gate does (`proof_record.fetch`), renders
 the body in the brief's shape and writes it with `gh pr edit --body-file`. The
 model never edits the body.
 
+The rendered body passes through the redaction seam (`name_redact`, DRE-8166)
+before it is written (DRE-8169). Live — `NAME_GUARD_LIVE` is `true` — the
+roster is read once (`name_roster.read`, owner the repository's, the run's
+actors as extra logins) and every form in the body becomes its role; a roster
+that cannot be read fails the step like an unreadable record, with no body
+written. Not live, `render`'s output is written as it is and one
+`name-guard: dry — …` line says so. No line printed here carries a name.
+
 Exit 0 when the body was written or no record pull request is open — a run
 that opened none has no body to keep. Exit 1 on anything else: a lookup GitHub
 refused, a record not found or with no status line or criterion table, an edit
@@ -27,12 +35,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import name_redact  # noqa: E402 — the one redaction seam (DRE-8166)
+import name_roster  # noqa: E402 — the live roster the seam reads (DRE-8165)
 import proof_record  # noqa: E402 — the branch rule, the finder and the table, spelled once
 
 #: The record's status line (briefs/proof.md, "The record", item 2).
@@ -71,9 +82,12 @@ def _fail(why: str) -> int:
     return 1
 
 
-def refresh(repo: str, card: str, card_url: str, gh=None) -> int:
-    """Rewrite the open record pull request's body from its record at head."""
+def refresh(repo: str, card: str, card_url: str, gh=None, *, roster=None, reader=None,
+            env=None) -> int:
+    """Rewrite the open record pull request's body from its record at head,
+    through the redaction seam when the name guard is live."""
     gh = gh or proof_record._gh
+    env = os.environ if env is None else env
     branch = f"agent/{card}-proof-record"
     try:
         prs = json.loads(gh(["pr", "list", "--repo", repo, "--head", branch,
@@ -96,6 +110,19 @@ def refresh(repo: str, card: str, card_url: str, gh=None) -> int:
         body = render(card, card_url, record.text)
     except ValueError as exc:
         return _fail(f"#{number}: {record.path} at {head}: {exc}")
+    tag = name_redact.TAG
+    if not name_redact.live(env):
+        print(f"{tag} dry — not live, #{number}'s body is written as rendered")
+    else:
+        if roster is None:
+            actors = (env.get("GITHUB_ACTOR", ""), env.get("GITHUB_TRIGGERING_ACTOR", ""))
+            try:
+                roster = (reader or name_roster.read)(owner=repo.split("/", 1)[0],
+                                                      extra_logins=actors)
+            except name_roster.RosterUnreadable as exc:
+                return _fail(f"#{number}: {tag} refused — roster unreadable: {exc}")
+        body = name_redact.redact(body, roster)
+        print(f"{tag} ok — #{number}'s body went through the redaction seam")
     with tempfile.NamedTemporaryFile("w", suffix=".md", encoding="utf-8") as fh:
         fh.write(body)
         fh.flush()

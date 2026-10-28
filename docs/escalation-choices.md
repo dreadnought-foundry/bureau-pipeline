@@ -43,14 +43,60 @@ the Recommendation line's answer is the recommended choice's label.
 
 No block is added when:
 
-- the choices file is missing — the normal case on every other route, and
-  silent;
+- the call passes no choices file — the classifier's refusal and every other
+  route that does not ask for one;
 - the reason itself was refused — the note posts the refusal line alone;
 - the note is the `✋ escalation-stood-down` record, which asks nothing.
 
 These routes post prose only, and the console shows them without buttons: the
-classifier's refusal, the returned-child default reason the epic route's
-escalation step writes itself, and the `--transport` and `--rewrite` wordings.
+classifier's refusal and the `--transport` and `--rewrite` wordings.
+
+## The screen — a decision for the CEO, or housekeeping (DRE-7961)
+
+The three routes that pass `--choices-file` — the epic route's escalation step
+(`Planner escalation — hand-planning parks for the CEO`), the roll-up route's
+(`Roll-up route — check the split`) and the one-off planner's own question
+(`One-off critic — escalate`, when the revision `asked`) — are **screened**
+before anything is posted (`planning_escalation.screen`). A call is screened
+whenever it passes the path, whether or not the file exists, and never when it
+is a `--transport` or `--rewrite` call. A call that passes no path is not
+screened and posts exactly what it did before.
+
+A screened escalation goes to the CEO only when it passes all three rules:
+
+1. **It names a decision.** The choices file exists, is JSON and passes the
+   validation below.
+2. **It offers two or three options.** The planner writes 2 or 3 choices
+   (`planning_escalation.SCREENED_CHOICES`). The console still accepts 2 to 4
+   (`MIN_CHOICES`, `MAX_CHOICES`), and that stays the block's contract.
+3. **It does not say it is not a decision.** No phrase from
+   `planning_escalation.NOT_A_DECISION_PHRASES` — "not a real question",
+   "housekeeping" and the rest — appears, in any case, in the reason or in the
+   block's `question`, `context` or `why`.
+
+One that passes parks in Green Light with exactly the note it got before the
+screen, block included. One that breaks any rule is **housekeeping**, and goes
+to the operator: no `🙋 planning-escalation` note and no write to Green Light.
+It gets one note, opening `🧹 planning-stall-park:` so the plan-gate does not
+re-plan the card on entering Triage, which names the rule broken, says the card
+is for the operator and not the CEO, quotes the reason unless it carries a
+verdict marker, and names moving the card to Planning as the way back. Then the
+card moves to `Triage` (`planning_escalation.HOUSEKEEPING_LANE`), the way
+`park_unread` parks a card nothing could read (DRE-5975). A card that has
+already left Planning, or carries a current routing verdict, is stood down as
+before and gets neither.
+
+The judgment the code cannot make is the planner's, in its brief and the five
+prompt copies, in the same words: a real business choice is two or three
+defensible options whose difference is a business outcome — a price, a policy,
+what to make public, what a customer sees, scope or priority, or a risky or
+destructive change. A fact an agent can look up, a mechanical step for a person
+(lift a hold, set or clear a label, re-run or retry, move a card, merge, set a
+secret or variable, fix a repo label) and a question with only one sensible
+answer are housekeeping, and for those the planner writes the reason and no
+choices file. The returned-child default reason the epic route's escalation
+step writes itself passes the path with no file beside it, so it goes to the
+operator under rule 1.
 
 ## The block
 
@@ -61,7 +107,7 @@ dialect, and a fenced block survives that verbatim.
 
 - `question`: one sentence.
 - `context`: one short paragraph.
-- `choices`: 2 to 4 items. Each has
+- `choices`: 2 to 4 items — and 2 or 3 on a screened route, above. Each has
   - `id` — a slug matching `[a-z][a-z0-9-]*`, unique within the block;
   - `label` — a few words;
   - `effect` — one line on what happens;
@@ -90,10 +136,13 @@ The writer checks the block before anything is posted
   renders the result, so a time or a product string is fine;
 - no key outside the contract, at either level.
 
-A block that fails falls back to today's prose-only note: the card still
-escalates and still parks, it is just not structured. The run log gets one line,
-`escalation-choices refused: <rule>`, and nothing about the refusal is posted to
-the card. A choices file that is not JSON is logged the same way.
+The run log gets one line, `escalation-choices refused: <rule>`, for a block
+that fails, and the same for a choices file that is not JSON. On a screened
+route such a block names no decision, and the card goes to the operator under
+rule 1 of the screen, the rule named in its note. A block that fails on a route
+that is not screened falls back to a prose-only note: the card still escalates
+and still parks, it is just not structured, and nothing about the refusal is
+posted to the card.
 
 ## The example — DRE-5260
 

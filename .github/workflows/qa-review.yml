@@ -2794,6 +2794,12 @@ jobs:
           A1_ELAPSED: ${{ steps.gate1.outputs.elapsed }}
           A2_ELAPSED: ${{ steps.gate2.outputs.elapsed }}
           BACKOFF_OUTCOME: ${{ steps.backoff.outcome }}
+          # DRE-8170: the name guard. `true` runs the composed comment
+          # through name_redact.py's redaction seam and guard before it
+          # posts, and holds a comment the guard refuses; the roster it
+          # reads is the owner's.
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
+          OWNER: ${{ github.repository_owner }}
         run: bash "$PIPELINE_DIR/scripts/post_verdict.sh"
 
       # ── The card's lane, written from the PR side (DRE-4179) ──────────────
@@ -2961,6 +2967,10 @@ jobs:
           # default no-review summary blames an infrastructure failure, and
           # here there wasn't one: the workflow read the size and declined.
           TOO_LARGE: ${{ steps.size.outputs.strategy == 'oversized' && steps.size.outputs.size_phrase || '' }}
+          # DRE-8170: `true` when the name guard held the critic's comment.
+          # /tmp/qa-verdict.md still reads as composed, but the pull request
+          # was told no verdict stands, so the check fails closed.
+          HELD: ${{ steps.post.outputs.held }}
         run: |
           python3 "$PIPELINE_DIR"/scripts/publish_review_check.py \
             --repo "${{ github.repository }}" \
@@ -2968,6 +2978,7 @@ jobs:
             --verdict-file /tmp/qa-verdict.md \
             --real "$REAL" \
             --too-large "$TOO_LARGE" \
+            --held "$HELD" \
             --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             --event "${{ github.event_name }}"
 

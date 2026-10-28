@@ -357,7 +357,10 @@ def _rerun(monkeypatch, doc: dict) -> str:
     hold, returned as it stands — still the proof run's, still not the
     CEO's; it names an operator as the one to read it next. Since DRE-7740
     the budget check, not that hold, refuses the re-run, and nothing re-arms
-    it: no fix is named and no `🔬 proof-observed` follows the receipts."""
+    it: no fix is named and no `🔬 proof-observed` follows the receipts.
+    Since DRE-7953 a record whose rows are all plain `Not met.` files one fix
+    card instead — recorded here, never written — and its hold waits for the
+    card to ship."""
     pr = _gate_note_timed(copy.deepcopy(doc["pr"]), doc["as_of"])
     head = pr["headRefOid"]
     repo = "/".join(pr["url"].split("/")[3:5])
@@ -383,6 +386,12 @@ def _rerun(monkeypatch, doc: dict) -> str:
     holds: list = []
     posted: list[str] = []
     fired: list = []
+    filed: list = []
+
+    def file_fix(proof_card, epic, record_pr_url, gaps, *, repo_slug, kind):
+        filed.append((proof_card, record_pr_url, list(gaps), kind))
+        return {"identifier": "DRE-8001", "url": None}
+
     monkeypatch.setattr(proof_record, "fetch", fetch)
     monkeypatch.setattr(reconcile, "verdict_bound", lambda pr_: True)
     monkeypatch.setattr(linear_ops, "cmd_proof_waiting", lambda *args: holds.append(args))
@@ -397,7 +406,8 @@ def _rerun(monkeypatch, doc: dict) -> str:
         voices=voices,
         now=datetime.fromisoformat(doc["as_of"].replace("Z", "+00:00")),
         find_record=lambda ident: pr,
-        read_record=lambda pr_, h: proof_dispatch.record_at(repo, pr_, h))
+        read_record=lambda pr_, h: proof_dispatch.record_at(repo, pr_, h),
+        file_fix=file_fix)
     card = {"identifier": doc["card"], "state": {"name": doc["lane"]},
             "labels": {"nodes": [{"name": n} for n in doc["labels"]]}}
     standing = proof_record.open_holds(
@@ -419,9 +429,18 @@ def _rerun(monkeypatch, doc: dict) -> str:
         assert proof_dispatch.NEVER_ANOTHER in str(refused)
         assert fired == []
         [(ident, observed, needs)] = holds
-        marked = proof_dispatch.SPENT_AT.format(sha7=head[:7])
-        assert ident == doc["card"] and needs.endswith(marked)
-        assert linear_ops.proof_waiting_line(observed, needs) == standing[-1] + marked
+        assert ident == doc["card"]
+        if all(proof_dispatch._plain_not_met(result) for _, result in rows):
+            # The build fails its rows (DRE-7953): one defect fix card, and a
+            # hold that waits for it to ship, never for an operator's reading.
+            assert [(c, k) for c, _, _, k in filed] == [(doc["card"], "defect")]
+            assert filed[0][2] == [(criterion, "defect") for criterion, _ in rows]
+            assert needs == proof_dispatch.FIX_SHIPPED_NEEDS.format(card="DRE-8001")
+            assert standing[-1].startswith(linear_ops.proof_waiting_line(observed, ""))
+        else:
+            marked = proof_dispatch.SPENT_AT.format(sha7=head[:7])
+            assert needs.endswith(marked) and filed == []
+            assert linear_ops.proof_waiting_line(observed, needs) == standing[-1] + marked
         holds.clear()
         written = standing[-1]
     else:

@@ -3,13 +3,12 @@
 `proof-task.yml`'s `Report proof result to Linear` step reads the run's
 escalation file three ways. A file naming a press parks as a press. A file of
 cause rows and nothing else — the three declared lines, its Question
-`proof_cause_park.QUESTION` word for word, and its `cause:` lines — is handed,
-once the record pull request is OPEN, to the one writer DRE-6837 gives a CLI,
-`proof_cause_park.py park`, which holds the card `In Review` for the operator
-and asks the operator's question; the step posts no hold, no question and no
-move of its own there. Without an open record pull request that file is
-handed to nobody and nothing is held. Anything else is a decision for the
-CEO, parked in `Green Light` as the press is, under its own opening.
+`proof_cause_park.QUESTION` word for word, and its `cause:` lines — asks
+nobody (DRE-7953): since DRE-7952 a record whose every unmet row is a gap
+merges on its approved record and closes with a fix card, so the step prints
+the cause lines to the log and runs no `proof_cause_park.py park`, open record
+pull request or not. Anything else is a decision for the CEO, parked in
+`Green Light` as the press is, under its own opening.
 
 A file naming a press AND carrying cause lines parks as a press, with the
 cause lines set under the question's three lines, so the dispatcher's return
@@ -18,7 +17,10 @@ on the CEO's answer still fires for the press.
 The step's script is EXECUTED here the way `tests/test_proof_task_workflow.py`
 executes it — its `_StepHarness`, imported — with an argv-recording stub of
 `proof_cause_park.py` (the real one's `park` would write) beside the stubbed
-`linear_ops.py`. The prompt's cause step is read off every agent arm.
+`linear_ops.py`, so a call the step makes is seen. The prompt's cause step is
+read off every agent arm: since DRE-7954 it tells the run to write no
+escalation file for a cause row, so the step above is the backstop for a run
+that writes one anyway.
 """
 
 from __future__ import annotations
@@ -77,8 +79,8 @@ PARK_MOVE = ("Green Light", "Hand-work,In Review")
 #: The record's pull request, open.
 OPEN_PR = "OPEN\thttps://github.example/acme/widgets/pull/9"
 
-#: The writer stub's result line, the lane it read.
-RESULT = "left DRE-77 in In Review for the operator"
+#: What the step's summary says of cause rows with the record open (DRE-7953).
+LEFT_TO_THE_GATE = "proof park: cause rows (2) — left to the gate, nothing asked"
 
 #: What the step says, and prints, when cause rows meet no open pull request.
 NOTHING_HELD = ("proof park: cause rows with no open record pull request for DRE-77 "
@@ -144,14 +146,10 @@ class CauseParkStepTest(ptw._StepHarness):
 
     # --- a file of cause rows and no press, the record pull request open --
 
-    def _park_argv(self, *extra) -> list:
-        return ["proof_cause_park", "park", "DRE-77", "--escalation-file",
-                str(self.escalation), "--run-url", ptw.RUN_URL, *extra]
-
-    def _assert_handed_to_the_writer(self, posted: list) -> None:
-        """The writer's call, and of the step's own writes only the pull
-        request's report and its In Review move."""
-        self.assertEqual([self._park_argv()], self.parks)
+    def _assert_left_to_the_gate(self, posted: list) -> None:
+        """No writer called, and of the step's own writes only the pull
+        request's report and its In Review move (DRE-7953)."""
+        self.assertEqual([], self.parks)
         self.assertEqual(["comment", "advance"], [c[1] for c in posted])
         self.assertTrue(posted[0][3].startswith("🤖 PR opened:"), posted[0][3])
         self.assertEqual(("In Review", "Hand-work"), tuple(posted[1][3:]))
@@ -159,76 +157,43 @@ class CauseParkStepTest(ptw._StepHarness):
             self.assertNotEqual("proof-waiting", call[1])
             self.assertFalse(call[-1].startswith("🙋"), call)
         self.assertNotIn("only the CEO can make", self._summary())
+        self.assertIn(LEFT_TO_THE_GATE, self._summary())
 
-    def test_cause_rows_go_to_the_one_writer_and_the_step_writes_none_of_its_own(self):
+    def test_cause_rows_with_an_open_record_make_no_park_call(self):
         posted = self._run(CAUSE_ONLY, description=NO_PRESS_DESCRIPTION, pr=OPEN_PR)
-        self._assert_handed_to_the_writer(posted)
+        self._assert_left_to_the_gate(posted)
         self.assertEqual(2, len(_rows(CAUSE_ONLY)))
-        # The writer's own result line, quoted, closes the run's log.
-        self.assertIn(f"proof result: record pull request, then {RESULT}\n", self.stdout)
-        self.assertIn(f"proof result: record pull request, then {RESULT}", self._summary())
+        # The cause lines are still printed to the run's log.
+        for line in CAUSE_LINES:
+            self.assertIn(line + "\n", self.stdout)
+        self.assertIn("proof result: record pull request\n", self.stdout)
+        self.assertNotIn("for the operator", self.stdout)
         self.assertNotIn("proof park: press", self._summary())
         self.assertNotIn("proof park: decision", self._summary())
 
     def test_a_card_press_the_file_does_not_name_is_not_a_press(self):
         # ptw.DESCRIPTION marks a press criterion; CAUSE_ONLY never names it.
         self.assertIn("needs the CEO's press:", ptw.DESCRIPTION)
-        posted = self._run(CAUSE_ONLY, pr=OPEN_PR)
-        self._assert_handed_to_the_writer(posted)
-        parked = self.parks
+        self._assert_left_to_the_gate(self._run(CAUSE_ONLY, pr=OPEN_PR))
         self.calls.unlink()
-        posted_free = self._run(CAUSE_ONLY, description=NO_PRESS_DESCRIPTION, pr=OPEN_PR)
-        self._assert_handed_to_the_writer(posted_free)
-        self.assertEqual(parked, self.parks)
+        self._assert_left_to_the_gate(
+            self._run(CAUSE_ONLY, description=NO_PRESS_DESCRIPTION, pr=OPEN_PR))
 
-    def test_a_file_that_recommends_nothing_leaves_the_recommendation_to_the_writer(self):
-        text = CAUSE_ONLY.replace(
-            f"{console_escalation.RECOMMENDATION_PREFIX} {RECOMMENDATION}",
-            f"{console_escalation.RECOMMENDATION_PREFIX} none given — the operator decides")
-        posted = self._run(text, pr=OPEN_PR)
-        # The writer reads the file's Recommendation line itself (DRE-6837).
-        self._assert_handed_to_the_writer(posted)
-        self.assertNotIn("--recommendation", self.parks[0])
-
-    def test_a_refused_hold_writer_is_never_called_on_cause_rows(self):
-        posted = self._run(CAUSE_ONLY, pr=OPEN_PR, refuse_hold=True)
-        self._assert_handed_to_the_writer(posted)
-        self.assertNotIn("the hold could not be posted", self._summary())
+    def test_a_writer_that_would_refuse_is_never_reached(self):
+        # The stub would exit 1 or 2; the step never calls it, so neither the
+        # warning nor the decision park follows.
+        for code in (1, 2):
+            posted = self._run(CAUSE_ONLY, pr=OPEN_PR, park_exit=code)
+            self._assert_left_to_the_gate(posted)
+            self.assertNotIn("::warning::", self.stdout)
+            self.assertNotIn("could not", self._summary())
+            self.calls.unlink()
+            self.summary.unlink()
 
     def test_cause_rows_never_ask_for_the_green_light_move(self):
         posted = self._run(CAUSE_ONLY, pr=OPEN_PR, not_advancing=True)
-        self._assert_handed_to_the_writer(posted)
+        self._assert_left_to_the_gate(posted)
         self.assertNotIn("Green Light", self._summary())
-
-    def test_a_cause_park_that_completed_says_nothing_of_a_refusal(self):
-        self._run(CAUSE_ONLY, pr=OPEN_PR)
-        self.assertNotIn("did not move", self._summary())
-        self.assertNotIn("could not", self._summary())
-
-    def test_a_writer_that_refuses_posts_nothing_and_moves_nothing(self):
-        # Exit 1 — a refused write, or a cause line the writer cannot read:
-        # never the press or decision park, which would put the operator's
-        # question in the CEO's queue. The dispatcher's `_caused` finishes it.
-        text = CAUSE_ONLY.replace("cause: state-gone", "cause: vanished")
-        with self.assertRaises(ValueError):
-            _rows(text)
-        posted = self._run(text, pr=OPEN_PR, park_exit=1)
-        self._assert_handed_to_the_writer(posted)
-        self.assertIn("::warning::", self.stdout)
-        self.assertIn("proof park: the cause park could not be completed for DRE-77 — "
-                      "the dispatcher's next pass parks the record off its rows",
-                      self._summary())
-        self.assertNotIn(RESULT, self.stdout)
-
-    def test_a_writer_that_finds_no_cause_row_sends_the_file_to_the_decision(self):
-        posted = self._run(CAUSE_ONLY, description=NO_PRESS_DESCRIPTION, pr=OPEN_PR,
-                           park_exit=2)
-        self.assertEqual([self._park_argv()], self.parks)
-        self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
-                         [c[1] for c in posted])
-        self.assertTrue(posted[3][3].startswith(ptw.DECISION_RECEIPT), posted[3][3])
-        self.assertEqual(PARK_MOVE, tuple(posted[4][3:]))
-        self.assertIn("proof park: decision", self._summary())
 
     # --- the same file with no open record pull request --------------------
 
@@ -242,6 +207,8 @@ class CauseParkStepTest(ptw._StepHarness):
                       "run off the card", self.stdout)
         self.assertIn(NOTHING_HELD, self._summary())
         self.assertNotIn("only the CEO can make", self._summary())
+        for line in CAUSE_LINES:
+            self.assertIn(line + "\n", self.stdout)
 
     def test_no_pull_request_holds_nothing_and_reports_no_record(self):
         posted = self._run(CAUSE_ONLY, description=NO_PRESS_DESCRIPTION, pr="")
@@ -367,7 +334,7 @@ class CauseParkStepTest(ptw._StepHarness):
         self.assertTrue(posted[1][3].startswith(ptw.PARK_RECEIPT))
         self.assertIn("proof park: press", self._summary())
 
-    def test_a_record_pull_request_then_a_cause_park(self):
+    def test_a_record_pull_request_then_cause_rows_left_to_the_gate(self):
         self.escalation.write_text(CAUSE_ONLY, encoding="utf-8")
         done, posted, _ = self._exec({
             "FAKE_PR": OPEN_PR,
@@ -380,13 +347,11 @@ class CauseParkStepTest(ptw._StepHarness):
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertEqual(["comment", "advance"],
                          [c[1] for c in posted if c[0] == "linear_ops"])
-        self.assertEqual([["proof_cause_park", "park", "DRE-77", "--escalation-file",
-                           str(self.escalation), "--run-url", ptw.RUN_URL]],
-                         [c for c in posted if c[0] == "proof_cause_park"])
+        self.assertEqual([], [c for c in posted if c[0] == "proof_cause_park"])
         self.assertEqual([("In Review", "Hand-work")],
                          [tuple(c[3:]) for c in posted if c[1] == "advance"])
         self.assertTrue(done.stdout.rstrip("\n").endswith(
-            f"proof result: record pull request, then {RESULT}"), done.stdout)
+            "proof result: record pull request"), done.stdout)
 
 
 class CauseParkStepSourceTest(unittest.TestCase):
@@ -395,14 +360,26 @@ class CauseParkStepSourceTest(unittest.TestCase):
     def _run_text(self) -> str:
         return ptw.step_shell.step_shell(ptw._step(ptw.RESULT_STEP))
 
-    def test_the_one_writer_is_run_for_cause_rows(self):
+    def test_the_step_runs_no_cause_park(self):
+        """DRE-7953: nothing in the step runs the cause park's CLI — no
+        `park`, no `hold`, no `question`. The press and decision hold stays."""
         run = self._run_text()
-        self.assertIn('python3 .bureau-pipeline/scripts/proof_cause_park.py park "$CARD" '
-                      '--escalation-file "$ESCALATION_FILE" --run-url "$RUN_URL"', run)
-        # The writer owns the hold and the question: the step runs neither half.
-        self.assertNotIn("proof_cause_park.py hold", run)
-        self.assertNotIn("proof_cause_park.py question", run)
+        self.assertNotIn("scripts/proof_cause_park.py", run)
         self.assertIn('linear_ops.py proof-waiting "$CARD" "$OBSERVED" "$NEEDS"', run)
+
+    def test_park_stays_with_no_caller_and_says_it_is_retired(self):
+        """The subcommand is kept, its behavior untouched; its docstrings say
+        nothing in the pipeline calls it."""
+        doc = " ".join((proof_cause_park.__doc__ or "").split())
+        self.assertIn("`park` is retired (DRE-7953)", doc)
+        self.assertIn("Retired (DRE-7953)", " ".join((proof_cause_park.park.__doc__ or "").split()))
+        self.assertTrue(callable(proof_cause_park.park))
+        self.assertTrue(callable(getattr(proof_cause_park, "_cmd_park", None)))
+        scripts = (ROOT / "scripts").glob("*")
+        callers = [p.name for p in scripts if p.is_file() and p.name != "proof_cause_park.py"
+                   and "scripts/proof_cause_park.py park" in p.read_text(
+                       encoding="utf-8", errors="replace")]
+        self.assertEqual([], callers)
 
     def test_the_step_quotes_none_of_the_module_s_words(self):
         run = self._run_text()
@@ -428,15 +405,13 @@ class CauseParkStepSourceTest(unittest.TestCase):
         self.assertIn(ptw.RESULT_STEP, park_rows[0])
 
 
-#: The cause step's own phrases, whitespace collapsed.
+#: The cause step's own phrases, whitespace collapsed. Since DRE-7954 a cause
+#: row asks nobody: the record closes its card with one fix card (DRE-7952).
 CAUSE_STEP_PHRASES = (
     "`Not observed. cause: <cause-word> — <what the run saw instead>`",
     "one of the four words briefs/proof.md gives",
-    "AFTER the pull request is open, when the record carries at least one such row",
-    "write /tmp/agent-escalation.txt once for the card in the three declared lines",
-    "`cause: <cause-word> — “<criterion, cut to 70>” — <what was seen instead>`",
-    "A press and cause rows share the one file",
-    "Never ask twice.",
+    "It asks nobody: write no escalation file for it.",
+    "closes its card on its approved merge, and one fix card is filed for them",
 )
 
 
@@ -445,7 +420,8 @@ def _prompts() -> list:
 
 
 class PromptCauseStepTest(unittest.TestCase):
-    """Every arm tells the run to write its cause rows, in the module's grammar."""
+    """Every arm tells the run to write its cause rows, in the module's
+    grammar, and to ask nobody about them (DRE-7954)."""
 
     def test_every_arm_carries_the_cause_step_and_the_arms_are_equal(self):
         prompts = _prompts()
@@ -467,13 +443,13 @@ class PromptCauseStepTest(unittest.TestCase):
         prompt = _prompts()[0]
         row = re.search(r"`(Not observed\. cause: <cause-word> — [^`]*)`", prompt).group(1)
         self.assertTrue(row.startswith(proof_record.CAUSE_OPENING), row)
-        template = re.search(r"`(cause: <cause-word> — [^`]*)`", prompt).group(1)
-        filled = (template.replace("<cause-word>", "state-gone")
-                  .replace("<criterion, cut to 70>", "The release page names v3")
-                  .replace("<what was seen instead>", "the page answered 404"))
-        self.assertEqual([proof_cause_park.CauseRow(
-            "The release page names v3", "state-gone", "the page answered 404")],
-            proof_cause_park.rows_from_lines([filled]))
+        filled = row.replace("<cause-word>", "state-gone")
+        self.assertEqual("state-gone", proof_record.row_cause(filled))
+
+    def test_no_arm_asks_the_cause_question(self):
+        for prompt in _prompts():
+            self.assertNotIn(proof_cause_park.QUESTION, prompt)
+            self.assertNotIn("`cause: <cause-word> —", prompt)
 
     def test_the_phrases_the_arms_test_pins_are_still_there(self):
         for prompt in (step["with"]["prompt"] for _i, step in ptw._agent_steps()):

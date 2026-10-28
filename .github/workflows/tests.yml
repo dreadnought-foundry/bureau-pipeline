@@ -200,8 +200,8 @@ jobs:
   # fewer than 90% of the test files, and every pull request that adds a test
   # file moves the tree toward that floor; on 2026-10-18 main sat exactly at
   # it (693 of 770) and #1168, a docs-only change, failed on files other pull
-  # requests had added. The parts above run every non-walk test file
-  # with `pytest -v`, so a green nightly's logs are a whole measurement.
+  # requests had added. The parts above run every test file with
+  # `pytest -v`, so a green nightly's logs are a whole measurement.
   #
   # Schedule runs only, once every part FINISHED (DRE-7726): `always()` lets
   # the job run past a failed part, and the `unit` result keeps out a
@@ -218,9 +218,8 @@ jobs:
   # — under 95%, re-measure (`REMEASURE_MARGIN`, about four days of new test
   # files above the floor) — and every later step waits on its answer. On
   # `hold` nothing is opened and the coverage read goes to the job summary.
-  # On `refresh` the record is rebuilt from this run's own part logs,
-  # keeping every walk's seconds and provenance, and the record and no other
-  # path is pushed to the one literal branch `bot/test-durations`, whose pull
+  # On `refresh` the record is rebuilt from this run's own part logs, and
+  # the record and no other path is pushed to the one literal branch `bot/test-durations`, whose pull
   # request is opened once and updated after, never a second.
   #
   # The App token pushes and opens, never `GITHUB_TOKEN`: a pull request
@@ -246,8 +245,8 @@ jobs:
     env:
       BRANCH: bot/test-durations
     steps:
-      # Minted FIRST, as model-config-change.yml does: the checkout's push
-      # credential and the pull request both need it.
+      # Minted FIRST: the checkout's push credential and the pull request
+      # both need it.
       - name: Mint bot token
         id: app
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
@@ -374,7 +373,7 @@ jobs:
           {
             echo "The nightly Pipeline Tests run re-measured \`config/unit-test-durations.json\` from its own part logs (run $RUN_ID), because $COVERAGE."
             echo
-            echo "Under 90% every pull request that adds a test file fails \`test_the_durations_record_covers_the_live_tree\`, so this is re-measured about four days before that floor. Every walk keeps its seconds and its \`provenance\` line; every other file carries this run's seconds (DRE-7577)."
+            echo "Under 90% every pull request that adds a test file fails \`test_the_durations_record_covers_the_live_tree\`, so this is re-measured about four days before that floor. Every file carries this run's seconds (DRE-7577)."
             echo
             echo "This pull request changes \`config/unit-test-durations.json\` and nothing else."
           } > "$RUNNER_TEMP/durations-pr.md"
@@ -389,251 +388,19 @@ jobs:
               --body-file "$RUNNER_TEMP/durations-pr.md"
           fi
 
-  # THE WALKS RUN HERE, ON THEIR OWN CLOCK (DRE-6909). A walk copies the tree,
-  # applies a console save and runs the model tests inside the copy, once per
-  # case (`tests/console_change_walk.py`). On 2026-10-11 part 1 was canceled
-  # at its 30-minute limit with no test failed (run 38142539090): it held the
-  # agent-move walk, whose twenty copies each ran the other walk and itself,
-  # while parts 2 to 4 took 20 to 24 minutes, against 11 to 16 the day
-  # before. So no part collects a walk (`unit_test_parts.py list` leaves them
-  # out), and the jobs below run every one of them, found by their file name
-  # alone — a walk added later needs no edit here — and print how long each
-  # took. A run with no walk is red, never a silent green. `unit-result` waits
-  # on the walks and fails when one did not succeed, so a red walk still fails
-  # the pull request; `tests/test_tests_workflow_parts.py` holds all of it.
-  #
-  # ONE WALK, ONE JOB (DRE-6935). The four walks shared one 45-minute job
-  # until run 38178110152 canceled it twice at that limit: the agent-move walk
-  # took 17m45s, the change walk 0m12s, the every-default walk 20m42s, and
-  # the project walk was cut off 6m25s in. The eight green main runs before it
-  # put the project walk at 8m00s to 14m48s. `walk-list` reads the walks off
-  # the tree (`walks --json`, red with none) and `walks` runs them, so the
-  # every-default walk, which grows with every model the page offers, spends
-  # no other walk's clock.
-  #
-  # AND EACH WALK ACROSS SHARDS (DRE-7907). On 2026-10-24 one walk to a job
-  # took up to an hour: the every-default walk 60m07s (job 120989216560), the
-  # agent-move walk 46m09s (job 120989216557, both run 40133214810), the
-  # project-model walk 50m56s (job 120947794113, run 40119507138). The unit
-  # parts were done by about 2:39 PM PT and the walks held that run open to
-  # 3:13 PM PT, so the channel promotion was refused `unit-suite-not-finished`
-  # and every merge held `stable` back 45 to 60 minutes. More jobs, not
-  # bigger machines: this repository is public and stays on GitHub-hosted
-  # runners. `walks --json` now hands the matrix one entry per (walk, shard),
-  # and installs first, because it imports each walk to count its cases.
-  #
-  # AND ONLY WHEN A CHANGE CAN REACH THEM (DRE-7908). PR #1119 merged one
-  # proof record on 2026-10-24 and its run on main still spent the walks' 45
-  # to 60 minutes, while `stable` waited. `walk-list` asks
-  # `scripts/walk_reach.py` once: a run whose every changed file is a document
-  # under `docs/` or `architecture/` that no walk, helper or inner test names
-  # answers `false`, and every step of `walks` that installs or runs a walk is
-  # gated on it. One ungated step prints `skipped: no relevant change` and why,
-  # and `unit-result` prints the same line. The compare base is the pull
-  # request's base, or on a push the newest earlier main commit whose run here
-  # concluded `success` — never `event.before`, which would let a docs push
-  # carry `stable` past a red code push just before it. So this job holds its
-  # own token with `actions: read` (the App lacks it, DRE-1346, as for
-  # `durations-refresh`) and the whole history for the ancestry check. A
-  # schedule run, any other event and anything that cannot be read answer
-  # `true`. No job-level `if:` on `walks`: a skipped required job passes.
-  walk-list:
-    name: scripts unit tests (walk list)
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-    outputs:
-      walks: ${{ steps.list.outputs.walks }}
-      run: ${{ steps.reach.outputs.run }}
-      reason: ${{ steps.reach.outputs.reason }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: Install test tooling (cached)
-        uses: ./.github/actions/setup-python-cached
-        with:
-          python-version: "3.12"
-          requirements: |
-            requirements-dev.txt
-      - name: List the walk shards
-        id: list
-        run: |
-          walks=$(python3 scripts/unit_test_parts.py walks --json)
-          echo "walks=$walks" >> "$GITHUB_OUTPUT"
-          echo "walks: $walks"
-      # FAIL OPEN: every path that cannot name a base, or read the files
-      # changed since it, leaves the answer `run`. A rename lists its old
-      # name too, because a `.py` the tree no longer holds runs the walks.
-      - name: Can this run reach the walks?
-        id: reach
-        env:
-          GH_TOKEN: ${{ github.token }}
-          EVENT: ${{ github.event_name }}
-          PR_BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          answer=run
-          reason=""
-          base=""
-          case "$EVENT" in
-            pull_request)
-              base="$PR_BASE"
-              [ -n "$base" ] || reason="this pull request names no base commit"
-              ;;
-            push)
-              runs="$RUNNER_TEMP/walk-reach-runs.json"
-              if gh api "repos/$GITHUB_REPOSITORY/actions/workflows/tests.yml/runs?branch=main&status=success&exclude_pull_requests=true&per_page=100" > "$runs"; then
-                found=$(python3 scripts/walk_reach.py base --runs "$runs" --head "$HEAD" || printf 'none\nscripts/walk_reach.py base failed')
-                base=$(printf '%s\n' "$found" | sed -n 1p)
-                if [ "$base" = none ]; then
-                  base=""
-                  reason=$(printf '%s\n' "$found" | sed -n 2p)
-                fi
-              else
-                reason="could not list the earlier Pipeline Tests runs on main"
-              fi
-              ;;
-            schedule)
-              reason="a schedule run has no range to compare, so the nightly runs every walk"
-              ;;
-            *)
-              reason="a $EVENT run is not narrowed, so every walk runs"
-              ;;
-          esac
-          if [ -n "$base" ]; then
-            changed="$RUNNER_TEMP/walk-reach-changed.txt"
-            if gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$base...$HEAD" \
-                 --jq '.files[] | .filename, (.previous_filename // empty)' > "$changed"; then
-              decision=$(python3 scripts/walk_reach.py decide --changed "$changed" --tree . || printf 'run\nscripts/walk_reach.py decide failed')
-              answer=$(printf '%s\n' "$decision" | sed -n 1p)
-              reason=$(printf '%s\n' "$decision" | sed -n 2p)
-            else
-              reason="could not read the files changed since $base"
-            fi
-          fi
-          if [ "$answer" = skip ]; then run=false; else run=true; fi
-          echo "run=$run" >> "$GITHUB_OUTPUT"
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
-          echo "decision: $answer"
-          echo "reason: $reason"
-
-  # EACH SHARD ON ITS OWN CLOCK, AND THE CLOCK FROM WHAT THE JOBS MEASURED
-  # (DRE-7016, DRE-7907). Each walk's record in
-  # `config/unit-test-durations.json` is its slowest whole walk job on `main`
-  # on 2026-10-24, its run and job in its `provenance` line: agent-move 2,769
-  # s, every-default 3,607 s, project-model 3,056 s; the change walk keeps
-  # its 29 s (job 114573848564). The desk seconds times 4.28 this clock was
-  # set from until then had gone stale: the every-default walk's 3,607 s is
-  # 6.19 times its 583 desk seconds.
-  #
-  # THE PROJECTION. A job's fixed cost is 19 s — the change walk's job
-  # 120989216692 (run 40133214810) took 0m19s with no case in it. A shard
-  # projects at 19 s plus the walk's record less 19 s, scaled by the shard's
-  # case count over the walk's, both rounded up to the next multiple of 2
-  # (a walk runs two cases at a time on these 2-core runners).
-  #
-  # THE TARGET is 450 s, 7.5 minutes: 15 minutes halved for the 2x
-  # run-to-run spread these runners show — on two main runs of 2026-10-11
-  # the agent-move walk took 8m40s (run 38174492643) and 17m31s (run
-  # 38178153419), the project-model walk 7m11s and 14m34s (DRE-7016) — so a
-  # slow runner still lands a shard at or under 15 minutes. Each walk runs
-  # in the smallest number of shards whose largest projects at or under it
-  # (`scripts/unit_test_parts.py`'s `walk_shards`), read off the tree on every
-  # run, so a walk that gains cases gains shards with no edit here. With the
-  # 2026-10-25 case counts that is 7 shards for the agent-move walk (25
-  # cases, 19 + 2,750 x 4/26 = 442 s), 9 for the every-default walk (35
-  # cases, 19 + 3,588 x 4/36 = 418 s), 8 for the project-model walk (31
-  # cases, 19 + 3,037 x 4/32 = 399 s) and 1 for the change walk (29 s):
-  # 25 walk jobs a run, up from 4. A run that asks for more jobs than the
-  # account runs at once queues the rest, and a queued job's wait counts
-  # against no `timeout-minutes`.
-  #
-  # THE CLOCK is at least twice the slowest shard's projection, rounded up
-  # to the next ten minutes, the parts' rule: 2 x 442 = 884 s, 14.7 minutes,
-  # so 20. Twice the target rounds to 20 as well, so a shard count that grows
-  # with the cases keeps every shard inside it. `tests/test_walks_time_budget.py`
-  # holds every shard of every walk to the target and to this clock, and
-  # names the walk and the shard count that would fit when one does not.
-  walks:
-    name: scripts unit tests (walk ${{ matrix.walk }} shard ${{ matrix.shard }} of ${{ matrix.shards }})
-    needs: walk-list
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
-    strategy:
-      # One red shard must not cancel the others, as with the parts.
-      fail-fast: false
-      matrix:
-        include: ${{ fromJSON(needs.walk-list.outputs.walks) }}
-    timeout-minutes: 20
-    steps:
-      # The one ungated step (DRE-7908): a shard `walk-list` answered `false`
-      # for concludes success here in seconds and says why, and an answer
-      # that is neither is red rather than a silent green.
-      - name: Can this change reach the walks?
-        env:
-          RUN: ${{ needs.walk-list.outputs.run }}
-          REASON: ${{ needs.walk-list.outputs.reason }}
-        run: |
-          case "$RUN" in
-            true)
-              echo "running the walk: $REASON"
-              ;;
-            false)
-              line="skipped: no relevant change — $REASON"
-              echo "$line"
-              echo "$line" >> "$GITHUB_STEP_SUMMARY"
-              ;;
-            *)
-              echo "::error::walk-list answered '$RUN', neither true nor false"
-              exit 1
-              ;;
-          esac
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.walk-list.outputs.run == 'true'
-        with:
-          # The parts' full history, so the environment below means the same
-          # thing here as there.
-          fetch-depth: 0
-      - name: Install test tooling (cached)
-        if: needs.walk-list.outputs.run == 'true'
-        uses: ./.github/actions/setup-python-cached
-        with:
-          python-version: "3.12"
-          requirements: |
-            requirements-dev.txt
-      # The parts' `Unit tests` environment, exactly: a walk imports the same
-      # modules a part does, and must not pass or fail on which job ran it.
-      # Plus the walk this entry runs and its shard, through the environment,
-      # never written into the shell line. The shard's two names are set here
-      # and nowhere else; the walk's helper is their one reader.
-      - name: Console-change walk
-        if: needs.walk-list.outputs.run == 'true'
-        env:
-          LINEAR_API_KEY: test-key
-          REPO: test/test
-          GH_TOKEN: test
-          REPO_SLUG: agent-bureau
-          BUREAU_REQUIRE_GIT_HISTORY: "1"
-          WALK: ${{ matrix.walk }}
-          BUREAU_WALK_SHARD: ${{ matrix.shard }}
-          BUREAU_WALK_SHARDS: ${{ matrix.shards }}
-        run: python3 scripts/unit_test_parts.py run-walks --only "$WALK"
-
   # The ONE result the merge gate and branch protection read (DRE-5838). Branch
   # protection on `main` requires a check named exactly `scripts unit tests`;
   # the parts report as `scripts unit tests (part N)`, so this job keeps the
   # name, and it passes only when every part passed AND every test file ran in
-  # exactly one of them AND every walk's job passed (DRE-6909). `always()` is
-  # load-bearing: without it GitHub SKIPS this job when a part or the walks
-  # fail, and a skipped required check counts as passing.
+  # exactly one of them. `always()` is load-bearing: without it GitHub SKIPS
+  # this job when a part fails, and a skipped required check counts as
+  # passing. It waits on the parts alone: the console-change walks it also
+  # waited on from DRE-6909 were deleted with their jobs (DRE-8017).
   # The repository checks that used to follow the suite in the single job run
-  # here, under the same required name. It reads `walk-list` too (DRE-7908),
-  # so a run whose walks were skipped says why on the one required check.
+  # here, under the same required name.
   unit-result:
     name: scripts unit tests
-    needs: [unit, walk-list, walks]
+    needs: [unit]
     if: always()
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
@@ -744,126 +511,18 @@ jobs:
       - name: Every receipt composes through the one writer
         run: python3 scripts/check_act_receipts.py
 
-      # Last, and `always()`, so a red part or a red walk is reported here
-      # even when an earlier step of this job also failed.
+      # Last, and `always()`, so a red part is reported here even when an
+      # earlier step of this job also failed.
       - name: Every part passed
         if: always()
         env:
           PARTS: ${{ needs.unit.result }}
-          WALKS: ${{ needs.walks.result }}
-          WALKS_RUN: ${{ needs.walk-list.outputs.run }}
-          WALKS_REASON: ${{ needs.walk-list.outputs.reason }}
         run: |
-          if [ "$WALKS_RUN" = false ]; then
-            line="skipped: no relevant change — $WALKS_REASON"
-            echo "the walks were $line"
-            echo "The walks were $line" >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
-          fi
-          red=0
           if [ "$PARTS" != "success" ]; then
             echo "::error::the unit test parts finished '$PARTS', not 'success' — see the scripts unit tests (part N) jobs"
-            red=1
-          fi
-          if [ "$WALKS" != "success" ]; then
-            echo "::error::the walks finished '$WALKS', not 'success' — see the scripts unit tests (walk ...) jobs"
-            red=1
-          fi
-          if [ "$red" = 1 ]; then
             exit 1
           fi
-          echo "every unit test part and every walk passed"
-
-  # EVERY CONSOLE CHANGE KEEPS THE SUITE GREEN (DRE-6873). The harness
-  # (`tests/test_console_change_keeps_the_suite_green.py`, DRE-6865) derives one
-  # case per change the console can save, applies it to a copy of the tree and
-  # runs every test that can read the model files inside the copy — about ten
-  # minutes of pytest a case. In the unit parts and the walks' job
-  # `BUREAU_SUITE_GREEN_RUN` is unset and those cases skip; here they run, split
-  # over the parts (`BUREAU_SUITE_GREEN_PART` of `_OF`), side by side through
-  # the harness's own thread pool. Those three names are set in this job's
-  # pytest step and nowhere else.
-  #
-  # AS MANY PARTS AS THE CASES NEED (DRE-7511). Two fixed parts ran up to 69
-  # minutes against the 90-minute limit, and a pull request that added cases
-  # was canceled at it. `tests/test_suite_green_time_budget.py` projects each
-  # part's time from the harness's case count and the seconds a case was
-  # measured at on main, and fails unless `matrix.part` is 1..N and `_OF` is
-  # N for the smallest N whose every part stays at or under 75% of this job's
-  # `timeout-minutes` — naming the N that fits when a change adds cases.
-  #
-  # NARROWED PER CHANGE, WHOLE EVERY NIGHT (`standards/engineering.md`). The
-  # reach step asks `scripts/suite_green_reach.py` whether this run's changed
-  # files can reach the model tests — the harness's own rule — and every step
-  # after it is gated on the answer, so a run that cannot reach them concludes
-  # success in under a minute. A script, never an `on: paths:` filter, which
-  # would create no check run at all. No job-level `if:`: a schedule run has no
-  # range to compare, answers `run`, and runs every case.
-  #
-  # Not in `unit-result`'s `needs`: branch protection requires that check for
-  # the unit parts alone, and the merge gate reads this job as a check of its
-  # own. `tests/test_suite_green_job.py` holds all of it.
-  suite-green:
-    name: console change keeps the suite green (part ${{ matrix.part }})
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
-    strategy:
-      # One red part must not cancel the other: a canceled part hides its own
-      # failures behind somebody else's.
-      fail-fast: false
-      matrix:
-        part: [1, 2, 3, 4]
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # FAIL CLOSED, as the act-registry step below: if the changed files
-      # cannot be read the answer is `run`. A rename lists its old name too,
-      # because a `.py` the tree no longer holds reaches. The system python3
-      # reads the list — the cached install is the first gated step — and the
-      # script answers `run` if it cannot read `config/models.yaml`.
-      - name: Can this run reach the model tests?
-        id: reach
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # A schedule run has no `github.event.before`, so BASE is empty and
-          # the answer is `run`: the nightly runs every case.
-          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          HEAD: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-        run: |
-          changed="$RUNNER_TEMP/suite-green-changed.txt"
-          if [ -n "$BASE" ] && gh api --paginate "repos/$GITHUB_REPOSITORY/compare/$BASE...$HEAD" \
-               --jq '.files[] | .filename, (.previous_filename // empty)' > "$changed"; then
-            decision=$(python3 scripts/suite_green_reach.py decide --changed "$changed" --tree . || echo run)
-            echo "$decision"
-            if [ "$(printf '%s\n' "$decision" | head -n1)" = skip ]; then
-              echo "run=false" >> "$GITHUB_OUTPUT"
-              echo "no changed file can reach the model tests — the cases are not run"
-            else
-              echo "run=true" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            echo "run=true" >> "$GITHUB_OUTPUT"
-            echo "could not read this run's changed files — running every case"
-          fi
-      - name: Install test tooling (cached)
-        if: steps.reach.outputs.run == 'true'
-        uses: ./.github/actions/setup-python-cached
-        with:
-          python-version: "3.12"
-          requirements: |
-            requirements-dev.txt
-      # The inner runs inherit this environment: the parts' `Unit tests`
-      # environment, less BUREAU_REQUIRE_GIT_HISTORY — a case's copy of the
-      # tree carries no `.git`, so a test that reads history skips there.
-      - name: Every console change keeps the model tests green
-        if: steps.reach.outputs.run == 'true'
-        env:
-          LINEAR_API_KEY: test-key
-          REPO: test/test
-          GH_TOKEN: test
-          REPO_SLUG: agent-bureau
-          BUREAU_SUITE_GREEN_RUN: "1"
-          BUREAU_SUITE_GREEN_PART: ${{ matrix.part }}
-          BUREAU_SUITE_GREEN_OF: "4"
-        run: python3 -m pytest tests/test_console_change_keeps_the_suite_green.py -v
+          echo "every unit test part passed"
 
   # The act registry's CONSUMER (DRE-3091). Its own job, because it is the one
   # check here that leaves the repository: it reads the console's `ACTS` out of

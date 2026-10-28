@@ -6,25 +6,37 @@
 #      line of its own saying the CEO's press: the hold, the press's
 #      question and the move to `Green Light`, as before.
 #   2. Cause rows and nothing else — the three declared lines, the Question
-#      `proof_cause_park.QUESTION` word for word, and `cause:` lines — with
-#      the record pull request OPEN: handed to the one writer,
-#      `proof_cause_park.py park`, which holds the card `In Review` for the
-#      operator and asks the operator's question (DRE-6837). The step posts
-#      no hold, no question and no move of its own, and its closing line
-#      quotes the writer's result line. With no open record pull request —
-#      PR_STATE empty (none found), UNREADABLE (GitHub's answer could not be
-#      read) or MERGED (the record shipped) — the file is handed to nobody:
-#      a warning, `proof park: cause rows with no open record pull request
-#      for <CARD> — nothing held`, and the closing line `proof result: no
-#      record` (with the no-record comment) or `proof result: record already
-#      merged`. The card's clock is then the lane it stands in: Hand-work's
-#      `hand-work-overdue` alarm and the dispatcher's first-run read, or,
-#      where a pull request does exist, the dispatcher's own cause park.
+#      `proof_cause_park.QUESTION` word for word, and `cause:` lines — ask
+#      nobody (DRE-7953). Since DRE-7952 a record whose every unmet row is a
+#      gap merges on its approved record and closes with a fix card, so the
+#      step prints the cause lines to the log, posts no hold, no question and
+#      no move of its own, and runs no `proof_cause_park.py park` (which
+#      DRE-6837 had hold the card for the operator). With the record pull
+#      request OPEN the summary says `proof park: cause rows (<n>) — left to
+#      the gate, nothing asked`. With none — PR_STATE empty (none found),
+#      UNREADABLE (GitHub's answer could not be read) or MERGED (the record
+#      shipped) — a warning, `proof park: cause rows with no open record pull
+#      request for <CARD> — nothing held`, and the closing line `proof
+#      result: no record` (with the no-record comment) or `proof result:
+#      record already merged`. The card's clock is then the lane it stands
+#      in: Hand-work's `hand-work-overdue` alarm and the dispatcher's
+#      first-run read.
 #   3. Anything else — no press and no cause line, a Question of the run's
 #      own beside cause rows, or prose of its own — is a decision for the
 #      CEO: the press's hold, the question under the decision's own opening
 #      (a park mark of `spoken_thread.PROOF_PARK_MARKS`) and the move to
 #      `Green Light`.
+#
+# The name seam (DRE-8170). The park's comment quotes the escalation file,
+# which quotes criteria and what the run saw, so it can carry a person's
+# name. When NAME_GUARD_LIVE is `true` the comment file goes through
+# `name_redact.py redact --in-place` before it posts, with the roster of
+# OWNER (the owner half of BUREAU_REPOSITORY when OWNER is empty). When it
+# cannot be redacted — the roster is unreadable — the comment posted is the
+# fixed sentence `🔬 the escalation could not be redacted (name guard:
+# roster unreadable) — read the run` and the run, and the park still
+# happens, so a decision is never lost over a redaction. The receipts are
+# fixed strings and a URL, and do not go through it.
 set -e
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
 # Exits 1 and 2: the one PR-existence predicate (DRE-2316). Exit 3
@@ -108,28 +120,12 @@ PY
   fi
 fi
 if [ "$PARK" = "cause" ]; then
+  # Cause rows ask nobody (DRE-7953): a record whose every unmet row is a
+  # gap merges on its approval and its PROOF closes with one fix card
+  # (DRE-7952). The lines go to the log, and nothing is posted or moved.
+  printf '%s\n' "$CAUSES"
   if [ "$PR_STATE" = "OPEN" ]; then
-    # The one writer holds the card and asks the operator, and moves no
-    # card (DRE-6837): the card is `In Review`, where the move above put
-    # it, and the writer reads the lane off the card. Its last line is
-    # its result line, quoted below. Exit 2 is no cause row after all,
-    # and the file is a decision; exit 1 posts nothing of the step's own,
-    # because a press or decision park would put the operator's question
-    # in the CEO's queue — the dispatcher's `_caused` finishes it.
-    PARK_RC=0
-    PARKED=$(python3 .bureau-pipeline/scripts/proof_cause_park.py park "$CARD" --escalation-file "$ESCALATION_FILE" --run-url "$RUN_URL") || PARK_RC=$?
-    if [ -n "$PARKED" ]; then
-      printf '%s\n' "$PARKED"
-    fi
-    if [ "$PARK_RC" = "0" ]; then
-      TOOK="$TOOK, then $(printf '%s\n' "$PARKED" | tail -n 1)"
-      echo "proof park: cause rows ($(printf '%s\n' "$CAUSES" | grep -c .)), held for the operator" >> "$GITHUB_STEP_SUMMARY"
-    elif [ "$PARK_RC" = "2" ]; then
-      PARK="decision"
-    else
-      echo "::warning::the cause park could not be completed for $CARD; nothing is posted and nothing moves"
-      echo "proof park: the cause park could not be completed for $CARD — the dispatcher's next pass parks the record off its rows" >> "$GITHUB_STEP_SUMMARY"
-    fi
+    echo "proof park: cause rows ($(printf '%s\n' "$CAUSES" | grep -c .)) — left to the gate, nothing asked" >> "$GITHUB_STEP_SUMMARY"
   else
     echo "::warning::the cause rows were written with no open record pull request for $CARD; nothing is held — the dispatcher reads this run off the card"
     echo "proof park: cause rows with no open record pull request for $CARD — nothing held" >> "$GITHUB_STEP_SUMMARY"
@@ -196,6 +192,20 @@ PY
     echo ""
     echo "Run: $RUN_URL"
   } > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
+  # The name seam (DRE-8170): the comment quotes the agent's own file, so
+  # it can carry a person's name. Live, it is redacted in place before it
+  # posts; when it cannot be, the fixed sentence and the run post instead,
+  # and the park below still happens.
+  if [ "${NAME_GUARD_LIVE:-}" = "true" ]; then
+    if ! python3 .bureau-pipeline/scripts/name_redact.py redact \
+         --file "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md" --in-place \
+         --owner "${OWNER:-${BUREAU_REPOSITORY%%/*}}"; then
+      printf '%s\n\n%s\n' \
+        "🔬 the escalation could not be redacted (name guard: roster unreadable) — read the run" \
+        "Run: $RUN_URL" > "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
+      echo "proof park: the escalation could not be redacted for $CARD — the fixed sentence is posted" >> "$GITHUB_STEP_SUMMARY"
+    fi
+  fi
   echo "proof park: $PARK" >> "$GITHUB_STEP_SUMMARY"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "$(cat "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md")"

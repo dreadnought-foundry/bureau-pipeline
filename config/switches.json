@@ -27,6 +27,12 @@
       "reader": ".github/workflows/triage-repair.yml",
       "step": "Decide dry run",
       "means": "The scheduled Triage Repair run claims parked cards and has the planner repair them, instead of printing what it would repair."
+    },
+    {
+      "name": "NAME_GUARD_LIVE",
+      "reader": ".github/workflows/proof-task.yml",
+      "step": "Install the name guard",
+      "means": "Every push the proof run makes (the agent's, the push rescue's and the shadow push) and the record pull request's body refresh refuse a person's name from the live roster, instead of printing what they would refuse."
     }
   ]
 }

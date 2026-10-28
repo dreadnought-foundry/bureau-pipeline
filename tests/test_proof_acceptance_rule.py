@@ -21,6 +21,15 @@ only a Result cell that opens `ACCEPTED by operator decision` and links the
 decision in the same cell, and `tests/test_proof_record.py` pins that. The
 last test here re-states the two halves of the form against the reader, so a
 widened rule in prose can never quietly become a widened reader.
+
+DRE-7949 gave the acceptance to the record's critic: the run writes the row
+`Not met. wording-only: seen “…” — differs: …`, and the critic's verdict at
+the head accepts it in one `🔎 proof-row-accepted:` line. DRE-7954 rewrote
+the two briefs around that, so they carry the rule with the critic as the
+writer (`RULE`). DRE-7955 rewrote the standard the same way, so all three
+documents carry `RULE` word for word, and none gives the acceptance to the
+operator. An older record's operator-accepted row is history: the gate still
+reads it, and the standard describes it without the old acceptance words.
 """
 
 from __future__ import annotations
@@ -40,23 +49,13 @@ STANDARD = ROOT / "standards" / "card-quality.md"
 PROOF_BRIEF = ROOT / "briefs" / "proof.md"
 CRITIC_BRIEF = ROOT / "briefs" / "critic.md"
 DOCUMENTS = (STANDARD, PROOF_BRIEF, CRITIC_BRIEF)
+#: The briefs DRE-7954 rewrote around the critic's acceptance (DRE-7949).
+BRIEFS = (PROOF_BRIEF, CRITIC_BRIEF)
 
-#: The rule, sentence by sentence, as all three documents must carry it. The
-#: sentences are the contract; each document wraps them in its own reader's
-#: words around them, never in place of them.
-RULE = (
-    # The acceptable half.
-    "A row may be accepted by operator decision only where the mechanism was "
-    "actually observed working and just the card's wording, quoted text, "
-    "timing, count or method of observing differs.",
+#: The sentences that name no writer, as all three documents must carry them.
+SHARED = (
     # Overtaken stays, as one named case of the acceptable half.
     "A criterion overtaken by a later shipped decision is one case of this.",
-    # What an acceptance must contain.
-    "The acceptance names what was seen, quoted from the record, says what "
-    "differs from the card's words, and links the written decision.",
-    # Who writes it.
-    "The operator writes the decision and the row — never the builder and "
-    "never the proof run.",
     # The never-acceptable half.
     "A row where the thing itself was not seen is never accepted: it stays "
     "unmet and waits for a new run or a reworded card.",
@@ -68,6 +67,22 @@ RULE = (
     "A row that is part shown and part not seen is not acceptable either.",
 )
 
+#: The rule, sentence by sentence, as the two briefs carry it since DRE-7954
+#: and the standard since DRE-7955.
+#: The sentences are the contract; each document wraps them in its own
+#: reader's words around them, never in place of them.
+RULE = (
+    # The acceptable half.
+    "A row may be accepted only where the mechanism was actually observed "
+    "working and just the card's wording, quoted text, timing, count or "
+    "method of observing differs.",
+    # What an acceptance must contain.
+    "The acceptance names what was seen, quoted from the record, and says "
+    "what differs from the card's words.",
+    # Who writes it.
+    "The record's critic writes it, in its verdict — never the builder and "
+    "never the proof run.",
+) + SHARED
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -85,13 +100,32 @@ def _says(path: Path, needle: str) -> bool:
 
 
 @pytest.mark.parametrize("path", DOCUMENTS, ids=lambda p: str(p.relative_to(ROOT)))
-@pytest.mark.parametrize("sentence", RULE, ids=range(len(RULE)))
-def test_every_document_carries_the_rule_word_for_word(path, sentence):
+@pytest.mark.parametrize("sentence", SHARED, ids=range(len(SHARED)))
+def test_every_document_carries_the_shared_sentences_word_for_word(path, sentence):
     assert _says(path, sentence), (
         f"{path.relative_to(ROOT)} does not carry the CEO's 2026-10-10 rule "
         f"sentence {sentence!r} (DRE-6773) — the standard, the proof brief "
         f"and the critic brief must read one wording"
     )
+
+
+@pytest.mark.parametrize("path", DOCUMENTS, ids=lambda p: str(p.relative_to(ROOT)))
+@pytest.mark.parametrize("sentence", RULE, ids=range(len(RULE)))
+def test_every_document_carries_the_rule_word_for_word(path, sentence):
+    assert _says(path, sentence), (
+        f"{path.relative_to(ROOT)} does not carry the rule sentence {sentence!r} "
+        f"as DRE-7954 and DRE-7955 wrote it — the standard, the proof brief and the "
+        f"critic brief read one wording"
+    )
+
+
+@pytest.mark.parametrize("path", DOCUMENTS, ids=lambda p: str(p.relative_to(ROOT)))
+def test_no_document_gives_the_acceptance_to_the_operator(path):
+    for stale in ("The operator writes the decision", "A row may be accepted by operator decision",
+                  "accepted by the operator"):
+        assert not _says(path, stale), (
+            f"{path.relative_to(ROOT)} still gives the acceptance to the operator: {stale!r}"
+        )
 
 
 def test_the_standard_names_the_date_and_source_of_the_decision():
@@ -116,6 +150,16 @@ def test_no_document_still_limits_acceptance_to_overtaken_alone(path):
         )
 
 
+def test_the_standard_names_the_critics_acceptance_and_the_history():
+    """DRE-7955: the standard names the row the run writes, the line the
+    critic accepts it with, and an older accepted row as history."""
+    for needle in (proof_record.WORDING_OPENING, proof_record.ACCEPTANCE_MARK, "DRE-7949",
+                   "a person never does"):
+        assert _says(STANDARD, needle), f"standards/card-quality.md does not say {needle!r}"
+    assert _says(STANDARD, "An older record may carry a row accepted before DRE-7949"), (
+        "standards/card-quality.md no longer describes an older accepted row as history")
+
+
 def test_the_proof_run_records_unmet_rows_as_today_and_never_accepts():
     for needle in (
         "You never write an accepted row on your own judgment",
@@ -130,15 +174,63 @@ def test_the_critic_is_told_which_acceptance_to_send_back_and_which_not():
     for needle in (
         # A not-seen row accepted anyway is a finding.
         "An acceptance of a row whose thing was not seen is a blocking finding",
-        # A shown-but-not-as-worded row is not sent back for lacking the word.
-        "Never send back an acceptance of a row shown working but not as worded "
-        "for failing to say \"overtaken\"",
-        # The critic follows the link the gate only shape-checks.
+        # A shown-but-not-as-worded row is not held back for lacking the word.
+        "Never refuse a row shown working but not as worded for failing to say "
+        "\"overtaken\"",
+        # An older record's accepted row: the critic follows the link the gate
+        # only shape-checks.
         "open the linked decision",
     ):
         assert _says(CRITIC_BRIEF, needle), (
             f"briefs/critic.md does not carry the critic's half of the rule: {needle!r}"
         )
+
+
+#: The critic's acceptance line, its placeholders as the critic brief writes
+#: them (DRE-7949, DRE-7954).
+ACCEPTANCE_LINE = (f"{proof_record.ACCEPTANCE_MARK} “<criterion cut to 70>” — seen: "
+                   "“<quote>” — differs: <what> — reason: <sentence>")
+
+
+def _code_lines(path: Path) -> list:
+    return [line.strip() for line in _read(path).splitlines()
+            if line.startswith("    ") and line.strip()]
+
+
+def test_the_critic_brief_carries_the_acceptance_line():
+    assert ACCEPTANCE_LINE in _code_lines(CRITIC_BRIEF), (
+        f"briefs/critic.md does not quote the acceptance line `{ACCEPTANCE_LINE}` on its "
+        f"own line — `proof_record.ACCEPTANCE_MARK` is {proof_record.ACCEPTANCE_MARK!r}")
+
+
+def test_the_critic_brief_quotes_the_row_it_accepts():
+    row = f"{proof_record.WORDING_OPENING} seen “<quote>” — differs: <what>"
+    assert row in _code_lines(CRITIC_BRIEF), (
+        f"briefs/critic.md does not quote the wording-only row `{row}`")
+
+
+def test_the_acceptance_line_filled_is_one_the_gate_reads():
+    criterion = "The sweep posts a proof-release: line naming the ready release"
+    line = (ACCEPTANCE_LINE.replace("<criterion cut to 70>", criterion)
+            .replace("<quote>", "release v41 ready").replace("<what>", "the line's prefix")
+            .replace("<sentence>", "the line was seen with another prefix."))
+    assert proof_record.acceptances(line) == [(criterion, "release v41 ready")]
+
+
+def test_a_not_observed_row_is_never_accepted():
+    for needle in (
+        "You never write one for a `Not observed.` row",
+        "or for a row that is part shown and part not seen",
+    ):
+        assert _says(CRITIC_BRIEF, needle), (
+            f"briefs/critic.md does not say {needle!r}")
+
+
+def test_the_critic_section_is_rewritten_around_the_acceptance_line():
+    text = _read(CRITIC_BRIEF)
+    heading = "## An accepted row in a proof record (DRE-6244, DRE-6773, DRE-7949)"
+    assert heading in text, f"briefs/critic.md has no `{heading}` section"
+    assert "## An accepted row in a proof record (DRE-6244, DRE-6773)\n" not in text
 
 
 def test_the_critic_brief_points_at_the_standard_and_the_ruling():

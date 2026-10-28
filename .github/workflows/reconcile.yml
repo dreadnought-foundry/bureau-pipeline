@@ -554,6 +554,8 @@ jobs:
           HYGIENE_LIVE_OFF_UNTIL: ${{ vars.HYGIENE_LIVE_OFF_UNTIL }}
           TRIAGE_REPAIR_LIVE: ${{ vars.TRIAGE_REPAIR_LIVE }}
           TRIAGE_REPAIR_LIVE_OFF_UNTIL: ${{ vars.TRIAGE_REPAIR_LIVE_OFF_UNTIL }}
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
+          NAME_GUARD_LIVE_OFF_UNTIL: ${{ vars.NAME_GUARD_LIVE_OFF_UNTIL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG

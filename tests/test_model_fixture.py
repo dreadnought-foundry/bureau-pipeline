@@ -277,7 +277,8 @@ def test_the_tree_holds_todays_code_and_the_frozen_files(tree):
         assert (tree / "config" / name).read_bytes() == (FIXTURE_DIR / name).read_bytes()
     assert (tree / "config" / "repo-map.json").read_bytes() == (
         ROOT / "config" / "repo-map.json").read_bytes()
-    assert (tree / "config" / "model-choices.json").is_file()
+    # The generator writes no file of the console's any more (DRE-8020).
+    assert not (tree / "config" / "model-choices.json").exists()
 
 
 def test_the_tree_is_in_sync(tree):
@@ -469,7 +470,7 @@ def test_the_default_runs_the_generator_in_the_tree_exactly_once(tmp_path, monke
     calls = _record_subprocesses(monkeypatch)
     dest = fixture_tree(tmp_path / "tree")
     assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-    assert (dest / "config" / "model-choices.json").is_file()
+    assert not (dest / "config" / "model-choices.json").exists()
 
 
 def test_regenerate_true_is_the_default(tmp_path, monkeypatch):

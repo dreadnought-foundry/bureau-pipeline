@@ -544,8 +544,10 @@ class TestAStampedWaitingRow:
         assert len(examples) == 1, examples
         stamp = re.search(r"\[not-before=([^\]]+)\]", examples[0]).group(1)
         assert datetime.fromisoformat(stamp).tzinfo is not None
-        # When to stamp, and when a row stays prose.
-        assert "stays prose" in record
+        # When to stamp: every waiting row, and none stays prose (DRE-7951,
+        # DRE-7954) — an unstamped row is re-checked, and that run stamps it.
+        assert "Every waiting row carries" in " ".join(record.split())
+        assert "stays prose" not in record
 
 
 # --------------------------------------------------------------------------

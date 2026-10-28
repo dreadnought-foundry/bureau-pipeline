@@ -931,26 +931,25 @@ class ResultStepTest(_StepHarness):
 
     # --- the escalation sorted by what it names (DRE-6840) -----------------
 
-    def _park_argv(self) -> list:
-        return ["proof_cause_park", "park", "DRE-77", "--escalation-file",
-                str(self.escalation), "--run-url", RUN_URL]
-
     def _summary(self) -> str:
         return self.summary.read_text() if self.summary.exists() else ""
 
-    def test_cause_rows_with_an_open_record_go_to_the_one_writer(self):
+    def test_cause_rows_with_an_open_record_ask_nobody(self):
+        """DRE-7953: a gap record merges on its approval (DRE-7952), so cause
+        rows go to nobody — no writer, no hold, no question, no Green Light
+        move — and their lines are printed to the log."""
         self._install_cause_park()
         posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
                            escalation=CAUSE_FILE, description=NO_PRESS)
-        self.assertEqual([self._park_argv()], self.parks)
-        # The pull request's report and its In Review move, and nothing else:
-        # no hold, no question and no Green Light move of the step's own.
+        self.assertEqual([], self.parks)
         self.assertEqual(["comment", "advance"], [c[1] for c in posted])
         self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
         self.assertFalse(any(c.startswith("🙋") for c in self._comments(posted)))
-        # The writer's own result line closes the run's log, never a lane assumed.
-        self.assertIn("proof result: record pull request, then left DRE-77 in "
-                      "In Review for the operator\n", self.stdout)
+        for line in CAUSE_FILE.splitlines():
+            if line.startswith("cause:"):
+                self.assertIn(line, self.stdout)
+        self.assertIn("proof result: record pull request\n", self.stdout)
+        self.assertIn("left to the gate, nothing asked", self._summary())
         self.assertNotIn("only the CEO can make", self._summary())
         self.assertNotIn("only the CEO can make", self.stdout)
 
@@ -967,30 +966,15 @@ class ResultStepTest(_StepHarness):
         self.assertIn("proof park: decision", self._summary())
         self.assertNotIn("proof park: press", self._summary())
 
-    def test_a_writer_that_finds_no_cause_row_sends_the_file_to_the_decision(self):
+    def test_a_writer_that_would_refuse_is_never_reached(self):
         self._install_cause_park()
-        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=2)
-        self.assertEqual([self._park_argv()], self.parks)
-        self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
-                         [c[1] for c in posted])
-        self.assertTrue(posted[3][3].startswith(DECISION_RECEIPT), posted[3][3])
-        self.assertEqual([("In Review", "Hand-work"), ("Green Light", "Hand-work,In Review")],
-                         self._moves(posted))
-
-    def test_a_writer_that_refuses_leaves_a_warning_and_moves_nothing(self):
-        self._install_cause_park()
-        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=1)
-        self.assertEqual([self._park_argv()], self.parks)
-        # Never the press or decision fallback: that would put the operator's
-        # question in the CEO's queue.
-        self.assertEqual(["comment", "advance"], [c[1] for c in posted])
-        self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
-        self.assertIn("::warning::", self.stdout)
-        self.assertIn("proof park: the cause park could not be completed for DRE-77 — the "
-                      "dispatcher's next pass parks the record off its rows", self._summary())
-        self.assertNotIn("only the CEO can make", self._summary())
+        for code in (1, 2):
+            posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
+                               escalation=CAUSE_FILE, description=NO_PRESS, park_exit=code)
+            self.assertEqual([], self.parks)
+            self.assertEqual(["comment", "advance"], [c[1] for c in posted])
+            self.assertNotIn("::warning::", self.stdout)
+            self.calls.unlink()
 
 
 class ReturnStepTest(_StepHarness):
@@ -1544,6 +1528,208 @@ class LocalRunStepExecutedTest(unittest.TestCase):
         done = self._run("local_stop")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertFalse(Path(path).exists(), "the login file outlived the run")
+
+
+GUARD_STEP = "Install the name guard"
+#: The repository switch, `name_redact.SWITCH` (DRE-8166), read from `vars`.
+GUARD_SWITCH = "${{ vars.NAME_GUARD_LIVE }}"
+#: The guard step's env, whole: everything the hook bakes arrives here.
+GUARD_ENV = {
+    # A proof run's worker token; a shadow's agent can read the hook, so a
+    # shadow bakes none (tests/test_proof_task_shadow.py).
+    "GH_TOKEN": "${{ !inputs.shadow && steps.worker.outputs.token || '' }}",
+    "LINEAR_API_KEY": "${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}",
+    "LINEAR_API_KEY_FALLBACK": "${{ secrets.LINEAR_API_KEY }}",
+    "NAME_GUARD_LIVE": GUARD_SWITCH,
+    "GUARD_OWNER": "${{ github.repository_owner }}",
+    "GUARD_DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+    "GUARD_ROOT": "${{ github.workspace }}",
+}
+#: The steps after the agent whose scripts read the same switch.
+GUARD_SWITCH_STEPS = ("Push the shadow record", "Refresh the record pull request's body",
+                      RESULT_STEP)
+
+
+class NameGuardHookTest(unittest.TestCase):
+    """DRE-8168: the record branch cannot be pushed while it carries a roster
+    form. The agent pushes inside its own step, so the guard stands at git's
+    seam — a pre-push hook written after the checkout and before the agent,
+    agent-fix.yml's `Refuse a push onto a merged pull request` shape."""
+
+    def test_it_follows_the_identity_step_and_precedes_every_agent_attempt(self):
+        at = _index(GUARD_STEP)
+        self.assertEqual(_index(IDENTITY_STEP) + 1, at)
+        for i, step in _agent_steps():
+            self.assertLess(at, i, step.get("name"))
+        self.assertNotIn("if", _step(GUARD_STEP), "every run installs it")
+
+    def test_its_env_is_the_contracts_and_its_script_holds_no_expression(self):
+        step = _step(GUARD_STEP)
+        self.assertEqual(GUARD_ENV, step["env"])
+        self.assertNotIn("${{", step["run"])
+
+    def test_the_hook_runs_the_guard_on_the_pre_push_seam(self):
+        run = _step(GUARD_STEP)["run"]
+        self.assertIn("git rev-parse --git-path hooks", run)
+        self.assertIn('"$HOOKS/pre-push"', run)
+        self.assertIn("chmod +x", run)
+        self.assertIn("/.bureau-pipeline/scripts/name_redact.py", run)
+        self.assertIn("guard --pre-push --default-ref", run)
+
+    def test_the_switch_reaches_the_steps_whose_scripts_read_it(self):
+        for name in GUARD_SWITCH_STEPS:
+            with self.subTest(step=name):
+                self.assertEqual(GUARD_SWITCH, (_step(name).get("env") or {}).get("NAME_GUARD_LIVE"))
+
+    def test_the_catalog_names_the_guard_step_as_the_switchs_reader(self):
+        import name_redact
+        import switch_reason
+        rows = {r["name"]: r for r in switch_reason.load()["switches"]}
+        self.assertIn(name_redact.SWITCH, rows)
+        row = rows[name_redact.SWITCH]
+        self.assertEqual(".github/workflows/proof-task.yml", row["reader"])
+        self.assertEqual(GUARD_STEP, row["step"])
+        self.assertTrue(row["means"].strip().endswith("."))
+        self.assertEqual([], switch_reason.problems())
+
+
+#: What the stub guard records of each call, and how it answers.
+_STUB_GUARD = '''\
+import json, os, sys
+seen = {"argv": sys.argv[1:], "stdin": sys.stdin.read(),
+        "env": {k: os.environ.get(k) for k in (
+            "GH_TOKEN", "LINEAR_API_KEY", "LINEAR_API_KEY_FALLBACK",
+            "NAME_GUARD_LIVE", "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR")}}
+with open(os.path.join(os.path.dirname(__file__), "seen.json"), "w") as f:
+    json.dump(seen, f)
+exit_file = os.path.join(os.path.dirname(__file__), "exit")
+sys.exit(int(open(exit_file).read()) if os.path.exists(exit_file) else 0)
+'''
+
+#: The values the step is handed, as the runner would render GUARD_ENV.
+_BAKED = {
+    "GH_TOKEN": "ghs_worker_token",
+    "LINEAR_API_KEY": "lin_api_primary",
+    "LINEAR_API_KEY_FALLBACK": "lin_api_fleet",
+    "NAME_GUARD_LIVE": "true",
+    "GITHUB_ACTOR": "octo-actor",
+    "GITHUB_TRIGGERING_ACTOR": "octo-trigger",
+}
+
+
+class NameGuardHookExecutedTest(unittest.TestCase):
+    """The step's own script, run as written in a clone of a real repository,
+    then a real `git push` through the hook it wrote — against a stub guard
+    that records what it was handed, so the test reads the hook's behavior
+    rather than its text. The push runs in an environment that holds none of
+    the step's values, as a later step's would: whatever reaches the guard
+    was baked."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        home = self.tmp / "home"
+        home.mkdir()
+        self.base = {"PATH": os.environ["PATH"], "HOME": str(home),
+                     "GIT_CONFIG_NOSYSTEM": "1",
+                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        self.remote = self.tmp / "remote.git"
+        self._git(self.tmp, "init", "-q", "--bare", "-b", "main", str(self.remote))
+        self.work = self.tmp / "work"
+        self._git(self.tmp, "clone", "-q", str(self.remote), str(self.work))
+        self._git(self.work, "checkout", "-q", "-b", "main")
+        (self.work / "README.md").write_text("product\n")
+        self._git(self.work, "add", "-A")
+        self._git(self.work, "commit", "-q", "-m", "seed")
+        self._git(self.work, "push", "-q", "origin", "main")
+        self.root = self.tmp / "workspace"
+        scripts = self.root / ".bureau-pipeline" / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "name_redact.py").write_text(_STUB_GUARD)
+        self.scripts = scripts
+
+    def _git(self, cwd: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        done = subprocess.run(["git", *args], cwd=cwd, env=env or self.base,
+                              capture_output=True, text=True, timeout=60)
+        if env is None:
+            self.assertEqual(0, done.returncode, done.stderr)
+        return done
+
+    def _install(self, **over: str) -> subprocess.CompletedProcess:
+        env = dict(self.base, **_BAKED, GUARD_OWNER="octo-org",
+                   GUARD_DEFAULT_BRANCH="main", GUARD_ROOT=str(self.root))
+        env.update(over)
+        return subprocess.run(["bash", "-e", "-c", _step(GUARD_STEP)["run"]],
+                              cwd=self.work, env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def _push(self, refuse: bool = False, **env: str) -> tuple[subprocess.CompletedProcess, dict]:
+        if refuse:
+            (self.scripts / "exit").write_text("1")
+        with (self.work / "record.md").open("a") as f:
+            f.write("record\n")
+        self._git(self.work, "checkout", "-q", "-B", "agent/DRE-1-proof-record")
+        self._git(self.work, "add", "-A")
+        self._git(self.work, "commit", "-q", "-m", "record")
+        done = self._git(self.work, "push", "origin", "agent/DRE-1-proof-record",
+                         env=dict(self.base, GITHUB_ACTOR="someone-else", **env))
+        seen = self.scripts / "seen.json"
+        return done, json.loads(seen.read_text()) if seen.exists() else {}
+
+    def test_the_step_prints_one_line_and_no_credential(self):
+        for value, live in (("true", "true"), ("", "false"), ("TRUE", "false"),
+                            ("false", "false")):
+            with self.subTest(NAME_GUARD_LIVE=value):
+                done = self._install(NAME_GUARD_LIVE=value)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual(f"name-guard: installed — live={live}\n", done.stdout)
+                self.assertEqual("", done.stderr)
+                for secret in ("ghs_worker_token", "lin_api_primary", "lin_api_fleet"):
+                    self.assertNotIn(secret, done.stdout + done.stderr)
+
+    def test_a_push_runs_the_guard_with_every_value_baked(self):
+        self.assertEqual(0, self._install().returncode)
+        hook = self.work / ".git" / "hooks" / "pre-push"
+        self.assertTrue(os.access(hook, os.X_OK), "the hook is not executable")
+        done, seen = self._push()
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual(
+            ["guard", "--pre-push", "--default-ref", "origin/main", "--owner", "octo-org",
+             "--actor", "octo-actor", "--actor", "octo-trigger"], seen["argv"])
+        self.assertEqual(_BAKED, seen["env"])
+        # git's own pre-push stdin: the pushed ref and the sha it carries.
+        head = self._git(self.work, "rev-parse", "HEAD").stdout.strip()
+        self.assertIn(f"refs/heads/agent/DRE-1-proof-record {head} "
+                      f"refs/heads/agent/DRE-1-proof-record", seen["stdin"])
+
+    def test_a_refusal_stops_the_push(self):
+        self.assertEqual(0, self._install().returncode)
+        done, seen = self._push(refuse=True)
+        self.assertNotEqual(0, done.returncode)
+        self.assertTrue(seen, "the guard never ran")
+        branches = self._git(self.remote, "for-each-ref", "--format=%(refname:short)",
+                             "refs/heads/").stdout.split()
+        self.assertEqual(["main"], branches)
+
+    def test_a_later_push_step_hands_the_hook_its_fresh_token(self):
+        # The push rescue and the shadow push hold PUSH_TOKEN, minted after
+        # the agent; the worker token baked at install time is an hour old by
+        # then (DRE-3043), and a roster read on a dead token is a refusal.
+        self.assertEqual(0, self._install().returncode)
+        done, seen = self._push(PUSH_TOKEN="ghs_fresh_token")
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual("ghs_fresh_token", seen["env"]["GH_TOKEN"])
+
+    def test_a_shadows_hook_holds_no_token(self):
+        self.assertEqual(0, self._install(GH_TOKEN="").returncode)
+        hook = (self.work / ".git" / "hooks" / "pre-push").read_text()
+        self.assertNotIn("ghs_", hook)
+        done, seen = self._push(GH_TOKEN="ghs_agents_own")
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual("", seen["env"]["GH_TOKEN"])
+        _done, seen = self._push(PUSH_TOKEN="ghs_fresh_token")
+        self.assertEqual("ghs_fresh_token", seen["env"]["GH_TOKEN"])
 
 
 if __name__ == "__main__":
