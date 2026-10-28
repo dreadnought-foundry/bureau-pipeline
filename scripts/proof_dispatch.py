@@ -2311,7 +2311,9 @@ class _Pass:
         read here, one labelled for another repo in the roster
         (`config/repo-map.json`) on that repo (DRE-8156): its pull request
         found there and its release read there, as `_released` reads a
-        sibling's. At most `REARM_FIX_CARDS` cards are read, each once, and
+        sibling's. An epic is read built out with each build card shipped
+        (`_epic_shipped`), a Duplicate as its canonical card (`_canonical`,
+        DRE-8250). At most `REARM_FIX_CARDS` cards are read, each once, and
         one release reading is made per repo for its merges; the set re-arms
         once."""
         if not named:
