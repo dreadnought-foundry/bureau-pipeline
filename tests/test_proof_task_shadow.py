@@ -233,6 +233,8 @@ PRE_CHANGE_AGENT_ENV = {
     "PROOF_PYTHON": "${{ steps.local.outputs.python || '' }}",
     "PROOF_LOGIN_FILE": "${{ runner.temp }}/proof-login.json",
     "PROOF_SESSION_SECONDS": "${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}",
+    # DRE-8258: background tasks off, so a live run never ends its turn on one.
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 }
 
 # PRE_CHANGE_PROMPT — the agent's prompt on main at 16becdd2, byte for byte. It
