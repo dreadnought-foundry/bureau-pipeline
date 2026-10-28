@@ -1,0 +1,7 @@
+{
+  "card": "DRE-8025",
+  "model": "claude-sonnet-5-5",
+  "run_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/40757649250",
+  "dispatched_at": "2026-10-28T19:48:30Z",
+  "record_path": "docs/model-choice-copies-removal-proof.md"
+}
