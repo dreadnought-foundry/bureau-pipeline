@@ -50,21 +50,40 @@ quotes `##[error]Process completed with exit code 137` in prose — and its own
 fixtures, which a diff hunk in an agent log would carry with a `+` in front.
 A whole-line anchor refuses both: the quotation is never the line.
 
-## The class of machine
+## The rule the medic applies (DRE-8239)
 
-Off the `Runner name:` line the log already carries in its set-up steps, which
-was checked on all four runs. `bureau-mini-light-*` is `light` (the 2 GB pool),
-any other `bureau-mini-*` is `heavy` (the class DRE-4846 routes build and fix
-jobs to), `GitHub Actions *` is `hosted`, and anything else — including a log
-with no runner-name line at all — is `unknown`. Never guessed: the class is what
-decides whether the medic's one retry can help, and guessing `light` would
-re-run a heavy job straight into the same wall.
+A run's FIRST out-of-memory kill keeps the medic's one retry of the failed
+jobs, on any runner; the run's second kill is refused. "First" is counted per
+run, not by attempt number: on attempt 2 the medic reads attempt 1's failed
+log with this same reader, and an attempt 1 that was not killed leaves attempt
+2's kill its one retry. This replaced DRE-4847's rule, under which only a
+light runner's first kill was retried. On 10-27 and 10-28 the medic refused
+the kills of agent-bureau CI runs 40596656325 and 40616890320 on 4 GB heavy
+runners, and a plain re-run of the failed jobs on the same class of machine
+passed every time: a suite whose peak sits near the cap is killed on some runs
+and not others. A wasted retry costs one CI run, and a refused one cost a stall
+of hours. The rule lives in `medic_retry.out_of_memory_refusal`.
 
-With today's `gh` (2.100.0) `--log-failed` returns the whole job log, because
-GitHub's log is no longer step-mapped (every line reads `UNKNOWN STEP`). That
-is what puts the set-up lines and the kill line in one fetch. If `gh` ever
-narrows it again the medic sees no 137 line and classifies `normal`, which is
-today's behavior and never a false out-of-memory.
+## The machine, and its class
+
+The receipt names the machine off the Jobs API first (`machine_from_jobs`, the
+killed job's `runner_name` and its class label, `bureau-heavy`, `bureau-light`
+or `bureau-tiny`), then off the `Runner name:` line the log carries in its
+set-up steps, and failing both says "an unnamed runner" (`named`, DRE-8239).
+The Jobs API comes first because the log is not a reliable witness: the
+medic's fetch on the bureau pool's own light runners, whose image installs
+`gh` from Ubuntu's apt, carried the kill lines and no `Runner name:` line.
+
+The class read off the name — `bureau-mini-light-*` is `light` (the 2 GB
+pool), any other `bureau-mini-*` is `heavy`, `GitHub Actions *` is `hosted`,
+and anything else, a log with no runner-name line included, is `unknown` —
+is wording on the receipt now, and decides nothing.
+
+With `gh` 2.100.0 `--log-failed` returns the whole job log, because GitHub's
+log is no longer step-mapped (every line reads `UNKNOWN STEP`). That is what
+puts the set-up lines and the kill line in one fetch, and the shape depends on
+the `gh` version. If `gh` ever narrows it so the medic sees no 137 line, it
+classifies `normal`, which is never a false out-of-memory.
 
 CLI:
 
@@ -77,6 +96,7 @@ into two).
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -92,10 +112,8 @@ import stream_watchdog  # noqa: E402
 #: is not: the watchdog exits 124 so the two are told apart at a glance.
 KILL_EXIT = 137
 
-#: The classes of machine, and the only one the medic's single retry can help.
-#: A light runner's kill can be a one-off — a heavier turn, a bigger diff — so
-#: it keeps the ordinary retry; every other class is a machine that is already
-#: as big as it gets here, and a rerun walks into the same wall.
+#: The classes of machine, as the runner's name says them. Wording on the
+#: receipt since DRE-8239: a run's first kill keeps its retry on every class.
 LIGHT = "light"
 HEAVY = "heavy"
 HOSTED = "hosted"
@@ -111,13 +129,21 @@ _CLASS_WORDS = {
 }
 
 
+#: The runner labels that name a class of machine in the bureau pool — the
+#: one label the receipt names beside the runner (DRE-8239).
+CLASS_LABELS = ("bureau-heavy", "bureau-light", "bureau-tiny")
+
+
 class Kill(NamedTuple):
-    """A killed run's three facts: which machine, what size, and how many of
-    its processes the kernel ended."""
+    """A killed run's facts: which machine, what size, and how many of its
+    processes the kernel ended — and, since DRE-8239, the job the first kill
+    was in and the machine's class label off the Jobs API."""
 
     runner: str
     runner_class: str
     kills: int
+    job: str = ""
+    label: str = ""
 
 
 # A GitHub Actions log line is `job\tstep\t<ISO timestamp> <content>`, and the
@@ -174,13 +200,18 @@ def from_log(log_text: str | None) -> Kill | None:
     """
     if stream_watchdog.stall_from_log(log_text) is not None:
         return None
-    runner, kills = "", 0
+    runner, job, kills = "", "", 0
     for raw in (log_text or "").splitlines():
-        line = _LOG_PREFIX.sub("", raw, count=1)
+        prefix = _LOG_PREFIX.match(raw)
+        line = raw[prefix.end():] if prefix else raw
         if _QUOTATION_LINE.match(line):
             continue
         if _KILL.match(line):
             kills += 1
+            # The job field of the first kill line: the name the Jobs API
+            # knows the killed job by (`machine_from_jobs`).
+            if kills == 1 and prefix and "\t" in prefix.group(0):
+                job = prefix.group(0).split("\t", 1)[0].strip()
             continue
         if not runner:
             found = _RUNNER.match(line)
@@ -188,7 +219,54 @@ def from_log(log_text: str | None) -> Kill | None:
                 runner = found.group("name").strip()
     if not kills:
         return None
-    return Kill(runner, runner_class(runner), kills)
+    return Kill(runner, runner_class(runner), kills, job)
+
+
+def machine_from_jobs(reading, *, job: str = "") -> tuple:
+    """`(runner_name, class label)` off a Jobs API reading, or `("", "")`.
+
+    `reading` is the text `repos/<repo>/actions/runs/<id>/attempts/<n>/jobs`
+    answered. The job is the one named `job` — the job the first kill line
+    was in — and, when no job carries that name, the first failed job that
+    names a runner. The label is the first of `CLASS_LABELS` the job asked
+    for, or "". Anything that is not that answer — an empty file, an error
+    message, a shape it does not know — names nothing, so the caller falls
+    back to the log.
+    """
+    try:
+        payload = json.loads(reading or "")
+    except (TypeError, ValueError):
+        return "", ""
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
+    if not isinstance(jobs, list):
+        return "", ""
+    named = [j for j in jobs if isinstance(j, dict)
+             and str(j.get("runner_name") or "").strip()]
+    chosen = next((j for j in named if job and j.get("name") == job), None)
+    if chosen is None:
+        chosen = next((j for j in named if j.get("conclusion") == "failure"), None)
+    if chosen is None:
+        return "", ""
+    labels = chosen.get("labels") if isinstance(chosen.get("labels"), list) else []
+    label = next((str(l) for l in labels if str(l) in CLASS_LABELS), "")
+    return str(chosen["runner_name"]).strip(), label
+
+
+def named(kill: Kill | None, runner: str = "", label: str = "") -> Kill | None:
+    """The kill, with its machine named off the Jobs API where that read
+    answered (DRE-8239).
+
+    The Jobs API's runner wins over the log's `Runner name:` line, and the
+    log's line over nothing — `describe` says "an unnamed runner" when both
+    are empty.
+    """
+    if kill is None:
+        return None
+    runner = (runner or "").strip()
+    if not runner:
+        return kill._replace(label=(label or "").strip())
+    return kill._replace(runner=runner, runner_class=runner_class(runner),
+                         label=(label or "").strip())
 
 
 def describe(kill: Kill | None) -> str:
@@ -200,9 +278,10 @@ def describe(kill: Kill | None) -> str:
     if kill is None:
         return ""
     where = kill.runner or "an unnamed runner"
+    size = f"a {kill.label} runner" if kill.label else _CLASS_WORDS[kill.runner_class]
     times = "" if kill.kills == 1 else f", {kill.kills} times in this run"
     return (
-        f"{where} ({_CLASS_WORDS[kill.runner_class]}) ran out of memory: the "
+        f"{where} ({size}) ran out of memory: the "
         f"kernel killed the job with exit {KILL_EXIT}{times}"
     )
 
