@@ -473,7 +473,9 @@ its findings. A cause hold posted before never holds the card off the record
 at its head. When the gate's two re-runs are spent and every unmet row is a
 plain `Not met.` naming no fix, the dispatcher files one fix card
 (`proof_gap.file_fix_card`, `kind="defect"`) and holds on `— needs <DRE-n>
-shipped`, an event wait the sweep never alarms; once that card ships the
+shipped`, an event wait the sweep never alarms — unless a fix is already
+filed against the proof, a blocker related since its first run and not
+Canceled or Duplicate, which it holds on instead, filing nothing (DRE-8251); once that card ships the
 re-arm gives one more run. It is read after the first runs, under the same
 one-per-pass cap, and moves nothing.
 
