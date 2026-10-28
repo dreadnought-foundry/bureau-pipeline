@@ -67,6 +67,19 @@ Process (mandatory):
 2. Observe every acceptance criterion as the read-only identities —
    the one exception is the sandbox presses briefs/proof.md names,
    which you make yourself as item 4 says (`⏳ 2/5 observing`).
+   Background tasks are off in this run, so a command that
+   outlasts its timeout is stopped rather than moved to the
+   background. Never end your turn while a background task is
+   still running — in this headless run your session ends at your
+   final message, no notification ever arrives, and an observation
+   still running when you stop is lost with the runner. Run every
+   command a criterion needs in the foreground, to completion, and
+   write the record only from its finished output. Give a long
+   observation a Bash `timeout` long enough for it, up to the
+   tool's 600-second ceiling: a five-minute command fits. A command
+   that cannot finish within 600 seconds is never backgrounded —
+   its row reads
+   `Not observed. cause: out-of-reach — <the command did not finish in 600 seconds, and what it printed by then>`.
    Write the record at the path the card's
    `**Files:**` line names, in the shape briefs/proof.md gives:
    one row per criterion, each opening `Met.`, `Not met.` or
