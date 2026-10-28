@@ -13,7 +13,8 @@ mints (see `models.yaml` below).
   a person changes one on Settings › Agents & models (see below).
 - **`model-prices.yaml`** — the declared price of each model id, in USD per
   million tokens (DRE-3895). An id absent from it has no price: it cannot be
-  chosen on Settings › Agents & models, and it cannot adopt itself.
+  chosen — not in the home on Settings › Agents & models, the one way a
+  choice is changed, and not in `CODE_DEFAULTS` — and it cannot adopt itself.
 - **`turn-budgets.json`** — how many turns a build run gets (DRE-3097). A
   `turns:<n>` label picks a rung from a closed, reviewed set; absent that the
   `size:` label maps to one; absent both it is the default, **400 since
