@@ -159,6 +159,8 @@ PRE_CHANGE_STEPS = [
     ('Stand up a local run of the released commit', "steps.local_decl.outputs.declared == 'true' || steps.local_decl.outcome == 'failure'"),
     ('Install Claude Code (asserted)', None),
     ('Set the git identity every proof run commits as', None),
+    # DRE-8168: the name guard, written as a pre-push hook before the agent.
+    ('Install the name guard', None),
     ('Implement proof card', "steps.install_claude.outcome == 'success'"),
     ('Retry decision (attempt 1)', 'always()'),
     ('Back off before the agent retry (attempt 1)', "always() && steps.install_claude.outcome == 'success' && steps.retry1.outputs.retry == 'true'"),
@@ -433,6 +435,15 @@ class ShadowAgentTest(unittest.TestCase):
                 # An empty read-only token is never replaced by the worker's.
                 empty = dict(_shadow(), **{"steps.shadow_token.outputs.token": ""})
                 self.assertEqual(_render(token, empty), "")
+
+    def test_the_name_guards_hook_holds_no_write_token_in_a_shadow(self):
+        # DRE-8168: the hook is written before the agent, where the shadow's
+        # agent can read it, so a shadow bakes no token — never the worker's.
+        token = _step(name="Install the name guard")["env"]["GH_TOKEN"]
+        known = dict(_shadow(), **{"steps.worker.outputs.token": "ghs_worker"})
+        self.assertEqual(_render(token, known), "")
+        live = dict(LIVE, **{"steps.worker.outputs.token": "ghs_worker"})
+        self.assertEqual(_render(token, live), "ghs_worker")
 
     def test_the_read_only_token_comes_from_the_workers_pool_app(self):
         mint, worker = _step(id="shadow_token"), _step(id="worker")
@@ -886,6 +897,8 @@ class ShadowPushTest(unittest.TestCase):
         "steps.shadow_model.outputs.model": SHADOW_MODEL,
         "steps.pushtoken.outputs.token": "ghs_fresh",
         "steps.worker.outputs.token": "ghs_worker",
+        # The name guard's switch (DRE-8168), off as the repository holds it.
+        "vars.NAME_GUARD_LIVE": "",
     })
 
     def _push(self, record: str | None):
