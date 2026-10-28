@@ -255,11 +255,28 @@ not in `OPERATOR_NEEDS`, so `reconcile._held_for_operator` reads it as an
 event wait and never alarms it — before this the record was held "for an
 operator reading" and alarmed after 24 hours (DRE-7739). A card already named
 on such a hold, or on the PROOF card's `🩹 proof-gap-card:` receipt, is held
-on and never filed again. `_fix_shipped` reads the card named on that hold
+on and never filed again.
+
+Before it files, the dispatcher holds on a fix already filed against the
+proof (DRE-8251). It reads the proof's `blocks` relations — the read the
+re-arm below already makes, kept for this — and a card related after the
+proof's FIRST `🔬 proof-run` receipt, when the record began to exist, whose
+state is neither Canceled nor Duplicate (`GONE_STATES`), is a fix for this
+record (`_filed_for_record`). The newest is named on the same hold, `— needs
+<DRE-n> shipped`; nothing is filed and no `🩹 proof-gap-card:` receipt is
+posted, and the line names every card found. The epic's build cards were
+related before the first run, so they are never one. On agent-bureau's
+DRE-8162 the fix DRE-8215 was related between the first run and the newest
+receipt — too old for the re-arm's cut, too new to be a build card — and the
+dispatcher filed DRE-8230 beside it, a card nobody would build, so the hold
+never lifted by itself. Relations not read file nothing and hold nothing: the
+pass is a failure, its line says why, and the next pass reads them.
+
+`_fix_shipped` reads the card named on that hold
 beside the `fix:` cells, so the re-arm below gives one more run once it is
 Done, merged and live. A filing that fails is a failure of the pass and posts
 no hold; the next pass files it. Not live, `would: file a fix card` and
-nothing written.
+nothing written — or, with a fix already filed, `would: hold` on it.
 
 After that one re-armed run is spent the budget's hold for an operator's
 reading comes back as before: the fix shipped and the build still fails. The
@@ -766,12 +783,16 @@ FIX_CARD_QUERY = """query($id: String!) { issue(id: $id) {
 #: `blocks` relation made after the newest `🔬 proof-run` receipt is a fix
 #: filed against it. Read to the end, a page at a time, as the sweep reads a
 #: card's relations (`reconcile.complete_inverse_relations`), whose own query
-#: carries no times.
+#: carries no times. Each blocking card's state rides along: a Canceled or
+#: Duplicate card is never the fix a failing build's spent budget holds on
+#: (DRE-8251).
 BLOCKING_QUERY = """query($id: String!, $after: String) { issue(id: $id) {
                  inverseRelations(first: %d, after: $after) {
                    pageInfo { hasNextPage endCursor }
-                   nodes { type createdAt issue { identifier } } } } }""" % (
+                   nodes { type createdAt issue { identifier state { name } } } } } }""" % (
     reconcile.INVERSE_TOPUP_PAGE)
+#: A blocking card in either state is no fix to hold on (DRE-8251).
+GONE_STATES = ("Canceled", "Duplicate")
 #: The same relation times for every lane card whose window shows the
 #: budget's marked hold, in ONE request per lane read (DRE-8156) — the sweep's
 #: board read carries no relations, and the lane skip needs them.
@@ -1345,6 +1366,28 @@ def _filed_fixes(voices: list) -> list:
         and (found := _FIX_SHIPPED.match(_first_line(v.body)))))
 
 
+def _filed_for_record(relations: list, receipts: list) -> list:
+    """The distinct cards on the proof's `blocks` relations that are fixes
+    already filed against its record (DRE-8251), oldest relation first: each
+    related after the proof's first `🔬 proof-run` receipt with a time — when
+    the record began to exist — and in a state read and neither Canceled nor
+    Duplicate. The epic's build cards were related before its first run, so
+    they are never one. A relation with no time, or no receipt with one,
+    finds none."""
+    stamps = [when for when, _ in receipts if when is not None and when.tzinfo is not None]
+    if not stamps:
+        return []
+    first, found = min(stamps), []
+    for rel in _blocks({"nodes": relations}):
+        issue = rel.get("issue") or {}
+        card, when = issue.get("identifier"), _when(rel.get("createdAt"))
+        lane = (issue.get("state") or {}).get("name")
+        if (card and lane and lane not in GONE_STATES and when is not None
+                and when.tzinfo is not None and when > first):
+            found.append((when, card))
+    return list(dict.fromkeys(card for _, card in sorted(found)))
+
+
 def _plain_not_met(result: str) -> bool:
     """Is this unmet row a plain `Not met.` (DRE-7953)? It opens `Not met.`
     (markup and backticks stripped, as the record's readers strip them), is
@@ -1517,6 +1560,10 @@ class _Pass:
         #: The unread-note replies this pass posted or would post (DRE-7743),
         #: so a note the lane read and the thread read both see is answered once.
         self.answered: set = set()
+        #: Each proof's `blocks` relations `_filed_against` read this pass, or
+        #: the error that stopped the read (DRE-8251): a failing build's spent
+        #: budget looks in them for a fix already filed before it files one.
+        self.relations: dict = {}
 
     # -- the reads every candidate shares (conditions 2 and 3) ------------- #
 
@@ -2090,12 +2137,14 @@ class _Pass:
             if rearmed:
                 needs = (f"{needs} — the re-armed run of {rearmed[-1].at} was "
                          "its event's one run")
-            elif (trigger.gate and read is not None and read.unmet and not unread
+            elif (trigger.gate and read is not None and read.unmet
+                  and (not unread or isinstance(self.relations.get(ident), Exception))
                   and set(named) <= set(_filed_fixes(voices))
                   and all(_plain_not_met(result) for _, result in read.unmet)):
                 # The build fails its rows (DRE-7953): a fix card, and a hold
                 # that waits for it to ship, never for an operator's reading.
-                self._defect_held(ident, pr, read, voices, observed, head,
+                # Relations not read file nothing and hold nothing (DRE-8251).
+                self._defect_held(ident, pr, read, voices, receipts, observed, head,
                                   f"re-run: budget — {spent} re-runs on #{number} "
                                   f"since it opened and {trigger.again}", unarmed)
             if read is not None and not named and not unread:
@@ -2206,15 +2255,17 @@ class _Pass:
         """`(cards, unread)`: the cards related to the proof as blocking it
         after its newest receipt (DRE-8156). Relations not read, or a receipt
         with no time to cut at, add nothing; a relation with no time adds
-        nothing; and `unread` says which."""
+        nothing; and `unread` says which. What was read, or the error, is kept
+        in `relations` for the spent budget's filer (DRE-8251)."""
         stamps = [when for when, _ in receipts]
         if not stamps or any(when is None for when in stamps):
             return [], ("a proof-run receipt has no time, so no blocks relation "
                         "is read as filed after the newest")
         newest = max(stamps)
         try:
-            relations = self.linear.blocking(ident)
+            relations = self.relations[ident] = self.linear.blocking(ident)
         except Exception as error:  # noqa: BLE001 — unread adds nothing
+            self.relations[ident] = error
             return [], (f"its blocks relations could not be read, so they add "
                         f"nothing: {error}")
         filed, untimed = [], []
@@ -2405,14 +2456,18 @@ class _Pass:
                            f"at {head[:7]} — {detail}; nothing dispatched")
         return found.text
 
-    def _defect_held(self, ident: str, pr: dict, read, voices: list,
+    def _defect_held(self, ident: str, pr: dict, read, voices: list, receipts: list,
                      observed: str, head: str, said: str, unarmed: str) -> None:
         """A spent budget on a build that fails its rows (DRE-7953): one fix
         card, `kind="defect"`, its rows the unmet criteria, and the hold that
         waits for it to ship. A card already named on such a hold, or on the
         PROOF card's `🩹 proof-gap-card:` receipt, is held on and never filed
-        again. Always raises `_Refused`; a filing that failed is a failure of
-        the pass and posts no hold. Not live, `would:` and nothing written."""
+        again — and so is a fix already filed against the proof, read off its
+        `blocks` relations (`_filed_for_record`, DRE-8251): the newest is held
+        on, nothing is filed and no receipt is posted. Relations not read file
+        nothing and hold nothing. Always raises `_Refused`; a filing that
+        failed is a failure of the pass and posts no hold. Not live, `would:`
+        and nothing written."""
         rows = [(criterion, proof_gap.DEFECT) for criterion, _ in read.unmet]
         said = (f"{said}; every unmet row of the record at {head[:7]} is a plain "
                 "Not met. naming no fix — ")
@@ -2421,6 +2476,20 @@ class _Pass:
             [{"body": v.body, "authored_by_pipeline": v.kind == spoken_thread.PIPELINE}
              for v in voices])
         card = filed[-1] if filed else (receipted or {}).get("identifier")
+        if card is None:
+            relations = self.relations.get(ident)
+            if isinstance(relations, Exception):
+                self.tally.failures.append(f"{ident}: its blocks relations could not "
+                                           f"be read: {relations}")
+                raise _Refused(f"{said}ERROR: its blocks relations could not be read, "
+                               f"so a fix already filed against it is not ruled out: "
+                               f"{relations}; nothing filed and nothing held, the "
+                               "next pass reads them", "held")
+            found = _filed_for_record(relations or [], receipts)
+            if found:
+                card = found[-1]
+                said += (f"found {', '.join(found)} related to it since its first "
+                         "proof-run receipt and filed nothing, ")
         if card is None:
             if not self.live:
                 print(f"would: file a fix card for {ident} — {len(rows)} row(s) not "

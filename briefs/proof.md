@@ -385,7 +385,9 @@ nothing else for them — never a fix or a closed window out of prose.
   history row's `fix:` is not read. When the gate's re-runs are spent and
   every unmet row is a plain `Not met.` naming no fix, the dispatcher files
   one fix card for the defect in the build, and its shipping gets the proof
-  that one more run the same way (DRE-7953).
+  that one more run the same way (DRE-7953). A fix already filed against the
+  proof as a blocker since its first run is held on instead, and nothing is
+  filed beside it (DRE-8251).
 
 **Every waiting row is stamped (DRE-7316, DRE-7951).** Every waiting row
 carries `[not-before=<T>]`, right after the event: the earliest time its event
