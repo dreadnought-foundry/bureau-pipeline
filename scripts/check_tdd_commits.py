@@ -82,15 +82,16 @@ The rule (engineering standard: "commit the failing test FIRST"):
     (DRE-3896), and is docs too — but ONLY in a file some generator's `--check`
     actually proves. A region is the lines strictly between a line
     containing `BEGIN generated` and the next line containing `END generated`
-    — the markers `scripts/sync_model_config.py` already writes, read
-    generically here. The live shape: an automated adoption PR edits
-    `config/models.yaml` and reruns that generator, which rewrites the
-    `_FALLBACK_MODEL_CONFIG` literal in `scripts/model_fallback.py`. That
-    literal moves the AST, so the docstring rule cannot exempt it, and there
-    is no author to write a RED test for a rendered literal — a failure
-    DRE-2694 makes unfixable by adding a commit.
+    — the markers `scripts/sync_fallback_map.py` already writes, read
+    generically here. The live shape: an onboarding PR edits
+    `config/repo-map.json` and reruns that generator, which rewrites the
+    `_FALLBACK_REPO_MAP` literal in `scripts/validate_card.py`. That literal
+    moves the AST, so the docstring rule cannot exempt it, and there is no
+    author to write a RED test for a rendered literal — a failure DRE-2694
+    makes unfixable by adding a commit. (The rule was written for the model
+    adoption PR's rendered literal, whose generator DRE-6982 deleted.)
     **The exemption is safe because the region's content is proved
-    elsewhere:** `python3 scripts/sync_model_config.py --check` fails when a
+    elsewhere:** `python3 scripts/sync_fallback_map.py --check` fails when a
     generated region does not match its canonical render, and it runs in CI
     (the unit suite asserts it on every PR), so code cannot hide in a region.
     That proof is the whole argument, so the classifier REQUIRES it rather
@@ -329,8 +330,8 @@ _OPS_FILES = frozenset({"agents.yaml", "models.json"})
 
 # Generated-region markers (DRE-3896), read as SUBSTRINGS of a line so the one
 # rule covers every generator's comment syntax and wording. These are the
-# markers `scripts/sync_model_config.py` already writes — e.g.
-# `# --- BEGIN generated model config (from config/models.yaml) ---` — and the
+# markers `scripts/sync_fallback_map.py` already writes — e.g.
+# `# --- BEGIN generated repo mirror (from config/repo-map.json) ---` — and the
 # contract is deliberately generic: a line containing BEGIN opens a region, the
 # next line containing END closes it.
 _BEGIN_GENERATED = "BEGIN generated"
@@ -352,12 +353,12 @@ _END_GENERATED = "END generated"
 #
 # Adding an entry is a `.py` change to this file, which is `code` — so it takes
 # a RED test first and a critic's read, which is exactly the bar a new TDD
-# exemption should clear. Each command must run on every PR (both below are
-# asserted by the unit suite: tests/test_model_config.py and
-# tests/test_sync_fallback_map.py), because a proof that does not run proves
-# nothing.
+# exemption should clear. Each command must run on every PR (the one below is
+# asserted by the unit suite: tests/test_sync_fallback_map.py), because a proof
+# that does not run proves nothing. Removing an entry when its generator goes
+# is the same change in reverse (DRE-6982 took `scripts/model_fallback.py` off
+# with its generator, so its hand-written literal is code).
 _GENERATED_REGION_PROOFS = {
-    "scripts/model_fallback.py": "python3 scripts/sync_model_config.py --check",
     "scripts/validate_card.py": "python3 scripts/sync_fallback_map.py --check",
 }
 

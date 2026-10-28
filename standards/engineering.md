@@ -43,7 +43,7 @@ is the floor. Every rule here exists because its violation shipped a bug.
   GENERATED region — every differing line strictly between a `BEGIN generated`
   and an `END generated` marker, markers untouched (DRE-3896). That last one is
   safe only because the region's content is proved elsewhere: `python3
-  scripts/sync_model_config.py --check` goes red in CI when a generated region
+  scripts/sync_fallback_map.py --check` goes red in CI when a generated region
   does not match its canonical render, so code cannot hide in one. The proof is
   the condition, not a claim about it — the exemption applies **only to the
   handful of paths a generator's `--check` actually covers**, listed in

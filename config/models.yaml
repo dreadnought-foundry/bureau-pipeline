@@ -1,25 +1,17 @@
-# models.yaml — the model config the defaults in the code are rendered from
-# (DRE-2316/DRE-2317).
+# models.yaml — the model config's code-side facts (DRE-2316/DRE-2317).
 #
 # WHERE A CHOICE TAKES EFFECT is written down once, with the run lines that
 # show it, in docs/model-choice-levers.md (DRE-7195). In short: the selector
 # never reads the choices below. It reads the model home (`BUREAU_MODEL_CHOICES`)
-# when that reads, else the defaults in the code — `_FALLBACK_MODEL_CONFIG`,
-# GENERATED from this file. Every run's `model-home:` line says which. The
-# choices below reach a run only through that literal, and not at all while
-# the home is in force.
+# when that reads, else the defaults in the code — `CODE_DEFAULTS` in
+# scripts/model_fallback.py, written by hand. Every run's `model-home:` line
+# says which. The choices below reach no run.
 #
-# Everything else that names a model is GENERATED from this file, between
-# explicit `BEGIN generated …` / `END generated …` markers:
-#
-#   * scripts/model_fallback.py  — `_FALLBACK_MODEL_CONFIG` (the defaults in
-#                                  the code; its code-side facts are also the
-#                                  degrade path when this file is unreadable)
-#   * agents.yaml                — each agent's `model:` / `kind:` lines (the
-#                                  console roster's contract)
-#
-# Regenerate with:  python3 scripts/sync_model_config.py
-# CI fails red on drift (`--check`, pinned by tests/test_model_config.py).
+# The code-side facts below (`effort`, `review_separation`, `discovery`,
+# `retired`, `excluded`, `session_agents`, `about`, `rules`) are read from this
+# file. `CODE_DEFAULTS` carries the same facts for a checkout that cannot read
+# it, and tests/test_model_fallback.py fails, naming the key, when the two
+# differ — edit them together.
 #
 # Why a FILE, not a lookup: product-repo workflows run with NO AWS credentials
 # and NO token for a private repo — the same constraint documented for
@@ -506,9 +498,9 @@ ungrouped: []
 
 # The agents that run in a person's session, not a pipeline workflow (DRE-6833).
 # None of them has an agents.yaml entry in this repo, and that is fine: a name
-# here is never a pipeline role, in a group or not. `sync_model_config.py`
-# writes no registry region for it, `model_fallback` answers it as an unknown
-# name (the top of the Builders ladder), and rule 10 does not apply to it, so
+# here is never a pipeline role, in a group or not. `model_fallback` answers
+# it as an unknown name (the top of the Builders ladder), and rule 10 does
+# not apply to it, so
 # the CEO may put it in any group. Its group is a published fact the console
 # shows; making it run on that group's model is DRE-6784 (agent-bureau).
 session_agents:
@@ -611,8 +603,8 @@ projects: {}
 # pointing back at the build model, a `reviewers_use` that is not on the
 # advisory ladder, and a rule that no longer describes a real overlap. That
 # last one is the DRE-3892 carry-forward — a future same-family adoption moves
-# a Sonnet rung on BOTH ladders at once, and an adoption that did not move the
-# rule with it fails `sync_model_config.py --check`.
+# a Sonnet rung on BOTH ladders at once, and a file whose rule was not moved
+# with it is refused by `policy_errors` when the selector loads it.
 review_separation:
   # The two roles that REVIEW a pull request. The medic is advisory too and is
   # deliberately absent: it diagnoses a failed run and reviews nothing, so
