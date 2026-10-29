@@ -84,6 +84,9 @@ QUESTION_MARK = (f"{planning_escalation.ESCALATION_MARK} "
 _ASKERS = (spoken_thread.PIPELINE, spoken_thread.UNKNOWN)
 #: What is shown after the question.
 _ANSWERS = (spoken_thread.CEO_VIA_CONSOLE, spoken_thread.PERSON)
+#: Named after the question with their text withheld: a receipt that did not
+#: verify, and one whose check could not run — never the same label.
+_WITHHELD = (spoken_thread.REFUSED, spoken_thread.UNCHECKED)
 
 _RULE = (
     "This card was parked in Green Light on the question below and has come "
@@ -138,7 +141,7 @@ def build(card: str, all_voices: list[spoken_thread.Voice]) -> str:
         return ""
     after = all_voices[asked + 1:]
     shown = [v for v in after
-             if v.kind in _ANSWERS or v.kind in spoken_thread.WITHHELD_HEADINGS]
+             if v.kind in _ANSWERS or v.kind in _WITHHELD]
     unknown = sum(1 for v in after if v.kind == spoken_thread.UNKNOWN)
     if not shown and not unknown:
         return ""
@@ -146,7 +149,7 @@ def build(card: str, all_voices: list[spoken_thread.Voice]) -> str:
     out = [HEADING, "", _RULE, "",
            f"### The question — {question.label}", *_quoted(question.body), ""]
     for voice in shown:
-        if voice.kind in spoken_thread.WITHHELD_HEADINGS:
+        if voice.kind in _WITHHELD:
             out += [f"### {spoken_thread._heading(voice)}",
                     *spoken_thread._withheld(voice), ""]
         else:
