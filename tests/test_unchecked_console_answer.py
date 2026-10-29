@@ -431,6 +431,8 @@ OTHER_READERS = {
     "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
     "epic_growth.py": "tests/test_epic_growth.py::"
     "test_a_withheld_console_answer_is_left_for_a_person",
+    "escalation_answers.py": "tests/test_escalation_answers.py::"
+    "test_an_unchecked_receipt_is_named_and_its_text_withheld",
     "green_light_reply.py": "tests/test_green_light_reply.py::"
     "test_an_unchecked_answer_after_his_holds_the_dispatch_and_says_why",
     "groom_verify_agent.py": "tests/test_groom_verify_agent.py::"
