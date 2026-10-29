@@ -24,13 +24,15 @@ for the same login. Two jobs on one login will each see a rise; they will not
 each be credited with it.
 
 WHICH WORKFLOWS ARE WIRED. The agent-log upload role trusts a job only when its
-`job_workflow_ref` is one of the seven in agent-bureau's
+`job_workflow_ref` is one of the eight in agent-bureau's
 `BUREAU_PIPELINE_AGENT_WORKFLOWS` (mirrored here as `UPLOAD_TRUSTED_REUSABLES`
-in tests/test_self_stubs_grant_id_token.py), so these are the seven the wiring
-cards place the two steps in: `agent-task.yml`, `agent-fix.yml`, `medic.yml`
+in tests/test_self_stubs_grant_id_token.py). Seven of them are where the wiring
+cards place the two steps: `agent-task.yml`, `agent-fix.yml`, `medic.yml`
 (DRE-6916), `qa-review.yml`, `verify.yml` (DRE-6917), `plan.yml` and
-`red-main-repair.yml` (DRE-6918). A reading emitted from any other workflow is
-refused at upload, and says so on its line.
+`red-main-repair.yml` (DRE-6918). The eighth, `proof-task.yml`, joined the
+trust list for its working log (DRE-8260); no card has placed the two steps in
+it yet, so it can upload a reading the day one does. A reading emitted from any
+other workflow is refused at upload, and says so on its line.
 
 WHICH ARE NOT, AND WHY. The sweeps and gates that mint the same logins are not
 wired by this epic, by decision. `reconcile.yml` (every 15 minutes, minting the
@@ -39,7 +41,7 @@ main bot, three pool probe tokens and a pool reader), `merge-gate.yml` and
 on purpose: agent-bureau's infra/test/agent-log-stack.test.ts names them in
 `SWEEP_WORKFLOWS` because those runs carry the console's read-door token, and
 trusting them would let a read-door run reach AWS. `groomer.yml`,
-`deliver-rescue.yml`, `release-train.yml`, `proof-task.yml`, `harness.yml`,
+`deliver-rescue.yml`, `release-train.yml`, `harness.yml`,
 `hygiene.yml`, `nightly-watch.yml`, `promote-channel.yml`, `model-adoption.yml`
 and `model-trial.yml` have no upload trust either. Extending the trust list is
 a CDK change the operator deploys, and a route that needs no AWS from a sweep

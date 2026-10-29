@@ -587,7 +587,8 @@ class DocstringListsTest(unittest.TestCase):
 
     def test_every_upload_trusted_reusable_is_named_as_wired(self):
         wired = _section(gcr.__doc__, self.WIRED, self.NOT_WIRED)
-        self.assertEqual(len(UPLOAD_TRUSTED_REUSABLES), 7)
+        self.assertEqual(len(UPLOAD_TRUSTED_REUSABLES), 8)
+        self.assertIn("one of the eight", " ".join(wired.split()))
         for name in UPLOAD_TRUSTED_REUSABLES:
             with self.subTest(workflow=name):
                 self.assertIn(name, wired)
