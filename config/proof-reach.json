@@ -185,6 +185,18 @@
       "printed_by": "scripts/name_redact.py",
       "constant": "TAG",
       "when": "every `guard`, `self-test` and `redact` run since DRE-8166: the file, line and kind of a form that remains, the read that failed, or the count of lines read — never a name; `dry` while NAME_GUARD_LIVE is not `true`"
+    },
+    {
+      "tag": "proof-record-pr:",
+      "printed_by": "scripts/proof_record_pr.py",
+      "constant": "TAG",
+      "when": "every `decide` run since DRE-8437, one line on stdout: the decision word (opened, reopened, kept-open, closed-and-held, held or no-record), the card and why"
+    },
+    {
+      "tag": "proof-record-sweep:",
+      "printed_by": "scripts/proof_record_pr.py",
+      "constant": "SWEEP_TAG",
+      "when": "every `sweep` run since DRE-8437, one line on stdout: the open record pull requests read, those closed (or that would be, not live), kept and unread"
     }
   ],
   "causes": [
