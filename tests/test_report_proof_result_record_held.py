@@ -43,6 +43,16 @@ ESCALATION = (
     "Recommendation: reword it.\n"
 )
 
+#: Cause rows and nothing else: the three declared lines, the cause question
+#: word for word, and one cause line.
+CAUSE_FILE = (
+    "🔎 Finding: 1 row of the proof record cannot be observed as worded (cause: out-of-reach).\n"
+    "❓ Question: Accept each row as out of date, reword it on a new card, or drop it?\n"
+    "💡 Recommendation: Reword it on a new card — the read token is not granted variables.\n"
+    "cause: out-of-reach — “The repo variable PROOF_POOL_SIZE reads 5” — 403 on gh "
+    "variable get\n"
+)
+
 LINEAR_OPS_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as fh:
@@ -163,6 +173,21 @@ class HeldWithAnEscalationTest(_ProofRun):
         ops = self.calls()
         self.assertEqual([c[0] for c in ops if c[0] == "proof-waiting"], ["proof-waiting"])
         self.assertEqual(self.moves(), [["advance", CARD, "Green Light", "Hand-work,In Review"]])
+
+
+class HeldWithCauseRowsTest(_ProofRun):
+    def test_it_posts_the_receipt_moves_nothing_and_says_record_held(self):
+        # Cause rows ask nobody (DRE-7953), and with no open record pull
+        # request their summary line says nothing is held by the park; the
+        # closing line is still the held record's.
+        self.run_report(decision="held", escalation=CAUSE_FILE)
+        self.assertEqual(self.comments(), [f"{RECORD_HELD_RECEIPT} Run: {RUN_URL}"])
+        self.assert_no_record_not_said()
+        self.assertEqual(self.moves(), [])
+        self.assertEqual([c[0] for c in self.calls() if c[0] == "proof-waiting"], [])
+        self.assertIn(f"proof park: cause rows with no open record pull request for {CARD}",
+                      self.summary.read_text())
+        self.assertEqual(self.result_line(), "proof result: record held")
 
 
 class OtherDecisionsTest(_ProofRun):
