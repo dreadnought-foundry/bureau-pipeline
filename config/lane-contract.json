@@ -631,7 +631,7 @@
           "pending": "needs the transition history Phase 5 records"
         },
         "exit": {
-          "text": "GitHub merges the pull request and linear-sync writes Done — or the pull request is gone and the card is requeued under the dead-run cap. Or the hygiene agent closes a proof card whose merged record meets every criterion in its table, under the CEO's standing rule (DRE-5365).",
+          "text": "GitHub merges the pull request and linear-sync writes Done — or the pull request is gone and the card is requeued under the dead-run cap. A proof card whose record pull request was closed while the proof waits is not that card: it keeps its lane under its `🔬 proof-waiting` hold, and the proof dispatcher re-runs it from its branch (DRE-8438). Or the hygiene agent closes a proof card whose merged record meets every criterion in its table, under the CEO's standing rule (DRE-5365).",
           "enforced_from": "5",
           "assertion": null,
           "pending": "needs the transition history Phase 5 records"
