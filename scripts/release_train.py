@@ -453,7 +453,7 @@ SCHEMA: tuple[Field, ...] = (
           "the runner in `Set up the surface's node`, through the shared node "
           "action with nothing installed — the script installs what it needs "
           "— after the pipeline checkout and before the identity is assumed. "
-          "A failed Node step never stops the train; the script names its "
+          "A failed Node step never stops the train — the script names its "
           "own refusal when Node is wrong. The version is never written "
           "anywhere but that `.nvmrc`. **Optional** — omit it and the surface "
           "gets no Node step. Never absolute, never `..`, and the schema check "
