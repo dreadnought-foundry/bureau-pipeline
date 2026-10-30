@@ -338,9 +338,10 @@ class LinearSyncArmTest(unittest.TestCase):
 class FakeLinear:
     """The Linear seam, recorded. Every method mirrors the real signature."""
 
-    def __init__(self, *, by_url=None, fail_create=False):
+    def __init__(self, *, by_url=None, fail_create=False, fail_find=False):
         self.by_url = dict(by_url or {})
         self.fail_create = fail_create
+        self.fail_find = fail_find
         self.created: list[dict] = []
         self.searched: list[str] = []
         self.dones: list[tuple] = []
@@ -359,6 +360,8 @@ class FakeLinear:
 
     def find_by_pr_url(self, url):
         self.searched.append(url)
+        if self.fail_find:
+            raise reconcile.linear_ops.LinearError("Linear says 500")
         return self.by_url.get(url)
 
     def cmd_card_done(self, identifier, pr_url):
@@ -392,15 +395,17 @@ def _gh_factory(state):
     return fake_run
 
 
-def _sweep(prs, *, live=(), by_url=None, fail_create=False, list_rc=0, edit_rc=0, slug=SLUG):
+def _sweep(prs, *, live=(), plain=(), by_url=None, fail_create=False, fail_find=False,
+           list_rc=0, edit_rc=0, slug=SLUG):
     state = {"prs": prs, "edits": [], "listings": [], "list_rc": list_rc, "edit_rc": edit_rc}
-    fake = FakeLinear(by_url=by_url, fail_create=fail_create)
+    fake = FakeLinear(by_url=by_url, fail_create=fail_create, fail_find=fail_find)
     ops = reconcile.linear_ops
     with patch.object(reconcile, "REPO", REPO), \
             patch.object(reconcile, "REPO_SLUG", slug), \
             patch.object(reconcile.subprocess, "run", side_effect=_gh_factory(state)), \
             patch.object(reconcile, "active_cards",
-                         side_effect=lambda *a, **k: [_card(i, labels=(dependabot_card.LABEL,)) for i in live]), \
+                         side_effect=lambda *a, **k: [_card(i, labels=(dependabot_card.LABEL,)) for i in live]
+                         + [_card(i) for i in plain]), \
             patch.object(ops, "create_card", side_effect=fake.create_card), \
             patch.object(ops, "find_by_pr_url", side_effect=fake.find_by_pr_url, create=True), \
             patch.object(ops, "cmd_card_done", side_effect=fake.cmd_card_done), \
@@ -533,6 +538,80 @@ class FilerTest(unittest.TestCase):
     def test_the_backstop_runs_in_the_full_sweep(self):
         src = inspect.getsource(reconcile.main)
         self.assertIn("card_dependabot_prs,", src)
+
+
+class WipedMarkerCloseTest(unittest.TestCase):
+    """DRE-8394: a pull request that closed after dependabot wiped its marker.
+
+    foundry #70, 2026-10-27: a `@dependabot recreate` rewrote the body three
+    times and took `**Card:** DRE-8130` with it; the pull request merged twelve
+    minutes later, before any sweep re-stamped it. linear-sync read no marker,
+    the sweep's "no marker, closed → nothing" skipped it, and DRE-8130 sat In
+    Review for two days. The card is found by its URL, as the open path finds
+    it, and closed the way its pull request closed."""
+
+    def setUp(self):
+        _needs_module(self)
+        reconcile._write_failures.clear()
+        reconcile._read_failures.clear()
+
+    def tearDown(self):
+        reconcile._write_failures.clear()
+        reconcile._read_failures.clear()
+
+    def test_a_merged_pull_request_that_lost_its_marker_moves_its_card_to_done(self):
+        state, fake = _sweep([_pr(state="MERGED")], live=[CARD], by_url={PR_URL: CARD})
+        self.assertEqual(fake.searched, [PR_URL])
+        # The same receipt the stamped merge path writes: `card-done` with the URL.
+        self.assertEqual(fake.dones, [(CARD, PR_URL)])
+        self.assertEqual((fake.created, fake.states, state["edits"]), ([], [], []))
+        self.assertEqual((reconcile._write_failures, reconcile._read_failures), ([], []))
+
+    def test_a_closed_unmerged_pull_request_that_lost_its_marker_cancels_its_card(self):
+        state, fake = _sweep([_pr(state="CLOSED")], live=[CARD], by_url={PR_URL: CARD})
+        self.assertEqual(fake.searched, [PR_URL])
+        self.assertEqual(fake.states, [(CARD, "Canceled")])
+        self.assertEqual(fake.comments, [(CARD, dependabot_card.cancel_note(PR_URL))])
+        self.assertEqual((fake.dones, fake.created, state["edits"]), ([], [], []))
+
+    def test_a_merged_pull_request_with_no_card_by_url_changes_nothing(self):
+        # A live automation card nobody's marker names makes the sweep look —
+        # and Linear has no card for this URL, so nothing moves and nothing fails.
+        state, fake = _sweep([_pr(state="MERGED")], live=["DRE-9050"], by_url={})
+        self.assertEqual(fake.searched, [PR_URL])
+        self.assertEqual((fake.dones, fake.states, fake.comments, fake.created, state["edits"]),
+                         ([], [], [], [], []))
+        self.assertEqual((reconcile._write_failures, reconcile._read_failures), ([], []))
+
+    def test_a_card_found_by_url_that_is_already_closed_is_left_alone(self):
+        # Linear's oldest card for the URL is the one a person already closed.
+        state, fake = _sweep([_pr(state="MERGED")], live=["DRE-9050"], by_url={PR_URL: CARD})
+        self.assertEqual((fake.dones, fake.states, fake.comments, state["edits"]), ([], [], [], []))
+
+    def test_a_settled_board_looks_nothing_up(self):
+        # Every live automation card is named by a marker the listing carries,
+        # so no wiped card can be open: the closed, unmarked pull requests that
+        # stay in the window cost no Linear request, sweep after sweep.
+        prs = [_stamped(_pr(number=160), "DRE-9060"), _pr(number=154, state="MERGED"),
+               _pr(number=155, state="CLOSED")]
+        state, fake = _sweep(prs, live=["DRE-9060"], by_url={PR_URL: CARD})
+        self.assertEqual((fake.searched, fake.dones, fake.states, state["edits"]), ([], [], [], []))
+
+    def test_a_live_agent_card_does_not_make_the_sweep_look(self):
+        # Agent cards are always live and no dependabot marker ever names one.
+        # Only an unnamed AUTOMATION card can be a wiped marker's, so a board of
+        # agent cards costs no lookup — even though Linear would answer this URL
+        # with that very card, live, if the sweep asked.
+        prs = [_pr(number=154, state="MERGED"), _pr(number=155, state="CLOSED")]
+        state, fake = _sweep(prs, plain=[CARD], by_url={PR_URL: CARD})
+        self.assertEqual((fake.searched, fake.dones, fake.states, fake.comments, state["edits"]),
+                         ([], [], [], [], []))
+
+    def test_a_failed_lookup_is_recorded_and_the_next_pull_request_is_handled(self):
+        stamped = _stamped(_pr(number=160, state="MERGED"), "DRE-9060")
+        _, fake = _sweep([_pr(state="MERGED"), stamped], live=[CARD, "DRE-9060"], fail_find=True)
+        self.assertTrue(any("154" in f for f in reconcile._write_failures), reconcile._write_failures)
+        self.assertEqual(fake.dones, [("DRE-9060", f"https://github.com/{REPO}/pull/160")])
 
 
 # --------------------------------------------------------------------------- #

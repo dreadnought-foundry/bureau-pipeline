@@ -12767,9 +12767,22 @@ def card_dependabot_prs() -> None:
         marker on a regenerated body, or a re-opened pull request whose card
         is Canceled, must be found rather than re-filed); file one if none;
         stamp the body. Paced by DEPENDABOT_CARD_CAP.
-      * no marker, closed → nothing. A pull request that closed before any
-        sweep saw it never had a card to carry; filing one now would put a
-        finished bump on the board as work.
+      * no marker, closed → never filed for: a pull request that closed
+        before any sweep saw it never had a card to carry, and filing one now
+        would put a finished bump on the board as work. But dependabot wipes
+        the marker when it regenerates a body (`@dependabot recreate`, a group
+        change), and a pull request that merges before the next sweep
+        re-stamps it left its card open (DRE-8394: DRE-8130, foundry #70, sat
+        In Review two days after its merge). So while the board holds a live
+        automation card that no listed marker names, its card is looked up by
+        URL and closed below exactly as a marked one is. A settled board —
+        every live automation card named by a marker — looks nothing up, so
+        the closed pull requests that stay in the listing cost no request.
+        The bound is only as tight as the listing's window: a live automation
+        card whose pull request has fallen out of it, or whose open pull
+        request is wiped and not yet re-stamped, is unnamed too, and until it
+        settles every closed, unmarked pull request in the window costs one
+        lookup per sweep — at most the listing's 30.
       * marker, OPEN     → nothing. (A re-opened pull request whose card is
         Canceled keeps that card: a finished card is never reopened by an
         automated transition — DRE-1877 — and its merge moves it to Done.)
@@ -12813,15 +12826,36 @@ def card_dependabot_prs() -> None:
             live_cards.update({c["identifier"]: c for c in active_cards()})
             live_cards.setdefault("", {})  # read once, even when empty
         return live_cards
+    named = {dependabot_card.marker_card(p.get("body")) for p in prs}
+
+    def unnamed_live_card() -> bool:
+        """A live automation card no listed marker names — the only kind a
+        wiped marker can have left open (DRE-8394)."""
+        return any(ident and ident not in named and automation_card(c)
+                   for ident, c in live().items())
     filed = 0
     deferred = 0
     for pr in prs:
         number, url = pr.get("number"), pr.get("url") or ""
         state = (pr.get("state") or "").upper()
         card = dependabot_card.marker_card(pr.get("body"))
-        if card is None:
-            if state != "OPEN":
+        if card is None and state != "OPEN":
+            if not unnamed_live_card():
+                continue  # no card of this pull request's can still be open
+            try:
+                card = linear_ops.find_by_pr_url(url)
+            except linear_ops.LinearRateLimited:
+                raise
+            except linear_ops.LinearError as e:
+                err = f"dependabot card: PR #{number} — looking its card up by URL failed: {e}"
+                _write_failures.append(err)
+                print(f"ERROR: {err}", file=sys.stderr)
+                continue
+            if not card:
                 continue  # closed before any card existed: nothing to carry
+            print(f"dependabot card: PR #{number} is {state.lower()} and its marker was "
+                  f"wiped — found {card} by its URL")
+        if card is None:
             if filed >= DEPENDABOT_CARD_CAP:
                 deferred += 1
                 continue

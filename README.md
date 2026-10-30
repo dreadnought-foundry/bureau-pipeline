@@ -753,7 +753,13 @@ person can name. Merge → Done through that path (the sweep backstops it);
 closed unmerged → the sweep cancels the card with the reason on it; a re-opened
 pull request keeps the same card (idempotent on the pull request URL, looked up
 in Linear across every state, so a body dependabot regenerated is re-stamped,
-never re-filed). An `automation` card is out of the WIP base and out of the
+never re-filed). A pull request that merges or closes after dependabot wiped
+the line, before the sweep re-stamped it, is looked up by its URL the same way
+and its card goes Done or Canceled as a marked one's does (DRE-8394) — looked
+up only while the board holds a live `automation` card no line in the listed
+pull requests names, so a settled board costs no Linear request (an unsettled
+one costs at most one lookup per closed, unmarked pull request in the 30-item
+listing, per sweep). An `automation` card is out of the WIP base and out of the
 nudge loop — it has no agent run to count and no `agent/` head for the loop to
 find. Filing is paced at `DEPENDABOT_CARD_CAP` per sweep, oldest first, and a
 repo off the repo map (the harness sandbox) files nothing. The console's own

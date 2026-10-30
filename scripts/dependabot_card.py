@@ -43,7 +43,11 @@ request into every reader that already has it. Its one weakness — dependabot
 REGENERATES a grouped pull request's title and body when the group changes,
 wiping the line — is covered by the sweep: a dependabot pull request with no
 marker is looked up in Linear by its URL (`linear_ops.find_by_pr_url`) before
-any card is filed, so a wiped line is re-stamped, never re-filed.
+any card is filed, so a wiped line is re-stamped, never re-filed. A pull
+request that merges or closes before the next sweep re-stamps it is looked up
+the same way, and its card is closed as a marked one's is (DRE-8394): the
+merge event's linear-sync reads no line and moves nothing, so the sweep is the
+one reader that can.
 
 Stdlib only, and no sibling imports at module level: the workflow runs the CLI
 from a bare checkout, and `reconcile.py` cannot be imported without a live
