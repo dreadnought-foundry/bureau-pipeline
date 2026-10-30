@@ -37,8 +37,15 @@
 # roster unreadable) — read the run` and the run, and the park still
 # happens, so a decision is never lost over a redaction. The receipts are
 # fixed strings and a URL, and do not go through it.
+#
+# The held record (DRE-8461). RECORD_PR_DECISION is `proof_record_pr.decide`'s
+# word (DRE-8437), passed by the step once DRE-8441 sets it. On `held` or
+# `closed-and-held` the run left its record on its branch with no pull
+# request: RECORD_HELD_RECEIPT posts, the card keeps its lane and the step
+# exits 0. An escalation still parks as below.
 set -e
 RUN_URL="$BUREAU_SERVER_URL/$BUREAU_REPOSITORY/actions/runs/$BUREAU_RUN_ID"
+RECORD_HELD_RECEIPT="🤖 proof run left its record on its branch — no pull request; the record cannot merge yet, and the card's 🔬 proof-waiting hold says what it waits on."
 # Exits 1 and 2: the one PR-existence predicate (DRE-2316). Exit 3
 # from it is UNREADABLE, which is not "no PR" (DRE-2034).
 PR_STATE=""
@@ -90,6 +97,16 @@ elif [ "$PR_STATE" = "MERGED" ]; then
   TOOK="record already merged"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
     "🤖 PR already merged: $PR_URL — this proof record shipped while the run was finishing; nothing moves from here. Run: $RUN_URL"
+elif [ "${RECORD_PR_DECISION:-}" = "held" ] || [ "${RECORD_PR_DECISION:-}" = "closed-and-held" ]; then
+  # A record held on its branch (DRE-8461): `proof_record_pr.decide` left
+  # no pull request on purpose, because the record cannot merge yet. The
+  # card keeps its lane — no advance, no state — and the 🔬 proof-waiting
+  # hold `decide` posted says what it waits on. Never "no record": the
+  # record exists, on its branch. Unset or empty, the step ran before
+  # DRE-8441 and nothing here changes.
+  TOOK="record held"
+  python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
+    "$RECORD_HELD_RECEIPT Run: $RUN_URL"
 fi
 PARK=""
 if [ -n "$ESCALATED" ]; then
