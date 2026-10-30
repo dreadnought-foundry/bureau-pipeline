@@ -95,6 +95,8 @@ def test_a_malformed_node_dir_is_refused_by_name(tmp_path, value):
     problems = release_train.check_schema(data, repo_root=root)
     assert problems, f"node_dir={value!r} must be refused"
     assert all(p.startswith("console.node_dir:") for p in problems), problems
+    # Refused for its value, never because the field is unknown.
+    assert not any("is not a field" in p for p in problems), problems
 
 
 def test_a_node_dir_with_no_nvmrc_under_it_is_refused_naming_the_path(tmp_path):
