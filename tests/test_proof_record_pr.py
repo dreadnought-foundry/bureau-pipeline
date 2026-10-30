@@ -296,8 +296,10 @@ def test_the_mixed_hold_names_what_each_row_waits_on():
     for criterion in ("The Sunday report lists every card", "The badge renders on the card",
                       "The receipt is posted once"):
         assert criterion in observed
+    event = proof_record.row_waiting(WAITING_ROW.split("|")[2])
+    assert event.startswith("the Sunday report")
     parts = needs.split("; ")
-    assert parts == ["the Sunday report (not before 2026-10-18 06:30 PT)",
+    assert parts == [f"{event} (not before 2026-10-18 06:30 PT)",
                      "DRE-9001 shipped", "a re-run"]
 
 
@@ -332,12 +334,12 @@ def test_the_all_waiting_hold_is_the_dispatchers(text):
 
 
 def test_a_ceo_press_row_keeps_the_prose_needs_half():
-    text = record("| The CEO approves | Not observed. waiting for the CEO's press: the "
-                  "approval |")
+    text = record("| The plan is approved by the CEO's press | Not observed. waiting for "
+                  "his answer on the console: the approval |")
     blocking = prp.can_merge(text).blocking
     assert prp.hold_line(blocking, NOW) == _dispatcher_hold(
         proof_dispatch._waiting_rows(blocking), NOW)
-    assert prp.hold_line(blocking, NOW)[1] == "the CEO's press"
+    assert prp.hold_line(blocking, NOW)[1] == "his answer on the console: the approval"
 
 
 def test_the_waiting_helpers_are_the_dispatchers():
