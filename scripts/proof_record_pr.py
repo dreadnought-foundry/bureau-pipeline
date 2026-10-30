@@ -33,8 +33,9 @@ and prints one line, `proof-record-pr: <word> <card> — <why>`:
     the word is `opened`.
   * `kept-open` — the record can merge and its pull request is open.
   * `closed-and-held` — the record cannot merge and its pull request was open:
-    `gh pr close <n> --comment CLOSE_COMMENT`, never `--delete-branch`, then
-    the hold.
+    the hold, then `gh pr close <n> --comment CLOSE_COMMENT`, never
+    `--delete-branch`. A hold refused leaves the pull request open, so the
+    close comment never points at a card that says nothing.
   * `held` — the record cannot merge and no pull request is open: the hold.
   * `no-record` — no branch, or no record that can be read or judged. Nothing
     is written.
@@ -54,7 +55,11 @@ time-only, lifted by the dispatcher itself. Otherwise its observed half opens
 event, a fix card shipped, or a re-run. `is_record_hold` reads that second
 kind; it tells the card's reader what each row waits on, and never decides a
 re-run: the record at the branch head does (DRE-8451). A hold whose first line
-is already the card's newest open hold is not posted again, and `--no-hold`
+is already the card's newest open hold is not posted again — nor one that
+differs only by the later recheck time an unstamped row is read as, while the
+standing hold has not lapsed. A thread that cannot be read posts no hold and
+is a refused read: a card whose thread is unknown is never read as one with no
+hold. `--no-hold`
 posts none — the proof run passes it when it escalated a CEO press, whose park
 posts the card's one hold.
 
@@ -63,11 +68,13 @@ posts the card's one hold.
 Lists the repository's open pull requests on record branches
 (`proof_record.proof_record_branch`), reads each record at its head with
 `proof_record.fetch`, and closes each that `can_merge` refuses, with
-`CLOSE_COMMENT` and the hold on its card, keeping the branch. One line:
+`CLOSE_COMMENT` and the hold on its card, keeping the branch — the hold first,
+so a refused hold leaves its pull request open for the next sweep. One line:
 `proof-record-sweep: read <N> open record pull request(s); closed <K>: #a;
 kept <M>; unread <U>`. A record not read is counted unread and never closed.
 Not live — `PROOF_DISPATCH_LIVE` is not exactly `true` — it prints
-`would: close #<n>` and writes nothing.
+`would: close #<n>` and writes nothing. A list of `LIST_LIMIT` open pull
+requests is full, and the sweep says so.
 
 A LEAF, like `proof_record`: nothing here imports `proof_dispatch` or
 `reconcile`, which reads `os.environ["REPO"]` when it is imported. Nothing
@@ -125,6 +132,8 @@ CLOSE_COMMENT = ("Closed while the proof waits — the record on {branch} cannot
 CARD_URL = "https://linear.app/dreadnoughtfoundry/issue/{identifier}"
 #: The switch `sweep` is live under, the proof dispatcher's own.
 LIVE_VARIABLE = "PROOF_DISPATCH_LIVE"
+#: The most open pull requests `sweep` lists; a full list is said so.
+LIST_LIMIT = 200
 
 OPENED, REOPENED, KEPT_OPEN = "opened", "reopened", "kept-open"
 CLOSED_AND_HELD, HELD, NO_RECORD = "closed-and-held", "held", "no-record"
@@ -244,15 +253,39 @@ def hold_line(blocking: list, now: datetime) -> tuple:
     return observed, "; ".join(_row_needs(result) for _, result in blocking)
 
 
+def _observed_half(line: str) -> str:
+    return line.rpartition(" — needs")[0]
+
+
+def _already_held(newest: str, blocking: list, line: str, now: datetime) -> bool:
+    """Is `newest`, the card's newest open hold, the hold `line` would post?
+    A row nobody stamped is read as `WAITING_RECHECK_HOURS` from each pass,
+    so the same hold names a later time on every pass: a time-only hold over
+    the same rows, not yet lapsed and no earlier than any row's own stamp,
+    is that hold."""
+    if newest == line:
+        return True
+    waiting = waiting_rows(blocking)
+    if len(waiting) != len(blocking) or all(stamp for _, _, stamp in waiting):
+        return False
+    until = proof_record.time_only(newest)
+    if until is None or until <= now or _observed_half(newest) != _observed_half(line):
+        return False
+    return all(until >= stamp for _, _, stamp in waiting if stamp)
+
+
 def _post_hold(card: str, blocking: list, now: datetime, comment: Callable,
                voices: Callable) -> bool:
     """Post the hold unless the card's newest open hold is already it.
-    True when it was posted."""
+    True when it was posted. RuntimeError when the card's thread could not
+    be read: an unknown thread is never read as one with no hold."""
     observed, needs = hold_line(blocking, now)
     line = linear_ops.proof_waiting_line(observed, needs)
     thread = voices(card)
-    held = proof_record.open_holds(thread) if thread is not None else []
-    if held and held[-1] == line:
+    if thread is None:
+        raise RuntimeError(f"the thread of {card} could not be read, so no hold was posted")
+    held = proof_record.open_holds(thread)
+    if held and _already_held(held[-1], blocking, line, now):
         return False
     comment(card, observed, needs)
     return True
@@ -332,9 +365,9 @@ def decide(repo: str, card: str, card_url: str, title: str, *, gh: Callable | No
         word = _open(repo, card, card_url, title, branch, gh)
         return _say(word, card, f"{at} can merge — {verdict.why}")
     n = len(verdict.blocking)
+    posted = hold and _post_hold(card, verdict.blocking, now, comment, voices)
     if opened is not None:
         _close(repo, opened["number"], branch, n, card_url, gh)
-    posted = hold and _post_hold(card, verdict.blocking, now, comment, voices)
     said = "held" if posted else "already held" if hold else "no hold posted"
     if opened is not None:
         return _say(CLOSED_AND_HELD, card, f"{at}: {n} row(s) wait — "
@@ -361,13 +394,17 @@ def sweep(repo: str, *, gh: Callable | None = None, comment: Callable | None = N
     now = now or datetime.now(timezone.utc)
     try:
         pulls = json.loads(gh(["pr", "list", "--repo", repo, "--state", "open", "--limit",
-                               "200", "--json", "number,headRefName,headRefOid"]) or "null")
+                               str(LIST_LIMIT), "--json", "number,headRefName,headRefOid"])
+                           or "null")
         if not isinstance(pulls, list):
             raise ValueError("the answer was not a list")
     except (RuntimeError, ValueError, TypeError) as exc:
         print(f"{SWEEP_TAG} ERROR: the open pull requests of {repo} could not be read: "
               f"{proof_record._one_line(exc)}")
         return 1
+    if len(pulls) >= LIST_LIMIT:
+        print(f"{SWEEP_TAG} the list reached its limit of {LIST_LIMIT} open pull requests — "
+              "any past it were not read")
     records = sorted((p for p in pulls if proof_record.proof_record_branch(p.get("headRefName"))),
                      key=lambda p: int(p["number"]))
     closed, kept, unread, failed = [], 0, 0, False
@@ -396,9 +433,9 @@ def sweep(repo: str, *, gh: Callable | None = None, comment: Callable | None = N
             continue
         url = CARD_URL.format(identifier=card)
         try:
+            _post_hold(card, verdict.blocking, now, comment, voices)
             _close(repo, number, branch, len(verdict.blocking), url, gh)
             closed.append(number)
-            _post_hold(card, verdict.blocking, now, comment, voices)
         except Exception as exc:  # noqa: BLE001 — one refused write stops no other
             failed = True
             print(f"{SWEEP_TAG} ERROR: #{number} ({card}): {proof_record._one_line(exc)}")
