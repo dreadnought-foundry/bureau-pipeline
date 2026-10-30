@@ -2851,6 +2851,36 @@ LATE_PROOF_LANES = tuple(lane for lane in WATCHDOG_LANES if lane not in SWEEP_ST
 _ANY_KEY = "a key that is no comment's author"
 
 
+def _proof_open_holds(card: dict) -> list:
+    """The card's open `🔬 proof-waiting` holds as `(first line, createdAt)`:
+    `proof_record.open_holds_at` over `spoken_thread.voices`. The one read
+    `_proof_wait_clock` and `waiting_proof_off_pr` share (DRE-8438).
+
+    A window `linear_ops.window_is_partial` calls whole is read at no
+    request. A partial one is never judged on its own: the whole thread is
+    read once (the read `proof_dispatch.LinearReads.thread` makes, served
+    from the pass's cache when a reader already paid for it). A thread that
+    cannot be read raises `ReconcileReadError` — an unread thread is not an
+    empty one."""
+    import proof_record  # noqa: PLC0415 — the hold grammar, spelled once
+
+    ident = card["identifier"]
+    nodes, viewer = linear_ops.window_nodes(card.get("comments")), None
+    if linear_ops.window_is_partial(card.get("comments")):
+        try:
+            nodes, viewer = linear_ops._thread_and_viewer(
+                ident, "body", "user", "createdAt", whole=True)
+        except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+            raise ReconcileReadError(
+                f"{ident}'s whole thread could not be read ({e})") from e
+    try:
+        voices = spoken_thread.voices(nodes, viewer or _ANY_KEY, card=ident)
+    except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+        raise ReconcileReadError(
+            f"{ident}'s thread could not be read for its holds ({e})") from e
+    return proof_record.open_holds_at(voices)
+
+
 def _proof_wait_clock(card: dict, *, now: datetime | None = None
                       ) -> tuple[datetime | None, str, bool]:
     """`(clock, waits_on, read)` for a `PROOF:` card, on the card alone: the
@@ -2881,24 +2911,14 @@ def _proof_wait_clock(card: dict, *, now: datetime | None = None
     import proof_record  # noqa: PLC0415 — the hold grammar, spelled once
 
     now = now or datetime.now(UTC)
-    ident = card["identifier"]
-    nodes, viewer = linear_ops.window_nodes(card.get("comments")), None
-    if linear_ops.window_is_partial(card.get("comments")):
-        try:
-            nodes, viewer = linear_ops._thread_and_viewer(
-                ident, "body", "user", "createdAt", whole=True)
-        except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
-            print(f"held-proof: {ident}'s whole thread could not be read ({e}) — "
-                  f"its {PROOF_WAITING_TAG} holds are not judged", file=sys.stderr)
-            return None, "", False
     try:
-        voices = spoken_thread.voices(nodes, viewer or _ANY_KEY, card=ident)
-    except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
-        print(f"held-proof: {ident}'s thread could not be read for its holds ({e}) — "
-              f"its {PROOF_WAITING_TAG} holds are not judged", file=sys.stderr)
+        holds = _proof_open_holds(card)
+    except ReconcileReadError as e:
+        print(f"held-proof: {e} — its {PROOF_WAITING_TAG} holds are not judged",
+              file=sys.stderr)
         return None, "", False
     read, clocks = True, []
-    for line, created in proof_record.open_holds_at(voices):
+    for line, created in holds:
         if proof_record.CEO_PRESS in line:
             continue
         posted = _moment(created)
@@ -6174,6 +6194,42 @@ def proof_record_owned_by_proof_run(card: dict, pr: dict, tag: str,
         "no hold, no park"
     )
     return True
+
+
+def waiting_proof_off_pr(card: dict, pr: dict | None) -> str | None:
+    """The first line of the hold a waiting proof sits under, `proof_record._cut`
+    to 120, when its record pull request was closed while it waits — or None
+    (DRE-8438).
+
+    It answers only when all three hold, judged in this order so that only
+    the last can cost a request:
+
+      * the card's title is a proof's (`proof_and_demo.is_proof`);
+      * `pr`, the pull request `pr_for` found, is CLOSED and not merged, on a
+        proof-record branch (`proof_record.proof_record_branch`);
+      * the card carries at least one open `🔬 proof-waiting` hold, read the
+        way `_proof_wait_clock` reads them (`_proof_open_holds`).
+
+    The record pull request opens only when the record can merge, and the
+    proof run and the sweep close one whose proof still waits (DRE-8441,
+    DRE-8452). Such a card is not a dead run: the hold says what it waits on,
+    and the proof dispatcher re-runs it from its branch. A proof card with no
+    open hold is not answered for — nothing says what it waits on — and is
+    judged as before. A thread that cannot be read raises
+    `ReconcileReadError`. `proof_record` is imported here, not at the top:
+    proof_dispatch imports this module."""
+    import proof_record  # noqa: PLC0415 — the branch rule, spelled once
+
+    if not proof_and_demo.is_proof(card.get("title")):
+        return None
+    if pr is None or card_pr.pr_state(pr) != "CLOSED":
+        return None
+    if not proof_record.proof_record_branch(pr.get("headRefName")):
+        return None
+    holds = _proof_open_holds(card)
+    if not holds:
+        return None
+    return proof_record._cut(holds[0][0], 120)
 
 
 def hand_review_nudge_to_person(
@@ -10874,8 +10930,19 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
     only the comment. The card half's clock — its notice's `createdAt`, read
     off the comment window when `linear_ops.window_is_partial` calls it whole
     and off the whole thread otherwise — and its standing cards, never
-    listed, are `_flag_hand_built_idle`'s."""
+    listed, are `_flag_hand_built_idle`'s.
+
+    A proof's record branch, `agent/DRE-<n>-proof-record`
+    (`proof_record.proof_record_branch`), answers None before anything is
+    read (DRE-8438): the proof dispatcher owns it, its pull request opens only
+    when the record can merge, and while the proof waits the card's own
+    `🔬 proof-waiting` hold says what it waits on. Imported here, not at the
+    top: proof_dispatch imports this module."""
+    import proof_record  # noqa: PLC0415 — the branch rule, spelled once
+
     name, sha = branch["name"], branch.get("sha") or ""
+    if proof_record.proof_record_branch(name):
+        return None  # the proof dispatcher's branch, and the hold says why
     if name in pr_refs or not sha:
         return None  # a PR exists (any state) — every other backstop applies
     pulls = gh("api", f"repos/{REPO}/commits/{sha}/pulls", "--jq", "[.[].number]")
@@ -16120,6 +16187,30 @@ def main(
             if not not_started and idle < window:
                 continue
             print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
+
+            if state == REVIEW_LANE and not is_open:
+                # A WAITING PROOF IS NOT A DEAD RUN (DRE-8438). Its record pull
+                # request was closed while the proof waits (DRE-8441, DRE-8452),
+                # its `🔬 proof-waiting` hold says on what, and the proof
+                # dispatcher re-runs it from its branch — so it keeps its lane.
+                # Ahead of the hand-built skip and the dead-run arm below: that
+                # skip keeps a proof card off the arm for a different reason
+                # (who starts its run), and the hold is the reason here.
+                try:
+                    waiting = waiting_proof_off_pr(card, pr)
+                except ReconcileReadError as e:
+                    # Unread is not "no hold": act on nothing for this card,
+                    # sweep the rest, exit red (DRE-2034's rule).
+                    _read_failures.append(str(e))
+                    print(f"ERROR: {e}", file=sys.stderr)
+                    continue
+                if waiting:
+                    print(
+                        f"proof-waiting: {ident} in {REVIEW_LANE} with its record "
+                        f"pull request #{pr['number']} closed — left to the proof "
+                        f"dispatcher; held by {waiting}"
+                    )
+                    continue
 
             if hand_built(card) and not has_pr:
                 # DRE-2524, second half: the label suppresses the sweep's own

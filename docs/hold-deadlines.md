@@ -81,7 +81,10 @@ the chase — and hands `settle` one late list per pass, after both halves:
   pull request ever opened, its card not finished and not in a promoted lane
   — is late once its last commit is `due_hours` old, and waits on
   `a pull request from <branch>`. It is judged before the "already posted"
-  check, so a branch reported weeks ago is still listed.
+  check, so a branch reported weeks ago is still listed. A proof's record
+  branch, `agent/DRE-<n>-proof-record`, is never reported and never listed
+  (DRE-8438): the proof dispatcher owns it, and the card's own
+  `🔬 proof-waiting` hold is the clock that judges the wait.
 - **A person's card with no branch and no pull request** that carries its
   `no branch` notice is late once that notice's `createdAt` is `due_hours`
   old — never `updatedAt`, which any comment moves — and waits on
