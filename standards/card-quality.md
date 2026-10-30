@@ -486,6 +486,41 @@ posted. A record pull request gets at most two timed re-runs, and on the last
 (`LAST_TIMED_REASON`) a row whose event still has not come reads
 `Not observed. cause: misdescribed — …`, a gap (below).
 
+**A PROOF card can say when it can first be observed (DRE-8436).** On
+2026-10-10 the pipeline dispatched three first proof runs at DRE-6678 on the
+evening before the 06:00 PT groom proposal they had to observe, and all nine
+rows read `Not observed. waiting for the morning of October 11`. So a PROOF
+card whose observation cannot happen until a date or a scheduled event says
+so on one line of its own, opening `Observe after:`, in one of five forms:
+
+```
+Observe after: <YYYY-MM-DD> <HH:MM> PT
+Observe after: <event> — next <HH:MM> PT after release
+Observe after: <event> — next <Weekday> <HH:MM> PT after release
+Observe after: <event> — <N> days after release
+Observe after: <event>
+```
+
+- `<event>` is prose naming what must happen, in three words or more — for
+  example `the first groom proposal after release`. A vague time such as
+  `soon` is not an event.
+- `PT` is Pacific time, `America/Los_Angeles`, daylight saving included. The
+  em dash may also be written `-` or `--`.
+- "Release" is the newest merge of the epic's build cards' pull requests. The
+  `next` forms name the first such time strictly after it, the `days` form
+  that many days after it, and a bare event twelve hours after it, the same
+  twelve hours an unstamped waiting row gets.
+- The line opens its own line, the way a `**Blocked by:**` line does — inside
+  a list item or bold markup is fine — outside fenced code, at most once.
+
+The plan check (`scripts/proof_and_demo.py`) refuses a PROOF card whose line
+fits none of the forms, or that carries two, naming the card and quoting the
+line. Only the PROOF card's line is read. A card with no `Observe after:` line
+is dispatched as before, as soon as its release is live. The proof
+dispatcher's wait on the line is the dispatch gate's own card, which reads it
+through `observe_after` and `observable_at`; until that gate ships, the line
+is checked when the plan is written and not yet waited on.
+
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
 2026-09-30 that a proof runs as soon as its build cards finish — the pipeline
 dispatches it (DRE-5920, below) — and the card closes on the evidence that run
