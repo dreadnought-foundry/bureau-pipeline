@@ -12778,6 +12778,11 @@ def card_dependabot_prs() -> None:
         URL and closed below exactly as a marked one is. A settled board —
         every live automation card named by a marker — looks nothing up, so
         the closed pull requests that stay in the listing cost no request.
+        The bound is only as tight as the listing's window: a live automation
+        card whose pull request has fallen out of it, or whose open pull
+        request is wiped and not yet re-stamped, is unnamed too, and until it
+        settles every closed, unmarked pull request in the window costs one
+        lookup per sweep — at most the listing's 30.
       * marker, OPEN     → nothing. (A re-opened pull request whose card is
         Canceled keeps that card: a finished card is never reopened by an
         automated transition — DRE-1877 — and its merge moves it to Done.)
