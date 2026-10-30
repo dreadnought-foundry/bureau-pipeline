@@ -167,8 +167,9 @@ class Thread:
 
 
 def decide(gh: FakeGH, thread: Thread, **kw) -> str:
-    return prp.decide(REPO, CARD, CARD_URL, TITLE, gh=gh, comment=thread.comment,
-                      voices=thread.voices, now=NOW, description=DESCRIPTION, **kw)
+    kw = {"comment": thread.comment, "voices": thread.voices, **kw}
+    return prp.decide(REPO, CARD, CARD_URL, TITLE, gh=gh, now=NOW, description=DESCRIPTION,
+                      **kw)
 
 
 def _needs(line: str) -> str:
@@ -204,6 +205,50 @@ def test_a_waiting_record_with_an_open_pull_request_is_closed_and_held_once():
     gh.pulls[0]["state"] = "CLOSED"
     assert decide(gh, thread) == "held"
     assert len(thread.holds()) == 1, "the same hold is never posted twice"
+
+
+def test_an_unstamped_waiting_record_is_held_once_until_its_hold_lapses():
+    gh, thread = FakeGH({HEAD: UNSTAMPED}), Thread()
+
+    def at(now):
+        return prp.decide(REPO, CARD, CARD_URL, TITLE, gh=gh, comment=thread.comment,
+                          voices=thread.voices, now=now, description=DESCRIPTION)
+
+    assert at(NOW) == "held"
+    assert at(NOW + timedelta(minutes=30)) == "held"
+    assert len(thread.holds()) == 1, "a later recheck time is the same hold"
+    assert at(NOW + timedelta(hours=prp.WAITING_RECHECK_HOURS, minutes=1)) == "held"
+    assert len(thread.holds()) == 2, "a hold that lapsed is posted again"
+
+
+def test_a_restamped_waiting_record_is_held_again():
+    later = "2026-10-25T06:30-07:00"
+    gh, thread = FakeGH({HEAD: WAITING}), Thread()
+    assert decide(gh, thread) == "held"
+    gh.records[HEAD] = record(WAITING_ROW.replace(STAMPED, later), MET_ROW)
+    assert decide(gh, thread) == "held"
+    assert [_needs(h) for h in thread.holds()] == [f"not-before={STAMPED}",
+                                                   f"not-before={later}"]
+
+
+def test_an_unread_thread_posts_no_hold_and_closes_nothing():
+    gh, thread = FakeGH({HEAD: WAITING}, [pull(41, "OPEN")]), Thread()
+    with pytest.raises(RuntimeError, match="thread"):
+        prp.decide(REPO, CARD, CARD_URL, TITLE, gh=gh, comment=thread.comment,
+                   voices=lambda card: None, now=NOW, description=DESCRIPTION)
+    assert thread.holds() == []
+    assert gh.writes() == [], "the pull request stays open while its hold is owed"
+
+
+def test_a_refused_hold_leaves_the_pull_request_open():
+    gh, thread = FakeGH({HEAD: WAITING}, [pull(41, "OPEN")]), Thread()
+
+    def refused(card, observed, needs):
+        raise linear_ops.LinearError("linear down")
+
+    with pytest.raises(linear_ops.LinearError):
+        decide(gh, thread, comment=refused)
+    assert gh.writes() == []
 
 
 def test_no_hold_is_posted_when_hold_is_false():
@@ -412,6 +457,42 @@ def test_sweep_closes_only_the_record_that_cannot_merge(capsys):
     out = capsys.readouterr().out
     assert (f"{prp.SWEEP_TAG} read 3 open record pull request(s); closed 1: #12; "
             "kept 1; unread 1") in out
+
+
+def test_sweep_leaves_open_a_pull_request_whose_hold_was_refused(capsys):
+    gh, thread = _three()
+
+    def refused(card, observed, needs):
+        raise linear_ops.LinearError("linear down")
+
+    assert prp.sweep(REPO, gh=gh, comment=refused, voices=thread.voices,
+                     live=True, now=NOW) == 1
+    assert gh.writes() == []
+    out = capsys.readouterr().out
+    assert f"{prp.SWEEP_TAG} ERROR: #12 (DRE-7012): linear down" in out
+    assert "closed 0; kept 1; unread 1" in out
+
+    assert prp.sweep(REPO, gh=gh, comment=thread.comment, voices=thread.voices,
+                     live=True, now=NOW) == 0
+    assert [c[:3] for c in gh.writes()] == [["pr", "close", "12"]]
+    assert len(thread.holds("DRE-7012")) == 1, "the next sweep still owes the hold"
+
+
+def test_sweep_closes_nothing_on_a_card_whose_thread_is_unread(capsys):
+    gh, thread = _three()
+    assert prp.sweep(REPO, gh=gh, comment=thread.comment, voices=lambda card: None,
+                     live=True, now=NOW) == 1
+    assert gh.writes() == [] and thread.posted == {}
+    assert f"{prp.SWEEP_TAG} ERROR: #12 (DRE-7012): " in capsys.readouterr().out
+
+
+def test_sweep_says_when_the_list_is_full(capsys):
+    gh, thread = _three()
+    gh.pulls += [pull(100 + i, "OPEN", branch=f"agent/DRE-{8000 + i}-feature", head="e" * 40)
+                 for i in range(prp.LIST_LIMIT - len(gh.pulls))]
+    prp.sweep(REPO, gh=gh, comment=thread.comment, voices=thread.voices, live=False, now=NOW)
+    assert (f"{prp.SWEEP_TAG} the list reached its limit of {prp.LIST_LIMIT} open pull "
+            "requests") in capsys.readouterr().out
 
 
 def test_sweep_not_live_writes_nothing(capsys):
