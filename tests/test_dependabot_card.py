@@ -395,8 +395,8 @@ def _gh_factory(state):
     return fake_run
 
 
-def _sweep(prs, *, live=(), by_url=None, fail_create=False, fail_find=False, list_rc=0,
-           edit_rc=0, slug=SLUG):
+def _sweep(prs, *, live=(), plain=(), by_url=None, fail_create=False, fail_find=False,
+           list_rc=0, edit_rc=0, slug=SLUG):
     state = {"prs": prs, "edits": [], "listings": [], "list_rc": list_rc, "edit_rc": edit_rc}
     fake = FakeLinear(by_url=by_url, fail_create=fail_create, fail_find=fail_find)
     ops = reconcile.linear_ops
@@ -404,7 +404,8 @@ def _sweep(prs, *, live=(), by_url=None, fail_create=False, fail_find=False, lis
             patch.object(reconcile, "REPO_SLUG", slug), \
             patch.object(reconcile.subprocess, "run", side_effect=_gh_factory(state)), \
             patch.object(reconcile, "active_cards",
-                         side_effect=lambda *a, **k: [_card(i, labels=(dependabot_card.LABEL,)) for i in live]), \
+                         side_effect=lambda *a, **k: [_card(i, labels=(dependabot_card.LABEL,)) for i in live]
+                         + [_card(i) for i in plain]), \
             patch.object(ops, "create_card", side_effect=fake.create_card), \
             patch.object(ops, "find_by_pr_url", side_effect=fake.find_by_pr_url, create=True), \
             patch.object(ops, "cmd_card_done", side_effect=fake.cmd_card_done), \
@@ -595,6 +596,16 @@ class WipedMarkerCloseTest(unittest.TestCase):
                _pr(number=155, state="CLOSED")]
         state, fake = _sweep(prs, live=["DRE-9060"], by_url={PR_URL: CARD})
         self.assertEqual((fake.searched, fake.dones, fake.states, state["edits"]), ([], [], [], []))
+
+    def test_a_live_agent_card_does_not_make_the_sweep_look(self):
+        # Agent cards are always live and no dependabot marker ever names one.
+        # Only an unnamed AUTOMATION card can be a wiped marker's, so a board of
+        # agent cards costs no lookup — even though Linear would answer this URL
+        # with that very card, live, if the sweep asked.
+        prs = [_pr(number=154, state="MERGED"), _pr(number=155, state="CLOSED")]
+        state, fake = _sweep(prs, plain=[CARD], by_url={PR_URL: CARD})
+        self.assertEqual((fake.searched, fake.dones, fake.states, fake.comments, state["edits"]),
+                         ([], [], [], [], []))
 
     def test_a_failed_lookup_is_recorded_and_the_next_pull_request_is_handled(self):
         stamped = _stamped(_pr(number=160, state="MERGED"), "DRE-9060")
