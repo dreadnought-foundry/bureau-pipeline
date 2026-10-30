@@ -17,10 +17,13 @@
 #      UNREADABLE (GitHub's answer could not be read) or MERGED (the record
 #      shipped) — a warning, `proof park: cause rows with no open record pull
 #      request for <CARD> — nothing held`, and the closing line `proof
-#      result: no record` (with the no-record comment) or `proof result:
-#      record already merged`. The card's clock is then the lane it stands
-#      in: Hand-work's `hand-work-overdue` alarm and the dispatcher's
-#      first-run read.
+#      result: no record` (with the no-record comment), `proof result:
+#      record already merged`, or — RECORD_PR_DECISION `held` or
+#      `closed-and-held` — `proof result: record held` (with the held
+#      receipt; "nothing held" there means the park holds nothing, while
+#      the record waits on its branch). The card's clock is then the lane
+#      it stands in: Hand-work's `hand-work-overdue` alarm and the
+#      dispatcher's first-run read.
 #   3. Anything else — no press and no cause line, a Question of the run's
 #      own beside cause rows, or prose of its own — is a decision for the
 #      CEO: the press's hold, the question under the decision's own opening
