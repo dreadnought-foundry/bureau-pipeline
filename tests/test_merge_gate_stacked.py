@@ -576,6 +576,9 @@ if args[:2] == ["run", "list"]:
 if args[:2] == ["pr", "merge"]:
     emit("merged")
 if args[0] == "api":
+    if opt("--jq") == ".default_branch":
+        # DRE-8503: condition B reads the repository's default branch.
+        emit("main")
     method = opt("--method") or "GET"
     path = [a for a in args[1:] if "/" in a and not a.startswith("-")][0]
     m = re.search(r"issues/(\d+)/comments", path)

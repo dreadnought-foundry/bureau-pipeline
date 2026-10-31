@@ -138,6 +138,9 @@ if args[:2] == ["run", "list"]:
     emit([])
 
 if args[0] == "api":
+    if opt("--jq") == ".default_branch":
+        # DRE-8503: condition B reads the repository's default branch.
+        emit("main")
     path = [a for a in args[1:] if not a.startswith("-")][0]
     if "pulls?state=open" in path:
         # DRE-4103: the gate lists the repo's open pull requests to find any

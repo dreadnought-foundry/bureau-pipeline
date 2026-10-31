@@ -322,6 +322,9 @@ if args[:2] == ["pr", "merge"]:
     emit("merged")
 
 if args[0] == "api":
+    if opt("--jq") == ".default_branch":
+        # DRE-8503: condition B reads the repository's default branch.
+        emit("main")
     method = opt("--method") or opt("-X") or "GET"
     path = next(a for a in args if a.startswith("repos/"))
     if path.endswith("/update-branch"):
@@ -604,6 +607,8 @@ def todays_calls(*, base_advance):
         ["api", "--paginate", "--slurp",
          f"repos/{REPO}/issues/{PR}/comments?per_page=100"],
         ["api", f"repos/{REPO}/pulls/{PR}/commits?per_page=100"],
+        # Condition B's one read (DRE-8503).
+        ["api", f"repos/{REPO}", "--jq", ".default_branch"],
         ["run", "list", "--repo", REPO, "--workflow", "self-agent-fix.yml",
          "--limit", "20", "--json", "status,databaseId,displayTitle"],
         ["api", "--paginate", f"repos/{REPO}/pulls?state=open&per_page=100",

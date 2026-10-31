@@ -277,6 +277,9 @@ if args[:2] == ["pr", "merge"]:
     emit("merged")
 
 if args[0] == "api":
+    if opt("--jq") == ".default_branch":
+        # DRE-8503: condition B reads the repository's default branch.
+        emit("main")
     method = opt("--method") or opt("-X") or "GET"
     path = next(a for a in args if a.startswith("repos/"))
     if path.endswith("/update-branch"):
