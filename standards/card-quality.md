@@ -546,13 +546,36 @@ The sandbox presses, the one list (DRE-7772):
 - `makeTaskCard` — file a task's card into Intake
 - `sendProjectAgentMessage` — send a Desk message, or open a conversation
 - `answerDeskPermission` — answer a Desk Allow or Deny
+- `startInitiativeDraft` — start an initiative draft
+- `saveInitiativeDraft` — save an initiative draft
+- `discardInitiativeDraft` — discard an initiative draft
+- `sendToPlanning` — send a card to Planning
+- `setCardRepo` — set a card's repo
+- `buildCardByHand` — build a card by hand
+- `cancelCard` — cancel a card
+- `undoCancel` — undo a cancel
+- `markCardChecked` — mark a card checked
+- `remindCard` — send a reminder on a card
+- `answerCard` — answer a card
+- `commentOnCard` — comment on a card
+- `writeEpicCards` — write an epic's cards
+- `cancelEpic` — cancel an epic
+- `answerPlanner` — answer the planner
+- `addInitiativeContext` — add context to an initiative
+- `deleteInitiativeContext` — delete an initiative's context
+- `addInitiativeFile` — add a file to an initiative
+- `updateInitiativeFile` — update an initiative's file
+- `deleteInitiativeFile` — delete an initiative's file
 
 The list is the copy of agent-bureau's `SANDBOX_PRESS_MUTATIONS`
 (`console/backend/proof_reader_presses.py`), which bureau-pipeline cannot read,
 and the epic's PROOF holds the copies equal. The epic asked for a seventh,
 answering a draft's question (`answerInitiativeDraftQuestion`), and DRE-7776
 dropped it: the console's owner gate refuses it to the proof-reader on the
-sandbox too.
+sandbox too. DRE-8305 (2026-10-28) added the twenty Initiatives presses, the
+last twenty bullets, and left `approveInitiativeDraft`,
+`answerInitiativeDraftQuestion(s)` and `answerDecision` off, as the CEO's own
+answers.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run
