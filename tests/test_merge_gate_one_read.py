@@ -145,6 +145,9 @@ if args[:2] == ["workflow", "run"]:
     emit("")
 
 if args[0] == "api":
+    if opt("--jq") == ".default_branch":
+        # DRE-8503: condition B reads the repository's default branch.
+        emit("main")
     method = opt("--method") or opt("-X") or "GET"
     path = [a for a in args[1:] if "/" in a and not a.startswith("-")][0]
     if method == "PUT" and path.endswith("/update-branch"):
@@ -375,11 +378,14 @@ class OneReadOfThePullRequestTest(unittest.TestCase):
         self.assertNotIn(f"repos/{REPO}/pulls/{PR}", self.gate.api_paths(),
                          self.gate.explain())
 
-    def test_nine_github_reads_reach_the_merge(self):
+    def test_ten_github_reads_reach_the_merge(self):
         """The view, check runs, runs listing, compare, comments, commits, the
-        fix lane, the open pull requests and the base branch's rules — nine
-        where sixteen were before (seven views and the REST author read)."""
-        self.assertEqual(len(self.gate.before_merge()), 9, self.gate.explain())
+        repository's default branch (condition B, DRE-8503), the fix lane,
+        the open pull requests and the base branch's rules — ten where
+        sixteen were before (seven views and the REST author read)."""
+        self.assertIn(["api", f"repos/{REPO}", "--jq", ".default_branch"],
+                      self.gate.before_merge())
+        self.assertEqual(len(self.gate.before_merge()), 10, self.gate.explain())
 
     def test_the_card_comment_link_comes_from_the_one_read(self):
         """The url the merge comment carries is in the view; no read after
@@ -849,11 +855,11 @@ class AProofRecordIsReadOnceAtTheHeadTest(unittest.TestCase):
         self.assertEqual(len(run.views), 1, run.explain())
         self.assertIn(f"repos/{REPO}/contents/{RECORD_PATH}?ref={HEAD}",
                       run.api_paths())
-        # The tenth and eleventh: the record, and the repository's squash
+        # The eleventh and twelfth: the record, and the repository's squash
         # setting the record's merge method follows (DRE-8195).
         self.assertIn(["api", f"repos/{REPO}", "--jq", ".allow_squash_merge"],
                       run.before_merge())
-        self.assertEqual(len(run.before_merge()), 11, run.explain())
+        self.assertEqual(len(run.before_merge()), 12, run.explain())
 
     def test_off_a_proof_record_branch_the_record_is_never_read(self):
         fx = green_fixture(files=RECORD_FILES)
@@ -861,7 +867,7 @@ class AProofRecordIsReadOnceAtTheHeadTest(unittest.TestCase):
         run = run_gate(fx)
         self.assertEqual(run.decision(), "merge", run.explain())
         self.assertFalse(any("/contents/architecture/" in p for p in run.api_paths()))
-        self.assertEqual(len(run.before_merge()), 9, run.explain())
+        self.assertEqual(len(run.before_merge()), 10, run.explain())
 
 
 # --------------------------------------------------------------------------

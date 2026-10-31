@@ -56,8 +56,9 @@ set -e
 #     whether condition 1 waits on those two alone; if it does, the step says
 #     `decision=wait` and stops before reading anything else. Otherwise: the
 #     three-dot compare of base against head, every page of the comments, the
-#     commits, the Agent Fix lane, the open pull requests this branch
-#     carries, the code-owner rules and, on a proof-record branch, the proof
+#     commits, the repository's default branch, the Agent Fix lane, the open
+#     pull requests this branch carries, the code-owner rules and, on a
+#     proof-record branch, the proof
 #     record at the head (`proof_record.py gather`; off one it reads
 #     nothing). A record that cannot be read fails closed: it is written
 #     empty or unreadable, and the decision waits or holds on it. The body
@@ -90,7 +91,8 @@ set -e
 #               waits on; who must approve which folders, for a code-owner
 #               hold, which also parks the card in Green Light; or, for any
 #               other hold, `Merge gate: declined @<head> — <reason>`, once per
-#               head and reason.
+#               head and reason. A pull request whose base is not the
+#               default branch is one of those: it waits to be retargeted.
 #     wait      stops quietly. A live Agent Fix run on this pull request still
 #               there after step 3's re-reads, or an unfinished CI run on the
 #               head, is a wait.
@@ -460,6 +462,19 @@ set -e
 #   it is true; where it is false the record merges with --merge, as before
 #   DRE-8171. The log line names the setting and the method. An unreadable
 #   setting keeps --squash; every other branch keeps --merge.
+# DRE-8503 (2026-10-30). At 4:01 PM PT agent-bureau's gate merged #4373 into
+#   agent/DRE-8273-initiatives-contract-pr and #4372 into
+#   agent/DRE-7945-composer-at-foot-pr: stacked pull requests, green and
+#   approved, merged into other agent branches. #4373's work landed on a
+#   branch that then merged on and was deleted, so it never reached the
+#   stack and was re-filed as #4383. The repository's default branch is now
+#   read once, after the precheck, and handed over with the base as
+#   --base-ref and --default-branch; condition B holds a base that is not
+#   the default branch, posted as an ordinary decline note once per head.
+#   A failed read is empty, which holds as UNKNOWN. The path to a merge is
+#   ten reads now, off a proof-record branch. Neither of the gate's
+#   two branch writes is reached on that hold, and both are update-branch,
+#   which merges the pull request's own base, never the default branch.
 
 set -euo pipefail
 
@@ -541,6 +556,8 @@ gh api --paginate --slurp \
 # A blip is an empty record, and the gate waits on it (DRE-2039).
 gh api "repos/$REPO_FULL/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
   || echo '[]' > /tmp/pr-commits.json
+# The default branch, for condition B; a failed read is empty and holds (DRE-8503).
+DEFAULT_BRANCH=$(gh api "repos/$REPO_FULL" --jq .default_branch 2>/dev/null || true)
 # The workflow's own token; an unreadable lane is written in and waited on (DRE-4486).
 GH_TOKEN="$WORKFLOW_TOKEN" python3 .bureau-pipeline/scripts/stranded_fix.py lane \
   --repo "$REPO_FULL" --out /tmp/fix-lane.json
@@ -580,6 +597,8 @@ gate_decision() {
     --pr-body-file /tmp/pr-body.txt \
     --pr-created-at "$CREATED_AT" \
     --proof-record-file /tmp/proof-record.json \
+    --base-ref "$BASE" \
+    --default-branch "$DEFAULT_BRANCH" \
     ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"}
 }
 gate_decision | tee /tmp/gate-decision
