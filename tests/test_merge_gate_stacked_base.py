@@ -152,6 +152,24 @@ class AnUnreadableDefaultBranchHoldsTest(unittest.TestCase):
         self.assertIn("UNKNOWN", decision.reason)
 
 
+class TheHoldReasonReadsBackTest(unittest.TestCase):
+    """The sweep reads condition B's hold back off the gate's note, so a
+    held stack spends no re-trigger budget (DRE-8503) — through the gate's
+    own reader, never a second spelling of the reason."""
+
+    def test_the_stacked_base_reason_names_its_base(self):
+        reason = merge_gate.evaluate_base(STACKED_BASE, DEFAULT).reason
+        self.assertEqual(merge_gate.stacked_base_named(reason), STACKED_BASE)
+
+    def test_the_unknown_hold_names_no_base(self):
+        reason = merge_gate.evaluate_base(STACKED_BASE, "").reason
+        self.assertIsNone(merge_gate.stacked_base_named(reason))
+
+    def test_any_other_reason_names_no_base(self):
+        for reason in ("", None, "not proven", f"base is {STACKED_BASE}"):
+            self.assertIsNone(merge_gate.stacked_base_named(reason))
+
+
 class TheCommandLineCarriesTheBaseTest(unittest.TestCase):
     """The gate's own argv: --base-ref and --default-branch reach condition B."""
 

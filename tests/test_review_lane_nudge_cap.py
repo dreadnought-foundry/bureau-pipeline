@@ -258,6 +258,85 @@ class TestTheGateNudgeIsCapped:
         assert "critic APPROVE, verifier none" in posted[0]
 
 
+STACKED_BASE = "agent/DRE-1-x"
+
+
+def _stacked_pr(base=STACKED_BASE, noted_at=HEAD):
+    """APPROVE bound to the head, and the gate's condition-B hold note at
+    `noted_at` naming STACKED_BASE (DRE-8503) — the note's text is the gate's
+    own, off `merge_gate.evaluate_base`, so the two cannot drift apart."""
+    pr = _pr(critic="APPROVE")
+    pr["baseRefName"] = base
+    reason = reconcile.merge_gate.evaluate_base(STACKED_BASE, "main").reason
+    pr["comments"].append(_qa(f"⏸️ Merge gate: declined @{noted_at} — {reason}\n\n"
+                              "Not merged."))
+    return pr
+
+
+class TestAStackedBaseHoldSpendsNothing:
+    """DRE-8503: the gate holds a pull request whose base is another branch
+    until it is retargeted. A re-trigger cannot change that answer, so the
+    sweep spends none of the head's budget on it — and never parks it on a
+    person as a review cap spent — however long the parent takes."""
+
+    def test_five_sweeps_no_nudge_no_label_no_park_no_question(self):
+        board = _Board()
+        pr = _stacked_pr()
+        for _ in range(5):
+            nudge, cmd_state, posted = board.sweep(pr)
+            nudge.assert_not_called()
+            cmd_state.assert_not_called()
+            assert posted == [], posted
+        assert reconcile.HOLD_LABEL not in board.labels
+        assert board.state == "In Review"
+        assert board.pr_notes == []
+        assert _cap_notices(board.comments) == []
+
+    def test_retargeted_the_gate_nudge_resumes(self):
+        board = _Board()
+        pr = _stacked_pr()
+        for _ in range(4):
+            board.sweep(pr)
+        # The parent merged with --delete-branch: GitHub retargets the child,
+        # and the head does not move.
+        pr["baseRefName"] = "main"
+        nudge, cmd_state, posted = board.sweep(pr)
+        nudge.assert_called_once_with("merge-gate.yml", 42)
+        assert len(posted) == 1, posted
+        assert f"gate-nudge @{HEAD} (1/3)" in posted[0]
+        assert reconcile.HOLD_LABEL not in board.labels
+
+    def test_a_hold_note_on_an_older_head_is_not_this_heads(self):
+        board = _Board()
+        pr = _stacked_pr(noted_at=OLD_HEAD)
+        nudge, _, posted = board.sweep(pr)
+        nudge.assert_called_once_with("merge-gate.yml", 42)
+        assert f"gate-nudge @{HEAD} (1/3)" in posted[0]
+
+    def test_another_hold_reason_keeps_the_cap(self):
+        board = _Board()
+        pr = _pr(critic="APPROVE")
+        pr["baseRefName"] = STACKED_BASE
+        pr["comments"].append(_qa(
+            f"⏸️ Merge gate: declined @{HEAD} — UNKNOWN: the base branch "
+            f"({STACKED_BASE}) or the repository's default branch (unread) "
+            "could not be read"))
+        for _ in range(4):
+            board.sweep(pr)
+        assert reconcile.HOLD_LABEL in board.labels
+        assert len(_cap_notices(board.comments)) == 1
+
+    def test_a_person_quoting_the_note_is_not_the_note(self):
+        board = _Board()
+        pr = _pr(critic="APPROVE")
+        pr["baseRefName"] = STACKED_BASE
+        reason = reconcile.merge_gate.evaluate_base(STACKED_BASE, "main").reason
+        pr["comments"].append({"author": {"login": "someone"},
+                               "body": f"⏸️ Merge gate: declined @{HEAD} — {reason}"})
+        nudge, _, _ = board.sweep(pr)
+        nudge.assert_called_once_with("merge-gate.yml", 42)
+
+
 class TestAVerdictCarriedByContentIsNamed:
     """The head moved but the PR's content did not — a base merge. The critic's
     APPROVE is carried by content (DRE-2340), so verdict_bound is True and the
