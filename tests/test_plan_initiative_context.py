@@ -334,6 +334,51 @@ def test_a_skipped_title_never_reaches_the_listing(tmp_path):
     assert "$(cmd)" not in text
 
 
+@pytest.mark.parametrize("url", [
+    # The URL is the other word of the fetch command the builder runs
+    # unquoted (DRE-8304 review, attempt 2).
+    "https://uploads.linear.app/x/$(id)",
+    "https://uploads.linear.app/x;y",
+    "https://uploads.linear.app/x y",
+    "https://uploads.linear.app/x?a=1&b=2",
+    "https://uploads.linear.app/x`id`",
+    "https://uploads.linear.app/x'y",
+    'https://uploads.linear.app/x"y',
+    "https://uploads.linear.app/x|y",
+    "https://uploads.linear.app/x#y",
+    "https://uploads.linear.app:8443/x",
+])
+@pytest.mark.parametrize("title", ["a.png", "brief.pdf"])
+def test_an_upload_url_that_is_not_plain_is_skipped(title, url):
+    designs, documents, skipped = pic.classify([{"title": title, "url": url}])
+    assert (designs, documents, skipped) == ([], [], 1)
+
+
+def test_a_plain_upload_url_is_kept():
+    designs, documents, skipped = pic.classify([
+        {"title": "a.png", "url": "https://uploads.linear.app/8f0c/1a2b/file"},
+        {"title": "b.pdf", "url": "https://uploads.linear.app/8f0c/1a2b/b.v2_x-y~z"},
+    ])
+    assert skipped == 0
+    assert [d["title"] for d in designs] == ["a.png"]
+    assert [d["title"] for d in documents] == ["b.pdf"]
+
+
+def test_a_skipped_url_never_reaches_the_listing(tmp_path):
+    text = _block(_data(initiatives=[_initiative(content=SECTION)],
+                        attachments=[_upload("board.png", "a"),
+                                     {"title": "evil.png",
+                                      "url": "https://uploads.linear.app/x/$(id);y/a"},
+                                     {"title": "amp.pdf",
+                                      "url": "https://uploads.linear.app/x/y?a=1&b=2"}]),
+                  workspace=str(tmp_path))
+    assert "1 approved design(s), 0 document(s), 2 skipped" in _status(text)
+    assert "$(id)" not in text
+    assert "evil.png" not in text
+    assert "&b=2" not in text
+    assert "amp.pdf" not in text
+
+
 def test_an_upload_host_lookalike_is_ignored():
     designs, documents, skipped = pic.classify([
         {"title": "a.png", "url": "https://uploads.linear.app.evil.example/a.png"},
@@ -414,6 +459,8 @@ def test_fetch_writes_the_bytes_with_the_linear_authorization(tmp_path):
     "https://uploads.linear.app.evil.example/board.png",
     "http://uploads.linear.app/board.png",
     "file:///etc/passwd",
+    "https://uploads.linear.app/x/$(id)",
+    "https://uploads.linear.app/x?a=1&b=2",
 ])
 def test_fetch_refuses_any_other_url_without_a_request(tmp_path, url):
     dest = tmp_path / "board.png"
@@ -570,6 +617,11 @@ def test_the_brief_says_a_title_that_is_no_plain_file_name_is_skipped():
     text = _brief_section()
     assert _loose("plain file name").search(text)
     assert _loose("skipped").search(text)
+
+
+def test_the_brief_says_a_url_that_is_not_plain_is_skipped():
+    text = _brief_section()
+    assert _loose("URL that is not plain").search(text)
 
 
 def test_the_brief_states_which_design_line_rule_wins():
