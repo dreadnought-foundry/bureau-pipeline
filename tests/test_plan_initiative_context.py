@@ -302,10 +302,36 @@ def test_designs_documents_ignored_and_skipped(tmp_path):
     assert "approved/" not in doc_line, "a document has no target path"
 
 
-@pytest.mark.parametrize("title", ["a/b.png", "a\\b.png", "..png", "x..png"])
+@pytest.mark.parametrize("title", [
+    "a/b.png", "a\\b.png", "..png", "x..png",
+    # The target path is one word of the fetch command the builder runs
+    # unquoted, and sits in a backtick span in the listing (DRE-8304 review).
+    "Board v2.png", "$(x).png", "x$(cmd).png", "a;b.png", "a`b.png", "a'b.png",
+    'a"b.png', "a&b.png", "a|b.png", "a(b).png", "-rf.png", ".hidden.png",
+    "a\tb.png", "a b.png",
+])
 def test_a_title_with_a_separator_or_dot_dot_is_skipped(title):
-    _designs, _documents, skipped = pic.classify([_upload(title)])
-    assert skipped == 1
+    designs, documents, skipped = pic.classify([_upload(title)])
+    assert (designs, documents, skipped) == ([], [], 1)
+
+
+@pytest.mark.parametrize("title", [
+    "board.png", "Board_v2-final.PNG", "2026-10-31.screen.jpeg", "brief.pdf"])
+def test_a_plain_file_name_title_is_kept(title):
+    designs, documents, skipped = pic.classify([_upload(title)])
+    assert skipped == 0
+    assert [d["title"] for d in designs + documents] == [title]
+
+
+def test_a_skipped_title_never_reaches_the_listing(tmp_path):
+    text = _block(_data(initiatives=[_initiative(content=SECTION)],
+                        attachments=[_upload("board.png", "a"),
+                                     _upload("Board v2.png", "b"),
+                                     _upload("x$(cmd).png", "c")]),
+                  workspace=str(tmp_path))
+    assert "1 approved design(s), 0 document(s), 2 skipped" in _status(text)
+    assert "Board v2" not in text
+    assert "$(cmd)" not in text
 
 
 def test_an_upload_host_lookalike_is_ignored():
@@ -409,6 +435,18 @@ def test_a_redirect_off_the_upload_host_drops_the_key():
     home = handler.redirect_request(
         request, None, 302, "Found", {}, f"{UPLOADS}/other.png")
     assert home.get_header("Authorization") == "lin_api_test_key"
+
+
+def test_fetch_with_no_key_says_so_without_a_traceback(tmp_path):
+    env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ACTIONS": "true"}
+    dest = tmp_path / "board.png"
+    out = subprocess.run(  # nosec B603 — this interpreter, this repo's script
+        [sys.executable, str(SCRIPT), "fetch", f"{UPLOADS}/board.png", str(dest)],
+        env=env, capture_output=True, text=True, check=False, timeout=60)
+    assert out.returncode == 1, out.stderr
+    assert "Traceback" not in out.stderr
+    assert "LINEAR_API_KEY" in out.stderr
+    assert not dest.exists()
 
 
 def test_fetch_through_the_cli(tmp_path):
@@ -526,6 +564,12 @@ def test_the_brief_says_where_the_block_comes_from_and_that_it_is_data():
 
 def test_the_brief_carries_the_commit_criterion_word_for_word():
     assert COMMIT_CRITERION in _brief_section()
+
+
+def test_the_brief_says_a_title_that_is_no_plain_file_name_is_skipped():
+    text = _brief_section()
+    assert _loose("plain file name").search(text)
+    assert _loose("skipped").search(text)
 
 
 def test_the_brief_states_which_design_line_rule_wins():
