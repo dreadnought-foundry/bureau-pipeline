@@ -594,6 +594,44 @@ FIXTURE = os.path.join(ROOT, "tests", "fixtures", "sandbox-press-proof-card.json
 CARD_QUALITY = os.path.join(ROOT, "standards", "card-quality.md")
 SANDBOX_LIST = "The sandbox presses, the one list (DRE-7772):"
 _LIST_BULLET = re.compile(r"^- `([^`]+)`")
+#: The twenty Initiatives presses DRE-8305 added to agent-bureau's
+#: `SANDBOX_PRESS_MUTATIONS`, in its order: each operation, its plain words as
+#: the standard's bullet gives them, and the same press in the past and -ing.
+INITIATIVES_PRESSES = (
+    ("startInitiativeDraft", "start an initiative draft", "started an initiative draft",
+     "starting an initiative draft"),
+    ("saveInitiativeDraft", "save an initiative draft", "saved an initiative draft",
+     "saving an initiative draft"),
+    ("discardInitiativeDraft", "discard an initiative draft",
+     "discarded an initiative draft", "discarding an initiative draft"),
+    ("sendToPlanning", "send a card to Planning", "sent a card to Planning",
+     "sending a card to Planning"),
+    ("setCardRepo", "set a card's repo", "sets a card's repo", "setting a card's repo"),
+    ("buildCardByHand", "build a card by hand", "built a card by hand",
+     "building a card by hand"),
+    ("cancelCard", "cancel a card", "canceled a card", "canceling a card"),
+    ("undoCancel", "undo a cancel", "undid a cancel", "undoing a cancel"),
+    ("markCardChecked", "mark a card checked", "marked a card checked",
+     "marking a card checked"),
+    ("remindCard", "send a reminder on a card", "sent a reminder on a card",
+     "sending a reminder on a card"),
+    ("answerCard", "answer a card", "answered a card", "answering a card"),
+    ("commentOnCard", "comment on a card", "commented on a card", "commenting on a card"),
+    ("writeEpicCards", "write an epic's cards", "wrote an epic's cards",
+     "writing an epic's cards"),
+    ("cancelEpic", "cancel an epic", "canceled an epic", "canceling an epic"),
+    ("answerPlanner", "answer the planner", "answered the planner", "answering the planner"),
+    ("addInitiativeContext", "add context to an initiative", "added context to an initiative",
+     "adding context to an initiative"),
+    ("deleteInitiativeContext", "delete an initiative's context",
+     "deleted an initiative's context", "deleting an initiative's context"),
+    ("addInitiativeFile", "add a file to an initiative", "added a file to an initiative",
+     "adding a file to an initiative"),
+    ("updateInitiativeFile", "update an initiative's file", "updated an initiative's file",
+     "updating an initiative's file"),
+    ("deleteInitiativeFile", "delete an initiative's file", "deleted an initiative's file",
+     "deleting an initiative's file"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -682,7 +720,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(6, len(listed), listed)
+        self.assertEqual(26, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -717,6 +755,18 @@ class TheListIsCopied(unittest.TestCase):
             "waiting for the operator's press: on the sandbox, send a Desk message"))
         self.assertEqual(["sendProjectAgentMessage"], ppr.sandbox_presses(
             "waiting for the operator's press: on the sandbox, open a conversation"))
+
+    def test_the_initiatives_presses_name_only_themselves(self):
+        """DRE-8305's twenty: each press's plain words, in the present, past
+        and -ing forms, and its operation name only that press."""
+        for op, words, past, ing in INITIATIVES_PRESSES:
+            for text in (words, past, ing, op):
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_the_initiatives_presses_follow_the_six_in_order(self):
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual([op for op, *_ in INITIATIVES_PRESSES], ours[6:])
 
 
 class TheSandboxPressRule(_Cli):

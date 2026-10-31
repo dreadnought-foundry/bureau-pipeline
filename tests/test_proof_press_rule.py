@@ -95,7 +95,17 @@ ASKED = ("createTask", "snoozeTask", "markTaskDone", "makeTaskCard",
 #: is refused on `agent-bureau-demo` too, and the press is not in agent-bureau's
 #: `SANDBOX_PRESS_MUTATIONS`.
 DROPPED = ("answerInitiativeDraftQuestion",)
-PRESSES = tuple(p for p in ASKED if p not in DROPPED)
+#: The twenty Initiatives presses DRE-8305 added to agent-bureau's
+#: `SANDBOX_PRESS_MUTATIONS` on 2026-10-28, in its order, after the six.
+ADDED = ("startInitiativeDraft", "saveInitiativeDraft", "discardInitiativeDraft",
+         "sendToPlanning", "setCardRepo", "buildCardByHand", "cancelCard", "undoCancel",
+         "markCardChecked", "remindCard", "answerCard", "commentOnCard", "writeEpicCards",
+         "cancelEpic", "answerPlanner", "addInitiativeContext", "deleteInitiativeContext",
+         "addInitiativeFile", "updateInitiativeFile", "deleteInitiativeFile")
+PRESSES = tuple(p for p in ASKED if p not in DROPPED) + ADDED
+#: The presses DRE-8305 left off agent-bureau's list: the CEO's own answers.
+LEFT_OFF = ("approveInitiativeDraft", "answerInitiativeDraftQuestion",
+            "answerInitiativeDraftQuestions", "answerDecision")
 #: The plain words of each press, as a document might name one in prose.
 PLAIN_WORDS = {
     "createTask": "make a task",
@@ -105,6 +115,26 @@ PLAIN_WORDS = {
     "answerInitiativeDraftQuestion": "answer a draft's question",
     "sendProjectAgentMessage": "send a Desk message",
     "answerDeskPermission": "answer a Desk Allow",
+    "startInitiativeDraft": "start an initiative draft",
+    "saveInitiativeDraft": "save an initiative draft",
+    "discardInitiativeDraft": "discard an initiative draft",
+    "sendToPlanning": "send a card to Planning",
+    "setCardRepo": "set a card's repo",
+    "buildCardByHand": "build a card by hand",
+    "cancelCard": "cancel a card",
+    "undoCancel": "undo a cancel",
+    "markCardChecked": "mark a card checked",
+    "remindCard": "send a reminder on a card",
+    "answerCard": "answer a card",
+    "commentOnCard": "comment on a card",
+    "writeEpicCards": "write an epic's cards",
+    "cancelEpic": "cancel an epic",
+    "answerPlanner": "answer the planner",
+    "addInitiativeContext": "add context to an initiative",
+    "deleteInitiativeContext": "delete an initiative's context",
+    "addInitiativeFile": "add a file to an initiative",
+    "updateInitiativeFile": "update an initiative's file",
+    "deleteInitiativeFile": "delete an initiative's file",
 }
 
 #: The reach declaration will quote this sentence as its `brief` (the contract).
@@ -341,10 +371,23 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
                                    f"'- `<operation>` — <press>': {line!r}")
             ops.append(found.group(1))
         self.assertEqual(list(PRESSES), ops,
-                         f"{self.NAME}: the list is not the presses DRE-7776 shipped, in order")
+                         f"{self.NAME}: the list is not the presses DRE-7776 and DRE-8305 shipped, in order")
         for op in DROPPED:
             self.assertNotIn(f"`{op}`", "\n".join(bullets),
                              f"{self.NAME} lists `{op}`, which DRE-7776 dropped")
+
+    def test_the_presses_left_off_stay_off(self):
+        bullets = "\n".join(_list_bullets(self.raw) or [])
+        for op in LEFT_OFF:
+            self.assertNotIn(f"`{op}`", bullets, f"{self.NAME} lists `{op}`, which stays off")
+            self.assertNotIn(op, [o for o, _ in plan_proof_reach.SANDBOX_PRESSES],
+                             f"`SANDBOX_PRESSES` carries `{op}`, which stays off")
+        self.assertIn("DRE-7776", self.text,
+                      f"{self.NAME} no longer says DRE-7776 dropped a press")
+        self.assertTrue(_says_together(self.raw, "DRE-8305", "2026-10-28", "twenty",
+                                       "`approveInitiativeDraft`", "`answerDecision`"),
+                        f"{self.NAME} does not say DRE-8305 added the twenty presses "
+                        "and left the CEO's answers off")
 
     def test_the_list_is_the_copy_of_agent_bureaus(self):
         for needle in ("`SANDBOX_PRESS_MUTATIONS`", "`console/backend/proof_reader_presses.py`"):
