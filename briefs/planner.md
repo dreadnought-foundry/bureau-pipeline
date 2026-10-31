@@ -639,6 +639,18 @@ Everything else in the card is written so a run with read access
 can observe it. The card closes on the approved merge of the record (DRE-5919,
 the hygiene agent).
 
+**Write an `Observe after:` line on a PROOF card whose observation cannot
+happen until a date or a scheduled event (DRE-8436).** One line of its own,
+outside fenced code, in one of the five forms `standards/card-quality.md`
+lists, read there. PT is Pacific time. For a proof that must watch the morning
+groom proposal:
+
+    Observe after: the first groom proposal after release — next 06:00 PT after release
+
+The plan check refuses a line that fits no form, naming the card and quoting
+the line. A PROOF card whose observation can be made as soon as the release is
+live carries no line.
+
 **A log read the card prescribes is a quoted phrase (DRE-6778).** A CloudWatch
 Logs filter pattern for a literal phrase is written as a quoted phrase,
 `'"system-alert"'`, never bare. A pattern containing a hyphen, colon or other

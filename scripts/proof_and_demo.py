@@ -52,6 +52,19 @@ card. Since DRE-7773 the card closes on its approved, all-met record and names
 no person to close it, so the line is not required — and an older card still
 carrying it passes like any other.
 
+## The `Observe after:` line (DRE-8436)
+
+A proof card MAY say when the thing it observes can first have happened, on
+one line of its own: `Observe after: …` (`OBSERVE_AFTER`). On 2026-10-10 the
+pipeline dispatched three first proof runs at DRE-6678 the evening before the
+06:00 PT groom proposal they had to observe, and every row read "Not observed.
+waiting for the morning of October 11" — the card had no way to say "not
+before 06:00 tomorrow". `observe_after` reads the line, `observable_at` turns
+it and the release time into the earliest time the proof may run, and the
+check refuses a proof card whose line fits none of the forms. A card with no
+line passes as it always did. Nothing here reads the time for dispatch: the
+proof dispatcher's gate imports these two functions.
+
 ## And the check WRITES the verdict it computed (DRE-3039)
 
 Rule 3 read a verdict off the card, printed a one-line summary and stamped
@@ -114,6 +127,9 @@ import json
 import os
 import re
 import sys
+from datetime import date, datetime, time, timedelta, timezone
+from typing import NamedTuple
+from zoneinfo import ZoneInfo
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(_HERE)
@@ -165,6 +181,226 @@ def is_proof(title: str) -> bool:
 
 def is_demo(title: str) -> bool:
     return bool(_DEMO_TITLE.match(title or ""))
+
+
+# --------------------------------------------------------------------------- #
+# when a proof can first be observed (DRE-8436)                                #
+# --------------------------------------------------------------------------- #
+
+# The line's opening, and its five forms. `<event>` is free prose naming what
+# must happen; PT is `America/Los_Angeles`, daylight saving included; the em
+# dash may also be written `-` or `--`.
+OBSERVE_AFTER = "Observe after:"
+OBSERVE_AFTER_FORMS = (
+    "Observe after: <YYYY-MM-DD> <HH:MM> PT",
+    "Observe after: <event> — next <HH:MM> PT after release",
+    "Observe after: <event> — next <Weekday> <HH:MM> PT after release",
+    "Observe after: <event> — <N> days after release",
+    "Observe after: <event>",
+)
+PACIFIC = ZoneInfo("America/Los_Angeles")
+
+# A bare event names no time, so the proof may run this long after release:
+# the same 12 hours the dispatcher's `WAITING_RECHECK_HOURS` gives an unstamped
+# waiting row (DRE-7951). Restated rather than imported because the dispatcher
+# imports this module; `tests/test_proof_observe_after.py` holds the two equal.
+BARE_EVENT_HOURS = 12
+
+# The line opens its own line, the way `blocker_prose.BLOCKER_LINE` reads a
+# `**Blocked by:**` line: list markers and bold markup may precede it, closing
+# emphasis may sit before the colon, and a sentence that merely mentions the
+# words is ordinary prose.
+_OBSERVE_LINE = re.compile(
+    r"^[\s>*_`~+#-]*"                             # -, *, >, #, **bold**, `code`
+    r"(?:\d+[.)][\s>*_`~+#-]*)?"                  # 1. / 2) ordered list item
+    r"observe after[\s*_`]*:",
+    re.IGNORECASE,
+)
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_MARKUP = "*_` \t"
+
+_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday",
+             "saturday", "sunday")
+_AT_FORM = re.compile(
+    r"^(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})\s+PT$", re.IGNORECASE)
+_NEXT_FORM = re.compile(
+    r"^next\s+(?:(" + "|".join(_WEEKDAYS) + r")\s+)?(\d{2}):(\d{2})\s+PT"
+    r"\s+after\s+release$",
+    re.IGNORECASE,
+)
+_DAYS_FORM = re.compile(r"^([1-9]\d*)\s+days?\s+after\s+release$", re.IGNORECASE)
+# The separator between the event and its time: an em dash, or a spaced `-` or
+# `--`. A hyphen inside a word (`post-release`) is part of the event.
+_SEPARATOR = re.compile(r"\s*—\s*|(?:^|\s+)--?\s+")
+_DATE_OR_CLOCK = re.compile(r"\d{4}-\d{2}-\d{2}|\b\d{1,2}:\d{2}\b")
+_EVENT_MIN_WORDS = 3
+
+
+class ObserveAfter(NamedTuple):
+    """A proof card's `Observe after:` line, read."""
+
+    line: str                 # the line as written, stripped
+    event: str | None         # what must happen; None for the absolute form
+    at: datetime | None       # the absolute form's aware time, else None
+    rule: str                 # "at", "next", "days" or "event"
+
+
+class ObserveAfterMalformed(ValueError):
+    """A line opening `Observe after:` that fits none of the forms, or a second
+    such line. `line` is the line the refusal names."""
+
+    def __init__(self, message: str, line: str):
+        super().__init__(message)
+        self.line = line
+
+
+def _malformed(line: str, why: str) -> ObserveAfterMalformed:
+    return ObserveAfterMalformed(
+        f"`{line}` fits none of the forms of `{OBSERVE_AFTER}` — {why}. The "
+        "forms: " + "; ".join(f"`{f}`" for f in OBSERVE_AFTER_FORMS),
+        line,
+    )
+
+
+def _event_problem(event: str) -> str | None:
+    """Why `event` does not name what must happen, or None.
+
+    A time that fits no form is not an event (`tomorrow 06:00 PT`), and
+    neither is a vague time (`soon`, `next week`): an event names the thing
+    that has to happen, which takes a noun phrase of three words or more —
+    `the first groom proposal after release`.
+    """
+    if not event:
+        return "it names no event"
+    if _DATE_OR_CLOCK.search(event):
+        return "it carries a date or a time that fits no form"
+    if _SEPARATOR.search(event):
+        return "it carries a dash, and what follows it fits no form"
+    if len(event.split()) < _EVENT_MIN_WORDS:
+        return (
+            f"`{event}` is not an event — name what must happen, in "
+            f"{_EVENT_MIN_WORDS} words or more"
+        )
+    return None
+
+
+def _parse(line: str) -> tuple[ObserveAfter, tuple]:
+    """One `Observe after:` line → the record and the time it names.
+
+    The second half is what `observable_at` needs and the record does not
+    carry: `(weekday or None, hour, minute)` for `next`, `(days,)` for `days`,
+    `()` otherwise. Raises `ObserveAfterMalformed` naming the line.
+    """
+    opening = _OBSERVE_LINE.match(line)
+    if not opening:
+        raise _malformed(line, f"it does not open with `{OBSERVE_AFTER}`")
+    rest = line[opening.end():].strip(_MARKUP)
+
+    absolute = _AT_FORM.match(rest)
+    if absolute:
+        y, mo, d, h, mi = (int(g) for g in absolute.groups())
+        try:
+            at = datetime(y, mo, d, h, mi, tzinfo=PACIFIC)
+        except ValueError as exc:
+            raise _malformed(line, f"it names no real date and time ({exc})")
+        return ObserveAfter(line, None, at, "at"), ()
+
+    separators = list(_SEPARATOR.finditer(rest))
+    if not separators:
+        problem = _event_problem(rest)
+        if problem:
+            raise _malformed(line, problem)
+        return ObserveAfter(line, rest, None, "event"), ()
+
+    last = separators[-1]
+    event = rest[:last.start()].strip(_MARKUP)
+    tail = rest[last.end():].strip(_MARKUP)
+    problem = _event_problem(event)
+    if problem:
+        raise _malformed(line, problem)
+
+    following = _NEXT_FORM.match(tail)
+    if following:
+        weekday, hour, minute = following.groups()
+        try:
+            time(int(hour), int(minute))
+        except ValueError as exc:
+            raise _malformed(line, f"`{hour}:{minute}` is not a time ({exc})")
+        day = _WEEKDAYS.index(weekday.lower()) if weekday else None
+        return (ObserveAfter(line, event, None, "next"),
+                (day, int(hour), int(minute)))
+
+    days = _DAYS_FORM.match(tail)
+    if days:
+        return ObserveAfter(line, event, None, "days"), (int(days.group(1)),)
+
+    raise _malformed(line, f"`{tail}` is not a time after release")
+
+
+def observe_after(description: str) -> ObserveAfter | None:
+    """The card's `Observe after:` line, read — or None when it carries none.
+
+    Read outside fenced code only, at most once. Raises
+    `ObserveAfterMalformed` naming the line when a line opening
+    `Observe after:` fits none of the forms, or when there are two.
+    """
+    found: list[str] = []
+    fence = None
+    for raw in (description or "").splitlines():
+        marker = _FENCE.match(raw)
+        if marker:
+            if fence is None:
+                fence = marker.group(1)
+            elif marker.group(1) == fence:
+                fence = None
+            continue
+        if fence is None and _OBSERVE_LINE.match(raw):
+            found.append(raw.strip())
+    if not found:
+        return None
+    if len(found) > 1:
+        raise ObserveAfterMalformed(
+            f"{len(found)} `{OBSERVE_AFTER}` lines — "
+            + ", ".join(f"`{line}`" for line in found)
+            + ". A card carries the line at most once.",
+            found[1],
+        )
+    return _parse(found[0])[0]
+
+
+def observable_at(found: ObserveAfter, released_at: datetime) -> datetime:
+    """The earliest time, in UTC, the proof may run.
+
+    `released_at` is the caller's: the dispatch gate reads it as the newest
+    merge time of the epic's build cards' pull requests. It must be aware.
+
+      * `at` — the stated time.
+      * `next` — the first `<HH:MM>` PT (on `<Weekday>` when one is named)
+        strictly after `released_at`, on the Pacific wall clock.
+      * `days` — `released_at` plus N days.
+      * `event` — `released_at` plus `BARE_EVENT_HOURS`.
+    """
+    if released_at.utcoffset() is None:
+        raise ValueError("released_at must be an aware datetime")
+    released = released_at.astimezone(timezone.utc)
+    record, detail = _parse(found.line)
+    if record.rule == "at":
+        return record.at.astimezone(timezone.utc)
+    if record.rule == "days":
+        return released + timedelta(days=detail[0])
+    if record.rule == "event":
+        return released + timedelta(hours=BARE_EVENT_HOURS)
+    weekday, hour, minute = detail
+    start: date = released.astimezone(PACIFIC).date()
+    for offset in range(9):
+        day = start + timedelta(days=offset)
+        if weekday is not None and day.weekday() != weekday:
+            continue
+        candidate = datetime.combine(
+            day, time(hour, minute), tzinfo=PACIFIC).astimezone(timezone.utc)
+        if candidate > released:
+            return candidate
+    raise AssertionError("unreachable: a weekday recurs within eight days")
 
 
 # --------------------------------------------------------------------------- #
@@ -426,6 +662,16 @@ def findings(children: list, doc: dict | None = None) -> list:
     problem = _role_label_finding(proof, "proof", doc)
     if problem:
         found.append(problem)
+
+    # The `Observe after:` line, when it carries one (DRE-8436). Only the
+    # proof card's line is read: it is the card the dispatch gate times.
+    try:
+        observe_after(proof.get("body") or "")
+    except ObserveAfterMalformed as exc:
+        found.append(
+            f"{_ident(proof)}: the proof card's `{OBSERVE_AFTER}` line is "
+            f"malformed — {exc}"
+        )
 
     return found
 
