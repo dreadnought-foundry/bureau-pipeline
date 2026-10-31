@@ -863,7 +863,12 @@ Below the status line it lists each approved design attached to the epic —
 its title, its URL and its **target path**,
 `<design folder>/approved/<initiative-slug>/<title>`, under `console/design`
 when the repo has it and `design` otherwise — and each document, which is
-listed only: never committed and never on a `**Design:**` line.
+listed only: never committed and never on a `**Design:**` line. An upload
+whose title is no plain file name — ASCII letters, digits, `.`, `_` and `-`,
+opening with a letter or digit, no `..` — is skipped and counted on the status
+line, never listed, so every target path is one word of the `fetch` command
+below. Name a skipped upload in the plan for the CEO to rename; never retype
+its path yourself.
 
 **Which Design line rule wins.** The standing rule does. A `**Design:**` line
 goes only on a UI card — one that builds or changes a screen — and a non-UI

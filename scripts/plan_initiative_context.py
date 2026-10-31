@@ -30,8 +30,10 @@ One Linear read: `issue(id) { project { initiatives { … } } attachments { … 
     only approved files, so there is no unapproved upload to tell apart. Any
     other upload is a **document**: listed, never committed, never on a Design
     line. Every attachment on another host (pull request links, plain links)
-    is ignored. A title that could leave the design folder — `/`, `\\`, `..` —
-    is skipped and counted. The contract with DRE-8291: the file name,
+    is ignored. A title that is no plain file name (`PLAIN_NAME`: ASCII
+    letters, digits, `.`, `_`, `-`, opening with a letter or digit, and no
+    `..`) is skipped and counted, so a target path is always one shell word
+    that stays in the design folder. The contract with DRE-8291: the file name,
     extension included, is the attachment's `title`, and the `fileUpload`
     asset URL its `url`.
 
@@ -82,6 +84,10 @@ END = "===== END UNTRUSTED INITIATIVE CONTEXT ====="
 UPLOAD_HOST = "uploads.linear.app"
 
 DESIGN_ENDINGS = (".png", ".jpg", ".jpeg", ".svg", ".html")
+
+#: An attachment title kept as a file name: ASCII letters, digits, `.`, `_`
+#: and `-`, opening with a letter or digit. Anything else is skipped.
+PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 
 CONSOLE_DESIGN = "console/design"
 ROOT_DESIGN = "design"
@@ -183,9 +189,11 @@ def _is_upload(url: str) -> bool:
 
 
 def _unsafe(title: str) -> bool:
-    """A title that could leave the design folder, or is no file name at all."""
-    return (not title.strip() or "/" in title or "\\" in title or ".." in title
-            or any(ord(ch) < 32 for ch in title))
+    """A title that is no plain file name — `PLAIN_NAME` — or could leave the
+    design folder. The target path is one word of the `fetch` command a builder
+    runs unquoted, and sits in a backtick span in the listing, so a space, a
+    quote, `$`, `;` or a backtick in it would break both."""
+    return not PLAIN_NAME.fullmatch(title) or ".." in title
 
 
 def classify(attachments) -> tuple[list[dict], list[dict], int]:
@@ -328,7 +336,13 @@ def fetch(url: str, dest: str, *, opener=None) -> int:
         print(f"fetch: refused {_line(url)} — {why}; nothing was requested",
               file=sys.stderr)
         return 2
-    request = urllib.request.Request(url, headers={"Authorization": linear_ops.api_key()})
+    try:
+        key = linear_ops.api_key()
+    except KeyError as exc:
+        print(f"fetch: no Linear key — {exc} is not set; nothing was requested",
+              file=sys.stderr)
+        return 1
+    request = urllib.request.Request(url, headers={"Authorization": key})
     opener = opener or urllib.request.build_opener(_KeepTheKeyHome).open
     try:
         # B310: the scheme and host were checked above — https://uploads.linear.app.
