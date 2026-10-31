@@ -777,6 +777,16 @@ the parent (#2690) and its own parent (#2688) sat open as drafts until
 2026-09-22 09:57 PT. **A card is Done only when its code is on the default
 branch**, and the cloud era has no auto-revert.
 
+**And the merge gate no longer makes such a merge (DRE-8503).** On 2026-10-30
+at 4:01 PM PT agent-bureau's gate merged #4373 into
+`agent/DRE-8273-initiatives-contract-pr`, a branch that then merged on and was
+deleted, so #4373's work never reached the stack and was re-filed as #4383.
+The gate's condition B (`merge_gate.evaluate_base`) now holds a pull request
+whose base is not the default branch, with one note per head saying it waits
+to be retargeted, and the fix agent's conflict step merges the pull request's
+own base (`origin/<base_ref>`), never the default branch. A merge into a side
+branch now comes only from a person, and the two steps below still handle it.
+
 The `Card → Done` step now reads `base.ref` against the repository's own
 `default_branch` — through step env, never interpolated, the rule `PR_BODY`
 already follows, because a base branch is named by whoever opened the pull
