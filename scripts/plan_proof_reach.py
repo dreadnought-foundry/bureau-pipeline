@@ -147,8 +147,10 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: The sandbox presses, the copy of `standards/card-quality.md`'s one list
 #: (DRE-7772), in its order: each console operation, and the press in plain
 #: words. The epic's PROOF holds both equal to agent-bureau's
-#: `SANDBOX_PRESS_MUTATIONS`.
+#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the last twenty, the Initiatives
+#: page's writes.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
+_S = r"['’]s"
 SANDBOX_PRESSES = (
     ("createTask", rf"\b(?:make|makes|made|making|create|creates|created|creating)"
                    rf"\s+{_A}task\b(?!['’]s|\s+card)"),
@@ -160,6 +162,26 @@ SANDBOX_PRESSES = (
                                 rf"|\bopen(?:s|ed|ing)?\s+{_A}conversation\b"),
     ("answerDeskPermission", rf"\banswer(?:s|ed|ing)?\s+{_A}desk\s+"
                              rf"(?:allow|deny|permission)\b"),
+    ("startInitiativeDraft", rf"\bstart(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
+    ("saveInitiativeDraft", rf"\bsav(?:e|es|ed|ing)\s+{_A}initiative\s+draft\b"),
+    ("discardInitiativeDraft", rf"\bdiscard(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
+    ("sendToPlanning", rf"\b(?:send|sends|sent|sending)\s+{_A}card\s+to\s+planning\b"),
+    ("setCardRepo", rf"\bset(?:s|ting)?\s+{_A}card{_S}\s+repo\b"),
+    ("buildCardByHand", rf"\b(?:build|builds|built|building)\s+{_A}card\s+by\s+hand\b"),
+    ("cancelCard", rf"\bcancel(?:s|l?ed|l?ing)?\s+{_A}card\b"),
+    ("undoCancel", rf"\b(?:undo|undoes|undid|undone|undoing)\s+{_A}cancel\b"),
+    ("markCardChecked", rf"\bmark(?:s|ed|ing)?\s+{_A}card\s+(?:as\s+)?checked\b"),
+    ("remindCard", rf"\b(?:send|sends|sent|sending)\s+{_A}reminder\s+on\s+{_A}card\b"),
+    ("answerCard", rf"\banswer(?:s|ed|ing)?\s+{_A}card\b"),
+    ("commentOnCard", rf"\bcomment(?:s|ed|ing)?\s+on\s+{_A}card\b"),
+    ("writeEpicCards", rf"\b(?:write|writes|wrote|written|writing)\s+{_A}epic{_S}\s+cards\b"),
+    ("cancelEpic", rf"\bcancel(?:s|l?ed|l?ing)?\s+{_A}epic\b"),
+    ("answerPlanner", rf"\banswer(?:s|ed|ing)?\s+{_A}planner\b"),
+    ("addInitiativeContext", rf"\badd(?:s|ed|ing)?\s+context\s+to\s+{_A}initiative\b"),
+    ("deleteInitiativeContext", rf"\bdelet(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+context\b"),
+    ("addInitiativeFile", rf"\badd(?:s|ed|ing)?\s+{_A}file\s+to\s+{_A}initiative\b"),
+    ("updateInitiativeFile", rf"\bupdat(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
+    ("deleteInitiativeFile", rf"\bdelet(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
 )
 
 #: The rows that send a press to a person.
