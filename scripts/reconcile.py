@@ -6130,6 +6130,37 @@ def gate_hold_note_line(pr: dict) -> str | None:
     return None
 
 
+#: The gate's hold note's first line, after its badge: the head it was posted
+#: at and the reason (scripts/evaluate_and_merge.sh's HOLD_LINE).
+_GATE_HOLD_NOTE_RE = re.compile(
+    rf"{GATE_HOLD_NOTE_MARKER} @(?P<sha>[0-9a-f]+) — (?P<reason>.*)")
+
+
+def stacked_base_hold(pr: dict) -> str | None:
+    """The base the gate holds this pull request on, when its newest hold
+    note is condition B's AT the head and the pull request is still based on
+    the branch it names — or None (DRE-8503).
+
+    The gate holds a stacked pull request until it is retargeted, and a
+    re-trigger cannot retarget it, so the review lane spends none of the
+    head's budget on one: no gate nudge, no receipt, no cap, no park. A
+    stack can wait on its parent for hours, and three sweeps at the cap
+    would otherwise ask the CEO a review-cap question that is not his. Once
+    the base moves — GitHub retargets the child when the parent merges with
+    --delete-branch, and the head does not move — the note names a base the
+    pull request no longer has, and the nudge resumes at the head's unspent
+    budget. The UNKNOWN hold is not this one: a re-read can answer it."""
+    line = gate_hold_note_line(pr)
+    head = pr.get("headRefOid") or ""
+    found = _GATE_HOLD_NOTE_RE.search(line or "")
+    if not (found and head and found.group("sha") == head):
+        return None
+    base = merge_gate.stacked_base_named(found.group("reason"))
+    if not base or base != pr.get("baseRefName"):
+        return None
+    return base
+
+
 def critic_token(pr: dict) -> str | None:
     """The newest critic verdict's token — APPROVE, REQUEST_CHANGES — whatever
     commit it names, or None (DRE-6650). Whether it binds the head is
@@ -16431,6 +16462,15 @@ def main(
                     # put a question in front of the CEO that is not his.
                     continue
                 bound = tag == GATE_NUDGE_KEY
+                base = stacked_base_hold(pr) if bound else None
+                if base:
+                    # DRE-8503: the gate holds a stack until it is
+                    # retargeted, which no re-trigger does; the budget waits
+                    # for the base to move, and the CEO is not asked.
+                    print(f"review-nudge: {ident} PR #{pr['number']} is held "
+                          f"on its base {base} until it is retargeted — "
+                          "no nudge, nothing spent")
+                    continue
                 spent = review_nudges_spent(card, tag, head)
                 if spent >= REVIEW_NUDGE_CAP:
                     hand_review_nudge_to_person(card, pr, tag, critic, verifier)

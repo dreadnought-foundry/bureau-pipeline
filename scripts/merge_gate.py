@@ -1122,6 +1122,13 @@ def evaluate_fix_lane(fix_lane, pr_number) -> Optional[Decision]:
 #: a branch, and comparing it would read as "not the default branch" (DRE-8503).
 _BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
 
+#: Condition B's hold reason, as `stacked_base_named` reads it back off the
+#: gate's note. A branch name holds no comma or space, so the base ends where
+#: the comma begins (DRE-8503).
+_STACKED_BASE_REASON_RE = re.compile(
+    r"^this pull request's base is (?P<base>[A-Za-z0-9._/-]+), "
+    r"not the default branch [A-Za-z0-9._/-]+ — waiting for it to be retargeted")
+
 
 def evaluate_base(base_ref, default_branch) -> Optional[Decision]:
     """Condition B (DRE-8503). None = the pull request's base is the
@@ -1163,6 +1170,16 @@ def evaluate_base(base_ref, default_branch) -> Optional[Decision]:
         f"into another branch never reaches {default} on its own, so the "
         "gate does not make one (DRE-8503)",
     )
+
+
+def stacked_base_named(reason) -> Optional[str]:
+    """The base condition B's hold `reason` names, or None when `reason` is
+    not that hold — the UNKNOWN hold included, which a re-read can answer
+    (DRE-8503). The sweep reads the gate's note through this, so a stack
+    held on its parent spends no re-trigger: only a retarget changes the
+    answer, and a re-trigger cannot make one."""
+    found = _STACKED_BASE_REASON_RE.match(reason or "")
+    return found.group("base") if found else None
 
 
 def stacked_reading(comments, qa_login: str, head_sha: str) -> Optional[str]:

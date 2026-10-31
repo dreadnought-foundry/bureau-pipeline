@@ -920,6 +920,16 @@ says so once per head with a `review-nudge-draft` comment on the card. Only the
 receipts after that comment count, so once the pull request is marked ready the
 budget for the same head starts again from zero.
 
+A stacked pull request held on its base spends neither budget either
+(DRE-8503). When the gate's newest hold note at the head is condition B's —
+the base is another branch, waiting to be retargeted — and the pull request is
+still based on the branch the note names, the sweep re-triggers nothing,
+writes nothing and never parks it, however long the parent takes. Once the
+base moves (GitHub retargets the child when the parent merges with
+`--delete-branch`, and the head does not move), the note names a base the pull
+request no longer has, and the next stale sweep re-triggers the gate at the
+head's unspent budget.
+
 ## The plan artifact (DRE-2720)
 
 An epic's CEO-facing output is a published document, not a Linear comment.
