@@ -866,8 +866,10 @@ when the repo has it and `design` otherwise — and each document, which is
 listed only: never committed and never on a `**Design:**` line. An upload
 whose title is no plain file name — ASCII letters, digits, `.`, `_` and `-`,
 opening with a letter or digit, no `..` — is skipped and counted on the status
-line, never listed, so every target path is one word of the `fetch` command
-below. Name a skipped upload in the plan for the CEO to rename; never retype
+line, never listed, and so is an upload with a URL that is not plain —
+`https://uploads.linear.app/` then only ASCII letters, digits, `.`, `_`, `~`,
+`-` and `/`, no query and no port. So every URL and every target path is one
+word of the `fetch` command below. Name a skipped upload in the plan for the CEO to rename; never retype
 its path yourself.
 
 **Which Design line rule wins.** The standing rule does. A `**Design:**` line

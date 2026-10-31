@@ -32,8 +32,11 @@ One Linear read: `issue(id) { project { initiatives { … } } attachments { … 
     line. Every attachment on another host (pull request links, plain links)
     is ignored. A title that is no plain file name (`PLAIN_NAME`: ASCII
     letters, digits, `.`, `_`, `-`, opening with a letter or digit, and no
-    `..`) is skipped and counted, so a target path is always one shell word
-    that stays in the design folder. The contract with DRE-8291: the file name,
+    `..`), or a URL that is not plain (`PLAIN_URL`: `https://uploads.linear.app/`
+    then ASCII letters, digits, `.`, `_`, `~`, `-` and `/` — no query, no port),
+    is skipped and counted, so the URL and the target path are each always one
+    shell word, and the target path stays in the design folder. The contract
+    with DRE-8291: the file name,
     extension included, is the attachment's `title`, and the `fileUpload`
     asset URL its `url`.
 
@@ -54,7 +57,8 @@ characters one `-`, trimmed.
     plan_initiative_context.py fetch <url> <dest>
         Downloads one upload with the Linear key and `Authorization` header
         `linear_ops.gql` sends. Refuses, without a request, any URL that is not
-        `https://uploads.linear.app/…`. Exit 0 written, 2 refused, 1 failed.
+        `https://uploads.linear.app/…`, or is not plain. Exit 0 written, 2
+        refused, 1 failed.
 """
 
 from __future__ import annotations
@@ -88,6 +92,11 @@ DESIGN_ENDINGS = (".png", ".jpg", ".jpeg", ".svg", ".html")
 #: An attachment title kept as a file name: ASCII letters, digits, `.`, `_`
 #: and `-`, opening with a letter or digit. Anything else is skipped.
 PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+
+#: An upload URL kept as a `fetch` argument: the upload host, then a path of
+#: ASCII letters, digits, `.`, `_`, `~`, `-` and `/`. No query, no fragment, no
+#: port, and nothing a shell reads as syntax. Anything else is skipped.
+PLAIN_URL = re.compile(r"https://uploads\.linear\.app/[A-Za-z0-9._~/-]+")
 
 CONSOLE_DESIGN = "console/design"
 ROOT_DESIGN = "design"
@@ -207,7 +216,7 @@ def classify(attachments) -> tuple[list[dict], list[dict], int]:
         url = str((node or {}).get("url") or "")
         if not _is_upload(url):
             continue
-        if _unsafe(title):
+        if _unsafe(title) or not PLAIN_URL.fullmatch(url):
             skipped += 1
             continue
         entry = {"title": title, "url": url}
@@ -326,6 +335,8 @@ def _refusal(url: str) -> str | None:
         return f"its scheme is {parts.scheme or 'missing'}, not https"
     if (host or "").lower() != UPLOAD_HOST:
         return f"its host is {host or 'missing'}, not {UPLOAD_HOST}"
+    if not PLAIN_URL.fullmatch(url):
+        return "it is not a plain upload URL"
     return None
 
 
