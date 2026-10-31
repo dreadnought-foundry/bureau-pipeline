@@ -1228,6 +1228,13 @@ jobs:
           grep -E '^(LEDGER|MULCH) STATUS:' .bureau-pipeline/agent-context.md || echo "no LEDGER STATUS: or MULCH STATUS: line in the assembled context"
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
+          # The epic's initiative — its "Context (from the console)" section —
+          # and the approved designs attached to the epic (DRE-8304), read
+          # through the epic's Linear project. The script always exits 0; the
+          # fallback is for a crash before it can print.
+          python3 .bureau-pipeline/scripts/plan_initiative_context.py context "$CARD" >> .bureau-pipeline/agent-context.md \
+            || echo "INITIATIVE CONTEXT: UNKNOWN — plan_initiative_context.py context exited non-zero, so the initiative's context was not appended" >> .bureau-pipeline/agent-context.md
+          grep -E '^INITIATIVE CONTEXT:' .bureau-pipeline/agent-context.md || echo "no INITIATIVE CONTEXT: line in the assembled context"
           # This plan's own repo's holds (DRE-7753), read from the caller's
           # checkout at $GITHUB_WORKSPACE through `sweep_holds.read` — the
           # same reading the first critic's held-repo check makes, so the
