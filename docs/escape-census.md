@@ -23,7 +23,7 @@ from the table rather than typed.
 
 | # | Escape route | Evidence | Reader today |
 | -- | -- | -- | -- |
-| A | Branch pushed with commits, **no PR ever opened** | DRE-2655 — nineteen hours invisible, found by eye | `reconcile.flag_unlanded_work` — reports the branch on its card once it has been idle past the bounded interval |
+| A | Branch pushed with commits, **no PR ever opened** | DRE-2655 — nineteen hours invisible, found by eye | `reconcile.flag_unlanded_work` — reports the branch on its card once it has been idle past the bounded interval. A proof's record branch, agent/DRE-&lt;n&gt;-proof-record, is left to the proof dispatcher (DRE-8438): the proof dispatcher owns that branch, its pull request opens only when the record can merge, and the card's 🔬 proof-waiting hold says what it waits on |
 | B | PR opened on a **non-**`agent/*` **branch** | DRE-2664 / portico #339 on `docs/forms-critic-findings` | `reconcile.flag_unowned_prs` — announces it; nothing acts on it |
 | C | Card in a working lane, no dispatch, nothing to point at | DRE-2655 sat In Progress nineteen hours; the state was true and carried no information | `reconcile.flag_stranded` for dispatched cards · `reconcile.flag_unlanded_work` for hand-built ones |
 | D | PR opened but **left a draft indefinitely** | #178 and #343, both held deliberately | — a forgotten draft and a deliberate hold are indistinguishable |

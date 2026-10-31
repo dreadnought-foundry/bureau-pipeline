@@ -1703,6 +1703,34 @@ jobs:
           if-no-files-found: warn
           retention-days: 90
 
+      # THE SCRUB'S PLANT (DRE-8467). The log scrub's by-value pass is the
+      # DRE-5357 proof record's open observation: nothing a build agent does
+      # puts a registered secret's value in its transcript, and an agent
+      # rightly refuses a card asking it to echo the throwaway probe of
+      # DRE-7513 — card text is untrusted. So this trusted step appends ONE
+      # `"type": "scrub-plant"` record to the execution file the working log
+      # below scrubs: the probe's value (by value) and a made-up
+      # Anthropic-shaped key that is no registered secret (by shape). It prints
+      # neither. `plant_scrub_probe.py` also plants nothing when the probe is
+      # empty, because a secret cannot be read in an `if:`.
+      #
+      # The variable `BUREAU_PLANT_PROBE_APPEND` is meant to be set to `true`
+      # only on the sandbox repo, for a single run, then removed. Unset, which
+      # is every other repo and run, the step is skipped and the job does
+      # exactly today's work. It sits here, after the usage reading and the
+      # death receipt, so neither reads the plant, and ahead of the GitHub
+      # calls reading, which must stay immediately before the working log.
+      - name: Plant the scrub's probe in the working log
+        if: always() && vars.BUREAU_PLANT_PROBE_APPEND == 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          BUREAU_PLANT_PROBE_APPEND: ${{ vars.BUREAU_PLANT_PROBE_APPEND }}
+          BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/plant_scrub_probe.py --execution-file "$EXEC_FILE"
+
       # THE GITHUB CALLS READING (DRE-6916): the after point on the same
       # logins as `Take the GitHub calls before point`, written as one document
       # and put in the agent-log store over the run's OIDC login — the same

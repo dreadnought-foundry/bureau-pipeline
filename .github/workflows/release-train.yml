@@ -481,6 +481,65 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+      # The Node the surface's script needs (DRE-8463), read from the CALLER:
+      # the surface's optional `node_dir` in release.json names a directory
+      # whose `.nvmrc` holds the major, and the version is never written in
+      # this repo. A surface that declares none gets `node_dir=` and no Node
+      # step, exactly as before. Only the keys consumer_node.py declares reach
+      # the step outputs — the same filter proof-task.yml's local run uses —
+      # so a caller file cannot add an output line of its own choosing.
+      # continue-on-error, here and on the setup below: a failed Node step
+      # never stops the train (DRE-3263), and the script names its own
+      # refusal when Node is wrong.
+      - name: Read the surface's node
+        id: node_decl
+        continue-on-error: true
+        env:
+          # Through env, never interpolated into the shell line (tests.yml).
+          SURFACE: ${{ matrix.surface }}
+          # In-tree on purpose (DRE-3226): the file the `uses: ./…` below loads.
+          NODE_ACTION: .bureau-pipeline/.github/actions/setup-node-cached/action.yml
+        run: |
+          python3 .bureau-pipeline/scripts/release_train.py \
+            --repo "$GITHUB_REPOSITORY" node-dir --surface "$SURFACE" \
+            > "$RUNNER_TEMP/release-node-dir.txt"
+          cat "$RUNNER_TEMP/release-node-dir.txt"
+          grep -E '^node_dir=' "$RUNNER_TEMP/release-node-dir.txt" >> "$GITHUB_OUTPUT"
+          NODE_DIR=$(sed -n 's/^node_dir=//p' "$RUNNER_TEMP/release-node-dir.txt")
+          if [ -z "$NODE_DIR" ]; then
+            echo "release-train: $SURFACE declares no node_dir; the script runs on the runner's own node"
+            exit 0
+          fi
+          set +e
+          python3 .bureau-pipeline/scripts/consumer_node.py "$NODE_DIR" \
+            > "$RUNNER_TEMP/release-node.txt" 2> "$RUNNER_TEMP/release-node.err"
+          RC=$?
+          cat "$RUNNER_TEMP/release-node.txt"
+          cat "$RUNNER_TEMP/release-node.err"
+          if [ "$RC" -ne 0 ]; then
+            echo "setup=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ ! -f "$NODE_ACTION" ]; then
+            echo "setup=false" >> "$GITHUB_OUTPUT"
+            echo "the pipeline checkout at this ref carries no shared node action"
+            exit 0
+          fi
+          grep -E '^(setup|version|source|node-version|node-version-file)=' \
+            "$RUNNER_TEMP/release-node.txt" >> "$GITHUB_OUTPUT"
+
+      # Node only, `install: "false"`: the script installs what it needs, when
+      # it needs it, so nothing here assumes a lockfile.
+      - name: Set up the surface's node
+        if: steps.node_decl.outputs.node_dir != '' && steps.node_decl.outputs.setup == 'true'
+        continue-on-error: true
+        uses: ./.bureau-pipeline/.github/actions/setup-node-cached
+        with:
+          working-directory: ${{ steps.node_decl.outputs.node_dir }}
+          node-version: ${{ steps.node_decl.outputs.node-version }}
+          node-version-file: ${{ steps.node_decl.outputs.node-version-file }}
+          install: "false"
+
       # The caller's OWN role, so a repo can only ever deploy itself. Assumed
       # BEFORE the script runs, because the script's contract is that its
       # identity is already there (standards/release-train.md).
