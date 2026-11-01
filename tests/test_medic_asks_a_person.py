@@ -402,9 +402,10 @@ class TheParkTest(unittest.TestCase):
         self.assertEqual([], console_escalation.problems(question))
         esc = console_escalation.parse(question)
         self.assertEqual(PLAIN_QUESTION["finding"], esc.finding)
-        self.assertEqual(PLAIN_QUESTION["question"], esc.question)
-        # A block rides with the lines, so the Recommendation's answer is the
-        # recommended choice's label and its why the block's (DRE-3893).
+        # A block rides with the lines, so the Question is the block's own and
+        # the Recommendation's answer is the recommended choice's label, with
+        # the block's why (DRE-3893).
+        self.assertEqual(TWO_CHOICES["question"], esc.question)
         self.assertEqual("Keep the old prices", esc.recommendation)
         self.assertEqual(TWO_CHOICES["why"], esc.why)
         self.assertIn(RUN_URL, question)
@@ -646,10 +647,11 @@ class TheGuardTest(unittest.TestCase):
             self.assertEqual((), planning_escalation.jargon(line), line)
         esc = console_escalation.parse(body)
         self.assertEqual(REPORT_FINDING, esc.finding)
-        self.assertEqual(medic_next_step.FALLBACK_QUESTION, esc.question)
         if recommended:
+            self.assertEqual(TWO_CHOICES["question"], esc.question)
             self.assertEqual("Keep the old prices", esc.recommendation)
         else:
+            self.assertEqual(medic_next_step.FALLBACK_QUESTION, esc.question)
             self.assertIsNone(esc.recommendation)
         self.assertEqual([], console_escalation.problems(body))
 

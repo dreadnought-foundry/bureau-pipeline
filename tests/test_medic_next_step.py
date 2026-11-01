@@ -470,7 +470,7 @@ class QuestionWithChoicesTest(_TmpDir):
         lines = mns.question(q, report_path=None, choices_path=c)
         esc = console_escalation.parse(lines)
         self.assertEqual(QUESTION["finding"], esc.finding)
-        self.assertEqual(QUESTION["question"], esc.question)
+        self.assertEqual(TWO_CHOICES["question"], esc.question)
         self.assertEqual("Keep the old prices", esc.recommendation)
         self.assertEqual(TWO_CHOICES["why"], esc.why)
         body = lines + "\n\n" + planning_escalation.choices_block(TWO_CHOICES)
