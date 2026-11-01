@@ -49,9 +49,9 @@ moved.
 So a change that adds a Triage write cannot go green until it posts a reason
 and names it, or says in the registry why it does not.
 
-## Every unit, on 2026-10-27
+## Every unit, on 2026-11-01
 
-The discovery finds 20 writes in 16 units. Every one already posts a reason,
+The discovery finds 22 writes in 18 units. Every one already posts a reason,
 so `unreasoned` is empty.
 
 | Unit | Reason written at | Anchor | What the reason tells a reader |
@@ -66,6 +66,7 @@ so `unreasoned` is empty.
 | `rereview_watch.py#_fire` | the unit | `epic-rereview-twice` | A hold stamp says the epic was sent back for a second re-review, and the hold's reason names the way back. |
 | `agent-fix.yml#Escalate checks the loop structurally cannot fix` | the unit | `--reason unfixable-check` | A card note names the red checks the fix loop cannot clear, beside an unfixable-check hold stamp at the head it read. |
 | `agent-fix.yml#Report` | the unit | `--reason fix-dispute` | A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back. |
+| `medic.yml#Ask a person about the diagnosis` | the unit | `medic_next_step.py housekeeping-note` | A park note says the medic's question is housekeeping, not a decision for the CEO, names the screen's rule it broke, and carries the diagnosis's three lines and the failed run (DRE-8592). |
 | `plan.yml#One-off critic — park in Triage` | the unit | `--reason plan-critic-bound` | A plan-critic-bound hold stamp says the one-off critic's bound was reached, beside the critic's park note when it wrote one. |
 | `plan.yml#First critic — the bound parks in Triage` | the unit | `the plan goes on to neither the second critic nor Green Light` | A park comment gives the first critic's finding this round and how to re-approve the plan once a person settles it. |
 | `plan.yml#Review — the review died` | the unit | `plan-critic-death-note.md` | The death note and record say the second critic's run died and how, and the park note after the move says what is owed. |

@@ -80,6 +80,11 @@ DELETED = (
 #: third.
 TRUSTED = {"agent/", "repair/", "dependabot/", "bot/standards-sync",
            "bot/onboard", "bot/test-durations"}
+#: The gate's own copies of it — the event filter and the branch `case` — add
+#: one name the sweep's list does not need: `bot/onboard-`, the per-slug
+#: onboarding family (DRE-8658). The step re-checks its suffix as a slug, and
+#: the sweep owns it already through the `bot/onboard` entry's prefix match.
+GATE_TRUSTED = TRUSTED | {"bot/onboard-"}
 
 #: The historical records the card names, never edited. Each one may keep
 #: naming the retired branch and the retired files, and nothing else may.
@@ -196,18 +201,28 @@ def test_the_workflow_watcher_check_passes():
 
 def test_the_gates_branch_case_is_exactly_the_trusted_list():
     prefixes = {p.strip().rstrip("*") for p in _gate_pattern().split("|")}
-    assert prefixes == TRUSTED
+    assert prefixes == GATE_TRUSTED
 
 
 def test_the_merge_script_case_is_exactly_the_trusted_list():
     prefixes = {p.strip().rstrip("*") for p in _script_pattern().split("|")}
-    assert prefixes == TRUSTED
+    assert prefixes == GATE_TRUSTED
 
 
 def test_the_gates_event_filter_names_only_the_literal_bot_branches():
     condition = _doc("merge-gate.yml")["jobs"]["evaluate"]["if"]
     assert set(re.findall(r"head_branch == '([^']+)'", condition)) == {
         "bot/standards-sync", "bot/onboard", "bot/test-durations"}
+
+
+def test_the_gates_event_filter_prefixes_add_only_the_onboarding_family():
+    """`bot/onboard-` is the one bot prefix, and never a bare `bot/`."""
+    condition = _doc("merge-gate.yml")["jobs"]["evaluate"]["if"]
+    assert set(re.findall(
+        r"startsWith\(github\.event\.workflow_run\.head_branch, '([^']+)'\)",
+        condition)) == {"agent/", "repair/", "dependabot/", "bot/onboard-"}
+    assert (set(re.findall(r"head_branch == '([^']+)'", condition))
+            | {"agent/", "repair/", "dependabot/", "bot/onboard-"}) == GATE_TRUSTED
 
 
 def test_the_sweeps_trusted_list_is_exactly_the_trusted_list():

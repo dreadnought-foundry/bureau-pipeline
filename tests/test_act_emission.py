@@ -626,8 +626,9 @@ def _drive_triage_repair(mp):
     import answer_into_card  # noqa: PLC0415 — only this driver needs it
     import triage_repair  # noqa: PLC0415
 
+    stamp = "🔒 hold: reason=plan-critic-bound at=none lifts=manual by=plan.yml"
     mp.setattr(triage_repair.linear_ops, "comment_records",
-               lambda *_a, **_k: [])
+               lambda *_a, **_k: [{"body": stamp, "authored_by_pipeline": True}])
     mp.setattr(answer_into_card, "_read_description",
                lambda _card: "The card as it stood.")
     _card_recorder(mp)

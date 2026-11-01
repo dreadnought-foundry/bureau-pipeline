@@ -20,6 +20,14 @@ and writes its choices as JSON to a **second file beside the reason**:
 | Roll-up (`Roll-up route — split into child epics`, and its next rung) | `$RUNNER_TEMP/planner-escalation.txt` | `$RUNNER_TEMP/planner-escalation-choices.json` |
 | One-off revision (`One-off revision — the planner answers the critic`) | `$RUNNER_TEMP/one-off-question.md` | `$RUNNER_TEMP/one-off-question-choices.json` |
 | One-off critic's own question (`One-off critic — decide`) | `$RUNNER_TEMP/plan-critic-one-off.md`, the critic's result file — its `QUESTION` line | the same result file — its `OPTION` lines |
+| The medic's question (`medic.yml`, `Ask a person about the diagnosis`) | `.bureau-pipeline/medic-question.json`, the diagnosis agent's question file — its `question` and `why` | `.bureau-pipeline/medic-question-choices.json`, written only for a real business choice |
+
+The medic's diagnosis agent writes its question file on every diagnosis and
+its choices file only when it judges the question a real business choice
+(DRE-8592). Its step reads both through `scripts/medic_next_step.py`, which
+screens them (`screen`), appends the block (`choices-block`) and writes the
+operator's note (`housekeeping-note`); it never calls `escalate`, because a
+medic question is no planning escalation.
 
 The one-off critic's question is the one route whose choices are not a JSON
 file: the critic writes them as `OPTION` lines under its `QUESTION`
@@ -62,6 +70,19 @@ whenever it passes the path, whether or not the file exists, and never when it
 is a `--transport` or `--rewrite` call. A call that passes no path is not
 screened and posts exactly what it did before.
 
+The medic's park is screened too (DRE-8592): every diagnosis whose step is
+`ask-person` puts its question and its choices file through the same
+`planning_escalation.screen`, by `medic_next_step.py screen`, before
+anything is posted. One that passes parks in Green Light with the `🙋 The medic
+diagnosed a failure only a person can settle` question, the block last. One
+that breaks any rule is housekeeping: no `🙋` comment and no write to Green
+Light, but one note opening `🧹 planning-stall-park:` that names the rule
+broken, carries the diagnosis's three lines and the failed run, and says the
+card is for the operator and not the CEO, then a move to `Triage`
+(`planning_escalation.HOUSEKEEPING_LANE`). The medic's receipt after it names
+the lane. A diagnosis agent that died wrote no choices file, so its card goes
+to the operator under rule 1.
+
 A screened escalation goes to the CEO only when it passes all three rules:
 
 1. **It names a decision.** The choices file exists, is JSON and passes the
@@ -87,7 +108,8 @@ already left Planning, or carries a current routing verdict, is stood down as
 before and gets neither.
 
 The judgment the code cannot make is the planner's, in its brief and the five
-prompt copies, in the same words: a real business choice is two or three
+prompt copies, and the medic's diagnosis agent's, in its prompt, in the same
+words: a real business choice is two or three
 defensible options whose difference is a business outcome — a price, a policy,
 what to make public, what a customer sees, scope or priority, or a risky or
 destructive change. A fact an agent can look up, a mechanical step for a person

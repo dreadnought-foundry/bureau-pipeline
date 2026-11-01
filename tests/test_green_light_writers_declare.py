@@ -343,7 +343,7 @@ def _medic_question() -> None:
     """`medic.yml#Ask a person about the diagnosis` (DRE-7794): between the
     comment's 🙋 receipt and the `linear_ops.py comment` that precedes the
     lane write, its step runs `medic_next_step.py question`, which renders the
-    lines itself. What that prints — for an agent's free-prose question file,
+    lines itself, then `medic_next_step.py choices-block` (DRE-8592). What that prints — for an agent's free-prose question file,
     for no file and no report — is held to the lines too."""
     unit = "medic.yml#Ask a person about the diagnosis"
     receipt = green_light_rows.AGENT_ESCALATION_STEPS[unit]
@@ -357,9 +357,13 @@ def _medic_question() -> None:
                             if _runs(args, "medic_next_step.py", "question")), None)
         at_comment = max((i for i, args in enumerate(lines)
                           if _runs(args, "linear_ops.py", "comment")), default=None)
-        assert None not in (at_receipt, at_question, at_comment), (
-            write.where, at_receipt, at_question, at_comment)
-        assert at_receipt < at_question < at_comment, write.where
+        # DRE-8592: the choices block the screen passed rides last, after the
+        # three lines and before the post.
+        at_choices = next((i for i, args in enumerate(lines)
+                           if _runs(args, "medic_next_step.py", "choices-block")), None)
+        assert None not in (at_receipt, at_question, at_choices, at_comment), (
+            write.where, at_receipt, at_question, at_choices, at_comment)
+        assert at_receipt < at_question < at_choices < at_comment, write.where
     with tempfile.TemporaryDirectory() as td:
         path = Path(td) / "medic-question.json"
         path.write_text(json.dumps({"finding": FREE_PROSE, "question": FREE_PROSE}),

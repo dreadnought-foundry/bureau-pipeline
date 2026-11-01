@@ -1383,7 +1383,38 @@ jobs:
                whoever decides the card's next step. `recommendation` is your
                answer to it, and `why` the reason. It is read only when the
                diagnosis needs a person, and a line that is not plain is
-               replaced with fixed wording before anyone sees it.
+               replaced with fixed wording before anyone sees it. That
+               question goes to the operator, not the CEO, unless step 8
+               finds it a real business choice.
+            8. Decide whether that question is a real business choice. Only
+               a real business choice goes to the CEO: two or three defensible
+               options whose difference is a business outcome — a price, a
+               policy, what to make public, what a customer sees, scope or
+               priority, or a risky or destructive change. Anything else is
+               housekeeping: a fact an agent can look up, a mechanical step
+               for a person (lift a hold, set or clear a label, re-run or
+               retry, move a card, merge, set a secret or variable, fix a repo
+               label), or a question with only one sensible answer. For
+               housekeeping, write the reason and no choices file. Your
+               reason is the question file from step 7. A platform fault is
+               the operator's to mend, so its question is housekeeping unless
+               mending it needs such a choice. Only for a real business
+               choice, also write the choices as JSON to
+               .bureau-pipeline/medic-question-choices.json, beside the
+               question file. One object, with exactly these keys and no
+               others: `question` — one sentence. `context` — one short
+               paragraph. `choices` — 2 or 3 of them, each carrying `id` (a
+               lowercase slug, unique), `label` (a few words), `effect` (one
+               line on what happens), an optional `preview` (a few lines of
+               plain text showing the result) and `outcome` (`proceed`,
+               `replan` or `close`: build it, plan it again, or cancel the
+               card). `recommended` — the `id` of the choice you recommend.
+               `why` — one sentence saying why. No card numbers in a label or
+               an effect, and no code, file paths or commands anywhere. A
+               question with no choices file, a choices file that breaks these
+               rules, a count of choices other than 2 or 3, or words saying it
+               is not a real question is parked in Triage for the operator, not
+               put to the CEO.
             Do NOT attempt to fix anything — diagnose and report only.
 
       # THE CLASS, THE STEP, AND ONE RESUME (DRE-7526, DRE-7793; weekly report
@@ -1751,28 +1782,56 @@ jobs:
       # ASK-PERSON (DRE-7794): a diagnosis only a person can settle — a
       # `platform-fault`, an `unreadable` one (a diagnosis agent that died or
       # wrote no report reads `unreadable`), or a step whose fallback applies —
-      # parks the card in Green Light with a stated question, never a bare
-      # comment. The question is the `🙋` receipt line, then the three lines
-      # `medic_next_step.py question` prints (DRE-7792), then the failed run.
-      # The step composes no line of its own: `question` reads the agent's
-      # `.bureau-pipeline/medic-question.json` through
+      # is asked once on the card with a stated question, never a bare
+      # comment, and the card moves to the lane of whoever settles it.
+      #
+      # THE SCREEN (DRE-8592). Every such question used to park in Green
+      # Light, the CEO's queue, a `platform-fault` included, though its own
+      # record says only the operator can mend it. `medic_next_step.py screen`
+      # now applies `planning_escalation.screen`, the planner's (DRE-7961,
+      # docs/escalation-choices.md), to the agent's question and to
+      # `.bureau-pipeline/medic-question-choices.json`, which the agent writes
+      # only for a real business choice. It passes only when that file is
+      # there, `choices_problem` accepts it, it offers two or three choices
+      # and nothing says it is not a decision; it prints the rule broken and
+      # exits non-zero otherwise, and a screen that crashed is the same
+      # answer, so a diagnosis agent that died or wrote no choices goes to
+      # the operator.
+      #
+      # Passed: the question for Green Light, as before — the `🙋` receipt
+      # line, then the three lines `medic_next_step.py question` prints
+      # (DRE-7792), then the failed run — with the choices block
+      # (`medic_next_step.py choices-block`, `planning_escalation.choices_block`)
+      # last; with a block riding, the Recommendation's answer is the
+      # recommended choice's label, as on every Green Light row with one. Failed: housekeeping, one `medic_next_step.py housekeeping-note`
+      # for the operator, opening with `dedupe_dispatch.STALL_PARK_TAG` as
+      # `planning_escalation.housekeeping_note` does, naming the rule broken
+      # and carrying the same three lines and the failed run; no `🙋` line is
+      # written, and the move is to `planning_escalation.HOUSEKEEPING_LANE`,
+      # read into `HOUSEKEEPING_LANE` through the one seam a step shell reads
+      # a constant by, never written here.
+      #
+      # Either way the step composes no line of its own: `question` reads the
+      # agent's `.bureau-pipeline/medic-question.json` through
       # `planning_escalation.refusal`, line by line, and puts the fixed wording
       # in place of a line it refuses, of a blank one, or of a file that is
       # missing or unparseable — the agent read untrusted logs and card text,
       # so its words are never posted unguarded. With no report the Finding
-      # says no diagnosis was written, and the question, which then carries
+      # says no diagnosis was written, and the comment, which then carries
       # the failed run, is the card's whole record of the failure.
       #
-      # The question is posted before the move, and through no act: it asks
+      # The comment is posted before the move, and through no act: it asks
       # rather than announces (`config/pipeline-acts.json`'s `unconverted`
       # block). The move is `advance` from `medic_next_step.py from-lanes`,
-      # the command the Planning move above calls. A question that could not
-      # be rendered posts nothing, and one that could not be posted moves
+      # the command the Planning move above calls. A comment that could not be
+      # rendered posts nothing, and one that could not be posted moves
       # nothing — a Green Light row with no question is the failure, and a
-      # `🙋` line with no three lines under it is no question. `moved` is
-      # `true` only when `advance` printed `<card> → Green Light`; the
-      # `receipt` step below reads it and writes ` moved=no` otherwise. `green_light_rows.py check` reads this shell,
-      # where it runs, for the receipt line and the post before the write.
+      # `🙋` line with no three lines under it is no question. `lane` is the
+      # lane the step was for, and `moved` is `true` only when `advance`
+      # printed `<card> → <lane>`; the `receipt` step below reads both and
+      # writes ` moved=no` otherwise. `green_light_rows.py check` reads this
+      # shell, where it runs, for the receipt line and the post before the
+      # Green Light write.
       #
       # `always()`: a diagnosis agent that died is the card most in need of
       # asking about, and a step with no status function is skipped once an
@@ -1791,21 +1850,44 @@ jobs:
         run: |
           MOVED=false
           RENDERED=true
-          {
-            echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
-            echo ""
-            python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
-              || RENDERED=false
-            echo ""
-            echo "The failed run: $RUN_URL"
-          } > "$RUNNER_TEMP/medic-ask-comment.md"
+          HOUSEKEEPING=false
+          HOUSEKEEPING_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import planning_escalation; print(planning_escalation.HOUSEKEEPING_LANE)')
+          LANE="Green Light"
+          if BROKEN=$(python3 .bureau-pipeline/scripts/medic_next_step.py screen --file .bureau-pipeline/medic-question.json --choices-file .bureau-pipeline/medic-question-choices.json); then
+            {
+              echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
+              echo ""
+              python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
+                --choices-file .bureau-pipeline/medic-question-choices.json || RENDERED=false
+              echo ""
+              echo "The failed run: $RUN_URL"
+              echo ""
+              python3 .bureau-pipeline/scripts/medic_next_step.py choices-block --file .bureau-pipeline/medic-question-choices.json \
+                || RENDERED=false
+            } > "$RUNNER_TEMP/medic-ask-comment.md"
+          else
+            HOUSEKEEPING=true
+            LANE=$HOUSEKEEPING_LANE
+            echo "the medic's question is housekeeping, not a decision for the CEO: ${BROKEN:-the screen gave no answer}"
+            python3 .bureau-pipeline/scripts/medic_next_step.py housekeeping-note --card "$TARGET" --broken "$BROKEN" \
+              --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md --run-url "$RUN_URL" \
+              > "$RUNNER_TEMP/medic-ask-comment.md" || RENDERED=false
+          fi
+          echo "lane=$LANE" >> "$GITHUB_OUTPUT"
           FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
           if [ "$RENDERED" != true ]; then
-            echo "::warning title=Medic question not rendered::The three lines for ${TARGET} could not be rendered, so no question was posted and the card was not moved to Green Light. Failed run: ${RUN_URL}"
+            echo "::warning title=Medic question not rendered::The comment for ${TARGET} could not be rendered, so no question was posted and the card was not moved to ${LANE}. Failed run: ${RUN_URL}"
           elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
-            echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to Green Light. Failed run: ${RUN_URL}"
+            echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to ${LANE}. Failed run: ${RUN_URL}"
           elif [ -z "$FROM_LANES" ]; then
-            echo "::warning title=Card not moved to Green Light::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+            echo "::warning title=Card not moved to ${LANE}::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+          elif [ "$HOUSEKEEPING" = true ]; then
+            if OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "$HOUSEKEEPING_LANE" "$FROM_LANES"); then
+              printf '%s\n' "$OUT"
+              if printf '%s\n' "$OUT" | grep -qxF "$TARGET → $HOUSEKEEPING_LANE"; then MOVED=true; fi
+            else
+              echo "::warning title=Card not moved to ${LANE}::The move of ${TARGET} to ${LANE} failed. Failed run: ${RUN_URL}"
+            fi
           elif OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Green Light" "$FROM_LANES"); then
             printf '%s\n' "$OUT"
             if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Green Light"; then MOVED=true; fi
@@ -1833,9 +1915,13 @@ jobs:
       # by which the fix loop already reaches a red agent pull request.
       #
       # Only for a `card` target that is not waiting, and for every step: the
-      # three whose move DRE-7799 made, and `ask-person`, whose park in Green
-      # Light is the `ask` step above (DRE-7794) — a move to Green Light that
-      # did not land (`moved` is not `true`) is ` moved=no`. This is the one
+      # three whose move DRE-7799 made, and `ask-person`, whose park is the
+      # `ask` step above (DRE-7794) — in Green Light, or in the housekeeping
+      # lane when its question failed the screen (DRE-8592). The paragraph
+      # names that lane, the `ask` step's `lane`, through `--moved-to`; the
+      # first line is unchanged, because agent-bureau's weekly report parses
+      # it. A move that did not land (`moved` is not `true`) is ` moved=no`,
+      # and names the lane the card was left in, as for every step. This is the one
       # receipt for the park too, never a second write: `pipeline_act.py
       # check` fails the act's anchor found any other number of times.
       # `always()`, for the reason the move above gives. A write that fails
@@ -1861,12 +1947,14 @@ jobs:
           RESUMED: ${{ steps.resume.outputs.resumed }}
           PLANNING_MOVED: ${{ steps.planning.outputs.moved }}
           ASK_MOVED: ${{ steps.ask.outputs.moved }}
+          ASK_LANE: ${{ steps.ask.outputs.lane }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           S=.bureau-pipeline/scripts
           REPORT=.bureau-pipeline/medic-report.md
           MOVED=yes
           REASON=""
+          MOVED_TO=()
           case "$STEP" in
             requeue-once)
               if [ "$RESUMED" != true ]; then MOVED=no; fi ;;
@@ -1882,7 +1970,8 @@ jobs:
               REASON="the card has an open pull request, ${PR_URL:-which the medic could not read back}, and the fix loop already reaches a red agent pull request two ways: the fix agent (agent-fix.yml) is dispatched when the critic asks for changes or the verifier fails the pull request, and the sweep dispatches a fix for a pull request the critic approved whose checks are red (reconcile.fix_approved_but_red)." ;;
             ask-person)
               if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
-              REASON="the question posted just before this receipt asks a person to settle it." ;;
+              if [ -n "$ASK_LANE" ]; then MOVED_TO=(--moved-to "$ASK_LANE"); fi
+              REASON="the comment posted just before this receipt asks a person to settle it." ;;
           esac
           NOT_MOVED=()
           if [ "$MOVED" = no ]; then
@@ -1894,7 +1983,7 @@ jobs:
           FINDING=$(python3 "$S/medic_next_step.py" finding --report "$REPORT") || FINDING=""
           if ! RECEIPT=$(python3 "$S/medic_next_step.py" receipt --class "$CLASS" --step "$STEP" \
               --run-url "$RUN_URL" --report "$REPORT" --finding "$FINDING" --reason "$REASON" \
-              "${NOT_MOVED[@]}"); then
+              "${NOT_MOVED[@]}" "${MOVED_TO[@]}"); then
             echo "::warning title=Medic receipt not written::The medic's receipt for ${STEP} could not be rendered, so none was posted on ${TARGET}. Failed run: ${RUN_URL}"
             exit 0
           fi

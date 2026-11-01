@@ -146,8 +146,10 @@ class TestTheContract:
     def test_the_names_the_epic_shares(self):
         assert triage_repair.RECEIPT_KEY == "🩹 triage-repair:"
         assert triage_repair.OUTCOMES == ("started", "rewritten", "asked",
-                                          "replanned", "split", "unfinished")
-        assert triage_repair.ACTIONS == ("repair", "escalate", "replan", "spent", "skip")
+                                          "replanned", "split", "unfinished",
+                                          "unrepairable")
+        assert triage_repair.ACTIONS == ("repair", "escalate", "replan", "relabel",
+                                         "none", "spent", "wait")
         assert triage_repair.REPAIR_MAX_TURNS == 120
         assert triage_repair.DEFAULT_LIMIT == 3
 
@@ -269,23 +271,29 @@ class TestSelect:
         assert "triage-repair: DRE-3 → replan — " in capsys.readouterr().out
         assert board.events == []
 
-    def test_a_park_note_with_no_numbered_list_is_skipped(self, tmp_path, capsys):
+    def test_a_park_note_with_no_numbered_list_is_its_one_finding(self, tmp_path, capsys):
+        """DRE-8647: no card is skipped. With no numbered list, the newest
+        park note is the finding the planner answers."""
         board = TriageRepairBoard()
         _parked(board, "DRE-4", "🛑 Parked — the second critic produced no result twice.")
         _, rows = _select(board, tmp_path)
-        assert rows == []
-        assert "triage-repair: DRE-4 → skip — " in capsys.readouterr().out
+        assert [r["action"] for r in rows] == ["repair"]
+        assert rows[0]["findings"] == ["🛑 Parked — the second critic produced no result twice."]
+        assert "triage-repair: DRE-4 → repair — " in capsys.readouterr().out
 
-    def test_only_plan_critic_bound_holds_in_triage_are_in_scope(self, tmp_path, capsys):
+    def test_every_triage_card_is_in_scope_and_no_other_lane(self, tmp_path, capsys):
+        """DRE-8647: every card in Triage, held or not, whatever its stamp
+        (`tests/test_triage_repair_every_arrival.py`); never a card outside it."""
         board = TriageRepairBoard()
         board.add("DRE-5", comments=[NOTE_7066, STAMP.replace(
             "plan-critic-bound", "epic-rereview-twice")])
         board.add("DRE-6", labels=["repo:agent-bureau"], comments=[NOTE_7066, STAMP])
         board.add("DRE-7", lane="Planning", comments=[NOTE_7066, STAMP])
         board.add("DRE-8", comments=[NOTE_7066, STAMP, LIFT])
-        _, rows = _select(board, tmp_path)
-        assert rows == []
-        assert "triage-repair:" not in capsys.readouterr().out
+        _, rows = _select(board, tmp_path, "--limit", "9")
+        assert {r["card"]: r["action"] for r in rows} == {
+            "DRE-5": "replan", "DRE-6": "repair", "DRE-8": "repair"}
+        assert "DRE-7" not in capsys.readouterr().out
 
     def test_oldest_park_first_and_at_most_limit(self, tmp_path):
         board = TriageRepairBoard()

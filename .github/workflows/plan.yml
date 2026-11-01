@@ -3128,6 +3128,20 @@ jobs:
               --detail-file "$DETAIL" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # An epic built from an approved mockup whose committed inventory
+          # rows are not each covered by an open child's criterion or a
+          # deferral (DRE-8612), APPENDED to the same structural file. Its
+          # `Inventory:` lines land in the note either way. The inventory is
+          # read from this checkout; a description that could not be read
+          # leaves no file, and the note says so.
+          EPIC_FILE="${{ runner.temp }}/plan-epic-description.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py description "$EPIC" \
+            > "$EPIC_FILE" || rm -f "$EPIC_FILE"
+          python3 .bureau-pipeline/scripts/plan_inventory.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --epic-file "$EPIC_FILE" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
           # byte-for-byte the list the model read.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -3626,6 +3640,16 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The inventory check against the revision (DRE-8612), appended after
+          # the CEO-step check, on the epic's description read afresh.
+          EPIC_FILE="${{ runner.temp }}/plan-epic-description.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py description "$EPIC" \
+            > "$EPIC_FILE" || rm -f "$EPIC_FILE"
+          python3 .bureau-pipeline/scripts/plan_inventory.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --epic-file "$EPIC_FILE" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -5379,6 +5403,15 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --detail-file "$DETAIL" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The inventory check (DRE-8612), on the note only, for the same
+          # reason and on the same artifact.
+          EPIC_FILE="${{ runner.temp }}/plan-review-epic-description.md"
+          python3 .bureau-pipeline/scripts/linear_ops.py description "$EPIC" \
+            > "$EPIC_FILE" || rm -f "$EPIC_FILE"
+          python3 .bureau-pipeline/scripts/plan_inventory.py findings \
+              --artifact "${{ runner.temp }}/plan-artifact.md" \
+              --epic-file "$EPIC_FILE" \
               --note-file "$NOTE" < "$CHILDREN"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
             "$(cat "$NOTE")"
