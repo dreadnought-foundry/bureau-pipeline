@@ -71,6 +71,32 @@ alarms it for the operator, who gets his answer or re-sorts the hold.
      did not finish; after two, one hold, and never again.
   7. The release carrying the siblings' merges is `ready` — `waiting` and
      `unknown` both wait.
+  8. The card's `Observe after:` line, when it carries one, names a time that
+     has passed (DRE-8439). The line is read off the description the card
+     read already carries (`CARD_QUERY`), by `proof_and_demo.observe_after`,
+     and `proof_and_demo.observable_at` turns it into the earliest time the
+     proof may run from `released_at`: the newest `mergedAt` among the merged
+     pull requests condition 7 read (`PR_FIELDS`). The absolute form names
+     its own time and reads no release. Before that time the card gets one
+     hold, `🔬 proof-waiting: its card says it can first be observed after
+     <PT> (<the line>) — needs not-before=<T>`, the time-only kind, and is
+     counted held with `— lifts at <PT>`: the lane read holds it after that
+     at no read, and the first pass at or after `<T>` lifts it under
+     condition 4 and dispatches `dispatch 1 of 2` on the same pass, so the
+     wait spends no budget. Not live, `would: hold`. A card with no line is
+     not read here.
+
+     Two refusals post a plain comment instead of a hold, once per first
+     line — nothing to lift, so the card is refused, counted refused, on
+     every pass until it reads: a line that does not parse
+     (`proof_and_demo.ObserveAfterMalformed`, `MALFORMED_COMMENT` followed by
+     the five forms), and a merged pull request whose `mergedAt` is missing
+     or no time (`RELEASE_UNREAD_COMMENT`, naming those build cards). A
+     second malformed text, or another set of unreadable cards, is told
+     again. Not live, `would: comment`. A merge read that raised is
+     condition 7's refusal and posts nothing, so a passing fault never
+     reaches the card; neither does an epic with no merge in this repo to
+     time a relative line by.
 
 One exception to the order, and it costs nothing (DRE-6464): condition 4 is
 read first, off the lane read, where the lane read already answers it — a
@@ -784,8 +810,20 @@ RECHECK_EXHAUSTED_NEEDS = ("an operator reading the record's waiting rows and th
 PROMOTED_MARK = tuple(f"🧹 Auto-promoted {name} → {FIRST_RUN_LANE}"
                       for name in lane_contract.QUEUE_LANES)
 
-#: The fields the condition-7 lookup needs; `mergeCommit` is the merge's sha.
-PR_FIELDS = "number,url,headRefName,state,mergeCommit"
+#: Condition 8's hold, by its observed half (DRE-8439): the time in PT and the
+#: card's line as written. Its needs half is `not-before=<T>` alone.
+OBSERVE_AFTER_HELD = "its card says it can first be observed after {at} ({line})"
+#: The first lines of condition 8's two plain comments, each posted once per
+#: first line (DRE-8439): a line that does not parse, quoted as written, and
+#: the build cards whose merge time cannot be read.
+MALFORMED_COMMENT = "Proof not started — its Observe after line does not parse: “{line}”."
+RELEASE_UNREAD_COMMENT = ("Proof not started — the time its Observe after line names "
+                          "cannot be worked out, because the merge time of {cards} "
+                          "cannot be read.")
+
+#: The fields the condition-7 lookup needs; `mergeCommit` is the merge's sha,
+#: and `mergedAt` the time condition 8 reads the release by (DRE-8439).
+PR_FIELDS = "number,url,headRefName,state,mergeCommit,mergedAt"
 #: The fields the re-run reads off the record pull request: its head, when it
 #: opened, the comments the critic's verdict and the gate's note are read
 #: from, the files the record is found among (DRE-6488), the head's checks
@@ -795,8 +833,11 @@ PR_FIELDS = "number,url,headRefName,state,mergeCommit"
 RECORD_FIELDS = ("number,url,headRefName,baseRefName,state,headRefOid,createdAt,"
                  "comments,files,statusCheckRollup")
 
-#: The card's epic, its siblings and its blocking relations, in one read.
+#: The card's epic, its siblings and its blocking relations, in one read —
+#: and its description, which condition 8's `Observe after:` line is read off
+#: (DRE-8439).
 CARD_QUERY = """query($id: String!) { issue(id: $id) {
+             description
              %s
              parent { identifier state { name }
                children(first: 100) { nodes {
@@ -1808,7 +1849,8 @@ class _Pass:
             self._released(issue, ident)
             return self._chased(ident, *chase)
         reason = self._budget(card, got, voices)
-        self._released(issue, ident)
+        merged = self._released(issue, ident)
+        self._observable(issue, ident, voices, merged)
         return reason, FIRST_COUNT.format(n=got.dispatches + 1)
 
     def _lift_or_hold(self, ident: str, holds: list, voices: list,
@@ -1900,16 +1942,18 @@ class _Pass:
         if not any(held.startswith(line) for held in posted):
             self._hold(ident, observed, needs)
 
-    def _released(self, issue: dict, ident: str) -> None:
+    def _released(self, issue: dict, ident: str) -> dict:
         """Condition 7: the release carrying the siblings' merges is live.
         On `ready` the reading is printed, one `proof-release:` line per line
         and naming the card, so the dispatch it allows has a line a proof
-        record can quote (DRE-6516); any other state is the refusal's line."""
+        record can quote (DRE-6516); any other state is the refusal's line.
+        Returns each merged build card's `mergedAt` as read, by card, for
+        condition 8 (DRE-8439)."""
         siblings = [c for c in ((issue.get("parent") or {}).get("children")
                                 or {}).get("nodes") or []
                     if c.get("identifier") != ident
                     and not proof_and_demo.is_proof(c.get("title") or "")]
-        merges = []
+        merges, merged_at = [], {}
         for sibling in siblings:
             other = sibling["identifier"]
             if (sibling.get("state") or {}).get("name") not in prose_blockers.TERMINAL:
@@ -1932,12 +1976,88 @@ class _Pass:
                 raise _condition(7, "release", f"unknown — #{pr.get('number')} "
                                                f"for {other} names no merge commit")
             merges.append(proof_release.Merge(other, pr["number"], sha, []))
+            merged_at[other] = pr.get("mergedAt")
         got = self.release(self.repo, merges, read=self.read)
         if got.state != "ready":
             raise _condition(7, "release", "; ".join(got.lines),
                              "waiting" if got.state == "waiting" else "refused")
         for line in got.lines:
             print(f"{proof_release.TAG}: {ident} — {line}")
+        return merged_at
+
+    def _observable(self, issue: dict, ident: str, voices: list,
+                    merged_at: dict) -> None:
+        """Condition 8 (DRE-8439): the card's `Observe after:` line, when it
+        carries one, names a time at or before the pass's. Before it, one
+        time-only hold and a refusal counted held; a line that does not
+        parse, or a merge time that cannot be read, a refusal and one plain
+        comment (`_tell_once`). A card with no line goes on."""
+        try:
+            found = proof_and_demo.observe_after(issue.get("description") or "")
+        except proof_and_demo.ObserveAfterMalformed as error:
+            self._tell_once(ident, voices, MALFORMED_COMMENT.format(line=error.line),
+                            "The forms it may take:\n\n" + "\n".join(
+                                f"- `{form}`" for form in proof_and_demo.OBSERVE_AFTER_FORMS)
+                            + "\n\nThe proof is started on the first pass after "
+                              "the line is fixed or removed.")
+            raise _condition(8, "observe after", f"its line does not parse — "
+                                                 f"“{error.line}” — and the proof "
+                                                 "is not started until it is fixed")
+        if found is None:
+            return
+        released_at = found.at
+        if released_at is None:
+            released_at = self._released_at(ident, voices, found, merged_at)
+        at = proof_and_demo.observable_at(found, released_at)
+        if at <= self.now:
+            return
+        observed = OBSERVE_AFTER_HELD.format(at=_pt(at), line=found.line)
+        self._hold_once(ident, voices, observed,
+                        _not_before(at.astimezone(proof_and_demo.PACIFIC)))
+        raise _condition(8, "observe after", f"its card says it can first be "
+                                             f"observed after {_pt(at)} "
+                                             f"({found.line}){_lifts_at(at)}", "held")
+
+    def _released_at(self, ident: str, voices: list, found, merged_at: dict) -> datetime:
+        """The newest merge time among the build cards' merged pull requests
+        condition 7 read (DRE-8439), or a condition-8 refusal: a `mergedAt`
+        missing or no aware time is told once on the card, and no merge to
+        time a relative line by is named on the line alone. Never guessed."""
+        times = {card: _when(raw) for card, raw in merged_at.items()}
+        unread = [card for card, when in times.items()
+                  if when is None or when.tzinfo is None]
+        if unread:
+            cards = ", ".join(unread)
+            self._tell_once(ident, voices, RELEASE_UNREAD_COMMENT.format(cards=cards),
+                            "The proof is started on the first pass that reads "
+                            "it, at or after the time its line names.")
+            raise _condition(8, "observe after", f"unread — the merge time of "
+                                                 f"{cards} cannot be read, so "
+                                                 f"“{found.line}” names no time yet")
+        if not times:
+            raise _condition(8, "observe after", f"unread — no build card of the "
+                                                 f"epic has a merge on {self.slug} "
+                                                 f"to time “{found.line}” by")
+        return max(times.values())
+
+    def _tell_once(self, ident: str, voices: list, first: str, rest: str) -> None:
+        """One plain comment opening `first`, unless the thread already
+        carries a comment with that exact first line — the check `_hold_once`
+        makes (DRE-8439). Not live, `would:` and nothing written; a comment
+        not posted is a failure of the pass, and the next pass posts it."""
+        if any(_first_line(v.body) == first for v in voices):
+            return
+        if not self.live:
+            print(f"would: comment {ident} — {first}")
+            return
+        told = f"{first}\n\n{rest}"
+        try:
+            linear_ops.cmd_comment(ident, told)
+        except Exception as error:  # noqa: BLE001
+            self.tally.failures.append(f"{ident}: the comment could not be posted: {error}")
+            _say(ident, f"ERROR: the comment could not be posted: {error}")
+            return
+        _say(ident, f"commented: {first}")
 
     # -- the return after the CEO's answer ---------------------------------- #
 
