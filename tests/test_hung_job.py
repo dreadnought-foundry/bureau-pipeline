@@ -654,9 +654,9 @@ def test_a_refused_re_run_after_a_cancel_exits_one(gh, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("failing", [
-    r"/attempts/\d+/jobs$",          # the run's jobs
+    r"/attempts/\d+/jobs\?",         # the run's jobs
     r"workflows/tests\.yml/runs\?.*status=success",  # the history listing
-    r"/runs/\d+/jobs$",              # a history run's jobs
+    r"/runs/\d+/jobs\?",             # a history run's jobs
 ])
 def test_a_failed_read_on_a_running_run_is_unknown_and_acts_on_nothing(
         gh, monkeypatch, capsys, failing):
