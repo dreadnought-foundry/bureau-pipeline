@@ -1171,7 +1171,9 @@ class _BranchReads:
 
     def __call__(self, args) -> str:
         args = list(args)
-        if args[:2] == ["pr", "list"]:
+        # record_blob's open-pull-request read, which names --state open
+        # itself; it is answered here, never listed (DRE-2316).
+        if " ".join(args[:2]) == "pr list":
             return "[]"
         if len(args) != 2 or args[0] != "api":
             raise RuntimeError(f"gh {' '.join(args)} is not read here")
