@@ -552,9 +552,12 @@ the release record (the tags, `scripts/proof_release.py`) and never assumed,
 because `main` is not released — the sweep dispatches a proof run at the PROOF
 card: a dedicated run on its own workflow (`proof-task.yml`, role `proof`,
 `briefs/proof.md`), holding only scripted read-only identities and never a
-person's account, which observes the criteria and opens the record as a pull
-request on `agent/DRE-<n>-proof-record`. The card closes on the approved merge
-of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
+person's account, which observes the criteria and pushes the record to
+`agent/DRE-<n>-proof-record`. The run never opens a pull request itself: the
+workflow does, and the pull request opens only when the record can merge
+(DRE-8437, DRE-8441) — while the proof waits, the record stays on its branch
+and the card's `🔬 proof-waiting` hold says what it waits on. The card closes
+on the approved merge of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
 agent's `hyg-proof-closed` receipt (DRE-5365), and nothing waits on him. The
 card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions
 do not change: the run does the operator's observing. Its scripted read-only

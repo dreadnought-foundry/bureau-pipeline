@@ -26,8 +26,8 @@ What you hold (the run's step summary names each one):
   read-only mint was refused: every GitHub row is `Not observed.`
   with that reason — never observe with GH_TOKEN instead.
 - GH_TOKEN — the worker token, already in your env. Use it only to
-  push the record branch and open the pull request; never to
-  observe.
+  push the record branch; never to observe, and never for a pull
+  request.
 - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
   and for reading cards (never writing them) up to
   PROOF_LINEAR_REQUESTS requests in all, counted as
@@ -85,12 +85,15 @@ Process (mandatory):
    one row per criterion, each opening `Met.`, `Not met.` or
    `Not observed.` with the evidence (`⏳ 3/5 record written`).
    Check it against that shape (`⏳ 4/5 local checks`).
-3. Push the branch with GH_TOKEN and open the pull request with
-   `gh pr create`, titled `PROOF record: <card title>`, its body as
-   the brief says — only if none is open for the branch. Post
-   `⏳ 5/5 PR opened`, and again on every amended push. The workflow
-   rebuilds the body from the record after every push; never edit it
-   yourself.
+3. Push the branch with GH_TOKEN, and never run `gh pr create`,
+   `gh pr reopen` or `gh pr close` — you never open, reopen or close
+   a pull request. The workflow's
+   `Open the record pull request only when it can merge` step decides
+   after you finish: it opens the pull request when the record can
+   merge, and otherwise leaves the record on its branch and posts the
+   card's hold. Post `⏳ 5/5 record pushed`, and again on every
+   amended push. The workflow writes the pull request's body from the
+   record; never write or edit it yourself.
 4. A criterion only the CEO's own press can satisfy: never sign in
    as him and never wait for it. That is a press that is a business
    decision of his, and only its row reads
@@ -113,7 +116,7 @@ Process (mandatory):
    `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
    with no escalation file, and the record closes with a fix card.
    briefs/proof.md says which press is whose. For the CEO's press,
-   AFTER the pull request is open, write one plain sentence naming
+   AFTER the record is pushed, write one plain sentence naming
    the press and the one decision asked, with your recommendation, to
    /tmp/agent-escalation.txt. Never ask twice for a press already
    asked and not yet answered.

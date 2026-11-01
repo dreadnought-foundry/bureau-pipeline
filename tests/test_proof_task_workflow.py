@@ -1914,5 +1914,114 @@ class RecordUnchangedResultTest(_StepHarness):
             self.summary.unlink()
 
 
+# ---- the record pull request, decided by the workflow (DRE-8441) ----------
+
+DECIDE_STEP = "Open the record pull request only when it can merge"
+
+#: `proof_record_pr.py`, stubbed: it records its argv and writes the decision
+#: word `FAKE_DECISION` names to $GITHUB_OUTPUT, as the real `decide` does, or
+#: exits 1 — a read or write it needed was refused — when `FAKE_DECIDE_EXIT`
+#: says so.
+_PROOF_RECORD_PR_STUB = """\
+import json, os, sys
+open(os.environ["CALLS"], "a").write(json.dumps(["proof_record_pr"] + sys.argv[1:]) + "\\n")
+if os.environ.get("FAKE_DECIDE_EXIT"):
+    print("proof-record-pr: ERROR refused")
+    sys.exit(int(os.environ["FAKE_DECIDE_EXIT"]))
+with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+    fh.write("decision=" + os.environ.get("FAKE_DECISION", "held") + "\\n")
+"""
+
+
+class RecordPrStepTest(_StepHarness):
+    """The step that opens the record's pull request only when the record can
+    merge: after the push rescue, before the body refresh, never in a shadow,
+    with `--no-hold` exactly when the run escalated a CEO press."""
+
+    STEP = DECIDE_STEP
+    _HARNESS = _StepHarness._HARNESS + ("GITHUB_OUTPUT", "FAKE_DECISION", "FAKE_DECIDE_EXIT")
+
+    def setUp(self):
+        super().setUp()
+        scripts = self.tmp / ".bureau-pipeline" / "scripts"
+        (scripts / "proof_record_pr.py").write_text(_PROOF_RECORD_PR_STUB)
+        self.output = self.tmp / "github-output"
+        self.output.write_text("")
+
+    def _run(self, *, escalation: str | None = None, decision: str = "held",
+             exit_code: int | None = None):
+        if escalation is not None:
+            self.escalation.write_text(escalation)
+        env = {
+            "GITHUB_OUTPUT": str(self.output),
+            "FAKE_DECISION": decision,
+            "REPO": "acme/widgets",
+            "CARD": "DRE-77",
+            "CARD_URL": "https://linear.app/acme/issue/DRE-77",
+            "CARD_TITLE": "PROOF: the release names v3",
+            "CARD_DESCRIPTION": DESCRIPTION,
+            "ESCALATION_FILE": str(self.escalation),
+        }
+        if exit_code is not None:
+            env["FAKE_DECIDE_EXIT"] = str(exit_code)
+        done, posted, _lines = self._exec(env)
+        return done, [c for c in posted if c[0] == "proof_record_pr"]
+
+    def test_it_has_its_id_and_never_runs_in_a_shadow(self):
+        step = _step(DECIDE_STEP)
+        self.assertEqual("record_pr", step.get("id"))
+        self.assertEqual("always() && !inputs.shadow", step.get("if"))
+
+    def test_it_runs_after_the_push_rescue_and_before_the_body_refresh(self):
+        at = _index(DECIDE_STEP)
+        self.assertGreater(at, _index("Push rescue"))
+        self.assertGreater(at, _index("Upload rescued work"))
+        self.assertLess(at, _index("Refresh the record pull request's body"))
+        self.assertLess(at, _index(RESULT_STEP))
+        self.assertGreater(at, max(i for i, _ in _agent_steps()))
+
+    def test_it_holds_the_fresh_token_and_the_linear_key(self):
+        env = _step(DECIDE_STEP)["env"]
+        self.assertEqual("${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}",
+                         env["GH_TOKEN"])
+        self.assertEqual(_step(RESULT_STEP)["env"]["LINEAR_API_KEY"], env["LINEAR_API_KEY"])
+        self.assertEqual("${{ steps.card.outputs.title }}", env["CARD_TITLE"])
+        self.assertEqual("${{ steps.card.outputs.description }}", env["CARD_DESCRIPTION"])
+        self.assertEqual("/tmp/agent-escalation.txt", env["ESCALATION_FILE"])
+        self.assertNotIn("continue-on-error", _step(DECIDE_STEP))
+
+    def test_with_no_escalation_it_decides_and_may_hold(self):
+        done, calls = self._run(decision="closed-and-held")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([["proof_record_pr", "decide", "--repo", "acme/widgets",
+                           "--card", "DRE-77", "--card-url",
+                           "https://linear.app/acme/issue/DRE-77",
+                           "--title", "PROOF: the release names v3"]], calls)
+        self.assertIn("decision=closed-and-held", self.output.read_text())
+
+    def test_an_escalation_passes_no_hold(self):
+        done, calls = self._run(escalation="Approve the release in the console?\n",
+                                decision="held")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(1, len(calls))
+        self.assertEqual("--no-hold", calls[0][-1])
+        self.assertEqual(1, calls[0].count("--no-hold"))
+
+    def test_an_empty_escalation_file_is_no_escalation_and_holds(self):
+        # The result step reads an empty file as no escalation, so nothing
+        # parks and nothing else posts the card's hold.
+        done, calls = self._run(escalation="")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("--no-hold", calls[0])
+
+    def test_a_refused_decision_turns_the_run_red(self):
+        done, _calls = self._run(exit_code=1)
+        self.assertNotEqual(0, done.returncode)
+
+    def test_the_result_step_reads_the_decision(self):
+        self.assertEqual("${{ steps.record_pr.outputs.decision }}",
+                         _step(RESULT_STEP)["env"]["RECORD_PR_DECISION"])
+
+
 if __name__ == "__main__":
     unittest.main()

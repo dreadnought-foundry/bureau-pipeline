@@ -116,10 +116,12 @@ asks for a reading the declaration does not hold is a cause row, below.
   "Resource not accessible by integration"). If that write ever succeeds, the
   ref is scratch you created: delete it, and say plainly in the record that the
   read token could write.
-- **GitHub, written: `GH_TOKEN`.** The worker App token, used for exactly two
-  things: pushing the record branch and opening the pull request. Never use it
-  to observe — an observation made with a token that could write proves less
-  than one made with a token that could not.
+- **GitHub, written: `GH_TOKEN`.** The worker App token, used for exactly one
+  thing: pushing the record branch. Never use it to observe — an observation
+  made with a token that could write proves less than one made with a token
+  that could not — and never for a pull request: the workflow opens the record's
+  pull request, and the pull request opens only when the record can merge
+  (DRE-8441).
 - **Linear: `LINEAR_API_KEY`, the fleet key.** Linear issues one key per
   identity and does not scope it, so nothing stops this key writing anything.
   The rule is yours to keep: **your Linear writes are the heartbeats, the
@@ -161,7 +163,7 @@ asks for a reading the declaration does not hold is a cause row, below.
   session lives `PROOF_SESSION_SECONDS` seconds. Make every GitHub read, and
   the one refused write, before anything that waits; a push made after the
   first hour is refused, so commit the record on the branch and leave the push
-  and the pull request to the workflow's push-rescue step. Before a hold or any
+  to the workflow's push-rescue step. Before a hold or any
   other wait, add up the wait, the window the card reads after it and the
   reads themselves; if that ends after the AWS session does, make the hold
   anyway, write each window's start and end in PT into the record, and write
@@ -237,7 +239,8 @@ three moves and no other (DRE-5925): your escalation file parks it in
 `Green Light`, the CEO's "needs you" queue, only when it names the CEO's press
 or a decision — a cause row asks nobody, and the card stays `In Review` for
 the gate (DRE-6840, DRE-7953); the run his signed answer dispatches returns it to `Hand-work`
-before you start; and an open record pull request carries it to `In Review`. `Triage` is the broken-card lane, and a
+before you start; and an open record pull request — opened by the workflow,
+never by you — carries it to `In Review`. `Triage` is the broken-card lane, and a
 proof card reaches it only through a step that is not yours — the escalation
 file is the one thing you write that asks for anything. Read a lane in
 `config/lane-contract.json`, never from memory.
@@ -464,8 +467,11 @@ posted before the merge — the proof dispatcher's own holds and one typed with
 `linear_ops.py proof-waiting` — because the merged record is the observation
 the hold was waiting for (DRE-6489). Two holds still stand: one naming the
 CEO's press, until his signed console answer, and one posted after the merge.
-Write the record exactly as you saw it anyway, open its pull request, and let
-the gate hold it. The hold is the right outcome for a proof that saw nothing.
+Write the record exactly as you saw it anyway, push it, and let the workflow
+hold it: the pull request opens only when the record can merge, so a record
+with an unmet row that is not a gap stays on its branch, and the card's
+`🔬 proof-waiting` hold says what it waits on. The hold is the right outcome
+for a proof that saw nothing.
 A held record is amended in place by the next run (resume, below), and the
 gate reads it again on every new head, so a record whose rows are all met
 merges with nobody involved. For a press only the CEO can make, the park below
@@ -591,8 +597,8 @@ and you write the escalation file the workflow reads,
 `/tmp/agent-escalation.txt`: one plain sentence naming the press and the one
 decision asked, with a recommendation — make the press and say what you saw,
 or drop the criterion. **The order matters.** Observe and record every other
-row first, push the record and open its pull request, and only then write the
-escalation file, so the card parks holding a record with every other row in it.
+row first, push the record, and only then write the escalation file, so the
+card parks holding a record with every other row in it.
 
 **When you are dispatched again after he answers**, read his signed answer off
 the card:
@@ -663,10 +669,10 @@ One line each on the card, never skipping 1/5 — it is your "alive" signal:
     python3 .bureau-pipeline/scripts/linear_ops.py comment DRE-<n> "⏳ 1/5 read"
 
 `⏳ 1/5 read` · `⏳ 2/5 observing` · `⏳ 3/5 record written` ·
-`⏳ 4/5 local checks` · `⏳ 5/5 PR opened`. Post `⏳ 5/5 PR opened` when the
-record pull request is opened, and again every time a resumed run pushes an
-amended record to it: the run-state reader (DRE-5922) reads that line as "this
-run produced a record". If a heartbeat fails to post, keep working — reporting
+`⏳ 4/5 local checks` · `⏳ 5/5 record pushed`. Post `⏳ 5/5 record pushed`
+when the record branch is pushed, and again every time a resumed run pushes an
+amended record: the run-state reader (DRE-5922) reads that line as "this run
+produced a record". If a heartbeat fails to post, keep working — reporting
 never blocks the record.
 
 `4/5 local checks` is the record checked against its own shape: one row per
@@ -681,6 +687,18 @@ sweep reads it —
 — and `git diff --stat` showing the record file and nothing else.
 
 ## The pull request
+You push the record branch; the workflow opens the record's pull request, and
+**the pull request opens only when the record can merge** (DRE-8437,
+DRE-8441). After you finish, the workflow's
+`Open the record pull request only when it can merge` step reads the record at
+the branch's head. A record that can merge — every judged row met, a gap, or a
+wording-only row its critic can accept — gets its pull request opened, or
+reopened. Any other record keeps none: the open one is closed, the branch is
+kept. **While the proof waits, the record stays on its branch and the card's
+hold says what it waits on** — the one `🔬 proof-waiting` hold that step posts,
+or the CEO-press park's. **A run never opens, closes or reopens a pull request
+itself**: you never run `gh pr create`, `gh pr reopen` or `gh pr close`.
+
 - **Branch `agent/DRE-<n>-proof-record`.** The `agent/` prefix is what
   `linear-sync`, the merge gate and the hygiene agent read as the card's own
   branch; the `-proof-record` suffix is what keeps the fix agent off it. The
@@ -688,16 +706,18 @@ sweep reads it —
   no `proof record not proven` decline from the gate at its head: that is the
   fix agent's, for the check only, and it is told the record is not its file
   (DRE-6571). You do not answer a red check; you never change code.
-- **Title `PROOF record: <card title>`.**
+- **Title `PROOF record: <card title>`**, set by the workflow when it opens it.
 - **Body:** the first line is `Proof record for DRE-<n>`, the next is
-  `What's new: none`, then the card URL and the criterion table copied in.
+  `What's new: none`, then the card URL and the criterion table copied in —
+  written by the workflow, never by you.
 - **Resume, never restart.** A run that finds its own branch already on the
   remote (`git ls-remote --heads origin agent/DRE-<n>-proof-record`) checks it
   out and merges the default branch into it first, so the record never waits on
   a conflict — the fix agent is kept off a record (DRE-5927), so nobody else
   will resolve one. Then amend the record in a new commit rather than starting
-  over, push, and post `⏳ 5/5 PR opened` again. Open the pull request only if
-  none is open for the branch. The workflow rebuilds the pull request's body
+  over, push, and post `⏳ 5/5 record pushed` again. The workflow decides the
+  pull request again on every run, so an amended record that can now merge has
+  its pull request opened or reopened. The workflow rebuilds the pull request's body
   from the record after every push, on a first run and a resumed one alike
   (DRE-7813): its first three lines as above, then the record's status line
   and its criterion table, read at the pushed head. So never edit the body
@@ -707,7 +727,7 @@ sweep reads it —
   test suite — the suite is the builders' evidence, not yours.
 
 ### Record that you acted, machine-readably
-As the last thing you do — after the pull request is open, or after the
+As the last thing you do — after the record is pushed, or after the
 escalation file is written — post the observability marker:
 
     python3 .bureau-pipeline/scripts/linear_ops.py actor DRE-<n> proof

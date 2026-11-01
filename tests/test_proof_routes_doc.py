@@ -17,9 +17,9 @@ this change left the numbered list at five.
 
 DRE-5923 adds the paragraph that follows once DRE-5920's siblings land: the
 pipeline starts the proof run itself, on its own workflow and with scripted
-read-only identities, and the run opens the record as a pull request on
-`agent/DRE-<n>-proof-record`. The card closes on the approved merge of that
-record. A press that is a business decision of the CEO's is written
+read-only identities, and the run pushes the record to
+`agent/DRE-<n>-proof-record`, whose pull request opens only when the record
+can merge (DRE-8441). The card closes on the approved merge of that record. A press that is a business decision of the CEO's is written
 `needs the CEO's press: <the press>`, so the run can name it back. Every other
 press a person makes after merge is its own OPERATOR card the PROOF is blocked
 by, never a row (DRE-7950, written into the two documents by DRE-7955).
@@ -116,9 +116,11 @@ class StandardTest(unittest.TestCase):
         self.assertSays("scripted read-only identities")
         self.assertSays("never a person's account")
 
-    def test_the_record_is_a_pull_request_on_the_record_branch(self):
-        self.assertSays("opens the record as a pull request")
-        self.assertSays("`agent/DRE-<n>-proof-record`")
+    def test_the_record_is_pushed_and_its_pull_request_opens_when_it_can_merge(self):
+        # DRE-8441: the run pushes; the workflow opens the pull request.
+        self.assertSays("pushes the record to `agent/DRE-<n>-proof-record`")
+        self.assertSays("the pull request opens only when the record can merge")
+        self.assertNotRegex(self.section, _loose("opens the record as a pull request"))
 
     def test_the_card_closes_on_the_approved_merge_of_the_record(self):
         self.assertSays("The card closes on the approved merge of that record")
