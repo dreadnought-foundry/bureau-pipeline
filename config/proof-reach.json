@@ -197,6 +197,12 @@
       "printed_by": "scripts/proof_record_pr.py",
       "constant": "SWEEP_TAG",
       "when": "every `sweep` run since DRE-8437, one line on stdout: the open record pull requests read, those closed (or that would be, not live), kept and unread"
+    },
+    {
+      "tag": "planner-allowance:",
+      "printed_by": "scripts/planner_allowance.py",
+      "constant": "TAG",
+      "when": "every read of the planners' Linear allowance since DRE-8616, one line on stdout: start or hold, the card, the remaining and the limit, the threshold, whether the read was answered or refused, the receipt and the run's request count"
     }
   ],
   "causes": [
