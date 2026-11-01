@@ -132,6 +132,13 @@ def test_a_stamped_waiting_row_reads_date():
     assert got.evidence == cell
 
 
+def test_several_dated_rows_wait_for_the_latest():
+    late = "Not observed. waiting for the report [not-before=2026-11-09T13:30:00+00:00]: it"
+    early = "Not observed. waiting for the window [not-before=2026-11-02T02:25:00+00:00]: it"
+    got = _diagnose(rows=[("Observation 1", early), ("Observation 2", late)])
+    assert (got.cls, got.waits_on, got.evidence) == ("date", "2026-11-09T13:30:00+00:00", late)
+
+
 def test_a_time_only_hold_with_no_rows_behind_it_reads_date():
     line = _hold("its card says it can first be observed after Nov 3 06:00 PT (Observe after: "
                  "2026-11-03 06:00 PT)", "not-before=2026-11-03T06:00-08:00")
