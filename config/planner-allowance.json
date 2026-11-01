@@ -1,0 +1,2 @@
+{"threshold_remaining": 1000, "wait_minutes": 5, "hold_max_minutes": 60, "stagger_seconds": 10,
+ "fixture_low_reading": {"repo": "dreadnought-foundry/agent-bureau-demo", "title_marker": "ALLOWANCE FIXTURE", "remaining": 312}}

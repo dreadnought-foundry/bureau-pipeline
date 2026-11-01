@@ -11,7 +11,8 @@
     "no-route": {
       "lifts": "repo-on-rail",
       "why": "Read off the card's CURRENT repo: label, never the stamp: the usual fix is a person correcting the label, which a lift reading the stamped slug would never see.",
-      "lift_sends": "Triage to Planning"
+      "lift_sends": "Triage to Planning",
+      "triage_repair_lift": "relabel (scripts/triage_repair.py, DRE-8647): the planner names one key of config/repo-map.json in repo.txt, and the repair sets that repo: label, lifts the hold with because=triage-repair and moves the card to Planning, once per card."
     },
     "review-cap-spent": {
       "lifts": "new-head",
@@ -30,13 +31,15 @@
     },
     "epic-rereview-twice": {
       "lifts": "manual",
-      "why": "The park ends in Triage for an operator and the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
-      "lift_sends": "nothing moves"
+      "why": "The park ends in Triage for an operator, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-8647): the epic is re-planned, and the repair lifts the hold with because=triage-repair as it moves the epic out. After that repair, the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
+      "lift_sends": "nothing moves, unless the Triage repair lifts it: then Triage to Planning, the epic re-planned",
+      "triage_repair_lift": "replan (scripts/triage_repair.py, DRE-8647): the repair posts the epic's bound-rewrite receipt with every finding, lifts the hold with because=triage-repair and moves the epic to Planning for a fresh planning attempt, once per card."
     },
     "plan-critic-bound": {
       "lifts": "manual",
       "why": "Every bound park ends in Triage, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out. After that repair, or one that did not finish, the way back is plan_critic.REAPPROVE_HOW, a person's act.",
-      "lift_sends": "Triage to Planning (rewritten, or an epic re-planned) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise"
+      "lift_sends": "Triage to Planning (rewritten, or an epic re-planned) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise",
+      "triage_repair_lift": "rewrite (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out, once per card."
     },
     "fix-dispute": {
       "lifts": "new-head",

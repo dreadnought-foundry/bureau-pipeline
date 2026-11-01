@@ -1,0 +1,99 @@
+{
+  "_readme": "The one repair the Triage Repair run (scripts/triage_repair.py, DRE-8647) gives a card, chosen by which writer put it in Triage. One row per unit config/triage-reasons.json declares — tests/test_triage_repair_every_arrival.py fails on a declared unit with no row here, so a Triage writer added tomorrow cannot arrive unhandled. `marker` is what the writer leaves on the card, and exactly one of: `hold`, the reason of its live `🔒 hold:` stamp; `tag`, the tag its note opens with after its mark (`🧹 planning-stall-park:`); `description`, a phrase in the description of a card it creates straight into Triage. A card is matched by its live stamp first, then by its newest pipeline-authored note carrying a tag, then by its description; a card matching no row is `rewrite`. Rows that share a marker share a repair, because the marker cannot tell them apart. `repair` is one of: `rewrite` — the planner answers the park reason and the card goes to Planning (select's `repair` action, `escalate` when a finding names a choice only the CEO can make, `replan` for a card with children); `replan` — an epic's bound rewrite, then Planning; `relabel` — the planner names one key of config/repo-map.json in repo.txt, and the card gets that repo: label, its hold lifted and a move to Planning; `none` — no planner runs, and the claim is followed at once by an `unrepairable` receipt saying `why` (`{ids}` is the claimed ids no relation holds).",
+  "version": 1,
+  "rows": [
+    {
+      "unit": "pipeline_notice.py#_file_card_quietly",
+      "repair": "rewrite",
+      "marker": {"description": "_The console door was not reached ("}
+    },
+    {
+      "unit": "planning_escalation.py#park_unread",
+      "repair": "rewrite",
+      "marker": {"tag": "planning-stall-park"}
+    },
+    {
+      "unit": "planning_escalation.py#escalate",
+      "repair": "rewrite",
+      "marker": {"tag": "planning-stall-park"}
+    },
+    {
+      "unit": "reconcile.py#escalate_out_of_planning",
+      "repair": "rewrite",
+      "marker": {"tag": "planning-stall-park"}
+    },
+    {
+      "unit": "reconcile.py#_route_to_defect_lane",
+      "repair": "none",
+      "marker": {"tag": "prose-blocker-no-relation"},
+      "why": "the description claims a dependency on {ids} that the board does not hold; only its author can reword the line"
+    },
+    {
+      "unit": "reconcile.py#flag_stranded",
+      "repair": "relabel",
+      "marker": {"hold": "no-route"}
+    },
+    {
+      "unit": "planning_route.py#_refuse_no_repo",
+      "repair": "relabel",
+      "marker": {"hold": "no-route"}
+    },
+    {
+      "unit": "rereview_watch.py#_fire",
+      "repair": "replan",
+      "marker": {"hold": "epic-rereview-twice"}
+    },
+    {
+      "unit": "agent-fix.yml#Escalate checks the loop structurally cannot fix",
+      "repair": "none",
+      "marker": {"hold": "unfixable-check"},
+      "why": "the card is held for a red check on its pull request that the fix loop cannot clear, and rewriting the card clears no check"
+    },
+    {
+      "unit": "agent-fix.yml#Report",
+      "repair": "none",
+      "marker": {"hold": "fix-dispute"},
+      "why": "the fix loop's budget on its pull request is spent, and rewriting the card changes neither the red check nor the budget"
+    },
+    {
+      "unit": "medic.yml#Ask a person about the diagnosis",
+      "repair": "rewrite",
+      "marker": {"tag": "planning-stall-park"}
+    },
+    {
+      "unit": "plan.yml#One-off critic — park in Triage",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    },
+    {
+      "unit": "plan.yml#First critic — the bound parks in Triage",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    },
+    {
+      "unit": "plan.yml#Review — the review died",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    },
+    {
+      "unit": "plan.yml#Review — the second critic passed a plan the first critic held",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    },
+    {
+      "unit": "plan.yml#Review — the second critic produced no result",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    },
+    {
+      "unit": "plan.yml#Re-check the revised plan — review mode",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    },
+    {
+      "unit": "plan.yml#Review — the bound parks the plan in Triage",
+      "repair": "rewrite",
+      "marker": {"hold": "plan-critic-bound"}
+    }
+  ]
+}

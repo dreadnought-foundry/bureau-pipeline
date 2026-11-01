@@ -1109,11 +1109,14 @@ def _said_not_a_decision(texts) -> str | None:
     return next((p for p in NOT_A_DECISION_PHRASES if p in said), None)
 
 
-def screen(reason: str | None, path: str | None) -> str | None:
+def screen(reason: str | None, path: str | None,
+           writer: str = "the planner") -> str | None:
     """The rule this escalation breaks, in plain words, or None when it is a
-    decision for the CEO. `path` is the choices file the caller passed."""
+    decision for the CEO. `path` is the choices file the caller passed;
+    `writer` is who wrote it, as the rule names them — the medic screens its
+    own question here too (DRE-8592)."""
     if not path or not os.path.exists(path):
-        return f"{RULE_NO_DECISION}: the planner wrote no choices for it"
+        return f"{RULE_NO_DECISION}: {writer} wrote no choices for it"
     block, problem = _load_choices(path)
     if block is None:
         return f"{RULE_NO_DECISION}: its choices could not be shown — {problem}"

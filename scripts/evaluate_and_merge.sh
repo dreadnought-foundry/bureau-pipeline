@@ -45,7 +45,9 @@ set -e
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
 #     dependabot/* (dependency bumps), the scheduled branch
 #     bot/standards-sync, the onboarding branch bot/onboard and the nightly's
-#     durations branch bot/test-durations, each matched as a literal. The dependabot and bot branches carry no card. The set is
+#     durations branch bot/test-durations, each matched as a literal, and the
+#     per-slug onboarding branches bot/onboard-<slug>, whose whole name must
+#     match ^bot/onboard-[a-z0-9][a-z0-9-]*$. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
@@ -434,6 +436,13 @@ set -e
 # DRE-7577 (2026-10-19). bot/test-durations, the nightly Pipeline Tests run's
 #   re-measured config/unit-test-durations.json, merges here card-less on the
 #   same terms, as a third literal — never `bot/*`.
+# DRE-8658 (2026-11-01). The onboarding process moves to one routing branch
+#   per declaration, bot/onboard-<slug> (agent-bureau's DRE-8613), so one
+#   stuck onboarding stops blocking the others. The family merges here
+#   card-less on the same terms beside the literal bot/onboard, which stays.
+#   The case admits bot/onboard-*, and the line after it skips any such
+#   branch whose whole name is not ^bot/onboard-[a-z0-9][a-z0-9-]*$, the slug
+#   agent-bureau's onboarding.SLUG_RE allows — never `bot/*`.
 # DRE-7165 (2026-10-13). On agent-bureau #3741 the Verifier passed 4a26218,
 #   the pull request moved to 6b0dbca, and the Verifier's run there declined
 #   it as single-system with no UI signal and posted nothing. The gate called
@@ -498,7 +507,9 @@ BRANCH=$(pr_field headRefName)
 STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
-case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard|bot/test-durations) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard|bot/onboard-*|bot/test-durations) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+# The one family, per-slug onboarding: the suffix must be a slug (DRE-8658).
+case "$BRANCH" in bot/onboard-*) [[ "$BRANCH" =~ ^bot/onboard-[a-z0-9][a-z0-9-]*$ ]] || { echo "not an agent branch — skip"; exit 0; };; esac
 CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 # The ECHOED line only: this job's name is a check-run name (DRE-4407).
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
