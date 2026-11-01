@@ -304,8 +304,8 @@ def test_a_released_card_carries_the_note_naming_the_sweep_and_its_place(
     proposal, result, thread = _drained_then_queued(monkeypatch)
     queued = result["queued"]
     queue = Queue(thread, [_card(i) for i in queued])
-    released = _release(queue, 3)
-    assert released == queued[:3]
+    released = _release(queue)
+    assert released == queued
     positions, of = _positions(proposal), len(_planning(proposal))
     for place, identifier in enumerate(released, 1):
         notes = _notes(queue.of("comment"), identifier)
@@ -324,7 +324,7 @@ def test_a_released_addition_is_noted_as_added_with_no_position(monkeypatch):
                                                     added=ADDED)
     assert result["queued"] == [ADDED]
     queue = Queue(thread, [_card(ADDED)])
-    assert _release(queue, 1) == [ADDED]
+    assert _release(queue) == [ADDED]
     [(_, body)] = _notes(queue.of("comment"), ADDED)
     assert body == groomer.moved_note(proposal["id"], position=None, of=15,
                                       place=1, batch_card=STANDING)
@@ -335,7 +335,7 @@ def test_the_release_writes_the_note_before_the_lane():
                                           "repo": "portico"}])
     queue = Queue([{"body": queued, "authored_by_pipeline": True,
                     "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
-    assert _release(queue, 1) == ["DRE-11"]
+    assert _release(queue) == ["DRE-11"]
     on_card = [w for w in queue.writes if w[1] == "DRE-11"]
     assert [w[0] for w in on_card][:2] == ["comment", "state"]
     assert on_card[0][2].startswith(f"{groomer.MARK} {groomer.MOVED_TAG}: {PID}")
@@ -348,7 +348,7 @@ def test_a_release_with_no_proposal_on_the_thread_still_writes_a_note():
                                           "repo": "portico"}])
     queue = Queue([{"body": queued, "authored_by_pipeline": True,
                     "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
-    _release(queue, 1)
+    _release(queue)
     [(_, body)] = _notes(queue.of("comment"), "DRE-11")
     parsed = groomer.parse_moved_note(body)
     assert parsed["id"] == PID and parsed["position"] is None
@@ -362,7 +362,7 @@ def test_a_failed_release_state_write_still_leaves_the_note():
     queue = Queue([{"body": queued, "authored_by_pipeline": True,
                     "created_at": "2026-10-06T12:00:00Z"}],
                   [_card("DRE-11")], fail_state={"DRE-11"})
-    assert _release(queue, 1) == []
+    assert _release(queue) == []
     assert len(_notes(queue.of("comment"), "DRE-11")) == 1
     assert queue.of("state") == []
 
@@ -389,11 +389,11 @@ def test_a_stalled_release_retried_pass_after_pass_writes_one_note():
                    [_card("DRE-11")], fail_state={"DRE-11"})
     for _ in range(3):
         reconcile.reset_sweep_cards()
-        assert _release(queue, 1) == []
+        assert _release(queue) == []
     assert len(_notes(queue.of("comment"), "DRE-11")) == 1
     queue.fail_state.clear()
     reconcile.reset_sweep_cards()
-    assert _release(queue, 1) == ["DRE-11"]
+    assert _release(queue) == ["DRE-11"]
     assert len(_notes(queue.of("comment"), "DRE-11")) == 1
     assert queue.of("state") == [("DRE-11", "Planning")]
 
@@ -417,7 +417,7 @@ def test_another_batchs_note_or_a_persons_copy_does_not_count():
 
     queue = _Seeded([{"body": queued, "authored_by_pipeline": True,
                       "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
-    assert _release(queue, 1) == ["DRE-11"]
+    assert _release(queue) == ["DRE-11"]
     assert len(_notes(queue.of("comment"), "DRE-11")) == 1
 
 
@@ -438,7 +438,7 @@ def test_a_note_that_will_not_post_moves_nothing_and_stops_the_pass():
     queue = _NoNotes([{"body": queued, "authored_by_pipeline": True,
                        "created_at": "2026-10-06T12:00:00Z"}],
                      [_card("DRE-11"), _card("DRE-12")])
-    assert _release(queue, 2) == []
+    assert _release(queue) == []
     assert queue.of("state") == [] and queue.of("unlabel") == []
     assert any("DRE-11" in f for f in reconcile._write_failures)
 
