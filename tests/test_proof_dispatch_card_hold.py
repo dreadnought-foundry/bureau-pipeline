@@ -430,8 +430,13 @@ def test_a_card_hold_long_past_its_chase_is_never_chased(monkeypatch, capsys):
 
 
 def test_a_card_hold_lift_re_arms_nothing(monkeypatch, capsys):
-    h, _ = _pass(monkeypatch)
+    # A lift of the card hold alone: a lift quoting a time is read as owing a
+    # timed re-run (`_lifted_at`, DRE-7316), which is the time lift's rule.
+    thread = [promoted_at("2026-10-12T16:00:00.000Z"),
+              at(CARD_HOLD, "2026-10-17T20:48:23.105Z", PERSON)]
+    h, _ = _pass(monkeypatch, thread=thread)
     (note,) = _lifts(h)
+    assert f"{WAITED_ON} Done" in note and "not-before=" not in note
     text = note[len(proof_record.OBSERVED_MARK):].strip()
     capsys.readouterr()
 
@@ -458,9 +463,9 @@ def test_a_card_hold_lift_re_arms_nothing(monkeypatch, capsys):
 
 
 def test_the_docstring_and_the_hold_deadlines_page_say_a_card_hold_lifts_itself():
-    doc = " ".join((proof_dispatch.__doc__ or "").split())
-    assert "card hold" in doc and "every card it names is Done" in doc
+    doc = " ".join((proof_dispatch.__doc__ or "").split()).lower()
+    assert "card hold" in doc and "every card it names is done" in doc
     assert "only the ids the needs half opens with are read" in doc
-    page = " ".join((ROOT / "docs" / "hold-deadlines.md").read_text().split())
-    assert "card hold" in page and "every card it names is Done" in page
+    page = " ".join((ROOT / "docs" / "hold-deadlines.md").read_text().split()).lower()
+    assert "card hold" in page and "every card it names is done" in page
     assert "only the ids the needs half opens with are read" in page
