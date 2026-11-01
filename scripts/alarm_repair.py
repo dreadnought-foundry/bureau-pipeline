@@ -81,7 +81,11 @@ posts the finished receipt LAST:
     relation, every one terminal — `blockers-terminal`, which `lift_due` does
     not decide and the sweep's promotion gate is the only other lifter of
     (DRE-6427). The lift is `hold.lift(card, <kind>, LIFT_BY)`. `repaired`,
-    `move=pipeline`. A lift that is not due is refused.
+    `move=pipeline`. A lift that is not due is refused, and so is a
+    `blockers-terminal` one on a card whose relations were not read to the
+    end (`prose_blockers.relations_unknown`, DRE-5379): an unread `blocks`
+    relation may still be open, so the sweep's promotion gate skips that
+    card too.
   * `none` — writes nothing but the receipt. `diagnosed`, with the agent's
     `move` (`operator` or `ceo`).
 
@@ -335,7 +339,11 @@ def blockers(card: dict) -> list[dict]:
 
 
 def blockers_terminal(card: dict) -> bool:
-    """At least one `blocks` relation, and every blocker terminal."""
+    """At least one `blocks` relation, and every blocker terminal. False when
+    the relations were not read to the end: a blocker past the page may be
+    open (DRE-5379)."""
+    if prose_blockers.relations_unknown(card):
+        return False
     states = prose_blockers.blocker_states(card)
     return bool(states) and all(s in prose_blockers.TERMINAL for s in states.values())
 
@@ -693,6 +701,11 @@ def apply(card: str, kind: str, raised: str, directory: str | None) -> int:
                 return _finish(run, writes, "lift-hold was refused: the card carries "
                                "no live hold stamp")
             due = lift_kind(stamp, issue, bodies)
+            if due is None and stamp.get("reason") == hold.OPERATOR_STEP_REASON \
+                    and prose_blockers.relations_unknown(issue):
+                return _finish(run, writes, "lift-hold was refused: the card's "
+                               "relations were not read to the end, so a blocker "
+                               "past the page may still be open")
             if due is None:
                 return _finish(run, writes, "lift-hold was refused: the "
                                f"`{stamp['reason']}` hold's own rule does not say its "
