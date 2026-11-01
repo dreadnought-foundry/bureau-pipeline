@@ -7,10 +7,11 @@
 # and reads only, `claim` posts the `🩹 triage-repair: started` receipt that
 # spends it, and `apply` reads the planner's files and makes the outcome's
 # writes — for a `none` card, no planner runs and `apply` posts the
-# `unrepairable` receipt at once. This file only wires them, and runs the planner between `claim` and
-# `apply`. Every decision is in the core and its tests; the wiring is held by
-# tests/test_triage_repair_workflow.py. It runs HERE, over the whole fleet, the
-# way hygiene.yml does, so no product repo carries a stub.
+# `unrepairable` receipt at once. This file only wires them, and runs the
+# planner between `claim` and `apply`. Every decision is in the core and its
+# tests; the wiring is held by tests/test_triage_repair_workflow.py. It runs
+# HERE, over the whole fleet, the way hygiene.yml does, so no product repo
+# carries a stub.
 #
 # IT DOES NOT RUN LIVE ON MERGE. A scheduled run is a dry run until the
 # repository variable TRIAGE_REPAIR_LIVE is exactly `true`, and a hand dispatch
@@ -495,8 +496,9 @@ jobs:
       # ALWAYS once the card is claimed, whatever the planner did: a dead or
       # half-done planner reaches the `unfinished` receipt here. `replan` and
       # `none` run no planner, so they have no directory to read; `none` posts
-      # its `unrepairable` receipt here, right after the claim. The planner's files are
-      # data `apply` validates; the code that reads them is the trusted copy.
+      # its `unrepairable` receipt here, right after the claim. The planner's
+      # files are data `apply` validates; the code that reads them is the
+      # trusted copy.
       # MODEL is the model step's selection, for a split's `epic` stamp, which
       # names the model the planner ran on (DRE-7182); `replan` selects none.
       - name: Apply the planner's files

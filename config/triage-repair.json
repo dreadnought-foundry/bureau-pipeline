@@ -56,6 +56,11 @@
       "why": "the fix loop's budget on its pull request is spent, and rewriting the card changes neither the red check nor the budget"
     },
     {
+      "unit": "medic.yml#Ask a person about the diagnosis",
+      "repair": "rewrite",
+      "marker": {"tag": "planning-stall-park"}
+    },
+    {
       "unit": "plan.yml#One-off critic — park in Triage",
       "repair": "rewrite",
       "marker": {"hold": "plan-critic-bound"}
