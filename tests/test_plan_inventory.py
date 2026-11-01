@@ -270,6 +270,18 @@ class NoInventoryLine(CliCase):
         self.assertIn(INV, lines[0])
         self.assertIn(INV_2, lines[0])
 
+    def test_a_mockup_outside_the_checkout_names_no_inventory(self):
+        """The mockup path is card text; nothing outside the checkout is listed."""
+        outside = "../outside/design/approved/tasks-final.html"
+        files = {outside: "<html></html>\n",
+                 "../outside/design/approved/secret-inventory.md": TABLE}
+        run = self.run_cli(artifact_text=artifact(inventory_line=None),
+                           epic_text=epic(outside), files=files)
+        lines = run.lines()
+        self.assertEqual(1, len(lines), run.structural_text())
+        self.assertIn(outside, lines[0])
+        self.assertNotIn("secret-inventory.md", lines[0])
+
     def test_a_mockup_not_in_the_checkout_names_no_inventory(self):
         run = self.run_cli(artifact_text=artifact(inventory_line=None),
                            epic_text=epic(MOCKUP), files={INV: TABLE})
@@ -307,6 +319,12 @@ class AnUnreadableInventory(CliCase):
         self.assertEqual(1, len(lines), run.structural_text())
         self.assertIn("could not be read", lines[0])
 
+    def test_prose_after_the_path_is_not_part_of_it(self):
+        run = self.run_cli(artifact_text=artifact(
+            inventory_line=f"**Inventory:** `{INV}` (committed 10-17)"),
+            epic_text=epic())
+        self.assertFalse(run.structural.exists(), run.structural_text())
+
     def test_several_on_one_line(self):
         line = f"**Inventory:** `{INV}`, {INV_2}"
         run = self.run_cli(artifact_text=artifact(inventory_line=line),
@@ -341,6 +359,33 @@ class TheRows(unittest.TestCase):
                         "  Task row |  #board | Title  and owner "):
             with self.subTest(written=written):
                 self.assertEqual(ROW_A, plan_inventory.key(written))
+
+    EMPTY_CELLS = ("| Element | Frame | Detail |\n"
+                   "|---|---|---|\n"
+                   "| Chevron | #timeline |  |\n"
+                   "| Chevron |  | Rotates open |\n"
+                   "|  | #timeline | Divider |\n")
+
+    def test_every_key_is_its_own_key(self):
+        """A planner copies a key from the note or a finding; it must match."""
+        found = plan_inventory.rows(self.EMPTY_CELLS + TABLE)
+        self.assertEqual(6, len(found))
+        for row in found:
+            with self.subTest(row=row):
+                self.assertEqual(row, plan_inventory.key(row))
+                self.assertEqual(row, plan_inventory.key(" ".join(row.split())))
+
+    def test_an_empty_trailing_cell_is_one_key_written_four_ways(self):
+        row = plan_inventory.rows(self.EMPTY_CELLS)[0]
+        for written in ("| Chevron | #timeline |  |", "Chevron | #timeline |",
+                        "Chevron | #timeline | ", "Chevron | #timeline"):
+            with self.subTest(written=written):
+                self.assertEqual(row, plan_inventory.key(written))
+
+    def test_an_empty_middle_cell_keeps_its_place(self):
+        row = plan_inventory.rows(self.EMPTY_CELLS)[1]
+        self.assertEqual(row, plan_inventory.key("Chevron | | Rotates open"))
+        self.assertNotEqual(row, plan_inventory.key("Chevron | Rotates open"))
 
 
 # --- What covers a row ------------------------------------------------------
@@ -394,6 +439,29 @@ class WhatCoversARow(CliCase):
         """The 10-19 chevrons were a detail inside a carded screen."""
         self.assert_row_b_uncovered(
             [COVERAGE[0], covered("Tasks screen", "DRE-9002", CRIT_B)])
+
+    def test_a_row_with_an_empty_last_cell_is_covered_by_the_key_its_finding_quotes(self):
+        table = TABLE + "| Divider | #board |  |\n"
+        first = self.run_cli(artifact_text=artifact(), epic_text=epic(),
+                             files={INV: table})
+        quoted = re.findall(r"row “([^”]*)”", "\n".join(first.lines()))
+        self.assertEqual(1, len(quoted), first.structural_text())
+        run = self.run_cli(artifact_text=artifact(
+            coverage=COVERAGE + [deferred(quoted[0], "Tasks part 2 draws it")]),
+            epic_text=epic(), files={INV: table})
+        self.assertFalse(run.structural.exists(), run.structural_text())
+
+    def test_a_deferral_naming_a_card_that_is_not_a_child_says_so_on_the_note(self):
+        """The reason is a whole deferral; the card it names is reported to
+        the first critic, never sent back."""
+        record = dict(deferred(ROW_B, "Tasks part 2 draws it"), card="DRE-4444")
+        run = self.run_cli(artifact_text=artifact(coverage=[COVERAGE[0], record]),
+                           epic_text=epic())
+        self.assertFalse(run.structural.exists(), run.structural_text())
+        note = [line for line in run.note_text().splitlines() if ROW_B in line]
+        self.assertEqual(1, len(note), run.note_text())
+        self.assertIn("deferred — Tasks part 2 draws it", note[0])
+        self.assertIn("DRE-4444 is not an open child", note[0])
 
     def test_a_record_for_a_row_the_inventory_lacks(self):
         run = self.run_cli(artifact_text=artifact(
