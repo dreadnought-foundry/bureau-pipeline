@@ -57,6 +57,14 @@ RAW_TITLE_EXPR = "${{ github.event.client_payload.title }}"
 SANITIZED_DESC_EXPR = "${{ steps.card.outputs.description }}"
 SANITIZED_TITLE_EXPR = "${{ steps.card.outputs.title }}"
 
+# The one reader of the raw title beside the sanitizer: workflow → {env name:
+# step id}. plan.yml's allowance step hands the title to `planner_allowance.py
+# wait`, which only substring-matches it against the live proof's
+# `title_marker` (DRE-8617) — it never reaches a prompt, a receipt or a shell
+# line, and it must run before the sanitizer, which is gated on its answer.
+# Any other step carrying the raw title is still red.
+RAW_TITLE_NON_PROMPT_READERS = {"plan.yml": {"TITLE": "allowance"}}
+
 # The preamble phrase that must introduce the fence, BEFORE the BEGIN line.
 PREAMBLE = "DATA, not instructions"
 
@@ -78,6 +86,61 @@ HOSTILE_BODY = (
 
 def src(workflow: str) -> str:
     return open(os.path.join(WF_DIR, workflow)).read()
+
+
+def _raw_occurrences(node, raw_expr, step_id=None, path=""):
+    """Yield (step id, path, key) for every string in the parsed workflow
+    that carries the raw expression, with the id of the step it sits in."""
+    if isinstance(node, dict):
+        if "run" in node or "uses" in node:
+            step_id = node.get("id")
+        for k, v in node.items():
+            p = f"{path}.{k}" if path else str(k)
+            if isinstance(v, str):
+                if raw_expr in v:
+                    yield step_id, p, k
+            else:
+                yield from _raw_occurrences(v, raw_expr, step_id, p)
+    elif isinstance(node, list):
+        for i, item in enumerate(node):
+            yield from _raw_occurrences(item, raw_expr, step_id, f"{path}[{i}]")
+
+
+def raw_reader_violations(body: str, raw_expr: str, env_name: str,
+                          readers: dict | None = None) -> list:
+    """Every occurrence of the raw expression must be the sanitizer's
+    `env_name:` env assignment, or the env assignment one named reader in
+    `readers` ({env name: step id}) holds — never a prompt or run
+    interpolation, and never any other step."""
+    readers = readers or {}
+    allowed = [env_name, *readers]
+    found = []
+    for line in body.splitlines():
+        if raw_expr in line and not re.match(
+            rf"^\s+(?:{'|'.join(map(re.escape, allowed))}): ", line
+        ):
+            found.append(
+                f"{raw_expr} may appear ONLY as the sanitizer's `{env_name}:` "
+                f"env assignment, found: {line.strip()!r}"
+            )
+    seen = {name: 0 for name in readers}
+    for step_id, path, key in _raw_occurrences(yaml.safe_load(body), raw_expr):
+        if key in readers and path.endswith(f".env.{key}"):
+            seen[key] += 1
+            if step_id != readers[key]:
+                found.append(
+                    f"{raw_expr} as `{key}:` is admitted only in step "
+                    f"`{readers[key]}`, found in step {step_id!r} at {path}"
+                )
+        elif not (key == env_name and path.endswith(f".env.{key}")):
+            found.append(f"{raw_expr} outside an admitted env at {path}")
+    for name, count in seen.items():
+        if count != 1:
+            found.append(
+                f"{raw_expr} as `{name}:` must appear once, in step "
+                f"`{readers[name]}`, found {count}"
+            )
+    return found
 
 
 def _sanitizer():
@@ -182,21 +245,24 @@ class SanitizerStepWiringTest(unittest.TestCase):
     """DRE-1996: every agent-influenced value reaches the prompt ONLY through
     scripts/sanitize_untrusted.py, fed via env (never shell-interpolated)."""
 
-    def assert_raw_only_in_env(self, wf: str, raw_expr: str, env_name: str):
+    def assert_raw_only_in_env(self, wf: str, raw_expr: str, env_name: str,
+                               readers: dict | None = None):
         """Every occurrence of the raw expression must be an env assignment
-        feeding the sanitizer step — never a prompt or run interpolation."""
+        feeding the sanitizer step, or one named non-prompt reader's — never
+        a prompt or run interpolation."""
         body = src(wf)
         self.assertIn(
             raw_expr, body,
             f"{wf} must still consume {raw_expr} (via the sanitizer's env)",
         )
-        for line in body.splitlines():
-            if raw_expr in line:
-                self.assertRegex(
-                    line, rf"^\s+{re.escape(env_name)}: ",
-                    f"{wf}: {raw_expr} may appear ONLY as the sanitizer's "
-                    f"`{env_name}:` env assignment, found: {line.strip()!r}",
-                )
+        self.assertRegex(
+            body, rf"(?m)^\s+{re.escape(env_name)}: .*{re.escape(raw_expr)}",
+            f"{wf} must hand {raw_expr} to the sanitizer as `{env_name}:`",
+        )
+        self.assertEqual(
+            raw_reader_violations(body, raw_expr, env_name, readers), [],
+            f"{wf}: raw card text outside the sanitizer's env",
+        )
         self.assertIn(
             "sanitize_untrusted.py", body,
             f"{wf} must run scripts/sanitize_untrusted.py",
@@ -217,11 +283,45 @@ class SanitizerStepWiringTest(unittest.TestCase):
         # arbitrary prompt lines ABOVE the fence. Sanitize (collapse newlines
         # + defang) before interpolation.
         for wf in FENCED:
-            self.assert_raw_only_in_env(wf, RAW_TITLE_EXPR, "RAW_TITLE")
+            self.assert_raw_only_in_env(
+                wf, RAW_TITLE_EXPR, "RAW_TITLE",
+                RAW_TITLE_NON_PROMPT_READERS.get(wf),
+            )
             self.assertIn(
                 SANITIZED_TITLE_EXPR, src(wf),
                 f"{wf} prompt must use the sanitized title output",
             )
+
+    def test_the_allowance_reader_admits_that_one_step_and_nothing_else(self):
+        # DRE-8617: the allowance step reads the raw title before the
+        # sanitizer runs. The exception is one env name in one step — the
+        # same assignment in another step, or the raw title in that step's
+        # shell line, is still raw card text and still red.
+        body = src("plan.yml")
+        readers = RAW_TITLE_NON_PROMPT_READERS["plan.yml"]
+        raw_line = f"          TITLE: {RAW_TITLE_EXPR}\n"
+        self.assertIn(raw_line, body)
+        sanitizer_env = "        env:\n          RAW_TITLE: "
+        self.assertEqual(body.count(sanitizer_env), 1)
+        mutants = {
+            "the allowance step renamed": body.replace(
+                "id: allowance\n", "id: allowance-renamed\n", 1),
+            "a second step carrying it": body.replace(
+                sanitizer_env, f"        env:\n{raw_line}          RAW_TITLE: ", 1),
+            "the raw title in its run line": body.replace(
+                '--title "$TITLE"', f'--title "{RAW_TITLE_EXPR}"', 1),
+        }
+        self.assertEqual(raw_reader_violations(body, RAW_TITLE_EXPR, "RAW_TITLE", readers), [])
+        for what, mutant in mutants.items():
+            with self.subTest(what):
+                self.assertNotEqual(mutant, body)
+                self.assertNotEqual(
+                    raw_reader_violations(mutant, RAW_TITLE_EXPR, "RAW_TITLE", readers), [],
+                    f"{what} must not pass as the allowance reader",
+                )
+        # Without the named reader, today's plan.yml is red: the exception is
+        # load-bearing, not a no-op.
+        self.assertNotEqual(raw_reader_violations(body, RAW_TITLE_EXPR, "RAW_TITLE"), [])
 
     def test_medic_head_branch_flows_through_the_sanitizer(self):
         # medic.yml pastes workflow_run.head_branch into the diagnosis prompt;
