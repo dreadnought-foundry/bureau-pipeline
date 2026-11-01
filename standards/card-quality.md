@@ -517,9 +517,13 @@ The plan check (`scripts/proof_and_demo.py`) refuses a PROOF card whose line
 fits none of the forms, or that carries two, naming the card and quoting the
 line. Only the PROOF card's line is read. A card with no `Observe after:` line
 is dispatched as before, as soon as its release is live. The proof
-dispatcher's wait on the line is the dispatch gate's own card, which reads it
-through `observe_after` and `observable_at`; until that gate ships, the line
-is checked when the plan is written and not yet waited on.
+dispatcher (`scripts/proof_dispatch.py`) waits on the line as condition 8 of a
+first run (DRE-8439), reading it through `observe_after` and `observable_at`.
+Before the time it names, the card gets one time-only `🔬 proof-waiting` hold
+until that time; the first pass at or after it lifts the hold and starts
+`dispatch 1 of 2` on the same pass, so the wait spends no run. A line that
+does not parse, or a build card's merge time that cannot be read, gets one
+plain comment, and the proof is refused on every pass until it reads.
 
 **Proofs never wait on the CEO's sign-in (DRE-5391).** The CEO decided on
 2026-09-30 that a proof runs as soon as its build cards finish — the pipeline

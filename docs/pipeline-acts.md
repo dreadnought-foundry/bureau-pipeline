@@ -417,10 +417,12 @@ The `Dispatch proof runs` step of `reconcile.yml` runs right after `Sweep`,
 whether `Sweep` passed or failed (DRE-8000), on
 full passes only and only in a repo that carries a proof-run stub
 (`self-proof-task.yml` or `proof-task.yml`), and starts one proof run a pass
-when the card's seven conditions hold: a `PROOF:` card of this repo in
+when the card's eight conditions hold: a `PROOF:` card of this repo in
 `Hand-work`, its epic `In Progress`, its blockers terminal, no hold standing,
-nobody else on it and no run alive, a dispatch left in its budget of two, and
-the release carrying its siblings' merges live. A card in `Green Light` whose
+nobody else on it and no run alive, a dispatch left in its budget of two,
+the release carrying its siblings' merges live, and the time its
+`Observe after:` line names, if it carries one, passed — before it the card
+is held once on that time and the hold lifts itself (DRE-8439). A card in `Green Light` whose
 park named the CEO's press is dispatched once per signed answer of his. A card
 in `In Review` whose record pull request the critic sent back
 (`REQUEST_CHANGES` at the head) is dispatched again to amend the record, when no
