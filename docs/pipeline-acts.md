@@ -489,12 +489,23 @@ record branch, are read there: the record at the branch head, dated by the
 card's newest receipt and read as the gate's trigger. When every blocking row
 of it waits, the same rules hold and lift it — the time lift and one timed
 re-run, the 12-hour re-check of an unstamped row — with the budgets counted
-since the card's first receipt; any other branch record is refused, posting
-nothing, until DRE-8451 brings the re-arm to the branch. A branch GitHub says
+since the card's first receipt. A branch GitHub says
 is gone, or a head with no record file, is told once on the card in a plain
 comment (`Proof not re-run — no record can be read on <branch>: …`), and a read
 that failed posts nothing. A run in flight still holds either card, and
 nothing moves a lane.
+
+**…and re-armed there** (DRE-8451). A branch record whose rows do not all
+wait carries its own hold, the one the run's `decide` posts (`not ready to
+merge: …`), and once the record is read that hold is read past — the record
+says what it waits on, so the hold is never chased and never stops a re-run.
+A row naming `fix: DRE-<n>` is not dispatched while that card is open and
+gets one re-armed run once it is Done, merged and live, or once a new
+`🔬 proof-observed` follows the newest receipt. Rows a re-run may answer are
+re-run `re-run of the record on its branch at <sha7>`, twice; then, every
+unmet row a plain `Not met.`, one fix card is filed and held on, as above. A
+waiting row beside them is held on its time first, then given one timed
+re-run, as the pull-request path decides the same mix.
 
 **An event hold in `Hand-work` is chased once** (DRE-7967). A hold on a
 first-run candidate whose needs half waits on an event — not a time, not a

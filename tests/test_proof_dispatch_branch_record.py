@@ -16,7 +16,8 @@ card across passes whose thread grows with every write. Its hold is the one
     closed, each with a stamped waiting row, held before the time and given
     one timed re-run after it, `RERUN_BUDGET` unspent;
   * an unstamped waiting row's re-check twelve hours after its hold;
-  * a record with a row that does not wait refused with `BRANCH_NOT_YET`;
+  * a record with a row that does not wait decided as DRE-8451 re-arms it,
+    never refused (`tests/test_proof_dispatch_branch_rearm.py` has the rest);
   * a branch read that raised refused, nothing posted;
   * a branch that is gone, then a head with no record, each told once;
   * the spent-with-nothing-new shortcut over the branch's head;
@@ -315,9 +316,9 @@ def test_the_contract_names_are_the_modules():
         "kind", "number", "branch", "head", "text", "at")
     assert proof_dispatch.BRANCH_GONE_COMMENT == (
         "Proof not re-run — no record can be read on {branch}: {what}.")
-    assert proof_dispatch.BRANCH_NOT_YET == (
-        "re-run: the record on its branch has a row that does not wait — the "
-        "re-arm on the branch is DRE-8451's")
+    # DRE-8451 deleted the refusal of a record whose rows do not all wait.
+    assert not hasattr(proof_dispatch, "BRANCH_NOT_YET")
+    assert proof_dispatch.BRANCH_RERUN_REASON == "re-run of the record on its branch at {sha7}"
 
 
 def test_the_waiting_rows_readers_are_proof_record_prs_under_the_old_names():
@@ -446,7 +447,7 @@ def test_an_unstamped_waiting_row_on_the_branch_is_re_checked_twelve_hours_after
 
 
 # --------------------------------------------------------------------------- #
-# a row that does not wait: refused, nothing posted (DRE-8451 re-arms it)      #
+# a row that does not wait: decided, never refused (DRE-8451)                  #
 # --------------------------------------------------------------------------- #
 
 NOT_YET = {
@@ -458,16 +459,31 @@ NOT_YET = {
 
 @pytest.mark.parametrize("lane", LANES)
 @pytest.mark.parametrize("case", sorted(NOT_YET))
-def test_a_branch_record_with_a_row_that_does_not_wait_is_not_yet_read(
+def test_a_branch_record_with_a_row_that_does_not_wait_is_decided_not_refused(
         monkeypatch, capsys, lane, case):
-    # In Hand-work the record's own hold would hold the card on the lane read
-    # first; with no hold posted it reaches the branch.
-    card = _card(monkeypatch, lane, NOT_YET[case], hold=lane == "In Review")
+    # The record's own hold, as the run's `decide` posts it, stands in both
+    # lanes; DRE-8451 reads past it once the record is read.
+    card = _card(monkeypatch, lane, NOT_YET[case])
+    assert proof_record_pr.is_record_hold(card.holds()[-1])
     count = len(card.thread)
     card.sweep(AFTER)
     lines = _lines(capsys)
-    assert card.fired == [] and len(card.thread) == count, card.bodies()[count:]
-    assert any(proof_dispatch.BRANCH_NOT_YET in line for line in lines), lines
+    assert not any("DRE-8451's" in line for line in lines), lines
+    if case == "plain":
+        # Plain `Not met.` rows: the re-run of the record on its branch.
+        reason = f"re-run of the record on its branch at {HEAD[:7]}"
+        assert card.fired == [(CARD, reason)], lines
+        newest = card.receipts()[-1]
+        assert (newest.reason, newest.count) == (reason, "re-run 1 of 2")
+    elif case == "fix":
+        # A fix named: not dispatched until it ships, nothing written.
+        assert card.fired == [] and len(card.thread) == count, card.bodies()[count:]
+        assert any("DRE-9001" in line for line in lines), lines
+    else:
+        # A waiting row beside it: held on the waiting row's time.
+        assert card.fired == [], lines
+        (held,) = card.bodies()[count:]
+        assert proof_record.time_only(held) is not None
 
 
 # --------------------------------------------------------------------------- #
