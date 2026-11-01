@@ -355,13 +355,14 @@ def test_the_sweeps_backstop_with_no_door_serves_the_first_arrival(monkeypatch, 
 def test_every_caller_orders_through_the_one_reader():
     """`settle_claim`, `next` and the sweep's backstop each read the order
     through `planner_queue`'s one wrapper; nothing else calls the door's
-    order endpoint."""
+    order endpoint but the copy of that wrapper in `planner_allowance`
+    (DRE-8616), which outlives `planner_queue.py` later in epic DRE-8539."""
     for path, needle in ((ROOT / "scripts" / "reconcile.py", "planner_queue.ordered_ledger("),
                          (ROOT / "scripts" / "planner_queue.py", "ordered_ledger(")):
         assert needle in path.read_text(encoding="utf-8"), path
     callers = [p.name for p in (ROOT / "scripts").glob("*.py")
                if "bureau_read.planning_order(" in p.read_text(encoding="utf-8")]
-    assert callers == ["planner_queue.py"]
+    assert sorted(callers) == ["planner_allowance.py", "planner_queue.py"]
 
 
 # --------------------------------------------------------------------------- #

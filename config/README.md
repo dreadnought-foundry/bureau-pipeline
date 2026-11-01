@@ -102,7 +102,25 @@ mints (see `models.yaml` below).
   time). The ceiling is never published: it is read from this file on every
   repo, so a ceiling change is a file edit that takes effect everywhere. The
   console reads both keys off this file and refuses a number above the
-  ceiling with `ceiling_reason` as the words.
+  ceiling with `ceiling_reason` as the words. The cap is being removed (epic
+  DRE-8539): `planner-allowance.json` below is what replaces it, and the
+  cards of that epic delete this file's readers one by one.
+- **`planner-allowance.json`** — the one limit left on planners (DRE-8616,
+  the CEO's "No limit, slow down near empty" of 2026-10-31, epic DRE-8539;
+  `architecture/decisions/adr-planner-cap-removed.md`). Exactly five keys:
+  `threshold_remaining`, the allowance at or above which a planner starts at
+  once; `wait_minutes`, the boundary a held planner re-reads on;
+  `hold_max_minutes`, after which it starts whatever the reading;
+  `stagger_seconds`, the gap between held planners' starts, in the CEO's
+  Planning order and then oldest `held` first, capped at `wait_minutes`; and
+  `fixture_low_reading` (`repo`, `title_marker`, `remaining`), the live
+  proof's one declared seam — the first read of a sandbox card whose title
+  carries the marker reports that `remaining`. Read only through
+  `scripts/planner_allowance.py`, which finds it beside itself and raises on a
+  bad file rather than defaulting; `python3 scripts/planner_allowance.py check`
+  validates it, and refuses `hold_max_minutes` plus `wait_minutes` at or above
+  the Planning stall window in `lane-contract.json`, because a held card posts
+  nothing between its `🪫 planner-hold: held` and `started` receipts.
 - **`whats-new-cutover.json`** — the switch for the What's New rule
   (DRE-5576): `enforced_from`, the UTC instant from which the merge gate holds
   a pull request opened without a `What's new:` line, and `why`. Absent, the
