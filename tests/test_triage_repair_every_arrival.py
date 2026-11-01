@@ -34,6 +34,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 import dedupe_dispatch  # noqa: E402
 import hold  # noqa: E402
 import hygiene  # noqa: E402
+import medic_next_step  # noqa: E402
 import pipeline_act  # noqa: E402
 import pipeline_notice  # noqa: E402
 import plan_bound  # noqa: E402
@@ -161,10 +162,10 @@ class TestTheTable:
         assert triage_repair.unhandled_units() == []
         assert set(units) == set(_declared_units())
 
-    def test_the_seventeen_split_eleven_one_two_three(self):
-        assert len(_rows()) == 17
+    def test_the_eighteen_split_twelve_one_two_three(self):
+        assert len(_rows()) == 18
         assert collections.Counter(r["repair"] for r in _rows()) == {
-            "rewrite": 11, "replan": 1, "relabel": 2, "none": 3}
+            "rewrite": 12, "replan": 1, "relabel": 2, "none": 3}
 
     def test_a_unit_declared_tomorrow_with_no_row_is_named(self):
         reasons = json.loads(REASONS.read_text(encoding="utf-8"))
@@ -210,8 +211,14 @@ class TestTheTable:
     def test_a_tag_marker_is_the_tag_its_writer_opens_with(self):
         tags = {r["unit"]: r["marker"].get("tag") for r in _rows()}
         for unit in ("planning_escalation.py#park_unread", "planning_escalation.py#escalate",
-                     "reconcile.py#escalate_out_of_planning"):
+                     "reconcile.py#escalate_out_of_planning",
+                     "medic.yml#Ask a person about the diagnosis"):
             assert tags[unit] == dedupe_dispatch.STALL_PARK_TAG
+        # The medic's screened-out question opens with the stall exit's tag
+        # too (DRE-8592), so its row shares that marker and that repair.
+        assert medic_next_step.housekeeping_note(
+            "DRE-1", "a rule", None, report_path=None, run_url="https://run").startswith(
+            f"🧹 {dedupe_dispatch.STALL_PARK_TAG}:")
         assert tags["reconcile.py#_route_to_defect_lane"] == prose_blockers.CARD_TAG
         assert prose_blockers.card_refusal("DRE-1", {NOWHERE}).startswith(
             f"🚨 {prose_blockers.CARD_TAG}:")
