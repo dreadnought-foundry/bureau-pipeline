@@ -46,6 +46,13 @@ lanes a build sits in" and "what is fit to show the CEO" each keep one reader.
     python3 scripts/medic_next_step.py planning-spent --comments-file <path>
     python3 scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json \\
         --report .bureau-pipeline/medic-report.md
+    python3 scripts/medic_next_step.py screen --file .bureau-pipeline/medic-question.json \\
+        --choices-file .bureau-pipeline/medic-question-choices.json
+    python3 scripts/medic_next_step.py choices-block \\
+        --file .bureau-pipeline/medic-question-choices.json
+    python3 scripts/medic_next_step.py housekeeping-note --card DRE-N --broken "…" \\
+        --file .bureau-pipeline/medic-question.json \\
+        --report .bureau-pipeline/medic-report.md --run-url <failed run url>
     python3 scripts/medic_next_step.py check [--file <path>]
 """
 
@@ -107,6 +114,11 @@ _DONE = {
     "ask-person": "moved the card to Green Light to ask a person what "
                   "happens next",
 }
+#: Who an `ask-person` move asks, by the lane it moves the card to: the CEO's
+#: queue holds a business choice, and the housekeeping lane is the operator's
+#: (DRE-8592). Keyed at use, so `HOUSEKEEPING_LANE` keeps one writer.
+_ASKED_IN_GREEN_LIGHT = "a person"
+_ASKED_IN_HOUSEKEEPING = "the operator"
 #: What the medic meant to do, and why it did not, when the move did not land.
 _MEANT = {
     "requeue-once": ("re-run the failed jobs of the run once more",
@@ -260,13 +272,45 @@ def _run_id(run_url: str) -> str:
     return tail or "unknown"
 
 
+def _ask_move(moved_to: str) -> tuple:
+    """`(what the move does, the closing line)` for an `ask-person` move to
+    `moved_to`: Green Light asks a person, the housekeeping lane asks the
+    operator, and its receipt carries the stall exit's tag, because the
+    receipt is the card's newest comment and the plan-gate reads that one
+    (`dedupe_dispatch.parked_for_a_person`)."""
+    import dedupe_dispatch
+    import planning_escalation
+
+    if moved_to != planning_escalation.HOUSEKEEPING_LANE:
+        return (f"move the card to {moved_to} to ask {_ASKED_IN_GREEN_LIGHT} "
+                "what happens next", "")
+    return (f"move the card to {moved_to} to ask {_ASKED_IN_HOUSEKEEPING} what "
+            "happens next, because its question is housekeeping and not a "
+            "business decision for the CEO",
+            f"The note before this receipt opens with "
+            f"{dedupe_dispatch.STALL_PARK_TAG}, so a plan run the move starts "
+            f"leaves the card parked.")
+
+
 def receipt(step: NextStep, *, run_url: str, finding: str, moved: bool = True,
-            lane: str | None = None) -> str:
+            lane: str | None = None, moved_to: str | None = None) -> str:
     """The one comment the medic writes for its step. Line one is the
     contract line, ending ` moved=no` when the step's move did not land;
     `fix-path` moves nothing by design and never carries it. Then one
-    plain-English paragraph: the class, what the medic did, the finding."""
+    plain-English paragraph: the class, what the medic did, the finding.
+
+    `moved_to` is the lane an `ask-person` move was for — Green Light or
+    `planning_escalation.HOUSEKEEPING_LANE` (DRE-8592) — and the paragraph
+    names it whether or not the move landed; `lane` is the lane a move that
+    did not land left the card in."""
     not_moved = not moved and step.step != "fix-path"
+    done = _DONE.get(step.step, f"took the step {step.step}")
+    meant, why = _MEANT.get(step.step, (f"take the step {step.step}",
+                                        "the move was refused"))
+    closing = ""
+    if step.step == "ask-person" and moved_to:
+        meant, closing = _ask_move(moved_to)
+        done = "moved" + meant[len("move"):]
     first = (f"{RECEIPT_MARK} class={step.cls} step={step.step} "
              f"run={_run_id(run_url)}")
     if not_moved:
@@ -279,12 +323,12 @@ def receipt(step: NextStep, *, run_url: str, finding: str, moved: bool = True,
     if means:
         said.append(means)
     if not_moved:
-        meant, why = _MEANT.get(step.step, (f"take the step {step.step}",
-                                            "the move was refused"))
         said.append(f"It meant to {meant}, but {why}, so the card was left "
                     f"in {lane or 'the lane it was in'}.")
     else:
-        said.append(f"So it {_DONE.get(step.step, f'took the step {step.step}')}.")
+        said.append(f"So it {done}.")
+        if closing:
+            said.append(closing)
     if step.reason:
         said.append(f"Why this step: {step.reason}")
     said.append(f"Finding: {' '.join(finding.split())}")
@@ -404,7 +448,8 @@ def _question_file(path: str | None) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def question(question_path: str | None, *, report_path: str | None) -> str:
+def question(question_path: str | None, *, report_path: str | None,
+             choices_path: str | None = None) -> str:
     """The medic's Green Light question, guarded at the write seam.
 
     The diagnosis agent writes the question file after reading untrusted run
@@ -412,9 +457,18 @@ def question(question_path: str | None, *, report_path: str | None) -> str:
     it is a non-blank string `planning_escalation.refusal` passes, and the
     recommendation only together with its why. Every other line is replaced
     by its fallback, and one stderr line names each replaced field and why.
-    The three lines are `console_escalation.render`'s own. Never raises."""
+    The three lines are `console_escalation.render`'s own. Never raises.
+
+    With a choices file `planning_escalation.read_choices` accepts (DRE-8592)
+    the block rides after these lines, so the Question is the block's own and
+    the Recommendation's answer is the recommended choice's label, with the
+    block's why, as `console_escalation.problems` holds every Green Light row
+    that carries a block to. The block passed `choices_problem`'s plain-words
+    check, so its words are as guarded as the file's."""
     import console_escalation
     import planning_escalation
+
+    block = planning_escalation.read_choices(choices_path) if choices_path else None
 
     data = _question_file(question_path)
     kept: dict[str, str] = {}
@@ -445,12 +499,90 @@ def question(question_path: str | None, *, report_path: str | None) -> str:
         if field in held:
             print(f"medic_next_step question: {field} replaced — "
                   f"{held[field]}", file=sys.stderr)
+    if block is not None:
+        return console_escalation.render(console_escalation.Escalation(
+            kept["finding"],
+            block["question"],
+            None,
+            block["why"],
+            choices=tuple(console_escalation.Choice(
+                c["id"], c["label"], c["effect"], c["outcome"],
+                c.get("preview", "")) for c in block["choices"]),
+            recommended=block["recommended"],
+        ))
     return console_escalation.render(console_escalation.Escalation(
         kept["finding"],
         kept.get("question", FALLBACK_QUESTION),
         kept.get("recommendation"),
         kept.get("why", WHY_NOT_FINISHED if no_report else WHY_NO_ANSWER),
     ))
+
+
+# --------------------------------------------------------------------------- #
+# the screen — a business choice for the CEO, or housekeeping (DRE-8592)       #
+# --------------------------------------------------------------------------- #
+#
+# Every `ask-person` diagnosis used to park in Green Light, the CEO's queue,
+# a `platform-fault` included, though its own record says only the operator
+# can mend it. The medic's question now passes the screen the planner's does
+# (`planning_escalation.screen`, DRE-7961): the diagnosis agent writes a
+# choices file beside its question only for a real business choice, and a
+# question that breaks any of the screen's three rules is housekeeping, which
+# the step posts as one note for the operator and parks in
+# `planning_escalation.HOUSEKEEPING_LANE`. The judgment the code cannot make is
+# the agent's, in its prompt, in the planner's own words.
+
+#: The rule a housekeeping note names when the screen itself gave no answer.
+SCREEN_UNREAD = "the screen could not be read, so the question is the operator's"
+
+
+def screen(question_path: str | None, choices_path: str | None) -> str | None:
+    """The rule the medic's question breaks, in `planning_escalation.screen`'s
+    words, or None when it is a business choice for the CEO. The reason
+    screened is the question file's own `question` and `why`, raw — a line
+    `question()` would replace still says what the agent meant."""
+    import planning_escalation
+
+    data = _question_file(question_path) or {}
+    reason = " ".join(v for v in (data.get("question"), data.get("why"))
+                      if isinstance(v, str))
+    return planning_escalation.screen(reason or None, choices_path,
+                                      writer="the medic")
+
+
+def choices_block(choices_path: str) -> str | None:
+    """The fenced block for a choices file `planning_escalation.read_choices`
+    accepts — the planner's own, appended last — or None."""
+    import planning_escalation
+
+    block = planning_escalation.read_choices(choices_path)
+    return None if block is None else planning_escalation.choices_block(block)
+
+
+def housekeeping_note(identifier: str, broken: str | None,
+                      question_path: str | None, *, report_path: str | None,
+                      run_url: str) -> str:
+    """The one note a screened-out medic question carries, for the operator.
+
+    It opens with the stall exit's tag, `dedupe_dispatch.STALL_PARK_TAG`, as
+    `planning_escalation.housekeeping_note` does, so the plan-gate leaves a
+    parked planner card parked. Then the rule broken, the three lines
+    `question()` renders — every line guarded as on the Green Light path —
+    and the failed run. It never opens `🙋`: that is the CEO's question."""
+    import dedupe_dispatch
+    import planning_escalation
+
+    rule = " ".join((broken or "").split()) or SCREEN_UNREAD
+    return (
+        f"🧹 {dedupe_dispatch.STALL_PARK_TAG}: {identifier} — the medic's "
+        f"question is housekeeping, not a decision: {rule}.\n\n"
+        f"Parked in **{planning_escalation.HOUSEKEEPING_LANE}** for the "
+        "operator, not the CEO: a question goes to the CEO only when it names "
+        "a decision, offers two or three options and does not say it is not "
+        "one.\n\n"
+        f"{question(question_path, report_path=report_path)}\n\n"
+        f"The failed run: {run_url}"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -483,6 +615,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--reason", default="")
     p.add_argument("--moved-no", action="store_true")
     p.add_argument("--lane", default=None)
+    # The lane an `ask-person` move was for (DRE-8592); empty reads as unset.
+    p.add_argument("--moved-to", default=None)
 
     p = sub.add_parser("finding", help="print the report's first sentence")
     p.add_argument("--report", required=True)
@@ -501,6 +635,24 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("question", help="print the Green Light question")
     p.add_argument("--file", required=True)
     p.add_argument("--report", required=True)
+    p.add_argument("--choices-file", default=None)
+
+    p = sub.add_parser("screen", help="print the rule the question breaks and "
+                                      "exit 1, or print nothing and exit 0")
+    p.add_argument("--file", required=True)
+    p.add_argument("--choices-file", required=True)
+
+    p = sub.add_parser("choices-block", help="print the choices file's fenced "
+                                             "block, or exit 1")
+    p.add_argument("--file", required=True)
+
+    p = sub.add_parser("housekeeping-note",
+                       help="print the operator's note for a screened-out question")
+    p.add_argument("--card", required=True)
+    p.add_argument("--broken", default="")
+    p.add_argument("--file", required=True)
+    p.add_argument("--report", required=True)
+    p.add_argument("--run-url", required=True)
 
     p = sub.add_parser("check", help="exit 1 naming every gap in the table")
     p.add_argument("--file", default=None)
@@ -525,7 +677,8 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(receipt(step, run_url=args.run_url,
                                  finding=args.finding.strip()
                                  or finding(args.report),
-                                 moved=not args.moved_no, lane=args.lane))
+                                 moved=not args.moved_no, lane=args.lane,
+                                 moved_to=(args.moved_to or "").strip() or None))
     elif args.cmd == "finding":
         print(finding(args.report))
     elif args.cmd == "from-lanes":
@@ -540,7 +693,21 @@ def main(argv: list[str] | None = None) -> int:
                   else "true" if planning_spent(bodies) else "false")
         print(f"planning_spent={answer}")
     elif args.cmd == "question":
-        print(question(args.file, report_path=args.report))
+        print(question(args.file, report_path=args.report,
+                       choices_path=args.choices_file))
+    elif args.cmd == "screen":
+        broken = screen(args.file, args.choices_file)
+        if broken:
+            print(broken)
+            return 1
+    elif args.cmd == "choices-block":
+        block = choices_block(args.file)
+        if block is None:
+            return 1
+        print(block)
+    elif args.cmd == "housekeeping-note":
+        print(housekeeping_note(args.card, args.broken, args.file,
+                                report_path=args.report, run_url=args.run_url))
     else:
         problems = check(args.file)
         for problem in problems:

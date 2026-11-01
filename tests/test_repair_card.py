@@ -60,11 +60,13 @@ SLUG = "bureau-pipeline"
 #: here and asserted against the workflow below (DRE-3879 added the two
 #: scheduled jobs' own branches; DRE-6049 and DRE-6056 retired both jobs, so
 #: neither is left; DRE-7209 added the onboarding routing branch as a literal,
-#: and DRE-7577 the nightly's durations branch); two copies of this string in one module is how it comes to name a gate
-#: nobody runs.
+#: and DRE-7577 the nightly's durations branch; DRE-8658 added the per-slug
+#: onboarding family, whose slug the step re-checks on the next line); two
+#: copies of this string in one module is how it comes to name a gate nobody
+#: runs.
 MERGE_GATE_PATTERN = (
     "agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard"
-    "|bot/test-durations"
+    "|bot/onboard-*|bot/test-durations"
 )
 
 

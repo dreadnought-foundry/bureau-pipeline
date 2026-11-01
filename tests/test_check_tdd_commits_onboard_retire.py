@@ -19,7 +19,8 @@ The relief here is DRE-7431's, reversed, with the same exactness:
     engine writes, and no other line of the file changed — a second entry,
     a changed existing entry or an edited function is code;
   * only on an onboarding routing PR — opened by agent-bureau-bot
-    (GitHub-attested) on the literal branch `bot/onboard`.
+    (GitHub-attested) on the literal branch `bot/onboard`, or since DRE-8659
+    on a per-slug `bot/onboard-<slug>`.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_check_tdd_commits_onboard_retire.py -v
 """
@@ -314,12 +315,19 @@ class RetireFactsCliTest(GitRepoMixin, unittest.TestCase):
         self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
 
     def test_any_other_branch_fails(self):
-        for branch in ("bot/onboard-x", "agent/DRE-7866-x"):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-7866-x"):
             with self.subTest(branch=branch):
                 self._replay(branch=branch)
                 p = self.run_check(head_ref=branch, author=BOT)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn("[code]", p.stdout)
+
+    def test_the_same_removal_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
 
     def test_any_other_opener_fails(self):
         self._replay()

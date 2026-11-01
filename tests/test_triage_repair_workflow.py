@@ -57,9 +57,10 @@ OUT_DIR = "${{ runner.temp }}/triage-repair/${{ matrix.card }}"
 TRUSTED = "${{ runner.temp }}/pipeline-trusted"
 COPY_STEP = "Keep a trusted copy of bureau-pipeline"
 DROP_STEP = "Remove the trusted copy"
-#: The four files the planner may write (`triage_repair`'s names).
+#: The five files the planner may write (`triage_repair`'s names): the
+#: four of a rewrite or a question, and a relabel's `repo.txt` (DRE-8647).
 OUTPUT_FILES = ("revised-card.md", "repair-answers.md", "question.md",
-                "question-choices.json")
+                "question-choices.json", "repo.txt")
 #: Every expression carrying card text or critic findings: each may stand in
 #: the agent's prompt only between the two sentinel lines.
 UNTRUSTED = ("steps.card.outputs.title", "steps.card.outputs.description",
@@ -693,7 +694,12 @@ class TestThePrompt:
         prompt = self._prompt()
         for words in ("You are the PLANNER", "plan critic's bound", "ONCE",
                       "one numbered line per finding", "CEO", "escalate",
-                      "${{ matrix.action }}", "steps.card.outputs.decisions"):
+                      "${{ matrix.action }}", "steps.card.outputs.decisions",
+                      # DRE-8647: a relabel names one key of the repo map,
+                      # and a card with no findings list hands its park note
+                      # or its own description to the planner as the finding.
+                      "When the action is `relabel`", "config/repo-map.json",
+                      "exactly one key", "the card's own description"):
             assert words in prompt, words
 
 

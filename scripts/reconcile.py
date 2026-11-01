@@ -5454,8 +5454,10 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # `bot/onboard` joined on the same terms (DRE-7209): the onboarding process's
 # routing pull requests, here and in agent-bureau, which the merge gate merges
 # card-less. Broad tuple only — no card to work, no fix agent — and a literal
-# name, as that answer allows. The onboarding routing step reads this file at
-# `stable` for the literal before it opens one.
+# name, as that answer allows. Its per-slug branches, `bot/onboard-<slug>`
+# (DRE-8658), are owned through this entry's prefix match: `_has_prefix` asks
+# `startswith`, so a separate `bot/onboard-` entry would change nothing. The
+# merge gate admits that family by name and re-checks the slug.
 #
 # `bot/test-durations` joined on the same terms (DRE-7577): the nightly
 # Pipeline Tests run re-measures config/unit-test-durations.json on it before
