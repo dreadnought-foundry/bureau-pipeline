@@ -22,9 +22,8 @@ The CEO gave three rules for a model the catalog offers that the pipeline has
 never configured, and they replaced "a human decides every one" (DRE-3899):
 
   * a newer version of a family already on a ladder, at the same or a lower
-    declared price, is ADOPTED — trialled for real, then proposed as an
-    ordinary pull request to config/models.yaml that the critic and the merge
-    gate review;
+    declared price, is ADOPTED — trialed for real, then written into the
+    model home by the daily adoption (DRE-6943);
   * a model older than, or superseded by, what we run is IGNORED — no card;
   * a new family, a higher price, or no declared price at all is ASKED — one
     plain-English question for the CEO.
@@ -58,8 +57,8 @@ rather than taking "newest" on faith:
 
 DISCOVERY (DRE-2317)
 --------------------
-`new_models()` reports ids the catalog offers that config/models.yaml has never
-named; the adoption rule sorts them. `discovery.on_new_model: workhorse` is not
+`new_models()` reports ids the catalog offers that the pipeline has never
+named — on a ladder, `retired` or `excluded`; the adoption rule sorts them. `discovery.on_new_model: workhorse` is not
 an expressible policy, and neither is `judgement`: schema validation rejects
 both, so a new family can reach the advisory ladder at most (see
 `discovery_policy()`).
@@ -369,8 +368,8 @@ def _resolve_pin(pinned: str, catalog) -> datetime | None:
 # --------------------------------------------------------------------------- #
 
 def discovery_policy() -> dict:
-    """What may happen to a model id the system sees that config/models.yaml
-    does not name: ``{"on_new_model": "advisory"|"none", "alert": bool}``.
+    """What may happen to a model id the system sees that the pipeline does
+    not name: ``{"on_new_model": "advisory"|"none", "alert": bool}``.
 
     Read from the config, never decided here. Under the CEO's rule of
     2026-09-14, `on_new_model: advisory` means a NEW FAMILY may join the

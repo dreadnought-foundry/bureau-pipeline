@@ -14,14 +14,15 @@ WHAT THIS PINS, one section per acceptance criterion:
   1. A valid choices file adds ONE fenced `escalation-choices` block as the last
      thing in the comment, the prose above it is byte for byte today's comment,
      and the block parses back to the same fields.
-  2. An invalid one is refused with a run-log line naming the rule, and the
-     escalation still posts the prose and parks the card in Green Light. A
-     missing file is the normal case and silent; a file that is not JSON is
-     logged.
+  2. An invalid one is refused with a run-log line naming the rule. Since
+     DRE-7961 the route that passed it is screened: an invalid file, a missing
+     one or one that is not JSON names no decision, and the card is parked in
+     Triage for the operator rather than put to the CEO as prose alone
+     (`tests/test_escalation_screen.py` pins the screen itself).
   3. All five planner prompt copies in plan.yml and the planner brief's
-     escalation section ask for the route's choices file and name the five
-     top-level fields — in the same words, so no copy is left asking for prose
-     only.
+     escalation section ask for the route's choices file, name the five
+     top-level fields, ask for 2 or 3 choices and carry the housekeeping test
+     — in the same words, so no copy is left asking for prose only.
   4. The schema is documented, and its example is DRE-5260's real question.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_escalation_choices.py -v
@@ -275,7 +276,17 @@ INVALID = {
 }
 
 
-class TestAnInvalidAnswerFallsBackToProse:
+def _parked_for_the_operator(card: _Card) -> bool:
+    """The screened-out shape (DRE-7961): one operator note, Triage, no
+    question for the CEO."""
+    import dedupe_dispatch
+    return (card.states == [planning_escalation.HOUSEKEEPING_LANE]
+            and len(card.posted) == 1
+            and card.posted[0].startswith(f"🧹 {dedupe_dispatch.STALL_PARK_TAG}:")
+            and planning_escalation.ESCALATION_TAG not in card.posted[0])
+
+
+class TestAnInvalidAnswerGoesToTheOperator:
     @pytest.mark.parametrize("case", sorted(INVALID))
     def test_it_is_refused_naming_the_rule(self, case, tmp_path, capsys):
         mutate, rule = INVALID[case]
@@ -285,11 +296,10 @@ class TestAnInvalidAnswerFallsBackToProse:
                    if line.startswith("escalation-choices refused: ")]
         assert len(refused) == 1, err
         assert rule in refused[0]
-        # The escalation still happens exactly as today.
-        assert card.posted == [_posted_note(CARD, REASON)]
-        assert card.states == ["Green Light"]
-        # Nothing about the refusal reaches the card.
-        assert "refused" not in card.posted[0]
+        # A block the console cannot show names no decision (DRE-7961): the
+        # card goes to the operator, never to the CEO as prose alone.
+        assert _parked_for_the_operator(card), (card.states, card.posted)
+        assert rule in card.posted[0]
 
     @pytest.mark.parametrize("case", sorted(INVALID))
     def test_the_validator_names_a_rule(self, case):
@@ -300,11 +310,10 @@ class TestAnInvalidAnswerFallsBackToProse:
     def test_the_documented_example_is_valid(self):
         assert planning_escalation.choices_problem(DRE_5260) is None
 
-    def test_a_missing_file_is_silent(self, tmp_path, capsys):
+    def test_a_missing_file_goes_to_the_operator(self, tmp_path, capsys):
         card = _escalate(tmp_path, str(tmp_path / "never-written.json"))
-        assert "escalation-choices" not in capsys.readouterr().err
-        assert card.posted == [_posted_note(CARD, REASON)]
-        assert card.states == ["Green Light"]
+        assert "escalation-choices refused" not in capsys.readouterr().err
+        assert _parked_for_the_operator(card), (card.states, card.posted)
 
     def test_no_choices_flag_is_todays_comment(self, tmp_path, capsys):
         card = _escalate(tmp_path, None)
@@ -316,8 +325,7 @@ class TestAnInvalidAnswerFallsBackToProse:
         err = capsys.readouterr().err
         assert "escalation-choices refused: " in err
         assert "not JSON" in err
-        assert card.posted == [_posted_note(CARD, REASON)]
-        assert card.states == ["Green Light"]
+        assert _parked_for_the_operator(card), (card.states, card.posted)
 
     @pytest.mark.parametrize("mutate, rule", [
         (lambda b: b.update(extra="x"), "key"),
@@ -395,7 +403,7 @@ def _choices_paragraph(text: str) -> str:
     """The choices instruction, path replaced and whitespace collapsed, so the
     six copies can be compared word for word."""
     flat = " ".join(_PATH.sub("PATH", text).split())
-    last = "is dropped and the reason is posted alone."
+    last = "is parked for the operator, not put to the CEO."
     start = flat.index("Then write the choices as JSON")
     return flat[start:flat.index(last, start) + len(last)]
 
@@ -406,7 +414,35 @@ def _copies() -> dict:
     return copies
 
 
+#: The limit the screen holds a question to (DRE-7961), in the prompts' words.
+TWO_OR_THREE = "`choices` — 2 or 3 of them"
+
+#: The housekeeping test from DRE-7961's "The screen", word for word in every
+#: copy: the judgment the code cannot make.
+HOUSEKEEPING_TEST = (
+    "Only a real business choice goes to the CEO: two or three defensible "
+    "options whose difference is a business outcome — a price, a policy, what "
+    "to make public, what a customer sees, scope or priority, or a risky or "
+    "destructive change. Anything else is housekeeping: a fact an agent can "
+    "look up, a mechanical step for a person (lift a hold, set or clear a "
+    "label, re-run or retry, move a card, merge, set a secret or variable, fix "
+    "a repo label), or a question with only one sensible answer. For "
+    "housekeeping, write the reason and no choices file."
+)
+
+
 class TestEveryPromptAsksForTheChoices:
+    def test_every_copy_asks_for_two_or_three_and_carries_the_test(self):
+        for name, text in _copies().items():
+            paragraph = _choices_paragraph(text)
+            assert TWO_OR_THREE in paragraph, name
+            assert "2 to 4" not in paragraph, name
+            assert HOUSEKEEPING_TEST in paragraph, name
+
+    def test_the_prompts_limit_is_the_screens(self):
+        low, high = planning_escalation.SCREENED_CHOICES
+        assert TWO_OR_THREE == f"`choices` — {low} or {high} of them"
+
     @pytest.mark.parametrize("name", sorted(PROMPT_STEPS))
     def test_the_workflow_prompt_names_its_routes_file_and_fields(self, name):
         prompt = _named(name)["with"]["prompt"]

@@ -1,0 +1,121 @@
+# The Channel Watch (DRE-8655): two watches on the `stable` channel, every
+# 10 minutes.
+#
+#   * hung-jobs — scripts/hung_job.py (DRE-8652). A `Pipeline Tests` push run
+#     on main holding a hung job is canceled and re-run once. On 10-27 a shard
+#     hung, its run ended `cancelled`, Promote Channel refused to move `stable`
+#     and nothing acted for five hours; the re-run was all it needed.
+#   * hold — scripts/channel_hold.py (DRE-8653). A held `stable` is diagnosed
+#     from Promote Channel's run logs and raised as one console alert,
+#     `pipeline_notice:channel_hold:stable`, at 2 hours and before the
+#     briefing; a pass that finds no hold resolves it.
+#
+# This file is the wiring only. What counts as hung, what a hold is and when
+# it raises live in the two modules and their tests; the wiring is held by
+# tests/test_channel_watch_workflow.py.
+#
+# THE OFF SWITCH: the repository variable `HUNG_JOB_WATCH`, set to `off`,
+# stops the cancels and re-runs and leaves the watch reporting what it would
+# do. Unset is live, so there is no switch anybody has to remember to turn
+# on. The hold check is held by `CHANNEL_HOLD`, the channel's own hold, which
+# it reads and reports.
+#
+# WHAT IF THE WATCH ITSELF STOPS: "Channel Watch" is in the medic's watch
+# list (self-medic.yml), so a red run is diagnosed, and
+# scripts/check_workflow_watchers.py fails the build if it ever leaves it.
+#
+# Vendor boundary (standards/vendor-boundaries.md):
+#   Q1 actor — the schedule runs as `github-actions`. The cancels and re-runs
+#      are made with the bureau App's token, never GITHUB_TOKEN: a re-run
+#      asked for with GITHUB_TOKEN starts no workflow when it finishes, so
+#      Promote Channel would never wake. On 10-27 a re-run asked for by
+#      `agent-bureau-bot[bot]` woke Promote Channel run 40554972524, which
+#      moved `stable`. The hold check writes nothing on GitHub, so it reads
+#      with `github.token`.
+#   Q2 secrets — a scheduled run in this repository gets the repository's own
+#      secrets: the App pair and LINEAR_API_KEY (the notice's fallback card).
+#      The notice door's OIDC token needs `id-token: write` on `hold`.
+#   Q3 retry and timing — GitHub may start a scheduled run late, or skip one
+#      when it is busy. Each pass is complete on its own, so a late or skipped
+#      pass only delays the next decision. The hold check reads the clock in
+#      America/Los_Angeles itself and never infers PT from the cron minute.
+#   Q5 our crash — a pass that dies is followed by the next one, 10 minutes
+#      later. Neither module keeps state, and the medic sees a failed run.
+name: Channel Watch
+
+on:
+  schedule:
+    # Every 10 minutes from :04 — off the hour, and clear of the release
+    # trains' `0 12` and `0 13` UTC. The minutes are hung_job.PASS_MINUTES,
+    # which the replay reads, and the step is the hold check's
+    # `--interval-minutes`; a wiring test holds all three together.
+    - cron: "4-59/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two passes never overlap: a hung-job pass can be waiting on a cancel when
+# the next one is due, and it must finish before another reads the same run.
+concurrency:
+  group: channel-watch
+  cancel-in-progress: false
+
+jobs:
+  hung-jobs:
+    name: Cancel and re-run a hung Pipeline Tests job
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # One pass can wait up to 10 minutes for a cancel to land.
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The App's token, minted the way tests.yml's durations refresh mints
+      # it: its re-run is the one that wakes Promote Channel (Q1).
+      - name: Mint bot token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+
+      # The module reads only the standard library, so the runner's python3.
+      # It writes its own lines to the step summary. Exit 1 only when GitHub
+      # refused a cancel or a re-run.
+      - name: Watch for a hung job
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          APPLY: ${{ vars.HUNG_JOB_WATCH != 'off' }}
+        run: |
+          if [ "$APPLY" = "true" ]; then
+            python3 scripts/hung_job.py watch --repo "$GITHUB_REPOSITORY" --apply
+          else
+            echo "HUNG_JOB_WATCH is off: reporting only, nothing is canceled or re-run"
+            python3 scripts/hung_job.py watch --repo "$GITHUB_REPOSITORY"
+          fi
+
+  hold:
+    name: Diagnose a held stable channel
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    # `id-token: write` is the OIDC token the console's notice door reads.
+    # The hold check reads Promote Channel's run logs, never deployments.
+    # A job-level block replaces the workflow's, so `contents: read` is
+    # restated.
+    permissions:
+      id-token: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The door and the fallback card's key are passed exactly as
+      # nightly-watch.yml's notice step passes them. Exit 1 only when the
+      # notice client reports `lost`.
+      - name: Check for a held stable
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL_HOLD: ${{ vars.CHANNEL_HOLD }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: python3 scripts/channel_hold.py watch --repo "$GITHUB_REPOSITORY" --interval-minutes 10 --apply

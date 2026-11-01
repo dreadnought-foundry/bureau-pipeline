@@ -1,0 +1,508 @@
+{
+ "saved_at": "2026-11-01T18:03:24Z",
+ "repo": "agent-bureau",
+ "card": {
+  "identifier": "DRE-5357",
+  "title": "PROOF: logs land for every kind of run including the dead ones and the repair run, planted secrets never survive, a plan run's kept log names its step and carries that step's effort, and the first weekly report is produced",
+  "createdAt": "2026-09-30T17:52:47.421Z",
+  "state": {
+   "name": "Hand-work"
+  },
+  "labels": {
+   "nodes": [
+    {
+     "name": "agent:ops"
+    },
+    {
+     "name": "no-code"
+    },
+    {
+     "name": "repo:agent-bureau"
+    },
+    {
+     "name": "size:M"
+    }
+   ]
+  },
+  "history": {
+   "nodes": [
+    {
+     "createdAt": "2026-10-13T21:47:52.691Z",
+     "fromState": {
+      "name": "Backlog"
+     },
+     "toState": {
+      "name": "Queued"
+     }
+    },
+    {
+     "createdAt": "2026-10-23T08:55:27.893Z",
+     "fromState": {
+      "name": "Queued"
+     },
+     "toState": {
+      "name": "Hand-work"
+     }
+    }
+   ]
+  },
+  "inverseRelations": {
+   "nodes": [
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-8608",
+      "state": {
+       "name": "In Progress"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-7513",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-7484",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-5407",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4245",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5356",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5354",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5353",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5352",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5351",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5350",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5032",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4925",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4907",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4906",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4905",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4387",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4386",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4385",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4375",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4353",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4352",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4351",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4350",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4349",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4348",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4343",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4271",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4270",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4269",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4268",
+      "state": {
+       "name": "Done"
+      }
+     }
+    }
+   ]
+  }
+ },
+ "thread": [
+  {
+   "body": "🧭 routing-verdict: **OPERATOR** — Not code — a deploy, a migration run, a secret.\n\n**Why:** the epic's proof card, routed by the proof-and-demo check off the card itself: the card carries an explicit role label, which says where it goes — no judgement, and no model asked An epic is confirmed by something other than its builder, so the fleet is never sent at this card.\n\n**Where it goes:** Todo. **Who handles it there:** operator.\n**Marked:** `hand-built`, `no-code` — so the sweep neither dispatches a run nor reports the card as stalled.\nThis card is **not** dispatched to the fleet: the promoter reads this verdict and leaves it where a person will find it.",
+   "createdAt": "2026-09-30T17:56:02.324Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "**Proof by system** — waits on DRE-4271, DRE-5350, DRE-5353, DRE-5356 and the Agent-Bureau fleet pause (the run it observes is switched off until Stage 1 lands); closes itself on evidence, never reaches the CEO.\n\n_Sorted 2026-10-02 17:24 PT under the CEO's rule of 2026-10-02: a proof runs in the sandboxes and is closed on evidence. Only a fact he alone can see goes to him._",
+   "createdAt": "2026-10-03T00:24:43.413Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "🧳 hand-built-migration: label removed (`hand-built`).\n\n**What it read:** `hand-built` was put on this card automatically — applied by Agent-Bureau (history entry) — and the card is a proof in Backlog.\n\n**The rule it followed:** a proof keeps `no-code` and its lane; the proof dispatch takes it from Hand-work, and nothing about it needs the CEO's mark.\n\nThe CEO's rule of 2026-10-07: \"Build it and let everyone know when i say built it, I'm saying this is a hand built card.\" The mark is his alone, so the one-time hand-built migration takes off every one the pipeline applied.",
+   "createdAt": "2026-10-09T17:37:47.522Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "🧹 Reconcile: the 'Backlog' lane is being retired (DRE-4125) and nothing writes to it any more — moved to 'Queued', which is where the work now continues.",
+   "createdAt": "2026-10-13T21:47:53.261Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🔬 proof-observed: second pass read by hand against production on 2026-10-17, 13:30–13:45 PT, and written into architecture/proofs/agent-working-logs.md on draft PR #3876. The first pass is left as written.\n- **1 met:** all seven job kinds have logs, including 40 `repair` logs since 10-07. There are 10,022 working logs in all.\n- **2 met:** each death left a real transcript.\n  - Turn cap: agent-bureau 38314378287 attempt 1, plan, 141 turns, stored 10-12 15:33 PT.\n  - 429: agent-bureau 37714053603, review, stored 10-07 18:43 PT.\n  - Timeout (exit 124, stalled-no-stream): bureau-pipeline 38170959772, plan, 10-11 13:28 PT.\n  - Not seen: a build turn-cap death. All 13 turn-cap deaths since 10-02 were plan runs.\n- **3 met:**\n  - bureau-pipeline 38329761597 (10-12 17:57 PT) died in oorevise, the step after the critic. That step's transcript was kept, with no effort metadata.\n  - agent-bureau 38314378287 attempt 2 kept the last critic's transcript with effort high. That critic was the second one, preb, because the plan was revised once.\n- **4 not observed:** no secret was planted. Both routes need either rotating a real credential or a bureau-pipeline change. A sample of 382 logs (242M characters) shows by-shape redactions on 3 shapes and no by-value redactions. The scrub's own patterns matched nothing.\n- **5 met:** two public bureau-pipeline runs had 0 transcript lines in their logs and only receipt artifacts. The secret-name listing is gone from the log.\n- **6 met, except foundry:**\n  - Six repos have logs, portico included (first portico log 10-01 18:43 PT).\n  - The gap sweep's first pass (10-01 14:35 PT) found missing=1961. At 13:34 PT today: missing=2602 of 5532.\n  - foundry has run no agent and has no upload role in the live AgentLogStack; `cdk diff` shows the role pending.\n  - None of the 5 missing runs checked by hand had run a model step. Two were Onboarding Plan runs, which the gap sweep counts as planner runs.\n- **7 met:** 6,551 of 7,743 fingerprint rows since 10-02 carry effort. The rows match the objects both ways: 39066771344 has effort high on both, and 38999022487 has neither.\n- **Releases:** AgentLogStack deploy carrying DRE-5032 and DRE-5351 was 10-01 17:02 PT. The first console release carrying DRE-4387 and DRE-5354 was v1.6.224, 10-01 17:10 PT.",
+   "createdAt": "2026-10-17T20:48:22.328Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "🔬 proof-waiting: observation 8 (the first weekly report is one card in Green Light, with its measured cost recorded) — needs DRE-5407's record to merge, which waits on the report of Sunday 2026-10-18 (about 05:30 PT) and the operator's reading on draft PR #3173; then this record cites it on draft PR #3876.",
+   "createdAt": "2026-10-17T20:48:23.105Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "🔬 proof-observed (operator session, 10-17 3:25 PM PT): `foundry` now has its agent-log upload role. The CEO said go at about 3:20 PM PT.\n- `cdk diff AgentLogStack` showed only additions: the new role `bureau-agent-log-upload-foundry` (trusted only for dreadnought-foundry/foundry's seven bureau-pipeline agent workflows), a bucket-policy statement `DenyUploadOutsidePrefixfoundry`, and one output. Nothing else changed.\n- The deploy (`cdk deploy AgentLogStack --exclusively`) finished UPDATE_COMPLETE at 3:22:49 PM PT, and the role was created at 3:22:55 PM PT.\n- The other repos' uploads are unaffected: two agent-bureau logs landed at 3:23:45 PM PT, after the deploy.\n- Observation 6's `foundry` gap stays open until foundry's first agent run uploads a log.",
+   "createdAt": "2026-10-17T22:24:24.284Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "Observation 8 filled on draft PR #3876 (commit 5b4a4e635) from DRE-5407's record of Sunday 2026-10-18: production filed DRE-7512 itself at 05:43:29 PT, alone in Green Light, with `Cost: $2.72 · 8 model calls` matching its row. Seven of the eight observations are now met. The one left is observation 4, the planted secret, which is not observed. Do not close this card; the CEO closes it.",
+   "createdAt": "2026-10-18T14:08:06.228Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The card is in Queued, a lane the proof dispatcher does not read — moving it to In Review puts the record in front of the critic and the proof run's re-run, and closing the pull request ends it if the work is finished: either moves it.\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 76 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-21T01:40:18.173Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The card is in Queued, a lane the proof dispatcher does not read — moving it to In Review puts the record in front of the critic and the proof run's re-run, and closing the pull request ends it if the work is finished: either moves it.\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 100 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-22T01:44:26.915Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The card is in Queued, a lane the proof dispatcher does not read — moving it to In Review puts the record in front of the critic and the proof run's re-run, and closing the pull request ends it if the work is finished: either moves it.\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 124 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-23T01:47:28.699Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧹 Auto-promoted Queued → Hand-work: routed **OPERATOR** — Not code — a deploy, a migration run, a secret. operator, your turn in Hand-work — a person builds this; nothing was dispatched. Marked `no-code`.",
+   "createdAt": "2026-10-23T08:55:28.333Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🔬 proof-note-unread: the note of 2026-10-17 15:24 PT “🔬 proof-observed (operator session, 10-17 3:25 PM PT): `foundry` now has its agent-log upload role. The CEO said go at about 3:20 PM PT.” discharged nothing — a note is read only when it opens “🔬 proof-observed:” with the colon, and a dash or anything else in its place is not read as one. Post it again opening “🔬 proof-observed:” to discharge the hold.",
+   "createdAt": "2026-10-23T08:55:47.091Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 149 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-24T01:59:17.004Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 173 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-25T02:21:17.992Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 197 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-26T02:33:40.150Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 221 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-27T02:35:18.406Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 245 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-28T02:35:24.415Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "🧱 proof-record-stuck #3876: the proof record's pull request #3876 is open and nothing in the pipeline will move it.\n\n- The gate can read no record: the pull request adds no .md file under docs/ or architecture/ — it touches architecture/proofs/agent-working-logs.md (modified). A proof record is one new .md file under docs/ or architecture/ — adding it on this branch moves it.\n\nOpen 269 hours. It has been open past 72 hours, so the operator has a console alert for it too. Said at most once a day while it stands.\n\nhttps://github.com/dreadnought-foundry/agent-bureau/pull/3876",
+   "createdAt": "2026-10-29T02:47:53.129Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  },
+  {
+   "body": "Operator note, 2026-10-30 8:27 AM PT (not a 🔬 proof-observed, and no acceptance): observation 4's plant was tried today. The CEO set `BUREAU_PLANT_PROBE` on agent-bureau-demo at 7:09 AM PT and sandbox card DRE-8435 asked its build to echo it; the build agent declined at 7:34 AM PT, because card text is untrusted and may not instruct an agent to print its environment. On the CEO's answer, the refusal stays, DRE-8435 is canceled, and the plant moves to a trusted workflow step: DRE-8467. Observation 4 now waits on that card shipping and one sandbox build run with `BUREAU_PLANT_PROBE_APPEND=true`.",
+   "createdAt": "2026-10-30T15:27:55.246Z",
+   "user": {
+    "id": "0913a8db-839c-42d0-b2e8-70eda1b64617"
+   }
+  },
+  {
+   "body": "🔬 proof-waiting: All eight observations are recorded by hand, by the operator, in agen… — needs not-before=2026-11-01T20:21+00:00\n\n📎 pipeline-act: proof-observation-pending · kind: hold · state: held · next: operator · discharges: nothing · subscriber: reconcile.yml · tag: proof-waiting",
+   "createdAt": "2026-11-01T08:21:32.319Z",
+   "user": {
+    "id": "cebc4c53-fad2-410f-be31-f920b6ad773f"
+   }
+  }
+ ],
+ "viewer": "cebc4c53-fad2-410f-be31-f920b6ad773f",
+ "record": {
+  "pr": {
+   "number": 3876,
+   "state": "CLOSED",
+   "createdAt": "2026-10-17T20:48:07Z",
+   "headRefName": "agent/DRE-5357-proof-record",
+   "headRefOid": "4a61f7c57640d31ec526966fc41b2b45540ffd18",
+   "files": [
+    {
+     "path": "architecture/proofs/agent-working-logs-second-pass.md",
+     "changeType": "ADDED"
+    }
+   ]
+  },
+  "branch": "agent/DRE-5357-proof-record",
+  "head": "4a61f7c57640d31ec526966fc41b2b45540ffd18",
+  "path": "architecture/proofs/agent-working-logs-second-pass.md",
+  "text": "# Agent working logs, second pass — DRE-5357, observed in production on 2026-10-17\n\n**Six of the eight observations are met. Two wait on one event each: observation 4 (the planted secret) waits on a sandbox build at night, and observation 6's `foundry` line waits on DRE-8154 shipping and an AgentLogStack deploy.** Observations 1, 2, 3, 5 and 7 were read by hand against production on 2026-10-17. Observation 8 is cited from DRE-5407's merged record. This file was assembled on 2026-10-29 at about 4:40 PM PT from the draft on this branch, with observations 6 and 8 brought up to date (each says what changed and when).\n\n**Why this is its own file.** The card asked for a dated second-pass section appended to `architecture/proofs/agent-working-logs.md`. The proof gate reads exactly one `.md` file that a record pull request ADDS under `docs/` or `architecture/`, so a section added to the existing file left the gate with no record to read (the `🧱 proof-record-stuck` notes on DRE-5357 from 10-21 on). The second pass therefore lives here, and `architecture/proofs/agent-working-logs.md` on `main` is left exactly as written.\n\nEverything under \"Observation 1\" to \"Observation 7\" was read by hand by the operator session between **13:30 and 13:45 PT on 2026-10-17**. Nothing was written to any live system: no S3 put, no workflow dispatch, no re-run, no deploy, and the database reads ran in a `READ ONLY` transaction (`make db-read`). Times are Pacific.\n\n**The first pass is `architecture/proofs/agent-working-logs.md` on `main`.** It is DRE-4272's record of 2026-09-20 and its two observation comments of that day: [13:02 PT](https://linear.app/dreadnoughtfoundry/issue/DRE-4272/superseded-re-filed-as-dre-5355-so-the-proof-card-is-the-epics-last#comment-3e10aabf) (\"where this stands after a day\") and [13:33 PT](https://linear.app/dreadnoughtfoundry/issue/DRE-4272/superseded-re-filed-as-dre-5355-so-the-proof-card-is-the-epics-last#comment-7414401d) (the turn-cap death cannot be arranged). It is left as written. The first pass numbers its observations differently: its 3 is this card's 4 (secrets), its 4 is 5 (public surfaces), its 5 is 6 (gaps) and its 6 is 8 (the report). This card's 3 (plan step and effort) and 7 (effort on the fingerprint) are new.\n\n## Criteria\n\n| Criterion | Result |\n| --- | --- |\n| All eight observations are recorded by hand, by the operator, in agent-bureau's `architecture/proofs/agent-working-logs.md`, each with its time (PT) and the command, taken against the live store, the live Record and the live board. | Not observed. waiting for a sandbox build on agent-bureau-demo that plants DRE-7513's throwaway probe secret, run 11 PM–3 AM PT (observation 4), and for DRE-8154 shipped and AgentLogStack deployed (observation 6's `foundry` line): observations 1, 2, 3, 5 and 7 are recorded below with their PT times and commands, read on 2026-10-17 between 13:30 and 13:45 PT against the live store, the live Record and the live board, and observation 8 is cited from DRE-5407's merged record. Observation 4's scrub-by-value plant has not run, and `foundry`'s first agent run (40436818679, 2026-10-26 9:44 PM PT) was refused at upload. The second pass is in this file rather than in `architecture/proofs/agent-working-logs.md`, for the reason given above. |\n| The record cites [DRE-4272](https://linear.app/dreadnoughtfoundry/issue/DRE-4272/superseded-re-filed-as-dre-5355-so-the-proof-card-is-the-epics-last)'s two 2026-09-20 observation comments, and the first-pass sections already in `architecture/proofs/agent-working-logs.md` on `main`, as its first pass, leaves those sections as written, and states per observation what changed since. | Met. The two DRE-4272 comments (13:02 and 13:33 PT, 2026-09-20) are linked above, and `architecture/proofs/agent-working-logs.md` on `main` is named as the first pass. This pull request leaves that file byte for byte as it is on `main`. The table under \"Per observation\" says what changed since the first pass, row by row. |\n| Every sibling card in this epic is merged, and one AgentLogStack deploy taken after both [DRE-5032](https://linear.app/dreadnoughtfoundry/issue/DRE-5032/agent-bureau-porticos-agent-logs-are-refused-at-upload-its-oidc-tokens) and [DRE-5351](https://linear.app/dreadnoughtfoundry/issue/DRE-5351/agent-bureau-the-agent-log-upload-roles-trust-bureau-pipelines-red) merged has been applied, before the observations are taken; the record names that deploy's time. | Met. All 27 cards on the card's **Blocked by:** line read `Done` (`scripts/linear-api.py get DRE-<n>`, 2026-10-29 about 4:35 PM PT). DRE-5032 merged 2026-10-01 14:32 PT (#3005) and DRE-5351 at 14:54 PT (#3007). The AgentLogStack deploy carrying both finished `UPDATE_COMPLETE` at **2026-10-01 17:02:36 PT**, 16 days before the observations; see \"The deploy and the release\". |\n| A console release carrying both [DRE-4387](https://linear.app/dreadnoughtfoundry/issue/DRE-4387/a-run-the-record-saw-whose-working-log-never-arrived-is-a-recorded-gap)'s and [DRE-5354](https://linear.app/dreadnoughtfoundry/issue/DRE-5354/agent-bureau-the-fingerprint-sweep-fills-each-runs-effort-from-the)'s merges is live, confirmed by commit ancestry against its tag, and each sweep has completed a pass on it, before observations 6 and 7 are read; the record names the release version and the time it went live. | Met. The first release carrying both merges is `agent-bureau-console-v1.6.224`, tagged 2026-10-01 17:10 PT. `git merge-base --is-ancestor` holds for `642733d4` (DRE-4387) and `49fb60f8` (DRE-5354) against `v1.6.491`, the version the console last reported (12:12 PT 2026-10-17), and `v1.6.492` (tagged 12:04 PT). The gap sweep completed a pass at 13:34:35 PT and the fingerprint sweep at 13:39:33 PT on 2026-10-17, before observations 6 and 7 were read. |\n| Observation 2 cites a real run id for each kind that happened in the stated window, and says so plainly for any kind that did not; observation 3 does the same for a plan run that died in a later model step. | Met. The window is 2026-10-01 17:02 PT to 2026-10-17. Turn cap: agent-bureau `38314378287` attempt 1. 429: agent-bureau `37714053603`. Timeout: bureau-pipeline `38170959772`. A build-run turn-cap death did not happen in the window, and observation 2 says so. Observation 3's plan run that died in a later model step is bureau-pipeline `38329761597` (died in `oorevise`). |\n| The CEO closes this card after reading the record. | Open: the CEO's step. |\n\n## Per observation\n\n| # | observation | verdict | what changed since the first pass |\n| --- | --- | --- | --- |\n| 1 | every run type lands a log | **met**, all seven kinds | `repair` joined: 40 logs since 2026-10-07 |\n| 2 | the runs that died land too | **met**: turn cap, 429 and timeout each cited | was half proven, because no death had left a transcript |\n| 3 | a plan run's kept log is the last model step's, carrying that step's effort | **met** | new |\n| 4 | planted fake secrets never survive | **waiting**: for a sandbox build on agent-bureau-demo with `BUREAU_PLANT_PROBE` set, 11 PM–3 AM PT | the by-shape pass has now fired on 3 shapes; by value, still never. DRE-7513 (the throwaway probe secret) is now shipped |\n| 5 | nothing reached a public surface | **met** | the secret-name listing (DRE-4391) is gone from the public log |\n| 6 | every repo has a log, portico included, and a missing log shows as a gap | **met for six repos; `foundry` waiting** for DRE-8154 shipped and AgentLogStack deployed | portico now uploads; the gap sweep runs; `foundry` has a role, but it refuses foundry's sign-in form |\n| 7 | a log carrying `effort` has a fingerprint row with that effort | **met** | new |\n| 8 | the first weekly report is one card in Green Light, with its cost | **met**, cited from DRE-5407's merged record | production filed DRE-7512 itself, alone in Green Light, `$2.72 · 8 model calls` |\n\n## The deploy and the release these observations were read on\n\n**AgentLogStack: the deploy carrying both trust changes finished at 2026-10-01 17:02:36 PT.** DRE-5032 merged at 14:32 PT that day (agent-bureau #3005) and DRE-5351 at 14:54 PT (#3007). The stack's `UPDATE_COMPLETE` at 17:02:36 PT is the first one after both, and all six upload roles were updated in it, between 17:02:26 and 17:02:28 PT (`aws cloudformation describe-stack-events --stack-name AgentLogStack`). The live roles hold both changes, read with `aws iam get-role --role-name bureau-agent-log-upload-<slug>` at about 13:32 PT:\n\n- **DRE-5032:** `bureau-agent-log-upload-portico`'s `:sub` condition accepts two patterns, `repo:dreadnought-foundry/portico:*` and the immutable `repo:dreadnought-foundry@226758887/portico@1299587579:*`.\n- **DRE-5351:** every role's `job_workflow_ref` list holds seven workflows, including `dreadnought-foundry/bureau-pipeline/.github/workflows/red-main-repair.yml@*`.\n\nThe stack has been updated 14 times since, most recently at 2026-10-16 14:49 PT. None of those updates changed an upload role; the last role update is still 2026-10-01 17:02 PT.\n\n**The console: every release since v1.6.224 carries both sweeps.** DRE-4387's merge `642733d4` (#3006, 2026-10-01 14:27 PT) is first in `agent-bureau-console-v1.6.223`, and DRE-5354's merge `49fb60f8` (#3011, 15:19 PT) is first in **`agent-bureau-console-v1.6.224`, tagged 2026-10-01 17:10 PT** (`git tag --contains <sha>`). `git merge-base --is-ancestor` holds for both merges against `v1.6.491` and `v1.6.492`. The console's own heartbeat last named its version as `agent-bureau-console-v1.6.491`, at its shutdown at 12:12 PT on 2026-10-17. That followed the App Runner `UPDATE_SERVICE` of 12:01–12:04 PT, and `v1.6.492` was tagged at 12:04 PT. Either way, the running release carries both.\n\n**Both sweeps completed passes on that release, read from the App Runner application log at about 13:41 PT** (`aws logs filter-log-events --log-group-name /aws/apprunner/bureau-console-backend/…/application`):\n\n- **Gap sweep, 13:34:35 PT:** `considered=5532 covered=2930 missing=2602 unchecked=0 recorded=0 failed=0`.\n- **Fingerprint sweep, 13:39:33 PT:** `listed=12510 … read=5 inserted=5 refused=0 failed=0 … coverage=complete`.\n\n---\n\n## Observation 1 — every run type lands a log\n\n**Met. All seven job kinds have stored logs, `repair` included, from six of the seven repos.** Listing taken at **13:30:05 PT**:\n\n```\nAWS_PROFILE=dreadnought aws s3 ls s3://agentlogstack-agentlogbucketffd20d5f-3yaboku3ceyv/agent-logs/ --recursive --region us-west-2\n```\n\nThere were **10,022 working logs**: 1,961 from September and 8,061 from October. There were also 2,457 objects under a per-repo `github-calls/` prefix: DRE-6915's GitHub-call readings, which are not transcripts and are left out of every count here. Since 2026-10-02, the first day after the deploy:\n\n| repo | diagnose | execute | fix | plan | repair | review | verify |\n| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n| `agent-bureau` | 367 | 553 | 637 | 600 | 22 | 1,608 | 615 |\n| `bureau-pipeline` | 200 | 408 | 446 | 408 | 18 | 1,018 | 0 |\n| `portico` | 26 | 105 | 121 | 129 | 0 | 295 | 0 |\n| `agent-bureau-demo` | 5 | 5 | 8 | 38 | 0 | 29 | 11 |\n| `deltasolv` | 7 | 4 | 4 | 6 | 0 | 23 | 0 |\n| `atlas` | 0 | 3 | 3 | 8 | 0 | 14 | 0 |\n\nOne stored key per kind, the newest of each at the listing, with the times as `s3 ls` printed them in PT:\n\n| job | key | stored |\n| --- | --- | --- |\n| `execute` | `agent-logs/agent-bureau/2026-10-17/39066585218-1-execute.json.gz` | 10-17 13:29:32 |\n| `review` | `agent-logs/agent-bureau/2026-10-17/39066771344-1-review.json.gz` | 10-17 13:28:48 |\n| `plan` | `agent-logs/agent-bureau/2026-10-17/39065950790-1-plan.json.gz` | 10-17 13:17:45 |\n| `diagnose` | `agent-logs/agent-bureau/2026-10-17/39063824086-1-diagnose.json.gz` | 10-17 12:47:37 |\n| `repair` | `agent-logs/agent-bureau/2026-10-17/39026018747-1-repair.json.gz` | 10-17 03:48:09 |\n| `fix` | `agent-logs/agent-bureau/2026-10-17/39008736105-1-fix.json.gz` | 10-16 23:09:53 |\n| `verify` | `agent-logs/agent-bureau/2026-10-16/38974224934-1-verify.json.gz` | 10-16 15:12:45 |\n\n**`repair` is the change.** The first repair log is `agent-logs/bureau-pipeline/2026-10-07/37645204926-1-repair.json.gz`, stored 2026-10-07 08:38 PT, three days after DRE-5353 merged (bureau-pipeline #711, 2026-10-04 08:57 PT). There are 40 since: 22 from agent-bureau and 18 from bureau-pipeline.\n\nZeros in the table are runs that did not happen, not refusals. bureau-pipeline, portico, atlas and deltasolv have no `verify` workflow, and only agent-bureau and bureau-pipeline have had a repair run that reached its model step. That second point is read from the gap spans, observation 6.\n\n---\n\n## Observation 2 — the runs that died land too\n\n**Met. A turn-cap death, a 429 and a timeout each left a real transcript in the store.** The first pass could not show this, because every death in its five hours died before the model wrote anything.\n\n**The window** runs from the deploy (2026-10-01 17:02 PT) to this record (2026-10-17). The deaths were found by the fingerprint table, then each one's stored object was downloaded and read. The operator caused none of them.\n\n```\n-- make db-read (13:33 PT)\nSELECT ending, job, count(*) FROM agent_run_fingerprint WHERE log_date >= '2026-10-02' GROUP BY ending, job;\n```\n\n| ending | rows since 2026-10-02 |\n| --- | ---: |\n| `completed` | 7,605 |\n| `api_error` | 103 (each sample read was a 401) |\n| `rate_limited` (429) | 19 |\n| `turn_cap` | 13, all `plan` |\n| `unknown` (no result event) | 3, all `plan` |\n\n| kind | run | stored object, PT | what the object is |\n| --- | --- | --- | --- |\n| **turn cap** | agent-bureau `38314378287` attempt 1, `plan`, DRE-7072 | `…/agent-bureau/2026-10-12/38314378287-1-plan.json.gz`, 10-12 15:33 | 2,701,837 characters, 1,295 events, 319 assistant messages. The last event is `result` / `error_max_turns` at 141 turns |\n| **429** | agent-bureau `37714053603`, `review`, DRE-6154 | `…/agent-bureau/2026-10-08/37714053603-1-review.json.gz`, 10-07 18:43 (the key's date is UTC) | 7,170 characters, 4 events: `init`, a `rate_limit_event`, one assistant message, and `result` with `is_error: true`, `api_error_status: 429` and the text \"You've hit your session limit · resets 2am (UTC)\" |\n| **timeout** | bureau-pipeline `38170959772`, `plan`, DRE-6936 | `…/bureau-pipeline/2026-10-11/38170959772-1-plan.json.gz`, 10-11 13:28 | 1,426,050 characters, 749 events, 98 assistant messages, ending mid-stream with no `result` event. The run log reads at 13:28:21 PT: `Claude Code process exited with code 124 … stalled-no-stream` |\n\nAll three passed `gzip.decompress` and then `json.loads`, and each begins with the SDK's `system`/`init` event naming its model. None of them is a `no model step wrote one` gap. The 429 transcript is short because the run died at its first turn, but it is the run's own stream, not a placeholder. A second 429 died the same way 4 minutes earlier: `37713749786`, `verify`, attempts 1 and 2.\n\n**Not seen in the window: a build (`execute` or `fix`) turn-cap death.** All 13 turn-cap rows are `plan` runs. In the first pass, turn-cap deaths were the fleet's most common expensive failure, at about five a day, all from build runs. That rate has not continued since DRE-4359 raised the default rung. This is a finding, not a gap in the proof. The card asks for \"a turn-cap death\", and the one above is a real one.\n\n---\n\n## Observation 3 — a plan run's kept log is the last model step's, with that step's effort\n\n**Met, on both halves.** The plan job's \"Keep the run's working log\" step reads `ORDER` (`oocritic oorevise claude claude_retry prea replan replan_retry preb posta postreplan postreplan_retry rollup rollup_retry`). It walks it backwards to the last step whose outcome is not `skipped`. If that step succeeded, it stamps that step's `EFFORT_<id>`. If it failed, it writes `kept model step: <id> (failed — transcript ownership unconfirmed, no effort stamped)`. The `kept model step:` line goes to `$GITHUB_STEP_SUMMARY`, which `gh run view --log` does not return, so it was not read as text. **The inputs to the step that writes it were read instead,** from its `env:` group in the run log (`gh run view <id> --log`). Which model step produced the stored transcript was matched by `session_id`: the object's `system`/`init` session id appears in exactly one `claude-code-action` group in the run log.\n\n**A plan run that died in a later model step:** bureau-pipeline `38329761597`, DRE-7066, job 2026-10-12 17:57–18:03 PT.\n\n- The step outcomes were `OUTCOME_oocritic: success` and `OUTCOME_oorevise: failure`, with every later step `skipped`. So the kept step is `oorevise`, the revise step that runs after the critic, and the summary line takes its failed branch.\n- The run log holds two `claude-code-action` groups, starting at lines 1010 and 1724. The stored object's session `717f30c4-…` is printed inside the second group, which is `oorevise` (`--max-turns 36`). The object is that later step's transcript, not the critic's. It ends `result` / `error_max_turns` at 37 turns: the revise step ran out of turns.\n- **The object carries no `effort` metadata:** `aws s3api head-object` returned `Metadata: {}`. The fingerprint row reads `effort` NULL, `ending` `turn_cap`.\n\n**A healthy plan-route run:** agent-bureau `38314378287` attempt 2, DRE-7072, job 2026-10-12 15:35–15:46 PT.\n\n- The step outcomes were `claude`, `prea`, `replan` and `preb` all `success`, each with `EFFORT_<id>: --effort high`, and every later step `skipped`. So the kept step is `preb`, and the success branch stamps `--effort high`.\n- The run log holds four `claude-code-action` groups (lines 1903, 3752, 4652 and 5878). The stored object's session `3d96f82d-…` is in the fourth, `preb`.\n- **The object carries `effort: high`**, matching `EFFORT_preb`.\n\n**Read against the card's words:** the card expected the healthy run's stored object to be \"the first critic's transcript\". On this run the plan was revised once, so the last model step to succeed is the **second** critic (`preb`), and that is the transcript kept. This is what DRE-5350's rule says, since the last step that ran owns the file. A run that the first critic passed outright would keep `prea`. Not every recent plan run was searched for one.\n\n---\n\n## Observation 4 — planted fake secrets never survive\n\n**Waiting for a sandbox build on agent-bureau-demo with `BUREAU_PLANT_PROBE` set, run 11 PM–3 AM PT. No secret has been planted yet.** On 2026-10-17 the plant still needed one of the two routes the first pass wrote out:\n\n- **Route A** echoes a real credential the agent holds. That must be followed by rotating that credential, which is a live change outside this observation pass.\n- **Route B** needs a one-line change to bureau-pipeline's `agent-task.yml` to put a throwaway secret in the agent step's `env:`.\n\nNeither was taken on 10-17. A run that \"passed\" without one would read exactly like success while testing nothing, which is the trap the first pass names. The procedure in the first pass's observation 3 stands unchanged. **This keeps the scrub's by-value pass unproven.**\n\n**Changed since 10-17:** route B shipped as DRE-7513 (Done, in bureau-pipeline's `stable`): the build agent's shell carries a throwaway `BUREAU_PLANT_PROBE` secret, so the plant needs no real credential and no further pipeline change. What remains is one sandbox build that echoes it, run at night because it is a live run, and then reading the stored object for the value and the scrub's by-value marker.\n\n**What was read instead, and what it does and does not show.** A one-in-twenty sample of every working log since 2026-10-02 was taken: 382 objects, 242,551,392 characters, all valid JSON, downloaded 13:38 PT. It was scanned with the first pass's two nets:\n\n```\nredaction markers: by value 0; by shape 17  («redacted-shape:aws-access-key-id» 13, «…:jwt» 2, «…:anthropic-key» 2)\nnet A (independent patterns): Anthropic key 18, in 2 files\nnet B (the scrub's own SHAPES, bureau-pipeline@stable scripts/secret_shapes.py): no match\n```\n\n- **The by-shape pass now fires on three shapes**, where the first pass saw one.\n- **Net B is empty**, so no text the scrub should have caught got past it.\n- **Net A's 18 hits are fixtures, not tokens.** They are in `37516061909-1-review` and `37529441327-1-execute` (agent-bureau, 2026-10-06). They were inspected masked: every one is `sk-ant-oat01-` followed by 15–19 characters ending in words like `…secret` or `…EN-bbb`. That is below the scrub's 20-character floor and far shorter than a real token.\n- **By-value markers: still zero**, so pass 1 has still never acted.\n\n\"No secret found\" is not \"the scrub works\", for the reason the first pass gives.\n\n---\n\n## Observation 5 — nothing reached a public surface\n\n**Met.** `bureau-pipeline` is the only `PUBLIC` repo of the seven; the other six are `PRIVATE` (`gh repo view … --json visibility`, about 13:40 PT). Two public runs from the last day were checked: one critic and the new repair kind.\n\n| run | PT | artifacts (`gh api …/runs/<id>/artifacts`) | `\"type\": \"assistant\"` in the full public log | upload line |\n| --- | --- | --- | ---: | --- |\n| `38999104880` QA Review | 10-16 20:31 | `claude-usage-reading-review-attempt1` (1,172 B), `death-receipt-review-attempt1` (1,073 B) | **0** | `agent log kept: …/bureau-pipeline/2026-10-17/38999104880-1-review.json.gz` |\n| `38992033721` Red-Main Repair | 10-16 18:43 | `death-receipt-repair-attempt1` (1,037 B) | **0** | `agent log kept: …/bureau-pipeline/2026-10-17/38992033721-1-repair.json.gz` |\n\n**Changed since the first pass:** the public log no longer prints `SECRETS_JSON`, with 0 lines in `38999104880`'s log. The secret-name listing the first pass raised as DRE-4391 is gone (that card is Done).\n\n---\n\n## Observation 6 — every repo has a log, and a missing log shows as a gap\n\n**Met for six of the seven repos in `config/repo-map.json`, portico included. `foundry` is waiting for DRE-8154 shipped and AgentLogStack deployed.** On 2026-10-17 at about 13:34 PT `foundry` had no log, for two reasons:\n\n- **It had run no agent workflow.** Its last 60 runs were Reconcile (58) and Release Train (2), read with `gh run list -R dreadnought-foundry/foundry --limit 60`.\n- **The live AgentLogStack had no upload role for it.** `foundry` joined `config/repo-map.json` on 2026-10-15 (`9c329d294`). The stack derives its roles from that file, but the live template held six roles and no `foundry`. `cdk diff AgentLogStack` against the live stack, read about 13:34 PT, showed `UploadRolefoundry…` and its policies and output as pending.\n\n**Changed since 10-17, and why the row still waits:**\n\n- **The role was deployed that afternoon.** On the CEO's go, `cdk deploy AgentLogStack --exclusively` finished `UPDATE_COMPLETE` at 2026-10-17 3:22:49 PM PT and created `bureau-agent-log-upload-foundry` at 3:22:55 PM PT; the diff held only additions, and two agent-bureau logs landed at 3:23:45 PM PT, after it (the operator's note on DRE-5357, 10-17 3:24 PM PT).\n- **It still refuses foundry's uploads.** Foundry was created after GitHub's July 15 change, so its OIDC tokens carry the ID-based subject `repo:dreadnought-foundry@226758887/foundry@1412115043:…`. The role trusts only the name form, because `infra/lib/agent-log-repo-ids.json` lists only `portico`. Foundry's fix-agent run `40436818679` (2026-10-26 9:44 PM PT) logged `AccessDenied when calling the AssumeRoleWithWebIdentity operation` for its upload. **DRE-8154** adds foundry's two ids to that file (moved from Intake to Planning on 2026-10-29); after it merges, an AgentLogStack deploy and foundry's next agent run's log under `agent-logs/foundry/` close this line.\n\n**Portico:** the first portico log is `agent-logs/portico/2026-10-02/36949636339-1-plan.json.gz`, stored 2026-10-01 18:43 PT, 101 minutes after the deploy. There are 676 since, across five job kinds. Before the deploy, portico's uploads were refused (DRE-5032).\n\n**The gap sweep's first real pass, the count DRE-4387 deferred:** 2026-10-01 14:35:48 PT, on the release carrying #3006.\n\n```\nagent-log gap sweep: considered=3559 covered=1598 missing=1961 unchecked=0 recorded=1959 failed=0\n  by_repo={'(no project)': 716, 'agent-bureau': 444, 'agent-bureau-demo': 15, 'atlas': 1,\n           'bureau-pipeline': 153, 'deltasolv': 4, 'portico': 628}\n```\n\n`recorded` is 2 short of `missing`: two runs started and finished in the same second, the key limit the module states.\n\n**At the time this was read, 13:34:35 PT on 2026-10-17:** `missing=2602` of `considered=5532` over the sweep's 7-day lookback, `by_repo={'(no project)': 1301, 'agent-bureau': 890, 'agent-bureau-demo': 9, 'bureau-pipeline': 361, 'deltasolv': 6, 'portico': 35}`. Portico went from 628 to 35 once its uploads were accepted. The spans filed since the sweep began, split by job (`SELECT substring(how from 'job=([a-z|]+)'), state, count(*) FROM record_coverage WHERE event='bureau-agent-log-gap' …`, 13:33 PT):\n\n| job | missing spans |\n| --- | ---: |\n| `review` | 4,047 |\n| `execute\\|plan` (`bureau-card: DRE-N`, which `job_run` cannot split) | 2,221 |\n| `verify` | 1,384 |\n| `fix` | 420 |\n| `plan` | 184 |\n| `repair` | 84 |\n| `diagnose` | 35 |\n| `execute` | 28 |\n| **all** | **8,403** |\n\n**This is an upper bound, and the five spot checks say how loose it is.** The five newest `missing` spans were checked against their run pages (`gh api repos/dreadnought-foundry/agent-bureau/actions/runs/<id>/jobs`, about 13:42 PT). **In none of the five did a model step run:**\n\n| run | PT | workflow | why no log |\n| --- | --- | --- | --- |\n| `39058400039` | 10-17 11:30 | **Onboarding Plan** (`plan` job) | not an agent workflow at all; no model step exists in it |\n| `39058400239` | 10-17 11:30 | Verify | `Verifier run` and `Install Claude Code` were skipped |\n| `39026162227` | 10-17 03:48 | Red-Main Repair | `Repair agent` was skipped (debounced); \"Keep the run's working log\" succeeded with nothing to keep |\n| `39014949490` | 10-17 00:47 | Agent Fix #3774 | `Fix` was skipped |\n| `39007390631` | 10-16 22:45 | **Onboarding Plan** (`plan` job) | not an agent workflow |\n\n**Two of the five are a false match, not a run that ended early.** `onboard-plan.yml`'s job is named `plan`, which `names_the_job` accepts as the planner's job, so every Onboarding Plan run is filed as a planner run with no log. The other three are the by-design case the module names: a run that ended before any model step.\n\n`(no project)` (1,301) is the sweep's bucket for a `job_run` row whose repo it could not attribute. It is reported as the sweep wrote it, not resolved here.\n\n---\n\n## Observation 7 — a log carrying `effort` has a fingerprint row with that effort\n\n**Met.** The fingerprint sweep has filled `effort` since its first row with the key, recorded **2026-10-03 16:46 PT**. On 2026-10-17 at 13:33 PT (`make db-read`):\n\n| job | rows since 2026-10-02 | with `effort` |\n| --- | ---: | ---: |\n| `review` | 2,987 | 2,616 |\n| `plan` | 1,189 | 804 |\n| `fix` | 1,219 | 981 |\n| `execute` | 1,077 | 985 |\n| `verify` | 626 | 542 |\n| `diagnose` | 605 | 583 |\n| `repair` | 40 | 40 |\n| **all** | **7,743** | **6,551** |\n\n**The rows follow the objects, both ways:**\n\n- **With the key:** agent-bureau `39066771344-1-review` (2026-10-17). `head-object` → `Metadata: {'effort': 'high'}`, and its row reads `effort` `high`, `model` `claude-sonnet-5-5`, recorded 13:29:27 PT. The 429 object in observation 2 is a second example (`effort: high`, row `high`).\n- **Without the key:** bureau-pipeline `38999022487-1-fix` (Agent Fix #1147, 2026-10-16 20:30 PT). `head-object` → `Metadata: {}`, its run log reads `EFFORT_ARG:` empty, and its row reads `effort` NULL. Observation 3's failed `oorevise` object is a second NULL example, by the other route: no effort stamped because the step failed.\n\nSince 2026-10-10 every NULL is on a model run with no effort argument: `claude-fable-5-1` 88, `claude-sonnet-5-5` 85, `claude-opus-5-5` 7, `claude-sonnet-4-6` 1. Every filled row reads `high`.\n\n---\n\n## Observation 8 — the first weekly report\n\n**Met, from DRE-5407's merged record.** The record is `architecture/proofs/weekly-agent-report.md` on agent-bureau's `main`, merged through #4107 at 2026-10-27 11:27 AM PT (last commit on the file `79e57ccf7`); DRE-5407 is Done. The observation is in its \"Sunday 3 (2026-10-18)\" reading, taken by the operator session between 06:53 and 06:59 PT on 10-18. It is cited here, not observed again, as this observation said it would be.\n\n**Changed since the draft of 10-18:** the draft cited DRE-5407's record on draft PR #3173, commit 26f08a1c2. That pull request was closed unmerged; the same record reached `main` through #4107 on its `agent/DRE-5407-proof-record` branch, with a Sunday 4 (2026-10-25) reading added.\n\n- **One card, in Green Light.** DRE-7512, `What broke the agents — week ending 2026-10-17 (PT)`, was created at 05:43:29 PT on 10-18 by `Agent-Bureau`, the production console's Linear identity. It sat in Green Light with `repo:agent-bureau`, `no-code` and `agent:ops`, and it was the only report card for the week. Production's log reads `2026-10-18 filed as DRE-7512 (created)`, and neither console on the Mac mini built the week. On 10-11 the card on the board was the development console's, which is why this observation waited (DRE-6912 fixed it).\n- **With its cost.** The card's second line is `Cost: $2.72 · 8 model calls`. Production's `weekly_agent_report` row has `cost_usd 2.723435` and `model_calls 8`, and the log shows 8 model-client starts between the claim (05:33:29 PT) and the filing.\n- **The logs it was built from** are this record's subject. The report's per-repo lines carry real numbers wherever logs arrived (agent-bureau 1,637 logs, bureau-pipeline 1,006, portico 122, deltasolv 29, agent-bureau-demo 16). They read `not measured` for atlas (4 runs, no logs), for foundry (26 runs, no logs, the exception under observation 6) and for onboard-sandbox (no job).\n\n## What is not proven, and why\n\n- **The scrub's by-value pass.** It is still never exercised. Only a planted secret tests it. DRE-7513 put a throwaway `BUREAU_PLANT_PROBE` secret in the build agent's shell, so no real credential has to be rotated, but the sandbox build that plants it has not run yet. It needs one build on agent-bureau-demo with `BUREAU_PLANT_PROBE` set, run 11 PM–3 AM PT.\n- **`foundry`'s logs.** Its upload role exists since 2026-10-17 3:22 PM PT, but it trusts only the name form of foundry's sign-in, and foundry's tokens carry the ID form, so every upload is refused (DRE-8154).\n- **The `kept model step:` summary line as text.** It is written to the job summary, which the run-log API does not return. It was proven from the step's own inputs and the session match instead.\n"
+ },
+ "states": {
+  "DRE-5407": "Done",
+  "DRE-7513": "Done",
+  "DRE-8154": "Done"
+ },
+ "release": null
+}

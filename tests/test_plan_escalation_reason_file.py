@@ -35,7 +35,7 @@ REPO = os.path.join(HERE, "..")
 WF = os.path.join(REPO, ".github", "workflows", "plan.yml")
 sys.path.insert(0, HERE)
 
-from test_planner_queue_wiring import Walk, truth  # noqa: E402
+from workflow_walk import Walk, truth  # noqa: E402
 
 REASON = "planner-escalation.txt"
 ARTIFACT = "plan-artifact.md"

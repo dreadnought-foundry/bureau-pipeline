@@ -1,7 +1,8 @@
 """RED-first tests for DRE-7209 — the TDD commit check passes a routing PR.
 
 The onboarding process opens a routing pull request on the literal branch
-`bot/onboard` in this repo and in agent-bureau. What it changes is
+`bot/onboard` in this repo and in agent-bureau — or, one per declaration since
+DRE-8659, on `bot/onboard-<slug>`. What it changes is
 REGENERATED, never authored — but only in part of each file: the repo map and
 the channel and workspace files under `config/` (ops already), and, in the
 five slug mirrors agent-bureau's `scripts/sync_repo_mirrors.py` lists in
@@ -16,7 +17,8 @@ bot, when it is confined to that region — and only then:
   * the opener is the GitHub-ATTESTED login (PR_AUTHOR, else the event
     payload), exactly the signal the standards-sync exemption is keyed on —
     a branch name and a git author line are forgeable, the opener is not;
-  * the branch is exactly `bot/onboard`, never a prefix;
+  * the branch is exactly `bot/onboard`, or `bot/onboard-` followed by a
+    lowercase slug (DRE-8659) — never a bare `bot/` prefix;
   * a routing path edited by one line outside its mirror region, or on a
     marker line, is code — the proof does not cover it (the QA review of
     PR #1087);
@@ -45,6 +47,8 @@ import check_tdd_commits as tdd  # noqa: E402
 from test_tdd_commit_check import BOT, GitRepoMixin  # noqa: E402
 
 ONBOARD = "bot/onboard"
+# The per-slug branch (DRE-8659): one routing PR per declaration.
+SLUG_BRANCH = "bot/onboard-acme"
 
 # The routing set, as the card names it — the two repos' paths in one list,
 # less this repo's `scripts/validate_card.py`, which the generated-region rule
@@ -61,11 +65,14 @@ AGENT_BUREAU = (
     "console/web/src/components/flyout/cardMeta.ts",
     "demo/demo_library.py",
 )
-# The two console fact files DRE-7431 adds, which are not slug mirrors and
-# are relieved entry by entry (tests/test_check_tdd_commits_onboard_facts.py).
+# The console fact files DRE-7431 and DRE-8249 add, which are not slug
+# mirrors and are relieved entry by entry
+# (tests/test_check_tdd_commits_onboard_facts.py).
 CONSOLE_FACTS = (
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
+    "console/backend/org-tenants.json",
+    "infra/lib/agent-log-repo-ids.json",
 )
 # The routing paths that classify as code without this card — the ones the
 # relief actually moves.
@@ -122,7 +129,14 @@ class RoutingSetTest(unittest.TestCase):
 
     def test_the_branch_and_opener_are_the_literal_ones(self):
         self.assertEqual(tdd.ONBOARD_BRANCH, ONBOARD)
+        self.assertEqual(tdd.ONBOARD_BRANCH_PREFIX, "bot/onboard-")
         self.assertEqual(tdd.ONBOARD_BOT, "agent-bureau-bot")
+
+    def test_the_channel_marker_is_in_the_script(self):
+        # agent-bureau's onboarding reads this literal in the file at tag
+        # `stable` before it opens a per-slug pull request (DRE-8659).
+        text = (ROOT / "scripts" / "check_tdd_commits.py").read_text()
+        self.assertIn("bot/onboard-", text)
 
     def test_most_of_the_set_is_code_without_the_relief(self):
         # Guards the end-to-end tests below from going vacuous: if these
@@ -137,15 +151,29 @@ class IsOnboardRoutingPrTest(unittest.TestCase):
             with self.subTest(opener=opener):
                 self.assertTrue(tdd.is_onboard_routing_pr(ONBOARD, opener))
 
+    def test_the_bot_on_a_per_slug_branch_is_a_routing_pr(self):
+        for ref in (ONBOARD, SLUG_BRANCH, "bot/onboard-onboard-sandbox-5",
+                    "bot/onboard-x", "bot/onboard-5"):
+            with self.subTest(ref=ref):
+                self.assertTrue(tdd.is_onboard_routing_pr(ref, BOT))
+
     def test_any_other_opener_is_not(self):
-        for opener in ("mallory", "agent-bureau-qa-bot[bot]",
-                       "agent-bureau-bot-3", "not-agent-bureau-bot", "", None):
-            with self.subTest(opener=opener):
-                self.assertFalse(tdd.is_onboard_routing_pr(ONBOARD, opener))
+        for ref in (ONBOARD, SLUG_BRANCH):
+            for opener in ("mallory", "agent-bureau-qa-bot[bot]",
+                           "agent-bureau-bot-3", "not-agent-bureau-bot",
+                           "", None):
+                with self.subTest(ref=ref, opener=opener):
+                    self.assertFalse(tdd.is_onboard_routing_pr(ref, opener))
 
     def test_any_other_branch_is_not(self):
-        for ref in ("bot/onboard-x", "bot/onboardx", "bot/other",
-                    "bot/onboard/evil", "agent/DRE-7209-x", "", None):
+        # Outside the family: an empty slug, a capital, an underscore, a path
+        # below the branch, a slug not led by a letter or digit, no hyphen.
+        for ref in ("bot/onboard-", "bot/onboard-Acme", "bot/onboard-X",
+                    "bot/onboard-acme_x", "bot/onboard-acme/x",
+                    "bot/onboard--acme",
+                    "bot/onboard/acme", "bot/onboard/x", "bot/onboardx",
+                    "bot/other", "bot/onboard/evil", "agent/DRE-7209-x",
+                    "", None):
             with self.subTest(ref=ref):
                 self.assertFalse(tdd.is_onboard_routing_pr(ref, BOT))
 
@@ -261,7 +289,22 @@ class OnboardCliTest(GitRepoMixin, unittest.TestCase):
         self._routing_commit(AGENT_BUREAU)
         p = self.run_check(head_ref=ONBOARD, author=BOT)
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
-        self.assertIn(ONBOARD, p.stdout)
+        self.assertIn(f"on branch {ONBOARD};", p.stdout)
+
+    def test_a_per_slug_routing_pr_by_the_bot_exits_0(self):
+        # DRE-8659: the same region-only change on `bot/onboard-<slug>`.
+        self.git("checkout", "-q", "-B", SLUG_BRANCH, "main")
+        self._routing_commit(AGENT_BUREAU)
+        p = self.run_check(head_ref=SLUG_BRANCH, author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
+
+    def test_the_routing_line_names_the_prs_own_branch(self):
+        self.git("checkout", "-q", "-B", SLUG_BRANCH, "main")
+        self._routing_commit(AGENT_BUREAU)
+        p = self.run_check(head_ref=SLUG_BRANCH, author=BOT)
+        self.assertRegex(
+            p.stdout, rf"(?m)^routing: .* on branch {SLUG_BRANCH};")
 
     def test_this_repos_routing_pr_passes_on_the_region_rule(self):
         # validate_card.py's mirror region is DRE-3896's; the repo map is ops.
@@ -280,13 +323,17 @@ class OnboardCliTest(GitRepoMixin, unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
     def test_a_logic_edit_on_a_routing_path_fails(self):
-        for path in CODE_ROUTING:
-            with self.subTest(path=path):
-                self.git("checkout", "-q", "-B", ONBOARD, "main")
-                self._routing_commit((path,), logic="route_anywhere")
-                p = self.run_check(head_ref=ONBOARD, author=BOT)
-                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
-                self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
+        for branch in (ONBOARD, SLUG_BRANCH):
+            for path in CODE_ROUTING:
+                with self.subTest(branch=branch, path=path):
+                    self.git("checkout", "-q", "-B", branch, "main")
+                    self._routing_commit((path,), logic="route_anywhere")
+                    p = self.run_check(head_ref=branch, author=BOT)
+                    self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                    self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
+                    if branch == SLUG_BRANCH:
+                        # Failed under the relief, not for want of it.
+                        self.assertIn("routing: ", p.stdout)
 
     def test_a_commit_that_also_touches_another_code_path_fails(self):
         self._routing_commit(AGENT_BUREAU, extra=("scripts/widget.py",))
@@ -307,16 +354,35 @@ class OnboardCliTest(GitRepoMixin, unittest.TestCase):
                 p = self.run_check(head_ref=ONBOARD, author=opener)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
 
+    def test_any_other_opener_fails_on_a_per_slug_branch(self):
+        self.git("checkout", "-q", "-B", SLUG_BRANCH, "main")
+        self._routing_commit(AGENT_BUREAU)
+        for opener in ("mallory", "agent-bureau-qa-bot[bot]", None):
+            with self.subTest(opener=opener):
+                p = self.run_check(head_ref=SLUG_BRANCH, author=opener)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
     def test_no_attested_opener_fails(self):
         self._routing_commit(AGENT_BUREAU)
         p = self.run_check(head_ref=ONBOARD)
         self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
 
     def test_a_near_miss_branch_fails(self):
+        # setUp's `bot/onboard` would block the ref `bot/onboard/x`.
+        self.git("checkout", "-q", "main")
+        self.git("branch", "-q", "-D", ONBOARD)
+        for branch in ("bot/onboard/x", "bot/onboard-X"):
+            with self.subTest(branch=branch):
+                self.git("checkout", "-q", "-B", branch, "main")
+                self._routing_commit(AGENT_BUREAU)
+                p = self.run_check(head_ref=branch, author=BOT)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+    def test_the_same_change_on_bot_onboard_x_passes(self):
         self.git("checkout", "-q", "-B", "bot/onboard-x", "main")
         self._routing_commit(AGENT_BUREAU)
         p = self.run_check(head_ref="bot/onboard-x", author=BOT)
-        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
 
 
 if __name__ == "__main__":

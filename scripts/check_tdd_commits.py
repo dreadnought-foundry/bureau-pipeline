@@ -82,15 +82,16 @@ The rule (engineering standard: "commit the failing test FIRST"):
     (DRE-3896), and is docs too — but ONLY in a file some generator's `--check`
     actually proves. A region is the lines strictly between a line
     containing `BEGIN generated` and the next line containing `END generated`
-    — the markers `scripts/sync_model_config.py` already writes, read
-    generically here. The live shape: an automated adoption PR edits
-    `config/models.yaml` and reruns that generator, which rewrites the
-    `_FALLBACK_MODEL_CONFIG` literal in `scripts/model_fallback.py`. That
-    literal moves the AST, so the docstring rule cannot exempt it, and there
-    is no author to write a RED test for a rendered literal — a failure
-    DRE-2694 makes unfixable by adding a commit.
+    — the markers `scripts/sync_fallback_map.py` already writes, read
+    generically here. The live shape: an onboarding PR edits
+    `config/repo-map.json` and reruns that generator, which rewrites the
+    `_FALLBACK_REPO_MAP` literal in `scripts/validate_card.py`. That literal
+    moves the AST, so the docstring rule cannot exempt it, and there is no
+    author to write a RED test for a rendered literal — a failure DRE-2694
+    makes unfixable by adding a commit. (The rule was written for the model
+    adoption PR's rendered literal, whose generator DRE-6982 deleted.)
     **The exemption is safe because the region's content is proved
-    elsewhere:** `python3 scripts/sync_model_config.py --check` fails when a
+    elsewhere:** `python3 scripts/sync_fallback_map.py --check` fails when a
     generated region does not match its canonical render, and it runs in CI
     (the unit suite asserts it on every PR), so code cannot hide in a region.
     That proof is the whole argument, so the classifier REQUIRES it rather
@@ -151,9 +152,15 @@ The rule (engineering standard: "commit the failing test FIRST"):
     `scripts/validate_card.py` is not in the set, because the generated-
     region rule already proves and exempts its mirror region. The same
     attested opener decides it as for standards-sync — `agent-bureau-bot`,
-    from `attested_pr_author` — plus the exact branch. It is NOT a PR
-    exemption: any other path on that branch, or any other line of a routing
-    path, is held to the rule like any other.
+    from `attested_pr_author` — plus the branch: the literal `bot/onboard`,
+    or since DRE-8659, when onboarding opens one routing PR per declaration,
+    `bot/onboard-<slug>` with the slug checked whole
+    (`[a-z0-9][a-z0-9-]*`, the shape of a repo slug). The opener is still the
+    whole of the security and the branch only narrows it, so the family is a
+    slug-checked suffix of one literal, never `bot/*`: a wider pattern would
+    hand every branch the bot opens, for any purpose, the routing relief. It
+    is NOT a PR exemption: any other path on that branch, or any other line
+    of a routing path, is held to the rule like any other.
   • The same routing PR's per-repo console facts are not code either
     (DRE-7431). Since DRE-7379 it also writes one `REPO_IDS` entry in
     `console/backend/github_oidc.py`, one `PROJECT_IDENTITIES` entry in
@@ -163,6 +170,20 @@ The rule (engineering standard: "commit the failing test FIRST"):
     the step writes, and nothing else: a changed existing entry, a second
     entry, a comment or an edited function beside it is code. The opener and
     branch conditions are the mirror rule's, unchanged.
+  • So is the owner org's tenant (DRE-8249). Since DRE-8210 the step also
+    appends one `"<org lowercased>": "<tenant slug>"` member to `orgs` in
+    `console/backend/org-tenants.json` when the org has none, and
+    `is_routing_entry_change` relieves that one member with the same
+    exactness: an existing entry rewritten or removed, a second entry or an
+    edited `_comment` is code.
+  • So is the new repo's agent-log ids entry (DRE-8534). Since DRE-8211 the
+    step also writes one top-level `"<slug>": {"owner_id": <int>,
+    "repo_id": <int>}` member into agent-bureau's
+    `infra/lib/agent-log-repo-ids.json`, keeping the slugs sorted, and
+    `is_routing_entry_change` relieves that one member at any position with
+    the same exactness: a non-slug name, ids that are not positive integers,
+    an existing entry rewritten or removed, a second entry or an edited
+    `_comment` is code.
   • The same facts REMOVED are not code either (DRE-7866). Since DRE-7537
     retirement's `50_retire_route.py` opens its own routing PR on that branch
     and takes out the one `REPO_IDS` entry, the one `PROJECT_IDENTITIES`
@@ -170,7 +191,10 @@ The rule (engineering standard: "commit the failing test FIRST"):
     onboarding wrote. `is_routing_entry_removal` relieves exactly that one
     entry, as `is_routing_entry_change` read backwards — the same exactness
     and the same opener and branch conditions. It matters most for the first
-    of those commits, which deletion detection never covers.
+    of those commits, which deletion detection never covers. An
+    `org-tenants.json` removal is not relieved: retirement leaves the org's
+    entry in place, so nothing on that branch writes one. Nor is an
+    `agent-log-repo-ids.json` removal, for the same reason.
   • Merge commits are skipped: merging an advanced main into the branch
     brings mainline commits that are not the PR's own work.
 
@@ -329,8 +353,8 @@ _OPS_FILES = frozenset({"agents.yaml", "models.json"})
 
 # Generated-region markers (DRE-3896), read as SUBSTRINGS of a line so the one
 # rule covers every generator's comment syntax and wording. These are the
-# markers `scripts/sync_model_config.py` already writes — e.g.
-# `# --- BEGIN generated model config (from config/models.yaml) ---` — and the
+# markers `scripts/sync_fallback_map.py` already writes — e.g.
+# `# --- BEGIN generated repo mirror (from config/repo-map.json) ---` — and the
 # contract is deliberately generic: a line containing BEGIN opens a region, the
 # next line containing END closes it.
 _BEGIN_GENERATED = "BEGIN generated"
@@ -352,12 +376,12 @@ _END_GENERATED = "END generated"
 #
 # Adding an entry is a `.py` change to this file, which is `code` — so it takes
 # a RED test first and a critic's read, which is exactly the bar a new TDD
-# exemption should clear. Each command must run on every PR (both below are
-# asserted by the unit suite: tests/test_model_config.py and
-# tests/test_sync_fallback_map.py), because a proof that does not run proves
-# nothing.
+# exemption should clear. Each command must run on every PR (the one below is
+# asserted by the unit suite: tests/test_sync_fallback_map.py), because a proof
+# that does not run proves nothing. Removing an entry when its generator goes
+# is the same change in reverse (DRE-6982 took `scripts/model_fallback.py` off
+# with its generator, so its hand-written literal is code).
 _GENERATED_REGION_PROOFS = {
-    "scripts/model_fallback.py": "python3 scripts/sync_model_config.py --check",
     "scripts/validate_card.py": "python3 scripts/sync_fallback_map.py --check",
 }
 
@@ -371,7 +395,13 @@ STANDARDS_SYNC_BOT = "agent-bureau-bot"
 # The onboarding routing PR (DRE-7209) — the literal branch the onboarding
 # process opens its routing pull requests on, here and in agent-bureau, and the
 # bot that must have OPENED one (GitHub-attested, the standards-sync signal).
+# Since DRE-8659 it opens one per declaration, on the prefix plus a repo-slug
+# shaped suffix; agent-bureau's onboarding reads the literal `bot/onboard-`
+# here at tag `stable` before it opens one.
 ONBOARD_BRANCH = "bot/onboard"
+ONBOARD_BRANCH_PREFIX = "bot/onboard-"
+_ONBOARD_SLUG_BRANCH = re.compile(
+    re.escape(ONBOARD_BRANCH_PREFIX) + r"[a-z0-9][a-z0-9-]*")
 ONBOARD_BOT = "agent-bureau-bot"
 
 # The paths a routing PR changes, in either repo. The `config/` paths are ops
@@ -386,7 +416,10 @@ ONBOARD_BOT = "agent-bureau-bot"
 # neighboring file is held to the rule. Since DRE-7379 the same PR also writes
 # three per-repo console facts, one entry each, and `is_routing_entry_change`
 # relieves exactly that entry (DRE-7431): `sources.py` is a mirror that also
-# holds one of them, and the last two paths are fact files and nothing else.
+# holds one of them, and the last three paths are fact files and nothing else.
+# The owner org's tenant in `org-tenants.json` is the fourth fact (DRE-8249),
+# and the new repo's ids in `infra/lib/agent-log-repo-ids.json` the fifth
+# (DRE-8534).
 ONBOARD_ROUTING_PATHS = frozenset({
     # bureau-pipeline
     "config/repo-map.json",
@@ -400,6 +433,8 @@ ONBOARD_ROUTING_PATHS = frozenset({
     "demo/demo_library.py",
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
+    "console/backend/org-tenants.json",
+    "infra/lib/agent-log-repo-ids.json",
 })
 
 # The markers agent-bureau's mirror generator splices between — the region its
@@ -407,14 +442,24 @@ ONBOARD_ROUTING_PATHS = frozenset({
 _BEGIN_REPO_MIRROR = "BEGIN generated repo mirror"
 _END_REPO_MIRROR = "END generated repo mirror"
 
-# The routing paths that are not slug mirrors (DRE-7431). No generator proves
-# a region in either, so repo-mirror markers written into one relieve nothing.
+# The routing paths that are not slug mirrors (DRE-7431), the agent-log ids
+# file among them (DRE-8534). No generator proves a region in any, so
+# repo-mirror markers written into one relieve nothing.
 _ROUTING_FACT_FILES = frozenset({
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
+    "console/backend/org-tenants.json",
+    "infra/lib/agent-log-repo-ids.json",
 })
 # The fact file whose one relieved change is a new repo under `repos`.
 _RUNNER_ROUTING = "console/backend/runner-routing.json"
+# The fact file whose one relieved change is a new org under `orgs` (DRE-8249).
+_ORG_TENANTS = "console/backend/org-tenants.json"
+# The fact file whose one relieved change is a new top-level repo slug with
+# its two GitHub ids (DRE-8534).
+_AGENT_LOG_REPO_IDS = "infra/lib/agent-log-repo-ids.json"
+# A repo slug the way the repo map names one.
+_REPO_SLUG = re.compile(r"[a-z0-9][a-z0-9-]*")
 # Decimal GitHub ids, the way `80_routing` writes them into `REPO_IDS`.
 _DECIMAL_ID = re.compile(r"[0-9]+")
 
@@ -516,13 +561,16 @@ def is_onboard_routing_pr(head_ref: str | None,
                           pr_author: str | None) -> bool:
     """True iff this is an onboarding routing PR (DRE-7209): opened by the
     bot — `pr_author` from `attested_pr_author`, the one signal here the PR's
-    contents cannot write — on exactly `bot/onboard`. No commit-author
+    contents cannot write — on exactly `bot/onboard`, or on
+    `bot/onboard-<slug>` matched whole (DRE-8659). No commit-author
     condition: what narrows this one is `mark_routing_paths`, which moves
     only the routing set out of `code` and leaves every other path on the
     branch under the rule. Fail-closed on a missing opener or branch."""
     if not pr_author or _normalized_bot_login(pr_author) != ONBOARD_BOT:
         return False
-    return (head_ref or "").strip() == ONBOARD_BRANCH
+    ref = (head_ref or "").strip()
+    return (ref == ONBOARD_BRANCH
+            or _ONBOARD_SLUG_BRANCH.fullmatch(ref) is not None)
 
 
 def mark_routing_paths(commits) -> list[dict]:
@@ -878,24 +926,76 @@ def _json_document(text: str):
         return None
 
 
-def _adds_one_runner_routing_repo(before: str, after: str) -> bool:
-    """True iff `after` is `before` with ONE new repo, an object, added under
-    the top-level `repos` object, and nothing else changed — every other
-    member, value and member order compared as JSON."""
+def _adds_one_json_member(before: str, after: str, container: str,
+                          member_ok) -> bool:
+    """True iff `after` is `before` with ONE new member added under the
+    top-level object `container`, `member_ok(name, value)` for it, and
+    nothing else changed — every other member, value and member order
+    compared as JSON."""
     doc_before, doc_after = _json_document(before), _json_document(after)
     if not isinstance(doc_before, dict) or not isinstance(doc_after, dict):
         return False
-    repos_before, repos_after = doc_before.get("repos"), doc_after.get("repos")
-    if not isinstance(repos_before, dict) or not isinstance(repos_after, dict):
+    in_before, in_after = doc_before.get(container), doc_after.get(container)
+    if not isinstance(in_before, dict) or not isinstance(in_after, dict):
         return False
-    added = [k for k in repos_after if k not in repos_before]
-    if len(added) != 1 or len(repos_after) != len(repos_before) + 1:
+    added = [k for k in in_after if k not in in_before]
+    if len(added) != 1 or len(in_after) != len(in_before) + 1:
         return False
-    if not isinstance(repos_after[added[0]], dict):
+    if not member_ok(added[0], in_after[added[0]]):
         return False
-    rest = {**doc_after, "repos": {
-        k: v for k, v in repos_after.items() if k != added[0]}}
+    rest = {**doc_after, container: {
+        k: v for k, v in in_after.items() if k != added[0]}}
     return json.dumps(rest) == json.dumps(doc_before)
+
+
+def _adds_one_runner_routing_repo(before: str, after: str) -> bool:
+    """One new repo, an object, under `repos` in runner-routing.json."""
+    return _adds_one_json_member(
+        before, after, "repos", lambda _name, value: isinstance(value, dict))
+
+
+def _adds_one_org_tenant(before: str, after: str) -> bool:
+    """One new org under `orgs` in org-tenants.json, the way `80_routing`
+    writes it (DRE-8210): the org lowercased, its tenant slug a string."""
+    return _adds_one_json_member(
+        before, after, "orgs",
+        lambda name, value: name == name.lower() and isinstance(value, str))
+
+
+def _adds_one_top_level_json_member(before: str, after: str,
+                                    member_ok) -> bool:
+    """`_adds_one_json_member` one level up: True iff `after` is `before`
+    with ONE new member added to the top-level object itself, at any
+    position, `member_ok(name, value)` for it, and nothing else changed —
+    every other member, value and member order compared as JSON."""
+    doc_before, doc_after = _json_document(before), _json_document(after)
+    if not isinstance(doc_before, dict) or not isinstance(doc_after, dict):
+        return False
+    added = [k for k in doc_after if k not in doc_before]
+    if len(added) != 1 or len(doc_after) != len(doc_before) + 1:
+        return False
+    if not member_ok(added[0], doc_after[added[0]]):
+        return False
+    rest = {k: v for k, v in doc_after.items() if k != added[0]}
+    return json.dumps(rest) == json.dumps(doc_before)
+
+
+def _positive_json_int(value) -> bool:
+    # JSON `true` reads as a Python int, so a bool is excluded by name.
+    return (isinstance(value, int) and not isinstance(value, bool)
+            and value > 0)
+
+
+def _adds_one_agent_log_repo_ids(before: str, after: str) -> bool:
+    """One new repo slug at the top level of agent-log-repo-ids.json, the
+    way `80_routing` writes it (DRE-8211): `{"owner_id": <int>, "repo_id":
+    <int>}`, both positive integers and no other member."""
+    def entry_ok(name, value):
+        return (_REPO_SLUG.fullmatch(name) is not None
+                and isinstance(value, dict)
+                and set(value) == {"owner_id", "repo_id"}
+                and all(_positive_json_int(v) for v in value.values()))
+    return _adds_one_top_level_json_member(before, after, entry_ok)
 
 
 def is_routing_entry_change(
@@ -912,7 +1012,13 @@ def is_routing_entry_change(
         mirror and the step writes it once, so its repo-mirror regions are
         put back to `before`'s first — the region is `is_routing_mirror_change`'s
         to prove, and everything outside it must be the entry alone;
-      * `console/backend/runner-routing.json` — one new repo under `repos`.
+      * `console/backend/runner-routing.json` — one new repo under `repos`;
+      * `console/backend/org-tenants.json` — one new org under `orgs`,
+        `"<org lowercased>": "<tenant slug>"`, `_comment` and every other
+        org unchanged (DRE-8249);
+      * `infra/lib/agent-log-repo-ids.json` — one new top-level repo slug,
+        `"<slug>": {"owner_id": <int>, "repo_id": <int>}`, at any position,
+        `_comment`, every other entry and their order unchanged (DRE-8534).
 
     Entry-only, never a whole-file pass: any other line of the file is code.
     Fail-closed like the mirror rule: a path outside the set, a missing
@@ -923,6 +1029,10 @@ def is_routing_entry_change(
         return False
     if path == _RUNNER_ROUTING:
         return _adds_one_runner_routing_repo(before, after)
+    if path == _ORG_TENANTS:
+        return _adds_one_org_tenant(before, after)
+    if path == _AGENT_LOG_REPO_IDS:
+        return _adds_one_agent_log_repo_ids(before, after)
     literal = _ROUTING_FACT_LITERALS.get(path)
     if literal is None:
         return False
@@ -946,7 +1056,12 @@ def is_routing_entry_removal(
     `before`, so this is that rule read backwards, with all of its exactness:
     one entry, in the shape the step writes, from exactly that literal, and
     no other line changed. In `sources.py` the repo-mirror regions are
-    likewise left for `is_routing_mirror_change` to prove."""
+    likewise left for `is_routing_mirror_change` to prove. `org-tenants.json`
+    is never relieved here (DRE-8249): retirement leaves the org's entry in
+    place, so a removal there is code. Nor is `agent-log-repo-ids.json`
+    (DRE-8534): retirement never takes its entry out either."""
+    if path in (_ORG_TENANTS, _AGENT_LOG_REPO_IDS):
+        return False
     return is_routing_entry_change(path, after, before)
 
 
@@ -1441,7 +1556,7 @@ def main(argv: list[str]) -> int:
         commits = mark_routing_paths(commits)
         print(f"routing: the onboarding routing PR — opened by "
               f"{ONBOARD_BOT}[bot] (GitHub-attested), on branch "
-              f"{ONBOARD_BRANCH}; a routing path changed only inside its "
+              f"{head_ref.strip()}; a routing path changed only inside its "
               f"generated repo-mirror region, or only by the one console-"
               f"fact entry the routing step writes, is not code here, and "
               f"any other line or path is held to the rule")

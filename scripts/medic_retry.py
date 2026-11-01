@@ -30,22 +30,24 @@ this module is where the medic asks them:
      nowhere else. Exactly the rule DRE-1921 wrote for a rate-limited critic —
      do not retry into the same wall.
 
-  3. **THE MACHINE RAN OUT OF MEMORY** (DRE-4847). A run the kernel killed at
-     the runner's memory limit — `##[error]Process completed with exit code
-     137.`, read by `out_of_memory.from_log` off the same log — is refused a
-     rerun on any machine that cannot be made bigger: a `heavy`, `hosted` or
-     `unknown` runner, or the SECOND kill on a `light` one. A light runner's
-     FIRST kill keeps the ordinary retry, because 2 GB can be one turn short
-     on one card and ample on the next. The same wall, a fourth time.
+  3. **THE MACHINE RAN OUT OF MEMORY TWICE IN ONE RUN** (DRE-4847, rewritten
+     by DRE-8239). A run the kernel killed at the runner's memory limit —
+     `##[error]Process completed with exit code 137.`, read by
+     `out_of_memory.from_log` off the same log — keeps the medic's one retry
+     for its FIRST kill, on any runner, and is refused a rerun for its
+     second. "First" is counted per run, not by attempt number: on attempt 2
+     the medic reads attempt 1's failed log (`--prior-log`) with the same
+     reader, so a kill that follows a cancellation keeps its retry
+     (`RULE_OUT_OF_MEMORY_FIRST`, which medic.yml's `retry` job admits on
+     attempt 2), and a kill that follows a kill is refused. Attempt 3 or
+     later is never retried. DRE-4847 retried only a light runner's first
+     kill; DRE-8239 dropped that because a 4 GB heavy runner's kill is not
+     deterministic — on 10-27 and 10-28 a plain re-run of the refused jobs
+     passed every time, on the same class of machine — and a refused retry
+     cost a stall of hours where a wasted one costs one CI run. The receipt
+     names the machine off the Jobs API (`--jobs`), then the log.
 
-  4. **THE CHANGE SET WAS REFUSED BY DESIGN** (DRE-6851). A `Model config
-     change` run whose "Validate the change set" step printed the validator's
-     refusal did not fail — it answered the person who asked, who was already
-     told "Not applied" on the Settings page. It gets no retry, and medic.yml
-     gives it no diagnosis and no failure card either. Every other failure of
-     that workflow, a crashed validator included, keeps both.
-
-  5. **THE DEFAULT BRANCH HAS MOVED PAST THE RUN** (DRE-6882). A failed `push`
+  4. **THE DEFAULT BRANCH HAS MOVED PAST THE RUN** (DRE-6882). A failed `push`
      run on the default branch whose commit is no longer that branch's tip is
      not retried: the commit is no longer the branch's tip, so a rerun's
      result, red or green, says nothing about `main` — on 2026-10-10 the
@@ -118,7 +120,9 @@ CLI:
         [--failed-step <failed step's name>] \
         [--snapshot <file to leave the card read in>] \
         [--event <event>] [--head-sha <sha>] [--default-branch <name>] \
-        [--tip-sha <the default branch's tip>]
+        [--tip-sha <the default branch's tip>] \
+        [--jobs <the Jobs API's answer for this attempt>] \
+        [--prior-log <attempt 1's failed log>]
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
     python3 medic_retry.py diagnosis-target --branch <head-ref> \
@@ -187,21 +191,19 @@ RULE_TURN_EXHAUSTION = "turn-exhaustion"
 # can be a passing blip in the network path — but a second in a row is not a
 # blip, and a third build would be DRE-1921's loop wearing a new name.
 RULE_STALLED_REPEAT = "stalled-no-stream-repeat"
-# DRE-4847. The FOURTH rule: the machine ran out of memory. A light runner's
-# first kill keeps the ordinary retry — 2 GB can be one turn short on one card
-# and fine on the next — but a heavy, GitHub-hosted or unrecognized machine is
-# already as big as it gets here, and the second kill on a light one has spent
-# the retry. Re-running the same work on the same size of machine dies the same
-# way; it needs a bigger machine or a smaller card, and neither is a rerun.
+# DRE-4847, rewritten by DRE-8239. The FOURTH rule: the machine ran out of
+# memory a second time in the same run. The run's first kill keeps the medic's
+# one retry on any runner — a suite whose peak sits near a 4 GB cap is killed
+# on some runs and not others — and the second has spent it.
 RULE_OUT_OF_MEMORY = "out-of-memory"
-# DRE-6851. The FIFTH rule: the run did not fail, it ANSWERED. A `Model config
-# change` run whose "Validate the change set" step refused the set is red by
-# design — the refusal is the answer to the person who asked, already shown to
-# them as "Not applied" on Settings › Agents & models. On 2026-10-10 run
-# 38114763170 was retried (refused again, writing nothing) and then diagnosed,
-# and the diagnosis filed DRE-6830 "Pipeline failure: Model config change",
-# which planning parked in Green Light as a question for the CEO. A refusal is
-# neither retried nor carded; medic.yml says so in its own run summary.
+# DRE-8239. Not a refusal: the run's FIRST out-of-memory kill, retried. Named
+# because medic.yml's `retry` job admits it on attempt 2 — the one case the
+# medic retries past attempt 1 — and reads it off this rule.
+RULE_OUT_OF_MEMORY_FIRST = "out-of-memory-first-kill"
+# DRE-6851. The word of a rule that read a refused change set off the console's
+# old pull-request save route. DRE-8021 deleted the route and the reader with
+# it, so nothing hands `decide` a refusal now; the word stays because
+# medic.yml's `refused_by_design` job and its diagnosis gates still name it.
 RULE_REFUSED_BY_DESIGN = "refused-by-design"
 # DRE-6882. The SIXTH rule: the run's commit is no longer the default branch's
 # tip. On 2026-10-10 the retry of a failed agent-bureau `main` run finished red
@@ -218,27 +220,6 @@ SUPERSEDED_EVENT = "push"
 
 # How much of a commit the sentence names — red_main_repair.SHA_CHARS's width.
 SHORT_SHA = 12
-
-# The workflow and the step the fifth rule is about, by their own names in
-# `.github/workflows/model-config-change.yml` — tests/test_medic_refused_change_set.py
-# reads that file to hold the two together. The workflow is matched as a
-# prefix, case-insensitively, the way `park_rule_applies` matches.
-CHANGE_SET_WORKFLOW = "model config change"
-REFUSED_STEP = "Validate the change set"
-
-# The validator's refusal lines, as `model_config_change.py apply --check`
-# prints them: `change set refused: <reason>` for a set it could not read, and
-# `the change set from <who> was refused — …` beside one line per refused
-# change. Either as the workflow command the script printed (`::error::`) or as
-# the annotation a downloaded log can show it as (`##[error]`). Anchored to the
-# start of the line's content, so a log that QUOTES the line in prose does not
-# match — and a validator that threw prints neither, and stays a real failure.
-_REFUSAL_LINE = re.compile(
-    r"^(?:::error::|##\[error\])"
-    r"(?:change set refused: (?P<reason>.*\S)|the change set from .* was refused\b)"
-)
-# The reason a per-change refusal names, `change N of M (<op …>): <reason>`.
-_CHANGE_REASON = re.compile(r"^(?:::error::|##\[error\])(?P<reason>change \d+ of \d+ .*\S)")
 
 # The park receipt's own marker — `dead_run.decide()`'s hold sentence, which
 # both caps reach ("🚨 held-for-human (dead-run-requeue cap reached)" and
@@ -359,32 +340,13 @@ def is_turn_exhaustion(execution: dict | None) -> bool:
     return check_agent_result.is_turn_exhaustion(execution)
 
 
-#: Why a rerun cannot help THIS class of machine — the second half of the
-#: refusal sentence, one per class that never gets the retry. `light` has no
-#: row because a light runner's first kill is the one case that keeps it.
-_NO_BIGGER_MACHINE = {
-    out_of_memory.HEAVY: (
-        "a heavy runner is already the biggest machine this pipeline asks "
-        "for, so the same work meets the same limit"
-    ),
-    out_of_memory.HOSTED: (
-        "a GitHub-hosted runner's size is not ours to raise, so the same work "
-        "meets the same limit"
-    ),
-    out_of_memory.UNKNOWN: (
-        "the run's log never named the machine, so there is no reason to "
-        "believe a rerun lands on a bigger one"
-    ),
-}
-
-
 def _attempt(value) -> int:
     """Which attempt of the failed run this is; 1 when it cannot be read.
 
     Unreadable reads as the FIRST attempt on purpose: the rule below would
-    otherwise refuse a light runner's one retry on a missing workflow input,
-    and `medic.yml`'s `retry` job is gated to attempt 1 anyway, so an
-    unreadable attempt can never spend a second build.
+    otherwise refuse a first kill's one retry on a missing workflow input,
+    and `medic.yml`'s `retry` job reads the attempt off the run itself, so an
+    unreadable attempt here can never spend a build past attempt 2.
     """
     try:
         return int(str(value).strip())
@@ -392,90 +354,40 @@ def _attempt(value) -> int:
         return 1
 
 
-def out_of_memory_refusal(kill, *, attempt) -> str:
+def out_of_memory_refusal(kill, *, attempt, earlier_log=None) -> str:
     """Why this out-of-memory kill gets no retry, or "" when it keeps its one.
 
-    The kill is read from the RUN (`out_of_memory.from_log`, off the log the
-    medic already fetched) and the rule is about the MACHINE: only a light
-    runner's FIRST kill keeps the ordinary retry, because 2 GB can be one turn
-    short on one card and ample on the next. A heavy, GitHub-hosted or
-    unrecognized runner is already as big as this pipeline can ask for, and a
-    second kill on a light one has spent the retry — in both cases the same
-    work on the same size of machine dies the same way, which is DRE-1921's
-    rule ("do not retry into the same wall") wearing a fourth name.
+    DRE-8239: the run's FIRST kill keeps the medic's one retry, on any runner,
+    and the class of machine decides nothing. The kill is read from the RUN
+    (`out_of_memory.from_log`, off the log the medic already fetched), and
+    "first" is counted per run, not by attempt number:
+
+      * attempt 1 — a first kill by construction: "";
+      * attempt 2 — `earlier_log` is attempt 1's failed log, read with the
+        same reader. A kill there makes this the run's second, refused; no
+        kill there (a cancellation, a test failure, a stall) leaves this one
+        its retry. None — attempt 1's log could not be read — keeps the
+        retry too, the way an unreadable card does: a wasted retry costs one
+        CI run, and the `retry` job never runs past attempt 2;
+      * attempt 3 or later — refused: the medic never re-runs one.
     """
     if kill is None:
         return ""
     number = _attempt(attempt)
     said = out_of_memory.describe(kill)
-    if kill.runner_class == out_of_memory.LIGHT:
-        if number <= 1:
+    if number <= 1:
+        return ""
+    if number == 2:
+        if out_of_memory.from_log(earlier_log) is None:
             return ""
         return (
-            f"{said}, and this is attempt {number}: the one retry a light "
-            f"runner's kill is entitled to is already spent"
+            f"{said}, and attempt 1 of this run was killed out of memory too: "
+            f"this is the run's second out-of-memory kill, and the one retry "
+            f"a first kill keeps is already spent"
         )
-    return f"{said}, and {_NO_BIGGER_MACHINE[kill.runner_class]}"
-
-
-def is_change_set_workflow(workflow_name) -> bool:
-    """Is this the `Model config change` workflow? Prefix, case-insensitive."""
-    name = " ".join(str(workflow_name or "").split()).lower()
-    return bool(name) and name.startswith(CHANGE_SET_WORKFLOW)
-
-
-def change_set_refusal(log_text: str, *, workflow, failed_step: str = "") -> str:
-    """The one sentence that says this run's change set was refused by design,
-    or "" when the run is a real failure (DRE-6851).
-
-    Three facts, all off the run: the workflow is `Model config change`; the
-    step that failed is "Validate the change set"; and that step's log carries
-    the validator's own refusal line. The failed step is the Jobs API's answer
-    when medic.yml could read it (`failed_step`), and otherwise the step field
-    of the refusal line itself — `gh run view --log-failed` prints every line
-    as `job<TAB>step<TAB>time content`. A Jobs API answer naming another step
-    wins over the log: a refusal printed by a later step is not the validator
-    answering the person who asked.
-
-    Fails toward the retry: an unreadable log, a log with no prefix, another
-    workflow quoting the line, or a validation step that crashed without
-    printing a refusal all answer "", and keep the retry and the failure card.
-    """
-    if not is_change_set_workflow(workflow):
-        return ""
-    named = " ".join((failed_step or "").split())
-    if named and named != REFUSED_STEP:
-        return ""
-    refused, reasons = False, []
-    for raw in (log_text or "").splitlines():
-        fields = raw.split("\t", 2)
-        if len(fields) != 3:
-            continue
-        step = fields[1].strip()
-        if not named and step != REFUSED_STEP:
-            continue
-        line = _LOG_PREFIX.sub("", fields[2], count=1).strip()
-        match = _REFUSAL_LINE.match(line)
-        if match:
-            refused = True
-            if match.group("reason"):
-                reasons.append(match.group("reason"))
-            continue
-        match = _CHANGE_REASON.match(line)
-        if match:
-            reasons.append(match.group("reason"))
-    if not refused:
-        return ""
-    # The FIRST reason only, and without a full stop of its own: the summary
-    # is one sentence, and the full list is already in the run's own summary.
-    reason = " ".join(reasons[0].split()).rstrip(". ") if reasons else ""
-    because = f" ({reason})" if reason else ""
     return (
-        f"The change set was refused by design at its '{REFUSED_STEP}' "
-        f"step{because}, which is the answer to the person who asked — they "
-        f"were told \"Not applied\" on Settings › Agents & models, and the "
-        f"failed run's own summary lists every reason — so it was not retried "
-        f"and no failure card was filed."
+        f"{said}, and this is attempt {number}: the medic re-runs a run's "
+        f"first out-of-memory kill once, and never re-runs attempt 3 or later"
     )
 
 
@@ -524,6 +436,7 @@ def decide(
     out_of_memory: str = "",
     refused_by_design: str = "",
     superseded: str = "",
+    first_kill: bool = False,
 ) -> Decision:
     """Retry this failed run, or decline and say why.
 
@@ -531,6 +444,11 @@ def decide(
     which one the receipt names — and when a card has been parked, "a person
     owns this card now" is the fact the next reader needs, with the turn cap
     or the stall as the reason it was parked rather than a finding of its own.
+
+    `first_kill` (DRE-8239) declines nothing: a retry of the run's first
+    out-of-memory kill is named `RULE_OUT_OF_MEMORY_FIRST` rather than
+    `RULE_NONE`, because medic.yml's `retry` job admits that rule on attempt
+    2. Every refusal above still outranks it.
     """
     if parked_because:
         return Decision(
@@ -569,7 +487,7 @@ def decide(
             f"'{dead_run.TURN_TAG}' receipt from this run says so, and a "
             f"budget ceiling is not a flake to retry into",
         )
-    return Decision(RETRY, RULE_NONE)
+    return Decision(RETRY, RULE_OUT_OF_MEMORY_FIRST if first_kill else RULE_NONE)
 
 
 def declined_comment(decision: Decision, run_url: str = "") -> str:
@@ -614,13 +532,13 @@ _WHY_NOT = {
         "going silent."
     ),
     RULE_OUT_OF_MEMORY: (
-        "The medic re-runs a failed run once, for a transient infrastructure "
-        "flake; a machine that ran out of memory is not one. Nothing is wrong "
-        "with the work — the system killed it, nothing was rejected — and "
-        "running it again on the same size of machine dies the same way, so "
-        "no second build was started and nothing more was charged to this "
-        "card. What moves it is a bigger machine or a smaller card, and "
-        "neither of those is a retry."
+        "The medic re-runs a run's first out-of-memory kill once, because a "
+        "job near its machine's memory limit can pass on the next try; this "
+        "run has been killed again, so no further build was started and "
+        "nothing more was charged to this card. Nothing is wrong with the "
+        "work — the system killed it, nothing was rejected. What moves it now "
+        "is a bigger machine or a smaller card, and neither of those is a "
+        "retry."
     ),
 }
 
@@ -1229,20 +1147,34 @@ def _decide_cli(args) -> int:
                 run_id=args.run_id,
                 attempt=args.run_attempt,
             )
+    # DRE-4847: the kill is read off the SAME log, no second fetch and no card
+    # read. DRE-8239: its machine is named off the Jobs API reading medic.yml
+    # made for this attempt, then the log; and on attempt 2 attempt 1's failed
+    # log says whether this is the run's first kill or its second.
+    kill = out_of_memory.from_log(log_text)
+    if kill is not None:
+        kill = out_of_memory.named(
+            kill, *out_of_memory.machine_from_jobs(_read(args.jobs), job=kill.job))
+    earlier_log = _read(args.prior_log) if args.prior_log else ""
+    earlier_log = earlier_log if earlier_log.strip() else None
+    refusal = out_of_memory_refusal(
+        kill, attempt=args.run_attempt, earlier_log=earlier_log)
+    if kill is not None and not refusal and _attempt(args.run_attempt) == 2 \
+            and earlier_log is None:
+        # Fail OPEN, out loud, the way an unreadable card is said above.
+        print(
+            f"::warning::medic retry gate: run {args.run_id or '?'} was killed "
+            f"out of memory on attempt 2, and attempt 1's log could not be "
+            f"read — counted as the run's first kill, so the retry was taken.",
+            file=sys.stderr,
+        )
     decision = decide(
         parked_because=parked,
         execution=execution_from_log(log_text),
         turn_receipt=witness,
         repeat_stall=repeat,
-        # DRE-4847: read off the SAME log, no second fetch and no card read —
-        # the machine and its class are in the run's own set-up lines.
-        out_of_memory=out_of_memory_refusal(
-            out_of_memory.from_log(log_text), attempt=args.run_attempt
-        ),
-        # DRE-6851: off the same log, plus the failed step's name.
-        refused_by_design=change_set_refusal(
-            log_text, workflow=args.workflow, failed_step=args.failed_step
-        ),
+        out_of_memory=refusal,
+        first_kill=kill is not None and not refusal,
         # DRE-6882: the default branch's tip, read by medic.yml's gate step
         # for a push run on that branch and handed over as a flag.
         superseded=superseded_on_default(
@@ -1291,9 +1223,9 @@ def main(argv=None) -> int:
     # Stage 2 fix #23. The failed workflow's name, which decides whether the
     # park rule applies (`park_rule_applies`). Absent means the rule applies.
     gate.add_argument("--workflow", default="")
-    # DRE-6851. The failed step's name off the Jobs API, which decides whether
-    # a refused change set was refused by its validation step. Absent means
-    # the log's own step field decides (`change_set_refusal`).
+    # DRE-6851. The failed step's name off the Jobs API. The rule that read it
+    # went with the change-set route (DRE-8021); medic.yml still passes it, so
+    # it is still taken, and read by nothing.
     gate.add_argument("--failed-step", default="")
     # Stage 2 fix #23. Where to leave the card read for the limit step, so it
     # does not ask Linear for the same comments again (`write_snapshot`).
@@ -1306,6 +1238,12 @@ def main(argv=None) -> int:
     gate.add_argument("--head-sha", default="")
     gate.add_argument("--default-branch", default="")
     gate.add_argument("--tip-sha", default="")
+    # DRE-8239. Two reads medic.yml makes only for a run whose log carries a
+    # kill: the Jobs API's answer for this attempt, which names the machine,
+    # and — on attempt 2 — attempt 1's failed log, which says whether this is
+    # the run's first kill. A missing or empty file is a read that failed.
+    gate.add_argument("--jobs", default="")
+    gate.add_argument("--prior-log", default="")
 
     # Stage 2 fix #23: the diagnosis agent's card, read before it starts.
     target = sub.add_parser("diagnosis-target")

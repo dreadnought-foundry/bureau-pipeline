@@ -27,29 +27,12 @@ what the parts RAN, not a recomputation of what they should have run — a
 matrix that drops an entry, or a part run against another commit, is caught
 here rather than trusted.
 
-THE WALKS ARE NOT IN ANY PART (DRE-6909). A walk is a
-`tests/*_keeps_the_suite_green.py` file: it copies the tree, applies a console
-save and runs the model tests inside the copy, once per case
-(`tests/console_change_walk.py`). On 2026-10-11 the agent-move walk alone put
-part 1 past its 30-minute limit (run 38142539090) with no test failed, and
-every pull request paid for it. So `discover` and `list` leave the walks out,
-`check` names a walk a part ran, and `walks` lists them by that file name
-alone — a walk added later needs no edit here or in `tests.yml`. `run-walks`
-runs each walk on its own and prints how long each took (and writes it to the
-job summary), so the walks' clock is watched rather than discovered at its
-limit. In `tests.yml` each walk had a job of its own (DRE-6935), and now runs
-across SHARDS (DRE-7907): on 2026-10-24 the every-default walk took 60m07s in
-one job, and `unit-result` waited on it. `walks --json` hands the matrix one
-entry per (walk, shard) — `{"walk", "shard", "shards"}` — and `run-walks
---only FILE` runs that walk with the shard `BUREAU_WALK_SHARD` of
-`BUREAU_WALK_SHARDS` names, whose cases `tests/console_change_walk.py`'s
-`shard` picks, and prints the shard and how many cases it selected. Each
-walk's shard count is the smallest whose largest shard projects at or under
-`WALK_SHARD_TARGET_SECONDS`, from the walk's CI seconds in the durations
-record and its case count (`projected_shard_seconds`), so a walk that gains
-cases gains shards with no edit here or in `tests.yml`;
-`tests/test_walks_time_budget.py` holds every shard to the target and to the
-walks job's clock.
+THE WALKS ARE GONE (DRE-8017). From DRE-6909 to DRE-8017 a
+`tests/*_keeps_the_suite_green.py` file was a console-change walk, run in jobs
+of its own and in no part. A save on Settings › Agents & models has written the
+one home since DRE-6977, so the route the walks proved carries nothing, and
+they were deleted with every command that ran them. A file named that way now
+is an ordinary test file, split like any other.
 
 `measure` rebuilds the durations record from pytest `--junit-xml` reports, or
 from the GitHub Actions logs of the parts' `pytest -v` (each result line is
@@ -66,7 +49,9 @@ records it without re-measuring: its seconds in `seconds` and one line in
 `provenance`, both keyed by its path, the `provenance` keys in path order — a
 CI run and job, or a local pytest run, and the card. Each file is a line of its
 own, so two pull requests that each add a test merge without a conflict here,
-as `seconds` always did. `measure` replaces all three: every second it writes
+as `seconds` always did — once the map holds a line. A re-measure leaves it
+empty, and the first two files added after one both write its one line.
+`measure` replaces all three: every second it writes
 is from its own reports, so it starts `provenance` empty.
 
 THE NIGHTLY RE-MEASURES BEFORE THE FLOOR (DRE-7577). The record must carry
@@ -74,10 +59,8 @@ seconds for 90% of the test files (`tests/test_unit_test_parts.py`), and every
 pull request that adds one moves the tree toward that floor; on 2026-10-18 a
 docs-only pull request failed on files others had added. `due` answers whether
 the record is under `REMEASURE_MARGIN`, a margin above the floor, and
-`refresh` rebuilds it from the nightly's own part logs through `measure`.
-The walks run in no part, so `refresh` keeps each walk's seconds and
-`provenance` line as they were — `tests/test_walks_time_budget.py` reads both
-— and its `method` names the run and the jobs it measured. `tests.yml`'s
+`refresh` rebuilds it from the nightly's own part logs through `measure`,
+and its `method` names the run and the jobs it measured. `tests.yml`'s
 schedule-only `durations-refresh` job asks `due`, and when it answers
 `refresh`, pushes the record alone to `bot/test-durations` and opens or
 updates that one pull request.
@@ -96,7 +79,6 @@ like a `PASSED` one, and pytest's closing `FAILED <id>` lines do not match.
 
 Run: python3 scripts/unit_test_parts.py list --part 1 --of 4
      python3 scripts/unit_test_parts.py check <dir of part-*.txt manifests>
-     python3 scripts/unit_test_parts.py run-walks
      python3 scripts/unit_test_parts.py due
      python3 scripts/unit_test_parts.py refresh part-*.log --run <run> --job <job>...
      python3 scripts/unit_test_parts.py coverage-only part-*.log
@@ -105,14 +87,10 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import importlib.util
 import json
-import os
 import re
 import statistics
-import subprocess
 import sys
-import time
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from fractions import Fraction
@@ -130,22 +108,6 @@ PYTHON_FILES = ("test_*.py", "*_test.py")
 #: collects from either.
 NORECURSE = ("*.egg", ".*", "_darcs", "build", "CVS", "dist", "node_modules",
              "venv", "{arch}", "__pycache__")
-
-#: A walk's file name (DRE-6909) — `tests/console_change_walk.py`'s `WALK`.
-WALK = "*_keeps_the_suite_green.py"
-
-#: A walk shard job's fixed cost, in seconds (DRE-7907): set up, checkout,
-#: the cached install, pytest starting and the walk's case-free tests. The
-#: change walk's job 120989216692 (run 40133214810, 2026-10-24) took 0m19s
-#: with no case in it; the other walks' jobs spent 8 to 14 seconds outside
-#: the walk step on the same runs.
-WALK_JOB_FIXED_SECONDS = 19
-
-#: The most a walk shard may project, in seconds (DRE-7907): 15 minutes
-#: halved, because `tests.yml` documents run-to-run spread of up to 2x on
-#: GitHub's 2-core runners, so a shard projected here lands at or under 15
-#: minutes on a slow one.
-WALK_SHARD_TARGET_SECONDS = 450
 
 #: The weight of a file when nothing is measured at all.
 DEFAULT_WEIGHT = 1.0
@@ -173,95 +135,10 @@ def _collect(root: Path, patterns) -> list[str]:
     return sorted(found)
 
 
-def is_walk(rel: str) -> bool:
-    """A console-change walk, by its file name alone."""
-    return fnmatch.fnmatch(Path(rel).name, WALK)
-
-
-def walks(root: Path = ROOT) -> list[str]:
-    """The walks, repo-relative, sorted — the walks' job runs these."""
-    return _collect(root, (WALK,))
-
-
-def _helper():
-    """`tests/console_change_walk.py`, the walks' one helper. This tree's
-    `scripts` and `tests` go LAST on the path, so a walk under another root
-    finds its own modules first and this tree's where it has none."""
-    for path in (ROOT / "scripts", ROOT / "tests"):
-        if str(path) not in sys.path:
-            sys.path.append(str(path))
-    import console_change_walk
-    return console_change_walk
-
-
-def _load_walk(root: Path, rel: str):
-    """The walk `rel` under `root`, imported as a module of its own."""
-    _helper()
-    name = "walk_" + re.sub(r"\W", "_", f"{root}/{rel}")
-    spec = importlib.util.spec_from_file_location(name, root / rel)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def walk_cases(root: Path, rel: str) -> list[str] | None:
-    """The walk's case names, in order, read off its `CASES` by the helper
-    (`tests/console_change_walk.py`'s `case_names`) — or None when the walk
-    cannot be imported or holds no `CASES`. Whatever cannot be read runs
-    whole, in one shard, and fails there by its own pytest run."""
-    try:
-        return _helper().case_names(_load_walk(root, rel).CASES)
-    except Exception:  # noqa: BLE001 — fail open: the walk's own run reports it
-        return None
-
-
-def _pairs(n: int) -> int:
-    """`n` rounded up to the next multiple of 2: a walk runs its cases two at
-    a time on GitHub's 2-core runners."""
-    return n + n % 2
-
-
-def projected_shard_seconds(seconds: float, cases: int, shards: int) -> float:
-    """The largest shard's projected seconds when a walk recorded at
-    `seconds` for its `cases` runs in `shards` shards: the fixed cost, plus
-    the rest scaled by the largest shard's cases over the walk's, both
-    counts rounded up to pairs."""
-    fixed = WALK_JOB_FIXED_SECONDS
-    if cases < 1:
-        return float(seconds)
-    largest = -(-cases // shards)
-    return fixed + max(seconds - fixed, 0.0) * _pairs(largest) / _pairs(cases)
-
-
-def shard_count(seconds: float | None, cases: int | None) -> int:
-    """The smallest shard count whose largest shard projects at or under
-    `WALK_SHARD_TARGET_SECONDS`. One shard for a walk with no recorded
-    seconds or no readable cases, and one shard a case when nothing fits —
-    `tests/test_walks_time_budget.py` names both."""
-    if not seconds or not cases:
-        return 1
-    for n in range(1, cases + 1):
-        if projected_shard_seconds(seconds, cases, n) <= WALK_SHARD_TARGET_SECONDS:
-            return n
-    return cases
-
-
-def walk_shards(root: Path = ROOT, record: Path = DURATIONS) -> list[dict]:
-    """One entry per (walk, shard), in walk order then shard order: the walk,
-    its shard number and its shard count — the walks job's matrix."""
-    seconds = load_weights(record)
-    out = []
-    for rel in walks(root):
-        names = walk_cases(root, rel)
-        of = shard_count(seconds.get(rel), len(names) if names else None)
-        out += [{"walk": rel, "shard": n, "shards": of} for n in range(1, of + 1)]
-    return out
-
-
 def discover(root: Path = ROOT) -> list[str]:
-    """The test files `pytest tests` collects, less the walks, repo-relative,
-    sorted — the files the parts split."""
-    return [f for f in _collect(root, PYTHON_FILES) if not is_walk(f)]
+    """The test files `pytest tests` collects, repo-relative, sorted — the
+    files the parts split."""
+    return _collect(root, PYTHON_FILES)
 
 
 def load_weights(path: Path = DURATIONS) -> dict[str, float]:
@@ -327,11 +204,9 @@ def assign(files: list[str], of: int, measured: dict[str, float]) -> list[list[s
 
 def part_files(root: Path, part: int, of: int,
                measured: dict[str, float]) -> list[str]:
-    """Part `part` (1-based) of `of`. A walk's measured seconds weigh on no
-    part: it runs in none."""
+    """Part `part` (1-based) of `of`."""
     if not 1 <= part <= of:
         raise ValueError(f"part {part} is outside 1..{of}")
-    measured = {f: s for f, s in measured.items() if not is_walk(f)}
     return assign(discover(root), of, measured)[part - 1]
 
 
@@ -397,11 +272,6 @@ def check(root: Path, ran: Path) -> list[str]:
             listed = ", ".join(str(h) for h in hits[:-1]) + f" and {hits[-1]}"
             problems.append(f"{f} is in parts {listed} — it ran more than once")
     for f in sorted(set(where) - set(tree)):
-        if is_walk(f):
-            problems.append(f"{f} was run by part(s) {where[f]}, but it is a "
-                            f"walk — the walks run in their own job, never in "
-                            f"a part")
-            continue
         problems.append(f"{f} was run by part(s) {where[f]} but is not a test "
                         f"file in this tree")
     return problems
@@ -457,11 +327,6 @@ def measure(reports: list[Path]) -> dict[str, float]:
 #: the margin trips about 39 files, roughly four days, before the floor: a
 #: nightly that is red or missed for a night or two still re-measures in time.
 REMEASURE_MARGIN = 0.95
-
-#: The start of the shared `method` sentence that says what a walk's seconds
-#: are. A refresh keeps the walks' seconds, so it keeps that sentence too.
-WALKS_SENTENCE = "every walk (tests/*_keeps_the_suite_green.py)"
-
 
 #: The durations-coverage tests (DRE-7726): the three test functions that
 #: fail, in every parametrization, when the record is under its 90% floor —
@@ -554,18 +419,13 @@ def refresh(record: dict, logs: list[Path], run: str, jobs: list[str],
             coverage_failed: list[str] | None = None) -> dict:
     """`record` re-measured from one CI run's part logs, through `measure`.
 
-    Every file the logs time takes their seconds, and its `provenance` line
-    goes: its seconds come from `method`'s run now. The walks run in no part,
-    so each walk keeps its `seconds` entry and its `provenance` line exactly
-    as they were, and `method` keeps the sentence saying what those seconds
-    are. `method` names the run and each job it read, and says every part
-    was green unless `coverage_failed` names jobs red only on the
+    Every file takes the logs' seconds, and no `provenance` line is kept:
+    every second comes from `method`'s run now. Nothing of `record` is kept
+    since the walks, whose seconds and lines it carried over, were deleted
+    (DRE-8017). `method` names the run and each job it read, and says every
+    part was green unless `coverage_failed` names jobs red only on the
     durations-coverage tests (DRE-7726), which it then names."""
-    old_seconds = record.get("seconds") or {}
-    seconds = {f: s for f, s in measure(logs).items() if not is_walk(f)}
-    seconds.update({f: s for f, s in old_seconds.items() if is_walk(f)})
-    provenance = {f: line for f, line in (record.get("provenance") or {}).items()
-                  if is_walk(f)}
+    seconds = measure(logs)
     at_head = f", head {head[:7]}" if head else ""
     if coverage_failed:
         red = (f"{'job' if len(coverage_failed) == 1 else 'jobs'} "
@@ -578,81 +438,9 @@ def refresh(record: dict, logs: list[Path], run: str, jobs: list[str],
         f"{'job' if len(jobs) == 1 else 'jobs'} {_and(jobs)}: the suite in "
         f"{len(jobs)} parts, {red}, re-measured by tests.yml's "
         f"durations refresh (DRE-7577); seconds per file from the runner's "
-        f"timestamps on each pytest -v result line; the walks run in no part, "
-        f"so each keeps its seconds and its `provenance` line from the record "
-        f"before")
-    old_method = str(record.get("method") or "")
-    if WALKS_SENTENCE in old_method:
-        method += "; " + old_method[old_method.index(WALKS_SENTENCE):]
-    return {"method": method, "provenance": dict(sorted(provenance.items())),
+        f"timestamps on each pytest -v result line")
+    return {"method": method, "provenance": {},
             "seconds": dict(sorted(seconds.items()))}
-
-
-def _took(seconds: float) -> str:
-    minutes, secs = divmod(round(seconds), 60)
-    return f"{minutes}m{secs:02d}s"
-
-
-def shard_line(root: Path, rel: str) -> str:
-    """The one line naming the walk, the shard this job runs of it and how
-    many of its cases that shard selected (DRE-7907) — read through the
-    helper, by the same names the walk's own run reads."""
-    helper = _helper()
-    shard = os.environ.get(helper.SHARD_ENV, "1")
-    shards = os.environ.get(helper.SHARDS_ENV, "1")
-    head = f"shard {shard} of {shards} of walk {rel}"
-    names = walk_cases(root, rel)
-    if names is None:
-        return f"{head}: its cases could not be read"
-    try:
-        picked = helper.shard(names)
-    except ValueError as exc:
-        return f"{head}: {exc}"
-    return f"{head}: {len(picked)} case(s) selected of {len(names)}"
-
-
-def run_walks(root: Path, only: str | None = None) -> int:
-    """Every walk, or only the walk `only` names, one pytest run each, timed,
-    each run as the shard the environment names (every case when it names
-    none). 1 when a walk failed or there is no walk at all — a pattern that
-    matches nothing is a silent green — and 2 when `only` names no walk."""
-    found = walks(root)
-    if not found:
-        print(f"unit_test_parts: no walk ({WALK}) under {root / 'tests'} — "
-              f"the walks' job would prove nothing", file=sys.stderr)
-        return 1
-    if only is not None:
-        if only not in found:
-            print(f"unit_test_parts: {only} is not a walk under "
-                  f"{root / 'tests'} — the walks are {found}", file=sys.stderr)
-            return 2
-        found = [only]
-    rows, shards = [], []
-    for rel in found:
-        print(f"running walk {rel}", flush=True)
-        shards.append(shard_line(root, rel))
-        print(shards[-1], flush=True)
-        start = time.monotonic()
-        proc = subprocess.run(
-            [sys.executable, "-m", "pytest", "-v", "-p", "no:cacheprovider", rel],
-            cwd=root)
-        took = time.monotonic() - start
-        verdict = "passed" if proc.returncode == 0 else "failed"
-        rows.append((rel, verdict, took))
-        print(f"walk {rel} ... {verdict} ... took {_took(took)}", flush=True)
-    failed = [rel for rel, verdict, _ in rows if verdict == "failed"]
-    print(f"{len(rows)} walk(s): {len(rows) - len(failed)} passed, "
-          f"{len(failed)} failed")
-    summary = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary:
-        with open(summary, "a", encoding="utf-8") as out:
-            out.write("### Console-change walks\n\n")
-            for line in shards:
-                out.write(f"{line}\n\n")
-            out.write("| walk | result | took |\n|---|---|---|\n")
-            for rel, verdict, took in rows:
-                out.write(f"| `{rel}` | {verdict} | {_took(took)} |\n")
-    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -670,21 +458,6 @@ def main(argv: list[str] | None = None) -> int:
     p_check.add_argument("--root", type=Path, default=ROOT)
     p_check.add_argument("ran", type=Path, help="directory of part records")
 
-    p_walks = sub.add_parser("walks", help="print the walks")
-    p_walks.add_argument("--root", type=Path, default=ROOT)
-    p_walks.add_argument("--json", action="store_true",
-                         help="one JSON list on one line, for a job matrix: "
-                              "one object per walk shard, carrying the walk, "
-                              "its shard and its shard count; no walk is an "
-                              "error")
-    p_walks.add_argument("--record", type=Path, default=DURATIONS,
-                         help="the durations record holding each walk's CI "
-                              "seconds (default: this tree's)")
-
-    p_run = sub.add_parser("run-walks", help="run every walk, timed")
-    p_run.add_argument("--root", type=Path, default=ROOT)
-    p_run.add_argument("--only", help="run only this walk, repo-relative")
-
     p_measure = sub.add_parser("measure", help="rebuild the durations record")
     p_measure.add_argument("reports", type=Path, nargs="+")
     p_measure.add_argument("--note", required=True,
@@ -701,8 +474,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_refresh = sub.add_parser(
         "refresh", help="re-measure the durations record from one CI run's "
-                        "part logs, keeping every walk's seconds and "
-                        "provenance; writes nothing that would still be due")
+                        "part logs; writes nothing that would still be due")
     p_refresh.add_argument("logs", type=Path, nargs="+")
     p_refresh.add_argument("--root", type=Path, default=ROOT)
     p_refresh.add_argument("--run", required=True, help="the CI run id")
@@ -745,22 +517,6 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"unit test parts: all {total} test files ran in exactly one part")
         return 0
-
-    if args.cmd == "walks":
-        found = walks(args.root)
-        if args.json:
-            if not found:
-                print(f"unit_test_parts: no walk ({WALK}) under "
-                      f"{args.root / 'tests'} — the walks' jobs would prove "
-                      f"nothing", file=sys.stderr)
-                return 1
-            print(json.dumps(walk_shards(args.root, args.record)))
-            return 0
-        print("\n".join(found))
-        return 0
-
-    if args.cmd == "run-walks":
-        return run_walks(args.root, args.only)
 
     if args.cmd == "due":
         path = args.record or DURATIONS

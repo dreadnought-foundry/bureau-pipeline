@@ -198,3 +198,94 @@ def test_a_composite_actions_mint_is_read(tmp_path):
                    "with": {"permission-secret-santa": "read"}}]}}))
     (tmp_path / ".github" / "workflows").mkdir()
     assert check(tmp_path, PINS) == ([], [("action.yml", "Mint", "permission-secret-santa")])
+
+
+# --------------------------------------------------------------------------- #
+# The build run's read-only organization token (DRE-8240)                      #
+# --------------------------------------------------------------------------- #
+#
+# Every token a build run held was scoped to the repository it runs in, so a
+# card whose criteria read a sibling repository's release parked in Green
+# Light on a 404 (DRE-6982). The build run now mints the read-only identity a
+# proof run holds, under the same name, for the three agent steps alone.
+
+TASK = ROOT / ".github" / "workflows" / "agent-task.yml"
+AGENT_ACTION = "anthropics/claude-code-action"
+READ_TOKEN = "GH_READ_TOKEN"
+READ_INPUTS = {
+    "owner": "${{ github.repository_owner }}",
+    "permission-contents": "read",
+    "permission-metadata": "read",
+    "permission-pull-requests": "read",
+}
+BUILD_BRIEFS = ("engineer", "devops", "frontend", "database-architect")
+
+
+def _task_steps():
+    return [s for s in _steps(yaml.safe_load(TASK.read_text())) if isinstance(s, dict)]
+
+
+def _task_mints():
+    return [s for s in _task_steps()
+            if str(s.get("uses") or "").split("@", 1)[0] == ACTION]
+
+
+def _step(step_id):
+    found = [s for s in _task_steps() if s.get("id") == step_id]
+    assert len(found) == 1, f"expected one step with id {step_id!r} in agent-task.yml"
+    return found[0]
+
+
+def _read_mint():
+    found = [s for s in _task_mints()
+             if (s.get("with") or {}).get("owner") == READ_INPUTS["owner"]]
+    assert len(found) == 1, (
+        f"expected exactly one mint in agent-task.yml scoped to the caller's "
+        f"organization, found {[s.get('name') for s in found]}")
+    return found[0]
+
+
+def _token_ref(step_id):
+    return re.compile(r"\$\{\{\s*steps\." + re.escape(step_id) + r"\.outputs\.token\s*\}\}")
+
+
+def test_the_build_read_mint_asks_for_an_org_wide_read_and_nothing_else():
+    step = _read_mint()
+    with_ = dict(step.get("with") or {})
+    assert {k: v for k, v in with_.items() if k not in ("app-id", "private-key")} == READ_INPUTS
+    assert "repositories" not in with_
+    assert step.get("continue-on-error") is True
+    assert step.get("id"), "the read mint needs an id the agent steps can read"
+
+
+def test_the_build_read_mint_uses_the_worker_tokens_pool_app():
+    reader, worker = _read_mint().get("with") or {}, _step("worker").get("with") or {}
+    assert reader.get("app-id") == worker.get("app-id")
+    assert reader.get("private-key") == worker.get("private-key")
+
+
+def test_the_app_and_worker_mints_stay_scoped_to_the_calling_repository():
+    for step_id in ("app", "worker"):
+        with_ = _step(step_id).get("with") or {}
+        assert "owner" not in with_, step_id
+        assert "repositories" not in with_, step_id
+
+
+def test_each_agent_step_and_no_other_receives_the_read_token_as_gh_read_token():
+    ref = _token_ref(_read_mint()["id"])
+    agents = [s for s in _task_steps()
+              if str(s.get("uses") or "").split("@", 1)[0] == AGENT_ACTION]
+    assert len(agents) == 3
+    for step in agents:
+        assert ref.fullmatch(str((step.get("env") or {}).get(READ_TOKEN, ""))), step.get("name")
+        assert not ref.search(json.dumps(step.get("with") or {})), step.get("name")
+    holders = [s.get("name") for s in _task_steps() if ref.search(json.dumps(s))]
+    assert holders == [s.get("name") for s in agents]
+
+
+@pytest.mark.parametrize("brief", BUILD_BRIEFS)
+def test_each_build_brief_says_how_to_use_the_read_token(brief):
+    text = " ".join((ROOT / "briefs" / f"{brief}.md").read_text().split())
+    assert "GH_TOKEN=$GH_READ_TOKEN" in text
+    assert "never to write" in text
+    assert "When `GH_READ_TOKEN` is empty" in text and "still a blocker" in text

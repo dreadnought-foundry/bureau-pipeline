@@ -833,7 +833,11 @@ def _step() -> dict:
 
 def test_the_step_follows_the_proof_dispatch_and_runs_only_on_a_full_pass():
     names = [s.get("name") for s in _steps()]
-    assert names.index(STEP) == names.index("Dispatch proof runs") + 1
+    # DRE-8452: the record sweep sits between them, under the same gate;
+    # DRE-8626: so does the proof-overdue pass, right after the record sweep.
+    assert names.index(STEP) == names.index("Proof overdue") + 1
+    assert names.index(STEP) == names.index("Close proof records that cannot merge") + 2
+    assert names.index(STEP) == names.index("Dispatch proof runs") + 3
     proof = next(s for s in _steps() if s.get("name") == "Dispatch proof runs")
     # DRE-8000: one gate for both, and it also runs after a failed Sweep
     # (tests/test_reconcile_workflow_phase_independence.py).

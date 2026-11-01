@@ -36,7 +36,8 @@ means is "the critic job finished" — the false green that got two
 REQUEST_CHANGES PRs hand-merged and shipped a data-integrity regression
 (DRE-1825 → DRE-1895). Here: APPROVE → success, REQUEST_CHANGES → failure,
 crashed critic → failure with a summary that says plainly it is not a code
-rejection (DRE-1916).
+rejection (DRE-1916). A comment held at the name guard (DRE-8170) posted no
+verdict, so it is a failure too, whatever the composed verdict said.
 
 This check is NOT a merge credential and must never become one. The merge
 gate's review condition stays the qa-bot-authored `VERDICT: APPROVE` comment
@@ -103,7 +104,8 @@ def _verdict_word(verdict: str) -> str:
     return ""
 
 
-def decide(real: bool, verdict: str, too_large: str = "") -> tuple[str, str, str]:
+def decide(real: bool, verdict: str, too_large: str = "",
+           held: bool = False) -> tuple[str, str, str]:
     """(conclusion, title, summary) for the head-bound check.
 
     `real` is check_critic_result.py's answer to "did a genuine review
@@ -116,6 +118,11 @@ def decide(real: bool, verdict: str, too_large: str = "") -> tuple[str, str, str
     reviewed — but it must say the real reason: the default no-review
     summary blames an infrastructure failure, and a notice that blames the
     wrong thing cost a day of credential-hunting once already (DRE-2465).
+
+    `held` (DRE-8170) is true when the name guard held the critic's
+    comment. The verdict file still carries what the critic composed, but
+    the pull request was told no verdict stands on this head, so the check
+    says the same and fails closed — never the composed APPROVE.
     """
     if too_large:
         return (
@@ -126,6 +133,15 @@ def decide(real: bool, verdict: str, too_large: str = "") -> tuple[str, str, str
             "a code rejection. Split it into smaller pull requests — each "
             "one independently reviewable — and every part gets a full "
             "review.",
+        )
+    if held:
+        return (
+            "failure",
+            "Review held at the name guard — no verdict",
+            "The adversarial reviewer's comment was held at the name guard "
+            "before it was posted, so no verdict stands on this commit. This "
+            "is NOT a code rejection. Merge is held until a critic's comment "
+            "passes the guard.",
         )
     if not real:
         return (
@@ -234,9 +250,9 @@ def detail_body(*, sha: str, summary: str, run_url: str, event: str,
 
 def publish(*, repo: str, sha: str, real: bool, verdict: str,
             run_url: str, event: str, carried_from: str = "",
-            too_large: str = "") -> int:
+            too_large: str = "", held: bool = False) -> int:
     """Create or update the head-bound check. 0 on success."""
-    conclusion, title, summary = decide(real, verdict, too_large)
+    conclusion, title, summary = decide(real, verdict, too_large, held)
     detail = detail_body(sha=sha, summary=summary, run_url=run_url,
                          event=event, carried_from=carried_from)
     payload = json.dumps({
@@ -295,6 +311,9 @@ def main(argv: list[str]) -> int:
                     help="the commit a CARRIED verdict was earned on "
                          "(DRE-2340) — set only on the review-skip path, "
                          "where the reviewer did not re-read this head")
+    ap.add_argument("--held", default="",
+                    help="`true` when the name guard held the critic's "
+                         "comment (DRE-8170) — the check fails closed")
     args = ap.parse_args(argv)
     try:
         with open(args.verdict_file) as f:
@@ -310,6 +329,7 @@ def main(argv: list[str]) -> int:
         event=args.event,
         carried_from=args.carried_from,
         too_large=args.too_large,
+        held=args.held.strip().lower() == "true",
     )
 
 

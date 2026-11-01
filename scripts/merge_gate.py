@@ -8,8 +8,8 @@ its decisions case-for-case. The workflow is now a thin caller: it gathers
 the inputs from GitHub's own records and acts on this module's verdict —
 no agent claims trusted, no human in the loop.
 
-The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → P → S → F → 4
-→ W → O.
+The conditions (all must pass), evaluated 0 → D → 1 → 2 → 3 → B → P → S → F
+→ 4 → W → O.
 
 FRESHNESS IS NOT A GATE (DRE-2416, CEO decision 2026-08-20 recorded on
 DRE-2597; the rule lives in agent-bureau's
@@ -210,6 +210,24 @@ not a critic catch).
      never blocks); anything else (FAIL, neutral) holds.
    - Same authorship rule as the critic: a forged FAIL could stall merges,
      a forged PASS could mask a real FAIL.
+
+B. BASE (DRE-8503) — the pull request's own base branch, against the
+   repository's default branch. On 2026-10-30 at 4:01 PM PT agent-bureau's
+   gate merged #4373 into `agent/DRE-8273-initiatives-contract-pr` and #4372
+   into `agent/DRE-7945-composer-at-foot-pr`: a stacked pull request, green
+   and approved, merged into another agent branch. #4373's work landed on a
+   branch that then merged on and was deleted, so it never reached the
+   stack, and it was re-filed. A merge into a branch that is not the default
+   is not a landing, so the gate never makes one: a base that is not the
+   default branch is `hold`, naming both, until the pull request is
+   retargeted — GitHub does that itself when the parent merges and its
+   branch is deleted. The workflow posts the hold once per head and reason,
+   like any other hold. Either name missing or unreadable is UNKNOWN and
+   holds: a blip is never "the base is the default branch". Evaluated after
+   2 and 3, so the pull request's own verdicts still speak first, and
+   before every later condition, whose notes would say something else is
+   all that is left. Condition 0 still comes first: a stacked pull request
+   in conflict goes to the fix agent, which merges its OWN base.
 
 P. PROOF RECORD (DRE-6141) — on a proof-record branch
    (`agent/DRE-<n>-proof-record`), the record `proof_record.py gather` read
@@ -1099,6 +1117,71 @@ def evaluate_fix_lane(fix_lane, pr_number) -> Optional[Decision]:
     return Decision("wait", reason) if reason else None
 
 
+#: A branch name as GitHub reports one — what the default-branch read must
+#: look like before it is compared. `{}` or `null` from a blipped read is not
+#: a branch, and comparing it would read as "not the default branch" (DRE-8503).
+_BRANCH_NAME_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+#: Condition B's hold reason, as `stacked_base_named` reads it back off the
+#: gate's note. A branch name holds no comma or space, so the base ends where
+#: the comma begins (DRE-8503).
+_STACKED_BASE_REASON_RE = re.compile(
+    r"^this pull request's base is (?P<base>[A-Za-z0-9._/-]+), "
+    r"not the default branch [A-Za-z0-9._/-]+ — waiting for it to be retargeted")
+
+
+def evaluate_base(base_ref, default_branch) -> Optional[Decision]:
+    """Condition B (DRE-8503). None = the pull request's base is the
+    repository's default branch, proceed. Otherwise `hold`: a merge into
+    another branch is not a landing, and on 2026-10-30 one lost #4373's work
+    when the branch it merged into merged on and was deleted.
+
+    `hold`, never `wait` or `human`: retargeting the pull request is what
+    changes the answer — GitHub does it when the parent merges and its
+    branch is deleted — and the held pull request is reconsidered the way
+    any held one is. The reason is the note's text and its once-per-head
+    marker, so it names only the two branches and never a verdict marker.
+
+    `None` for `base_ref` is the pre-DRE-8503 caller and gates nothing, the
+    default-to-old-behaviour shape the other conditions take. A name that is
+    empty or not a branch name is UNKNOWN and holds.
+    """
+    if base_ref is None:
+        return None
+    base = (base_ref or "").strip()
+    default = (default_branch or "").strip()
+    # `null` is what a jq filter prints for a field the record lacks.
+    if not all(_BRANCH_NAME_RE.match(name) and name != "null"
+               for name in (base, default)):
+        return Decision(
+            "hold",
+            f"UNKNOWN: the base branch ({base or 'unread'}) or the "
+            f"repository's default branch ({default or 'unread'}) could not "
+            "be read — the gate cannot tell whether this merge would land on "
+            "the default branch, so it holds rather than merge into another "
+            "pull request's branch (DRE-8503)",
+        )
+    if base == default:
+        return None
+    return Decision(
+        "hold",
+        f"this pull request's base is {base}, not the default branch "
+        f"{default} — waiting for it to be retargeted to {default}. A merge "
+        f"into another branch never reaches {default} on its own, so the "
+        "gate does not make one (DRE-8503)",
+    )
+
+
+def stacked_base_named(reason) -> Optional[str]:
+    """The base condition B's hold `reason` names, or None when `reason` is
+    not that hold — the UNKNOWN hold included, which a re-read can answer
+    (DRE-8503). The sweep reads the gate's note through this, so a stack
+    held on its parent spends no re-trigger: only a retarget changes the
+    answer, and a re-trigger cannot make one."""
+    found = _STACKED_BASE_REASON_RE.match(reason or "")
+    return found.group("base") if found else None
+
+
 def stacked_reading(comments, qa_login: str, head_sha: str) -> Optional[str]:
     """Condition S's reading of ONE open pull request this branch carries:
     None when the critic's latest verdict is APPROVE bound to that pull
@@ -1659,9 +1742,11 @@ def _decide(
     proof=None,
     workflow_runs=None,
     verifier_scope: Optional[VerifierScope] = None,
+    base_ref=None,
+    default_branch=None,
 ) -> Decision:
-    """The whole gate: conditions 0 → D → 1 → 2 → 3 → P → S → F → 4 → W → O,
-    first blocker wins.
+    """The whole gate: conditions 0 → D → 1 → 2 → 3 → B → P → S → F → 4 → W
+    → O, first blocker wins.
     `review_suites` is the verified-origin record from review_suite_ids();
     the default (empty — nothing excluded) is the fail-closed direction.
     `head_branch` / `pr_author` / `pr_commits` are the dependabot-policy
@@ -1741,7 +1826,12 @@ def _decide(
     `read_verifier_scope`'s answer at the current head, read only when the
     Verifier's verdict is for an older head and does not carry. A verdict
     the Verifier no longer gates is ignored, never carried. The default
-    (None) reproduces the pre-DRE-7165 behavior."""
+    (None) reproduces the pre-DRE-7165 behavior.
+
+    `base_ref` / `default_branch` are condition B's record (DRE-8503), the
+    pull request's `baseRefName` and the repository's `default_branch`,
+    evaluated after 3 and before P. The defaults (None) reproduce the
+    pre-DRE-8503 behavior for every caller that never passes them."""
     blocked = evaluate_conflict(merge_state)
     if blocked:
         return blocked
@@ -1802,6 +1892,12 @@ def _decide(
             decision.carried = carried
             decision.content_id = head_content_id
         return _noted(decision)
+
+    # Condition B (DRE-8503): the verdicts say merge, but a merge into a
+    # branch that is not the default lands nothing.
+    blocked = evaluate_base(base_ref, default_branch)
+    if blocked:
+        return _decided(blocked)
 
     # Condition P (DRE-6141): the critic approved a proof record, but a
     # record whose rows were not all seen working proves nothing.
@@ -1978,6 +2074,16 @@ def build_parser() -> argparse.ArgumentParser:
                              "older head is judged by verify_scope.decide at "
                              "the current head; a card with no readable "
                              "snapshot holds")
+    # Condition B's record (DRE-8503) — optional; omitting --base-ref
+    # reproduces the pre-DRE-8503 behavior for every caller.
+    parser.add_argument("--base-ref", default=None,
+                        help="the pull request's baseRefName. Passed, a base "
+                             "that is not --default-branch holds until the "
+                             "pull request is retargeted (DRE-8503)")
+    parser.add_argument("--default-branch", default="",
+                        help="the repository's default_branch, as GitHub "
+                             "reports it. Empty or unreadable with --base-ref "
+                             "passed is UNKNOWN, and holds")
     return parser
 
 
@@ -2318,6 +2424,7 @@ def main(argv=None) -> int:
         pr_body=pr_body, pr_created_at=args.pr_created_at or None,
         proof=proof, workflow_runs=workflow_runs,
         verifier_scope=verifier_scope,
+        base_ref=args.base_ref, default_branch=args.default_branch,
     )
     if body_note:
         decision.notes.append(body_note)

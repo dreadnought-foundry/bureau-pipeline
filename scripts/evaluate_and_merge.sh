@@ -45,7 +45,9 @@ set -e
 #     the pipeline's own: agent/* (card work), repair/* (red-main repair),
 #     dependabot/* (dependency bumps), the scheduled branch
 #     bot/standards-sync, the onboarding branch bot/onboard and the nightly's
-#     durations branch bot/test-durations, each matched as a literal. The dependabot and bot branches carry no card. The set is
+#     durations branch bot/test-durations, each matched as a literal, and the
+#     per-slug onboarding branches bot/onboard-<slug>, whose whole name must
+#     match ^bot/onboard-[a-z0-9][a-z0-9-]*$. The dependabot and bot branches carry no card. The set is
 #     the one reconcile.PIPELINE_BRANCH_PREFIXES holds. It echoes the
 #     `bureau-card` line when the branch names a card.
 #  2. Gathers the records the decision reads, each from GitHub's own answer.
@@ -56,8 +58,9 @@ set -e
 #     whether condition 1 waits on those two alone; if it does, the step says
 #     `decision=wait` and stops before reading anything else. Otherwise: the
 #     three-dot compare of base against head, every page of the comments, the
-#     commits, the Agent Fix lane, the open pull requests this branch
-#     carries, the code-owner rules and, on a proof-record branch, the proof
+#     commits, the repository's default branch, the Agent Fix lane, the open
+#     pull requests this branch carries, the code-owner rules and, on a
+#     proof-record branch, the proof
 #     record at the head (`proof_record.py gather`; off one it reads
 #     nothing). A record that cannot be read fails closed: it is written
 #     empty or unreadable, and the decision waits or holds on it. The body
@@ -90,7 +93,8 @@ set -e
 #               waits on; who must approve which folders, for a code-owner
 #               hold, which also parks the card in Green Light; or, for any
 #               other hold, `Merge gate: declined @<head> — <reason>`, once per
-#               head and reason.
+#               head and reason. A pull request whose base is not the
+#               default branch is one of those: it waits to be retargeted.
 #     wait      stops quietly. A live Agent Fix run on this pull request still
 #               there after step 3's re-reads, or an unfinished CI run on the
 #               head, is a wait.
@@ -109,6 +113,21 @@ set -e
 #     real failure, explained and red, unless GitHub's text says the head
 #     branch is out of date: then the branch is updated from the base once per
 #     base tip, one note says so, and the step exits 0 without merging.
+#
+# The merge method is read off the head branch, once, into MERGE_METHOD, and
+# both merge calls (the first try and the one retry) use it. A proof
+# record's branch, `agent/DRE-<n>-proof-record` as proof_record.proof_record_branch
+# reads it, merges with --squash, so no commit on the branch, and no name in
+# one, lands on the base: only the squash commit does. Every other branch
+# merges with --merge, so the TDD split commits stay visible on the base.
+# The script asks that reader and restates no branch rule. A record's method
+# then follows the repository's own allow_squash_merge setting, read once:
+# where it is false GitHub refuses every squash, so the record merges with
+# --merge instead. That gives up nothing the squash was for, because the name
+# hazard it closes is a public repository's, and the repository that turns
+# squash off (agent-bureau) is private. A setting that cannot be read keeps
+# --squash, and a refusal stays loud.
+#
 # No note carries verdict-shaped text, so none passes for an approval or wakes
 # the gate's own comment trigger.
 #
@@ -417,6 +436,13 @@ set -e
 # DRE-7577 (2026-10-19). bot/test-durations, the nightly Pipeline Tests run's
 #   re-measured config/unit-test-durations.json, merges here card-less on the
 #   same terms, as a third literal — never `bot/*`.
+# DRE-8658 (2026-11-01). The onboarding process moves to one routing branch
+#   per declaration, bot/onboard-<slug> (agent-bureau's DRE-8613), so one
+#   stuck onboarding stops blocking the others. The family merges here
+#   card-less on the same terms beside the literal bot/onboard, which stays.
+#   The case admits bot/onboard-*, and the line after it skips any such
+#   branch whose whole name is not ^bot/onboard-[a-z0-9][a-z0-9-]*$, the slug
+#   agent-bureau's onboarding.SLUG_RE allows — never `bot/*`.
 # DRE-7165 (2026-10-13). On agent-bureau #3741 the Verifier passed 4a26218,
 #   the pull request moved to 6b0dbca, and the Verifier's run there declined
 #   it as single-system with no UI signal and posted nothing. The gate called
@@ -425,6 +451,39 @@ set -e
 #   read once, and merge_gate.py asks verify_scope.decide with the compare
 #   record's files and that card. Out of scope merges with a note; in scope,
 #   or an input it could not read, holds and says which.
+# DRE-8171 (2026-10-27). Every pull request merged with --merge, so the last
+#   four proof records (#1263, #1202, #1191, #1178) landed as two-parent merge
+#   commits carrying every commit of their branch, and a record branch whose
+#   commits named a person would have put that name on `main` for good. A
+#   proof-record branch now merges with --squash (MERGE_METHOD, decided by
+#   proof_record.proof_record_branch); the squash commit's message is the
+#   branch's messages concatenated, which is why the epic's guard reads
+#   commit messages too. The readers that bind to the record still hold on a
+#   squash: the proof close binds the APPROVE to headRefOid and reads the
+#   record there (DRE-5919, DRE-6141), and proof_release compares the tag with
+#   mergeCommit.oid, the squash commit on `main`.
+# DRE-8195 (2026-10-27). DRE-8171 read allow_squash_merge off bureau-pipeline
+#   only. agent-bureau has it false, so its DRE-7825 record (#4132, all rows
+#   met, APPROVE at fcb3bce) was refused at merge in gate run 40597073925 with
+#   "Squash merges are not allowed on this repository", and every record there
+#   would have gone red the same way. The script now reads the setting once,
+#   off the repository it merges in, and a record branch squashes only where
+#   it is true; where it is false the record merges with --merge, as before
+#   DRE-8171. The log line names the setting and the method. An unreadable
+#   setting keeps --squash; every other branch keeps --merge.
+# DRE-8503 (2026-10-30). At 4:01 PM PT agent-bureau's gate merged #4373 into
+#   agent/DRE-8273-initiatives-contract-pr and #4372 into
+#   agent/DRE-7945-composer-at-foot-pr: stacked pull requests, green and
+#   approved, merged into other agent branches. #4373's work landed on a
+#   branch that then merged on and was deleted, so it never reached the
+#   stack and was re-filed as #4383. The repository's default branch is now
+#   read once, after the precheck, and handed over with the base as
+#   --base-ref and --default-branch; condition B holds a base that is not
+#   the default branch, posted as an ordinary decline note once per head.
+#   A failed read is empty, which holds as UNKNOWN. The path to a merge is
+#   ten reads now, off a proof-record branch. Neither of the gate's
+#   two branch writes is reached on that hold, and both are update-branch,
+#   which merges the pull request's own base, never the default branch.
 
 set -euo pipefail
 
@@ -448,7 +507,9 @@ BRANCH=$(pr_field headRefName)
 STATE=$(pr_field state)
 [ "$STATE" != "OPEN" ] && { echo "PR #$PR is $STATE — nothing to do"; exit 0; }
 # The pipeline's own branches, as literals (DRE-2426 keeps this set and reconcile's one).
-case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard|bot/test-durations) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+case "$BRANCH" in agent/*|repair/*|dependabot/*|bot/standards-sync|bot/onboard|bot/onboard-*|bot/test-durations) ;; *) echo "not an agent branch — skip"; exit 0;; esac
+# The one family, per-slug onboarding: the suffix must be a slug (DRE-8658).
+case "$BRANCH" in bot/onboard-*) [[ "$BRANCH" =~ ^bot/onboard-[a-z0-9][a-z0-9-]*$ ]] || { echo "not an agent branch — skip"; exit 0; };; esac
 CARD=$(printf '%s' "$BRANCH" | grep -oiE 'DRE-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]' || true)
 # The ECHOED line only: this job's name is a check-run name (DRE-4407).
 if [ -n "$CARD" ]; then echo "bureau-card: $CARD"; fi
@@ -506,6 +567,8 @@ gh api --paginate --slurp \
 # A blip is an empty record, and the gate waits on it (DRE-2039).
 gh api "repos/$REPO_FULL/pulls/$PR/commits?per_page=100" > /tmp/pr-commits.json 2>/dev/null \
   || echo '[]' > /tmp/pr-commits.json
+# The default branch, for condition B; a failed read is empty and holds (DRE-8503).
+DEFAULT_BRANCH=$(gh api "repos/$REPO_FULL" --jq .default_branch 2>/dev/null || true)
 # The workflow's own token; an unreadable lane is written in and waited on (DRE-4486).
 GH_TOKEN="$WORKFLOW_TOKEN" python3 .bureau-pipeline/scripts/stranded_fix.py lane \
   --repo "$REPO_FULL" --out /tmp/fix-lane.json
@@ -545,6 +608,8 @@ gate_decision() {
     --pr-body-file /tmp/pr-body.txt \
     --pr-created-at "$CREATED_AT" \
     --proof-record-file /tmp/proof-record.json \
+    --base-ref "$BASE" \
+    --default-branch "$DEFAULT_BRANCH" \
     ${SCOPE_ARGS[@]+"${SCOPE_ARGS[@]}"}
 }
 gate_decision | tee /tmp/gate-decision
@@ -800,10 +865,26 @@ fi
 [ "$REFRESH" = "proceed" ] || { echo "fork refresh: waiting — ${REFRESH_REASON:-no decision read}"; exit 0; }
 
 # Both gates green: advance card, merge as qa-bot.
+# A proof record squashes, every other branch keeps its merge commit (DRE-8171).
+# Asked of the one reader, never restated; a failed ask kills the step unmerged.
+MERGE_METHOD=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import proof_record; print("--squash" if proof_record.proof_record_branch(sys.argv[1]) else "--merge")' "$BRANCH")
+# ...but only where the repository allows squash: GitHub refuses it where it
+# does not, so there the record merges as before. Unreadable keeps the squash (DRE-8195).
+if [ "$MERGE_METHOD" = "--squash" ]; then
+  ALLOW_SQUASH=$(gh api "repos/$REPO_FULL" --jq .allow_squash_merge 2>/dev/null || true)
+  case "$ALLOW_SQUASH" in
+    true)  echo "merge method: --squash — $REPO_FULL has allow_squash_merge: true, so this proof record squashes" ;;
+    false) MERGE_METHOD=--merge
+           echo "merge method: --merge — $REPO_FULL has allow_squash_merge: false, so this proof record merges with a merge commit" ;;
+    *)     echo "merge method: --squash — allow_squash_merge could not be read for $REPO_FULL, so this proof record squashes as before" ;;
+  esac
+else
+  echo "merge method: --merge — not a proof-record branch"
+fi
 [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "In Review" "In Progress" || true
 # Pinned to the evaluated head; a moved head is benign (DRE-2117, DRE-1990).
 # GitHub's refusal text is kept for the out-of-date arm and still logged (DRE-6195).
-if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt; then
+if ! gh pr merge "$PR" "$MERGE_METHOD" --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt; then
   cat /tmp/merge-error.txt >&2
   NOW=$(gh pr view "$PR" --json headRefOid --jq .headRefOid 2>/dev/null || true)
   if [ -n "$NOW" ] && [ "$NOW" = "$SHA" ]; then
@@ -812,7 +893,7 @@ if ! gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp
     if grep -qF 'Something went wrong while executing your query' /tmp/merge-error.txt; then
       echo "GitHub answered the merge with its own server error, the head still at $SHA — trying once more"
       sleep "${MERGE_RETRY_SECONDS:-15}"
-      gh pr merge "$PR" --merge --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt && merged
+      gh pr merge "$PR" "$MERGE_METHOD" --delete-branch --match-head-commit "$SHA" 2>/tmp/merge-error.txt && merged
       cat /tmp/merge-error.txt >&2
     fi
     # GitHub's up-to-date rule, which this gate does not enforce: one update

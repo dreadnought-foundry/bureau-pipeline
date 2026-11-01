@@ -76,7 +76,7 @@ on:
         description: >-
           The candidate model id to trial, e.g. a newly seen id
           `model-adoption.yml` found in the catalog. It arrives as an INPUT so no literal model id
-          is pinned in this file (tests/test_model_config.py::
+          is pinned in this file (tests/test_workflow_model_pins.py::
           test_no_workflow_hardcodes_a_model_id).
         type: string
         required: true

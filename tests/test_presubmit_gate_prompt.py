@@ -24,7 +24,7 @@ Why a test and not just prompt text: a prompt is the one part of this pipeline
 with no compiler and no runtime error. A step that "disappears" in a later
 whitespace-shuffling edit of a 50-line prompt block fails SILENTLY and the only
 symptom is a slow drift back to 40% avoidable rejections. This file is the
-model-config discipline (``tests/test_model_config.py``) applied to prompt
+model-config discipline (``tests/test_workflow_model_pins.py``) applied to prompt
 text: the structural pins are on the PARSED workflow (the action input, not a
 grep of the file), they pin ORDER (gate before submit) as well as presence, and
 the ``## Unmet criteria`` heading is pinned byte-identical in both prompts

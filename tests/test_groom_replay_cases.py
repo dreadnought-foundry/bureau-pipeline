@@ -108,19 +108,25 @@ def inputs(threads, rows=(), *, reasons=REASONS, door_problem=None):
     return doc
 
 
-class Files:
-    """One build's three files in a temporary directory, the shipped ones
-    copied in first."""
+def seed_only():
+    """The cases file before any removal: the seed, unjudged. Never the
+    shipped file, which `groom-week` rewrites every Sunday."""
+    return {"schema": grc.SCHEMA, "built_at": None, "cases": [dict(SEED)]}
 
-    def __init__(self, tmp_path: Path, cases=None):
+
+class Files:
+    """One build's three files in a temporary directory, starting from a
+    seed-only cases file — or from the shipped one, when `shipped`."""
+
+    def __init__(self, tmp_path: Path, cases=None, *, shipped=False):
         self.dir = tmp_path
         self.cases = tmp_path / "cases.json"
         self.set = tmp_path / "replay-set.json"
         self.gate = tmp_path / "gate-set.json"
-        if cases is None:
+        if shipped:
             self.cases.write_text((ROOT / grc.CASES_PATH).read_text())
         else:
-            self.cases.write_text(json.dumps(cases))
+            self.cases.write_text(json.dumps(seed_only() if cases is None else cases))
 
     def build(self, doc, capsys=None) -> tuple[int, str]:
         source = self.dir / "from.json"
@@ -503,32 +509,90 @@ def test_an_empty_gate_set_says_zero_cards_so_a_workflow_can_skip_it(tmp_path, c
 # --------------------------------------------------------------------------
 # the shipped files and the seed
 # --------------------------------------------------------------------------
-def test_the_shipped_cases_hold_the_seed_and_nothing_else():
-    doc = json.loads((ROOT / grc.CASES_PATH).read_text())
-    assert doc == {"schema": "groom-replay-cases/1", "built_at": None,
-                   "cases": [SEED]}
-    assert list(doc["cases"][0]) == CASE_KEYS
+# `groom-week` rewrites these files every Sunday (docs/groom-week.md), so the
+# checks below hold for any week's build, never for one week's contents.
+SHIPPED = (grc.CASES_PATH, grc.SET_PATH, grc.GATE_SET_PATH)
 
 
-def test_the_shipped_sets_are_built_from_the_shipped_cases():
-    cases = json.loads((ROOT / grc.CASES_PATH).read_text())["cases"]
-    assert json.loads((ROOT / grc.SET_PATH).read_text()) == grc.replay_set(cases)
-    gate = json.loads((ROOT / grc.GATE_SET_PATH).read_text())
-    assert gate == grc.gate_set(cases)
-    assert gate["outcomes"]["now"] == [] and gate["sequence"] == []
-    assert [r["identifier"] for r in
-            json.loads((ROOT / grc.SET_PATH).read_text())["outcomes"]["now"]] == ["DRE-7239"]
+def without_main(c):
+    return {k: v for k, v in c.items() if k != "main"}
 
 
-def test_the_shipped_sets_go_through_base_in_the_checkout(tmp_path):
-    for stored, n in ((grc.SET_PATH, 1), (grc.GATE_SET_PATH, 0)):
+def assert_shipped_cases(root: Path):
+    doc = json.loads((root / grc.CASES_PATH).read_text())
+    assert doc["schema"] == grc.SCHEMA
+    cases = doc["cases"]
+    seeds = [c for c in cases if c["case"] == SEED["case"]]
+    assert [without_main(c) for c in seeds] == [without_main(grc.SEED_CASES[0])]
+    for c in cases:
+        assert list(c) == CASE_KEYS, c["case"]
+        assert c["expect"] in grc.EXPECTS, c["case"]
+    assert cases == sorted(cases, key=grc._sort_key)
+
+
+def assert_shipped_sets(root: Path, tmp_path: Path):
+    cases = json.loads((root / grc.CASES_PATH).read_text())["cases"]
+    stored = {grc.SET_PATH: grc.replay_set(cases), grc.GATE_SET_PATH: grc.gate_set(cases)}
+    for path, built in stored.items():
+        shipped = json.loads((root / path).read_text())
+        assert shipped == built, path
         out = tmp_path / "p.json"
-        assert groom_replay.main(["base", "--stored", stored, "--out", str(out)]) == 0
-        assert len(groom_verify_agent.window(json.loads(out.read_text()))) == n
+        assert groom_replay.main(["base", "--stored", path, "--out", str(out)],
+                                 root=root) == 0
+        cards = {r["identifier"] for r in shipped["outcomes"]["now"]}
+        assert len(groom_verify_agent.window(json.loads(out.read_text()))) == len(cards)
+
+
+def shipped_copy(tmp_path: Path) -> Path:
+    root = tmp_path / "checkout"
+    for path in SHIPPED:
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_bytes((ROOT / path).read_bytes())
+    return root
+
+
+def test_the_shipped_cases_hold_the_seed_in_order():
+    assert_shipped_cases(ROOT)
+
+
+def test_the_shipped_sets_are_built_from_the_shipped_cases_and_go_through_base(tmp_path):
+    assert_shipped_sets(ROOT, tmp_path)
+
+
+def test_the_shipped_checks_fail_on_a_missing_seed(tmp_path):
+    root = shipped_copy(tmp_path)
+    doc = json.loads((root / grc.CASES_PATH).read_text())
+    doc["cases"] = [c for c in doc["cases"] if c["case"] != SEED["case"]]
+    (root / grc.CASES_PATH).write_text(json.dumps(doc))
+    with pytest.raises(AssertionError):
+        assert_shipped_cases(root)
+
+
+def test_the_shipped_checks_fail_on_cases_out_of_order(tmp_path):
+    root = shipped_copy(tmp_path)
+    doc = json.loads((root / grc.CASES_PATH).read_text())
+    doc["cases"] = list(reversed(doc["cases"])) + [dict(SEED, case="zz-DRE-1",
+                                                        recorded_at="2026-01-01T00:00:00Z")]
+    (root / grc.CASES_PATH).write_text(json.dumps(doc))
+    with pytest.raises(AssertionError):
+        assert_shipped_cases(root)
+
+
+@pytest.mark.parametrize("path", [grc.SET_PATH, grc.GATE_SET_PATH])
+def test_the_shipped_checks_fail_on_a_set_that_drifts_from_its_builder(tmp_path, path):
+    root = shipped_copy(tmp_path)
+    drifted = json.loads((root / path).read_text())
+    extra = {"identifier": "DRE-9", "title": "portico: drift", "repo": "portico",
+             "position": len(drifted["outcomes"]["now"]) + 1}
+    drifted["outcomes"]["now"].append(extra)
+    drifted["sequence"].append(dict(extra))
+    (root / path).write_text(json.dumps(drifted))
+    with pytest.raises(AssertionError):
+        assert_shipped_sets(root, tmp_path)
 
 
 def test_the_shipped_files_are_what_a_build_writes(tmp_path, capsys):
-    files = Files(tmp_path)
+    files = Files(tmp_path, shipped=True)
     rc, out = files.build(inputs({}), capsys)
     assert rc == 0, out
     for mine, shipped in ((files.cases, grc.CASES_PATH), (files.set, grc.SET_PATH),

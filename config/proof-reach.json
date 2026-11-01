@@ -97,6 +97,12 @@
       "when": "full passes only"
     },
     {
+      "tag": "proof-overdue:",
+      "printed_by": "scripts/proof_overdue_sweep.py",
+      "constant": "TAG",
+      "when": "every full reconcile pass since DRE-8626, in the `Proof overdue` step's log, where the repo carries a proof-run stub: one line per overdue card, then the note line"
+    },
+    {
       "tag": "proof identity:",
       "printed_by": ".github/workflows/proof-task.yml",
       "constant": null,
@@ -119,12 +125,6 @@
       "printed_by": "scripts/model_home.py",
       "constant": "TAG",
       "when": "every selecting run since DRE-6939: the selector reads the home when it first answers a choice, before it prints the model id, and the reader prints the line to stderr, so it is in the `Select model` step's log above the note"
-    },
-    {
-      "tag": "model-home-carry:",
-      "printed_by": "scripts/model_home_carry.py",
-      "constant": "TAG",
-      "when": "every run of `model-home-carry.yml` since DRE-6986, in its `Carry the merged choices into the home` step's log"
     },
     {
       "tag": "shadow-verdict:",
@@ -179,6 +179,54 @@
       "printed_by": "scripts/groomer.py",
       "constant": "MEMORY_TAG",
       "when": "every groomer propose run since DRE-7824, one line in the Groom step's log"
+    },
+    {
+      "tag": "name-roster:",
+      "printed_by": "scripts/name_roster.py",
+      "constant": "TAG",
+      "when": "every `check` run since DRE-8165, one line on stdout: the counts of people and forms when the live roster is read in full, or the read that failed — never a name"
+    },
+    {
+      "tag": "name-guard:",
+      "printed_by": "scripts/name_redact.py",
+      "constant": "TAG",
+      "when": "every `guard`, `self-test` and `redact` run since DRE-8166: the file, line and kind of a form that remains, the read that failed, or the count of lines read — never a name; `dry` while NAME_GUARD_LIVE is not `true`"
+    },
+    {
+      "tag": "proof-record-pr:",
+      "printed_by": "scripts/proof_record_pr.py",
+      "constant": "TAG",
+      "when": "every `decide` run since DRE-8437, one line on stdout: the decision word (opened, reopened, kept-open, closed-and-held, held or no-record), the card and why"
+    },
+    {
+      "tag": "proof-record-sweep:",
+      "printed_by": "scripts/proof_record_pr.py",
+      "constant": "SWEEP_TAG",
+      "when": "every `sweep` run since DRE-8437, one line on stdout: the open record pull requests read, those closed (or that would be, not live), kept and unread"
+    },
+    {
+      "tag": "hung-job:",
+      "printed_by": "scripts/hung_job.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hung-jobs job's log and step summary"
+    },
+    {
+      "tag": "channel-hold:",
+      "printed_by": "scripts/channel_hold.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hold job's log"
+    },
+    {
+      "tag": "planner-allowance:",
+      "printed_by": "scripts/planner_allowance.py",
+      "constant": "TAG",
+      "when": "every read of the planners' Linear allowance since DRE-8616, one line on stdout: start or hold, the card, the remaining and the limit, the threshold, whether the read was answered or refused, the receipt and the run's request count"
+    },
+    {
+      "tag": "triage-unrepaired:",
+      "printed_by": "scripts/triage_unrepaired.py",
+      "constant": "TAG",
+      "when": "every Triage Repair run since DRE-8649, on stdout: one line per Triage card the repair could not fix (its card, its receipt word and when it arrived in Triage), then one closing line — the cards listed, whether every thread was read, and the console door's outcome, or unread when the door was not called"
     }
   ],
   "causes": [

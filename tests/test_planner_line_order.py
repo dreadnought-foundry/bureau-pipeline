@@ -26,7 +26,8 @@ trigger. What these pin, in the card's order:
   6. the client: what it sends, that it is asked whatever `BUREAU_READ` says,
      and that a failed order read never stops the door for the run's other
      reads (the endpoint is new, and answers 404 until DRE-5782 deploys);
-  7. plan.yml's claim and next steps carry the door's address.
+  7. reconcile.yml's sweep step carries the door's address (plan.yml's claim
+     and next steps did too, until DRE-8617 took them out).
 
 No test here reaches the console, GitHub or Linear: the door and the issuer
 are `tests/bureau_read_fakes.py` on 127.0.0.1, Linear is the fake board of
@@ -122,7 +123,7 @@ def arrivals(b: Board, running: int = 1) -> None:
 
 
 def next_card() -> tuple[str, str]:
-    """plan.yml's `Planner slot — next in line` step: (card, stderr)."""
+    """`next`, as the CLI answers it: (card, stderr)."""
     rc, out, _, err = run_cli(["next"])
     assert rc == 0
     return out["card"], err
@@ -355,13 +356,14 @@ def test_the_sweeps_backstop_with_no_door_serves_the_first_arrival(monkeypatch, 
 def test_every_caller_orders_through_the_one_reader():
     """`settle_claim`, `next` and the sweep's backstop each read the order
     through `planner_queue`'s one wrapper; nothing else calls the door's
-    order endpoint."""
+    order endpoint but the copy of that wrapper in `planner_allowance`
+    (DRE-8616), which outlives `planner_queue.py` later in epic DRE-8539."""
     for path, needle in ((ROOT / "scripts" / "reconcile.py", "planner_queue.ordered_ledger("),
                          (ROOT / "scripts" / "planner_queue.py", "ordered_ledger(")):
         assert needle in path.read_text(encoding="utf-8"), path
     callers = [p.name for p in (ROOT / "scripts").glob("*.py")
                if "bureau_read.planning_order(" in p.read_text(encoding="utf-8")]
-    assert callers == ["planner_queue.py"]
+    assert sorted(callers) == ["planner_allowance.py", "planner_queue.py"]
 
 
 # --------------------------------------------------------------------------- #
@@ -422,22 +424,8 @@ def test_a_pull_request_run_never_asks(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# 7. plan.yml hands the claim and next steps the door's address               #
+# 7. reconcile.yml's sweep step carries the door's address                   #
 # --------------------------------------------------------------------------- #
-
-
-def _plan_step(ident: str) -> dict:
-    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "plan.yml").read_text(
-        encoding="utf-8"))
-    return next(s for s in doc["jobs"]["plan"]["steps"] if s.get("id") == ident)
-
-
-@pytest.mark.parametrize("ident", ["slot", "next"])
-def test_the_claim_and_next_steps_carry_the_doors_address(ident):
-    env = _plan_step(ident).get("env") or {}
-    assert env.get("BUREAU_READ_URL") == "${{ vars.BUREAU_READ_URL }}"
-    assert env.get("BUREAU_READ_AUDIENCE") == "${{ vars.BUREAU_READ_AUDIENCE }}"
-    assert env.get("BUREAU_PIPELINE_REF") == "${{ inputs.pipeline_ref }}"
 
 
 def test_reconciles_sweep_step_already_carries_it():

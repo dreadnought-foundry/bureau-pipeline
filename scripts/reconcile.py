@@ -285,6 +285,7 @@ import reviewer_down  # noqa: E402
 # strings.
 import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
+import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -998,6 +999,14 @@ _read_failures: list[str] = []
 #: would dispatch a planning run at a problem that is a sentence.
 _stale_defects: list[str] = []
 
+#: What kept `_stale_defects` from being complete this pass (DRE-8632): a
+#: gate that appends to it and was skipped or failed partway — promotion on a
+#: held board, a limit recovery that stopped — or a defect it found and could
+#: not date. An empty ledger beside one of these is absence, not green, so
+#: `standing_defect_alert.settle` resolves no alert on it. Never decides the
+#: exit. Cleared at the top of `main`.
+_ledger_unread: list[str] = []
+
 #: What this sweep could not read and HANDLED (DRE-4214): the step that owns
 #: the read said so, reported nothing for it, and the rest of the sweep went
 #: on. A FOURTH ledger, and the one that does NOT decide the exit. On
@@ -1039,6 +1048,20 @@ def _degrade(step: str, what: str, err: object,
         return
     _degraded.append(entry)
     print(f"DEGRADED: {entry}")
+
+
+def _print_recorded_failures() -> None:
+    """Every recorded write and read failure as an `ERROR:` line on stderr,
+    printed just before a red exit whose summary says "see ERROR lines
+    above" (DRE-8570). Some sites record a failure without printing it (the
+    crashed-review hold post), and one printed it as `CRITICAL:` — the
+    summary then pointed at nothing. A failure its site already printed
+    prints twice, which is the cheap side of that trade. `_stale_defects`
+    are not here: each prints its own `ERROR:` line where it is recorded."""
+    for failure in _write_failures:
+        print(f"ERROR: write failure: {failure}", file=sys.stderr)
+    for failure in _read_failures:
+        print(f"ERROR: read failure: {failure}", file=sys.stderr)
 
 
 def _report_degraded() -> None:
@@ -2851,6 +2874,36 @@ LATE_PROOF_LANES = tuple(lane for lane in WATCHDOG_LANES if lane not in SWEEP_ST
 _ANY_KEY = "a key that is no comment's author"
 
 
+def _proof_open_holds(card: dict) -> list:
+    """The card's open `🔬 proof-waiting` holds as `(first line, createdAt)`:
+    `proof_record.open_holds_at` over `spoken_thread.voices`. The one read
+    `_proof_wait_clock` and `waiting_proof_off_pr` share (DRE-8438).
+
+    A window `linear_ops.window_is_partial` calls whole is read at no
+    request. A partial one is never judged on its own: the whole thread is
+    read once (the read `proof_dispatch.LinearReads.thread` makes, served
+    from the pass's cache when a reader already paid for it). A thread that
+    cannot be read raises `ReconcileReadError` — an unread thread is not an
+    empty one."""
+    import proof_record  # noqa: PLC0415 — the hold grammar, spelled once
+
+    ident = card["identifier"]
+    nodes, viewer = linear_ops.window_nodes(card.get("comments")), None
+    if linear_ops.window_is_partial(card.get("comments")):
+        try:
+            nodes, viewer = linear_ops._thread_and_viewer(
+                ident, "body", "user", "createdAt", whole=True)
+        except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+            raise ReconcileReadError(
+                f"{ident}'s whole thread could not be read ({e})") from e
+    try:
+        voices = spoken_thread.voices(nodes, viewer or _ANY_KEY, card=ident)
+    except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
+        raise ReconcileReadError(
+            f"{ident}'s thread could not be read for its holds ({e})") from e
+    return proof_record.open_holds_at(voices)
+
+
 def _proof_wait_clock(card: dict, *, now: datetime | None = None
                       ) -> tuple[datetime | None, str, bool]:
     """`(clock, waits_on, read)` for a `PROOF:` card, on the card alone: the
@@ -2881,24 +2934,14 @@ def _proof_wait_clock(card: dict, *, now: datetime | None = None
     import proof_record  # noqa: PLC0415 — the hold grammar, spelled once
 
     now = now or datetime.now(UTC)
-    ident = card["identifier"]
-    nodes, viewer = linear_ops.window_nodes(card.get("comments")), None
-    if linear_ops.window_is_partial(card.get("comments")):
-        try:
-            nodes, viewer = linear_ops._thread_and_viewer(
-                ident, "body", "user", "createdAt", whole=True)
-        except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
-            print(f"held-proof: {ident}'s whole thread could not be read ({e}) — "
-                  f"its {PROOF_WAITING_TAG} holds are not judged", file=sys.stderr)
-            return None, "", False
     try:
-        voices = spoken_thread.voices(nodes, viewer or _ANY_KEY, card=ident)
-    except Exception as e:  # noqa: BLE001 — an unread thread is not an empty one
-        print(f"held-proof: {ident}'s thread could not be read for its holds ({e}) — "
-              f"its {PROOF_WAITING_TAG} holds are not judged", file=sys.stderr)
+        holds = _proof_open_holds(card)
+    except ReconcileReadError as e:
+        print(f"held-proof: {e} — its {PROOF_WAITING_TAG} holds are not judged",
+              file=sys.stderr)
         return None, "", False
     read, clocks = True, []
-    for line, created in proof_record.open_holds_at(voices):
+    for line, created in holds:
         if proof_record.CEO_PRESS in line:
             continue
         posted = _moment(created)
@@ -5411,8 +5454,10 @@ def report_intake_blockers() -> list[tuple[str, str]]:
 # `bot/onboard` joined on the same terms (DRE-7209): the onboarding process's
 # routing pull requests, here and in agent-bureau, which the merge gate merges
 # card-less. Broad tuple only — no card to work, no fix agent — and a literal
-# name, as that answer allows. The onboarding routing step reads this file at
-# `stable` for the literal before it opens one.
+# name, as that answer allows. Its per-slug branches, `bot/onboard-<slug>`
+# (DRE-8658), are owned through this entry's prefix match: `_has_prefix` asks
+# `startswith`, so a separate `bot/onboard-` entry would change nothing. The
+# merge gate admits that family by name and re-checks the slug.
 #
 # `bot/test-durations` joined on the same terms (DRE-7577): the nightly
 # Pipeline Tests run re-measures config/unit-test-durations.json on it before
@@ -6110,6 +6155,37 @@ def gate_hold_note_line(pr: dict) -> str | None:
     return None
 
 
+#: The gate's hold note's first line, after its badge: the head it was posted
+#: at and the reason (scripts/evaluate_and_merge.sh's HOLD_LINE).
+_GATE_HOLD_NOTE_RE = re.compile(
+    rf"{GATE_HOLD_NOTE_MARKER} @(?P<sha>[0-9a-f]+) — (?P<reason>.*)")
+
+
+def stacked_base_hold(pr: dict) -> str | None:
+    """The base the gate holds this pull request on, when its newest hold
+    note is condition B's AT the head and the pull request is still based on
+    the branch it names — or None (DRE-8503).
+
+    The gate holds a stacked pull request until it is retargeted, and a
+    re-trigger cannot retarget it, so the review lane spends none of the
+    head's budget on one: no gate nudge, no receipt, no cap, no park. A
+    stack can wait on its parent for hours, and three sweeps at the cap
+    would otherwise ask the CEO a review-cap question that is not his. Once
+    the base moves — GitHub retargets the child when the parent merges with
+    --delete-branch, and the head does not move — the note names a base the
+    pull request no longer has, and the nudge resumes at the head's unspent
+    budget. The UNKNOWN hold is not this one: a re-read can answer it."""
+    line = gate_hold_note_line(pr)
+    head = pr.get("headRefOid") or ""
+    found = _GATE_HOLD_NOTE_RE.search(line or "")
+    if not (found and head and found.group("sha") == head):
+        return None
+    base = merge_gate.stacked_base_named(found.group("reason"))
+    if not base or base != pr.get("baseRefName"):
+        return None
+    return base
+
+
 def critic_token(pr: dict) -> str | None:
     """The newest critic verdict's token — APPROVE, REQUEST_CHANGES — whatever
     commit it names, or None (DRE-6650). Whether it binds the head is
@@ -6174,6 +6250,42 @@ def proof_record_owned_by_proof_run(card: dict, pr: dict, tag: str,
         "no hold, no park"
     )
     return True
+
+
+def waiting_proof_off_pr(card: dict, pr: dict | None) -> str | None:
+    """The first line of the hold a waiting proof sits under, `proof_record._cut`
+    to 120, when its record pull request was closed while it waits — or None
+    (DRE-8438).
+
+    It answers only when all three hold, judged in this order so that only
+    the last can cost a request:
+
+      * the card's title is a proof's (`proof_and_demo.is_proof`);
+      * `pr`, the pull request `pr_for` found, is CLOSED and not merged, on a
+        proof-record branch (`proof_record.proof_record_branch`);
+      * the card carries at least one open `🔬 proof-waiting` hold, read the
+        way `_proof_wait_clock` reads them (`_proof_open_holds`).
+
+    The record pull request opens only when the record can merge, and the
+    proof run and the sweep close one whose proof still waits (DRE-8441,
+    DRE-8452). Such a card is not a dead run: the hold says what it waits on,
+    and the proof dispatcher re-runs it from its branch. A proof card with no
+    open hold is not answered for — nothing says what it waits on — and is
+    judged as before. A thread that cannot be read raises
+    `ReconcileReadError`. `proof_record` is imported here, not at the top:
+    proof_dispatch imports this module."""
+    import proof_record  # noqa: PLC0415 — the branch rule, spelled once
+
+    if not proof_and_demo.is_proof(card.get("title")):
+        return None
+    if pr is None or card_pr.pr_state(pr) != "CLOSED":
+        return None
+    if not proof_record.proof_record_branch(pr.get("headRefName")):
+        return None
+    holds = _proof_open_holds(card)
+    if not holds:
+        return None
+    return proof_record._cut(holds[0][0], 120)
 
 
 def hand_review_nudge_to_person(
@@ -7611,6 +7723,7 @@ def _report_epic_prose_defect(epic_identifier: str, claims: set[str]) -> None:
             f"has stood: {e}",
             file=sys.stderr,
         )
+        _ledger_unread.append(f"{epic_identifier}'s prose defect age ({type(e).__name__})")
         return
     if first_seen is None:
         return  # nothing on the card yet — this sweep is the one that spoke
@@ -8356,6 +8469,9 @@ def promote_ready(
                     f"this sweep: {e}",
                     file=sys.stderr,
                 )
+                if promotion_stall.clocked(tag):
+                    _ledger_unread.append(
+                        f"{identifier}'s {tag} receipt age ({type(e).__name__})")
         refused.append(promotion_stall.Refused(identifier, tag, first_seen, epic))
 
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
@@ -10874,8 +10990,19 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
     only the comment. The card half's clock — its notice's `createdAt`, read
     off the comment window when `linear_ops.window_is_partial` calls it whole
     and off the whole thread otherwise — and its standing cards, never
-    listed, are `_flag_hand_built_idle`'s."""
+    listed, are `_flag_hand_built_idle`'s.
+
+    A proof's record branch, `agent/DRE-<n>-proof-record`
+    (`proof_record.proof_record_branch`), answers None before anything is
+    read (DRE-8438): the proof dispatcher owns it, its pull request opens only
+    when the record can merge, and while the proof waits the card's own
+    `🔬 proof-waiting` hold says what it waits on. Imported here, not at the
+    top: proof_dispatch imports this module."""
+    import proof_record  # noqa: PLC0415 — the branch rule, spelled once
+
     name, sha = branch["name"], branch.get("sha") or ""
+    if proof_record.proof_record_branch(name):
+        return None  # the proof dispatcher's branch, and the hold says why
     if name in pr_refs or not sha:
         return None  # a PR exists (any state) — every other backstop applies
     pulls = gh("api", f"repos/{REPO}/commits/{sha}/pulls", "--jq", "[.[].number]")
@@ -11728,7 +11855,8 @@ def fix_approved_but_red() -> None:
         # a failure (bureau-pipeline #1042, 2026-10-11) — red as any other,
         # neither re-run nor told; a log that cannot be read changes nothing.
         limits = _collateral_limits(runs)
-        split = canceled_check.split(runs, limits, _failed_inside(pr, runs, limits))
+        failed_inside = _failed_inside(pr, runs, limits)
+        split = canceled_check.split(runs, limits, failed_inside)
         if not _tend_canceled_runs(pr, sha, split.unknown):
             continue  # a refused re-run never falls through to a fix dispatch
         failed = list(dict.fromkeys(
@@ -11749,8 +11877,10 @@ def fix_approved_but_red() -> None:
         if not when or age_minutes(when) < 20:
             continue
         # A proof record red on a check is the fix agent's (DRE-6571); on
-        # any other branch this is [] and nothing below changes.
-        red = proof_dispatch.record_red_checks(pr, runs)
+        # any other branch this is [] and nothing below changes. The rule
+        # reads the same logs split did, so a canceled part with a failed
+        # test inside stays red there too (DRE-8177).
+        red = proof_dispatch.record_red_checks(pr, runs, failed_inside)
         eligible.append((pr, failed, red, _red_since(split.red)))
     # DRE-7617: longest red first. `sorted` is stable, so a tie and every
     # unreadable time keep listing order. The guards below read Linear or
@@ -12764,9 +12894,22 @@ def card_dependabot_prs() -> None:
         marker on a regenerated body, or a re-opened pull request whose card
         is Canceled, must be found rather than re-filed); file one if none;
         stamp the body. Paced by DEPENDABOT_CARD_CAP.
-      * no marker, closed → nothing. A pull request that closed before any
-        sweep saw it never had a card to carry; filing one now would put a
-        finished bump on the board as work.
+      * no marker, closed → never filed for: a pull request that closed
+        before any sweep saw it never had a card to carry, and filing one now
+        would put a finished bump on the board as work. But dependabot wipes
+        the marker when it regenerates a body (`@dependabot recreate`, a group
+        change), and a pull request that merges before the next sweep
+        re-stamps it left its card open (DRE-8394: DRE-8130, foundry #70, sat
+        In Review two days after its merge). So while the board holds a live
+        automation card that no listed marker names, its card is looked up by
+        URL and closed below exactly as a marked one is. A settled board —
+        every live automation card named by a marker — looks nothing up, so
+        the closed pull requests that stay in the listing cost no request.
+        The bound is only as tight as the listing's window: a live automation
+        card whose pull request has fallen out of it, or whose open pull
+        request is wiped and not yet re-stamped, is unnamed too, and until it
+        settles every closed, unmarked pull request in the window costs one
+        lookup per sweep — at most the listing's 30.
       * marker, OPEN     → nothing. (A re-opened pull request whose card is
         Canceled keeps that card: a finished card is never reopened by an
         automated transition — DRE-1877 — and its merge moves it to Done.)
@@ -12810,15 +12953,36 @@ def card_dependabot_prs() -> None:
             live_cards.update({c["identifier"]: c for c in active_cards()})
             live_cards.setdefault("", {})  # read once, even when empty
         return live_cards
+    named = {dependabot_card.marker_card(p.get("body")) for p in prs}
+
+    def unnamed_live_card() -> bool:
+        """A live automation card no listed marker names — the only kind a
+        wiped marker can have left open (DRE-8394)."""
+        return any(ident and ident not in named and automation_card(c)
+                   for ident, c in live().items())
     filed = 0
     deferred = 0
     for pr in prs:
         number, url = pr.get("number"), pr.get("url") or ""
         state = (pr.get("state") or "").upper()
         card = dependabot_card.marker_card(pr.get("body"))
-        if card is None:
-            if state != "OPEN":
+        if card is None and state != "OPEN":
+            if not unnamed_live_card():
+                continue  # no card of this pull request's can still be open
+            try:
+                card = linear_ops.find_by_pr_url(url)
+            except linear_ops.LinearRateLimited:
+                raise
+            except linear_ops.LinearError as e:
+                err = f"dependabot card: PR #{number} — looking its card up by URL failed: {e}"
+                _write_failures.append(err)
+                print(f"ERROR: {err}", file=sys.stderr)
+                continue
+            if not card:
                 continue  # closed before any card existed: nothing to carry
+            print(f"dependabot card: PR #{number} is {state.lower()} and its marker was "
+                  f"wiped — found {card} by its URL")
+        if card is None:
             if filed >= DEPENDABOT_CARD_CAP:
                 deferred += 1
                 continue
@@ -13951,14 +14115,20 @@ def dependabot_branch_token(ecosystem: str) -> str:
     return _DEPENDABOT_BRANCH_TOKENS.get(ecosystem, ecosystem.replace("-", "_"))
 
 
-def parse_dependabot_limits(text: str) -> dict:
-    """{ecosystem: {"limit": int|None, "groups": [names]}} from a
-    dependabot.yml body. Stdlib on purpose: this sweep runs on the runner's
-    bare python3 — reconcile.yml has no pip-install step, so PyYAML is not
-    guaranteed. The shape understood here is the one the config guard pins
+def parse_dependabot_entries(text: str) -> list[dict]:
+    """The `updates` entries of a dependabot.yml body, in file order, each
+    {"ecosystem", "directory", "limit": int|None, "groups": [names]}.
+
+    One record per ENTRY, never per ecosystem (DRE-8570): Dependabot applies
+    open-pull-requests-limit to each entry, and Foundry runs six npm entries,
+    one per manifest folder — keyed by ecosystem, the last overwrote the other
+    five. Stdlib on purpose: this sweep runs on the runner's bare python3 —
+    reconcile.yml has no pip-install step, so PyYAML is not guaranteed. The
+    shape understood here is the one the config guard pins
     (tests/test_dependabot_config.py), and parser drift against the LIVE
-    file turns tests/test_dependabot_limit_alerts.py red."""
-    result: dict[str, dict] = {}
+    file turns tests/test_dependabot_limit_alerts.py red. The plural
+    `directories:` key is not read."""
+    result: list[dict] = []
     entry = None
     item_indent = None    # indent of the `- ` update-entry dashes
     groups_indent = None  # indent of the current entry's `groups:` key
@@ -13977,7 +14147,8 @@ def parse_dependabot_limits(text: str) -> dict:
             continue
         if stripped.startswith("- ") and (item_indent is None or indent == item_indent):
             item_indent = indent
-            entry = {"limit": None, "groups": []}
+            entry = {"ecosystem": None, "directory": None, "limit": None, "groups": []}
+            result.append(entry)
             groups_indent = name_indent = None
             indent += 2
             stripped = stripped[2:].strip()
@@ -14000,7 +14171,9 @@ def parse_dependabot_limits(text: str) -> dict:
                 entry["groups"].append(key)
             continue
         if key == "package-ecosystem" and val:
-            result[val] = entry
+            entry["ecosystem"] = val
+        elif key == "directory" and val:
+            entry["directory"] = val
         elif key == "open-pull-requests-limit":
             try:
                 entry["limit"] = int(val)
@@ -14008,12 +14181,53 @@ def parse_dependabot_limits(text: str) -> dict:
                 pass
         elif key == "groups" and not val:
             groups_indent = indent
-    return result
+    return [e for e in result if e["ecosystem"]]
+
+
+def _dependabot_entry_dir(entry: dict) -> str:
+    """The entry's directory as branch segments: "templates/company/web" for
+    `/templates/company/web`, "" for the root `/`."""
+    return (entry.get("directory") or "").strip("/")
+
+
+def _dependabot_entry_label(entry: dict) -> str:
+    """`npm /templates/company/web` — the ecosystem and the entry's folder,
+    `/` for a root entry, so an alert names the one entry it is about."""
+    return f"{entry['ecosystem']} /{_dependabot_entry_dir(entry)}"
+
+
+def dependabot_entry_for(branch: str, entries: list[dict]) -> dict | None:
+    """The update entry a Dependabot branch belongs to, or None (DRE-8570).
+
+    A branch reads `dependabot/<token>/<directory>/<name>`, the directory
+    segment left out for `/`. Only entries whose ecosystem maps to <token>
+    are candidates. An entry with directory `/a/b` matches when the rest of
+    the branch starts with the whole segments `a/b/`; a root entry matches
+    every branch. The longest matching directory wins, so a root entry gets
+    only what no nested entry claims, and `/libraries/js/offline` beats
+    `/libraries/js`. A non-default branch-name separator is not read."""
+    parts = (branch or "").split("/")
+    if len(parts) < 3:
+        return None
+    token, rest = parts[1], "/".join(parts[2:])
+    best, best_depth = None, -1
+    for entry in entries:
+        if entry.get("directory") is None:
+            continue
+        if dependabot_branch_token(entry["ecosystem"]) != token:
+            continue
+        d = _dependabot_entry_dir(entry)
+        if d and not rest.startswith(f"{d}/"):
+            continue
+        depth = len(d.split("/")) if d else 0
+        if depth > best_depth:  # ties keep the first entry in the file
+            best, best_depth = entry, depth
+    return best
 
 
 def _is_grouped_dependabot_branch(pr: dict, groups: list) -> bool:
-    """True when the PR is one of the ecosystem's grouped updates — its
-    branch's final segment is `<group-name>-<hash>`. Everything else is a
+    """True when the PR is one of its entry's grouped updates — its branch's
+    final segment is `<group-name>-<hash>`. Everything else is a
     single-dependency PR: the human-merge lane condition D parks."""
     last = (pr.get("headRefName") or "").rsplit("/", 1)[-1]
     return any(last.startswith(f"{g}-") for g in groups)
@@ -14023,15 +14237,17 @@ def check_dependabot_capacity() -> None:
     """DRE-2119: WARN/CRITICAL before open-pull-requests-limit starves the
     minor/patch group.
 
-    Read-only monitor, per configured ecosystem: count(open dependabot-
-    authored PRs on dependabot/<token>/...) against the CONFIGURED limit
-    (vendor default 5 when the key is omitted; 0 = version updates
-    disabled, skipped). At ceil(80%): a WARNING sweep line, console-only.
-    AT the limit: a CRITICAL on the fail-loudly rail (_write_failures ->
-    red run -> medic -> Linear) naming the parked human-lane PRs — the
-    singles the merge gate never auto-merges — so the operator decision
-    (merge, or a config `ignore` rule) is forced BEFORE Dependabot silently
-    stops opening new version-update PRs.
+    Read-only monitor, per configured update ENTRY (DRE-8570 — Dependabot
+    applies the limit to each entry, not to an ecosystem): count(open
+    dependabot-authored PRs whose branch `dependabot_entry_for` places on the
+    entry) against that entry's CONFIGURED limit (vendor default 5 when the
+    key is omitted; 0 = version updates disabled, skipped). At ceil(80%): a
+    WARNING sweep line, console-only. AT the limit: a CRITICAL on the
+    fail-loudly rail (_write_failures -> red run -> medic -> Linear), printed
+    as an `ERROR:` line, naming the parked human-lane PRs — the singles the
+    merge gate never auto-merges, judged by the PR's own entry's groups — so
+    the operator decision (merge, or a config `ignore` rule) is forced BEFORE
+    Dependabot silently stops opening new version-update PRs.
 
     Fail-safe per the DRE-2034 read discipline: no config file = the repo
     doesn't run Dependabot, silence; an EXISTING config that parses to
@@ -14046,8 +14262,8 @@ def check_dependabot_capacity() -> None:
             config_text = fh.read()
     except FileNotFoundError:
         return  # no dependabot config -> no limit to starve
-    config = parse_dependabot_limits(config_text)
-    if not config:
+    entries = parse_dependabot_entries(config_text)
+    if not entries:
         err = (
             f"{DEPENDABOT_CONFIG} exists but no update entries parsed — the "
             "slot-capacity check is blind (parser drift or malformed "
@@ -14068,42 +14284,41 @@ def check_dependabot_capacity() -> None:
         _read_failures.append(err)
         print(f"ERROR: {err}", file=sys.stderr)
         return
-    by_token = {dependabot_branch_token(eco): eco for eco in config}
-    counted: dict[str, list[dict]] = {eco: [] for eco in config}
+    counted: dict[int, list[dict]] = {id(entry): [] for entry in entries}
     for pr in prs:
         if not is_dependabot_pr(pr):
             continue
-        parts = (pr.get("headRefName") or "").split("/")
-        eco = by_token.get(parts[1]) if len(parts) >= 3 else None
-        if eco is None:
+        entry = dependabot_entry_for(pr.get("headRefName") or "", entries)
+        if entry is None:
             # A genuine dependabot PR the mapping can't place still occupies
             # a slot somewhere — invisible would mean undercounting, so say so.
             print(
                 f"WARNING: dependabot PR #{pr['number']} "
-                f"({pr.get('headRefName')}) matches no configured ecosystem "
+                f"({pr.get('headRefName')}) matches no configured entry "
                 "— the slot count may be low (token mapping or config drift)"
             )
             continue
-        counted[eco].append(pr)
-    for eco, cfg in config.items():
-        limit = cfg["limit"] if cfg["limit"] is not None else DEPENDABOT_DEFAULT_PR_LIMIT
+        counted[id(entry)].append(pr)
+    for entry in entries:
+        limit = entry["limit"] if entry["limit"] is not None else DEPENDABOT_DEFAULT_PR_LIMIT
         if limit <= 0:
-            continue  # 0 disables version updates for the ecosystem
-        open_prs = sorted(counted[eco], key=lambda p: p["number"])
+            continue  # 0 disables version updates for the entry
+        label = _dependabot_entry_label(entry)
+        open_prs = sorted(counted[id(entry)], key=lambda p: p["number"])
         n = len(open_prs)
         if n >= limit:
             parked = [
                 p for p in open_prs
-                if not _is_grouped_dependabot_branch(p, cfg["groups"])
+                if not _is_grouped_dependabot_branch(p, entry["groups"])
             ]
             listing = ", ".join(
                 f"#{p['number']} ({(p.get('title') or '').strip()[:80]})"
                 for p in parked
             ) or "none identified — every slot is a grouped PR"
             err = (
-                f"CRITICAL: dependabot {eco} is at its open-PR limit "
+                f"CRITICAL: dependabot {label} is at its open-PR limit "
                 f"({n}/{limit}) — Dependabot now silently opens NO new "
-                f"version-update PRs for {eco}, the grouped minor/patch "
+                f"version-update PRs for {label}, the grouped minor/patch "
                 f"(security-relevant) stream included. Parked human-lane "
                 f"PR(s) holding slots: {listing}. Operator decision needed "
                 "per the majors playbook: merge each, or add a config "
@@ -14112,10 +14327,12 @@ def check_dependabot_capacity() -> None:
                 "ignore walks down to the next major — DRE-2064)."
             )
             _write_failures.append(err)
-            print(err, file=sys.stderr)
+            # An ERROR line, because the red exit's summary says "see ERROR
+            # lines above" (DRE-8570).
+            print(f"ERROR: {err}", file=sys.stderr)
         elif n >= max(1, math.ceil(limit * DEPENDABOT_WARN_FRACTION)):
             print(
-                f"WARNING: dependabot {eco}: {n}/{limit} open-PR slots used "
+                f"WARNING: dependabot {label}: {n}/{limit} open-PR slots used "
                 f"— at {limit} Dependabot silently stops opening new "
                 "version-update PRs (grouped minor/patch included); merge "
                 "or config-ignore the parked PRs before the limit bites "
@@ -14728,9 +14945,15 @@ def recover_limit_deaths() -> None:
         if not acted:
             print(f"limit-recovery: nothing to re-enter — {len(cards)} card(s) read, "
                   "none with a limit death to recover")
+    except BoardHeld as held:
+        # Its stood markers were not read, so the ledger is short of them
+        # (DRE-8632). An idle pass is not: nothing of this repo's is in motion.
+        _ledger_unread.append(f"recover_limit_deaths ({held.reason})")
+        raise  # skipped by its phase (Stage 2 item 34)
     except BoardNotRead:
-        raise  # skipped by its phase (Stage 2 item 34; an idle pass)
+        raise  # an idle pass, skipped by its phase
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
+        _ledger_unread.append(f"recover_limit_deaths ({type(e).__name__})")
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
 
 
@@ -15499,6 +15722,19 @@ def _phase(name: str, enabled: bool = True):
     return _pass_spend.phase(name, enabled)
 
 
+@contextlib.contextmanager
+def _fills_ledger(name: str):
+    """A phase whose gates append to `_stale_defects`: a held board skips it,
+    and that skip goes on `_ledger_unread` before its phase swallows it
+    (DRE-8632). An idle pass does not — nothing of this repo's is in motion or
+    waiting, so no gate of its can be standing."""
+    try:
+        yield
+    except BoardHeld as held:
+        _ledger_unread.append(f"{name} ({held.reason})")
+        raise
+
+
 def _reports_spend(pass_fn):
     """Open a spend ledger for the pass, and print its total on every way out.
 
@@ -15562,6 +15798,7 @@ def main(
     # must not inherit it — every invocation starts from a fresh snapshot,
     # including the two event-driven ones above.
     reset_sweep_cards()
+    _ledger_unread.clear()  # DRE-8632: what this pass's ledger is short of
     # The read door's mode, read ONCE per process and said (Stage 2 item 35):
     # a pass keeps the mode it started in, whatever the variable does next.
     bureau_read.mode()
@@ -15919,7 +16156,7 @@ def main(
     # (DRE-3236) — read in one request by identifier, through the same gates.
     # A card promotable for any other reason waits for the cron, which
     # merge_sweep_gate already made the backstop for what the gate declines.
-    with _phase("promote_ready"):
+    with _phase("promote_ready"), _fills_ledger("promote_ready"):
         if _door_hold:
             raise BoardHeld(_door_hold[0])  # skipped, one line — never on an empty board
         if _idle_pass:
@@ -15953,6 +16190,7 @@ def main(
         # here or below (DRE-4214): a step that handled its fault owes the
         # line above, not a red run.
         if _write_failures or _stale_defects:
+            _print_recorded_failures()
             sys.exit(
                 f"reconcile: {len(_write_failures)} write failure(s), "
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
@@ -16083,6 +16321,30 @@ def main(
             if not not_started and idle < window:
                 continue
             print(f"stale: {ident} in {state} (pr={pr['number'] if pr else None})")
+
+            if state == REVIEW_LANE and not is_open:
+                # A WAITING PROOF IS NOT A DEAD RUN (DRE-8438). Its record pull
+                # request was closed while the proof waits (DRE-8441, DRE-8452),
+                # its `🔬 proof-waiting` hold says on what, and the proof
+                # dispatcher re-runs it from its branch — so it keeps its lane.
+                # Ahead of the hand-built skip and the dead-run arm below: that
+                # skip keeps a proof card off the arm for a different reason
+                # (who starts its run), and the hold is the reason here.
+                try:
+                    waiting = waiting_proof_off_pr(card, pr)
+                except ReconcileReadError as e:
+                    # Unread is not "no hold": act on nothing for this card,
+                    # sweep the rest, exit red (DRE-2034's rule).
+                    _read_failures.append(str(e))
+                    print(f"ERROR: {e}", file=sys.stderr)
+                    continue
+                if waiting:
+                    print(
+                        f"proof-waiting: {ident} in {REVIEW_LANE} with its record "
+                        f"pull request #{pr['number']} closed — left to the proof "
+                        f"dispatcher; held by {waiting}"
+                    )
+                    continue
 
             if hand_built(card) and not has_pr:
                 # DRE-2524, second half: the label suppresses the sweep's own
@@ -16303,6 +16565,15 @@ def main(
                     # put a question in front of the CEO that is not his.
                     continue
                 bound = tag == GATE_NUDGE_KEY
+                base = stacked_base_hold(pr) if bound else None
+                if base:
+                    # DRE-8503: the gate holds a stack until it is
+                    # retargeted, which no re-trigger does; the budget waits
+                    # for the base to move, and the CEO is not asked.
+                    print(f"review-nudge: {ident} PR #{pr['number']} is held "
+                          f"on its base {base} until it is retargeted — "
+                          "no nudge, nothing spent")
+                    continue
                 spent = review_nudges_spent(card, tag, head)
                 if spent >= REVIEW_NUDGE_CAP:
                     hand_review_nudge_to_person(card, pr, tag, critic, verifier)
@@ -16412,6 +16683,16 @@ def main(
     print(cycles_line())
     print(f"sweep complete: {nudges} nudge(s)")
     _report_degraded()
+    # Each card on the standing-defect ledger is a console alert, and an alert
+    # whose card has left it is resolved (DRE-8632). The full sweep's alone:
+    # the `--promote-only` gate returned above, so it cannot flap the alert.
+    # A pass whose ledger is short (`_ledger_unread`) resolves nothing.
+    # Nothing it raises moves the exit below.
+    try:
+        standing_defect_alert.settle(_stale_defects, REPO_SLUG, unread=_ledger_unread)
+    except Exception as e:  # noqa: BLE001 — an alert never decides the exit
+        print(f"{standing_defect_alert.TAG} not settled this pass — "
+              f"{type(e).__name__}: {e}")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
         # when a write we claimed to make didn't happen (DRE-1254 lesson), when
@@ -16420,6 +16701,7 @@ def main(
         # a report nobody reads is how five cards froze for five days).
         # `_degraded` is deliberately not in this list (DRE-4214): a fault a
         # step handled by reporting nothing is said above, not exited on.
+        _print_recorded_failures()
         sys.exit(
             f"reconcile: {len(_write_failures)} write / {len(_read_failures)} read "
             f"failure(s), {len(_stale_defects)} unfixed card defect(s) — see "

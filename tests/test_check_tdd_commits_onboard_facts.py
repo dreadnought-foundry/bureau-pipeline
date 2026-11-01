@@ -20,9 +20,29 @@ commit discipline` on all three commits, and no added commit clears that
     a second entry or an edited function is code;
   * only on an onboarding routing PR — opened by agent-bureau-bot
     (GitHub-attested) on the literal branch `bot/onboard` — exactly the
-    DRE-7209 conditions;
+    DRE-7209 conditions, which since DRE-8659 admit a per-slug
+    `bot/onboard-<slug>` too;
   * neither fact file is a slug mirror, so a repo-mirror region written into
     one relieves nothing.
+
+DRE-8249 adds a fourth fact. Since DRE-8210 the same step appends one
+`"<org lowercased>": "<tenant slug>"` member to `orgs` in
+`console/backend/org-tenants.json` when the owner org has none, and that
+commit was code with no test before it, so a new company's routing pull
+request could not merge. The relief is the runner-routing one's exactness:
+one new key under `orgs`, lowercased, with a string value, and the rest of
+the file, `_comment` included, unchanged. Retirement never removes an entry,
+so a removal stays code.
+
+DRE-8534 adds a fifth. Since DRE-8211 the same step writes one new repo's
+`"<slug>": {"owner_id": <int>, "repo_id": <int>}` member at the top level of
+agent-bureau's `infra/lib/agent-log-repo-ids.json`, keeping the slugs sorted,
+and that commit — the pull request's first and only code commit, which no
+`TDD-Exempt:` trailer can clear — stopped every onboarding at `80_routing`.
+The relief is the same exactness: one new top-level member, its name a repo
+slug, its value exactly two positive integer ids, at any position, and the
+rest of the file, `_comment` and member order included, unchanged.
+Retirement never removes an entry here either, so a removal stays code.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_check_tdd_commits_onboard_facts.py -v
 """
@@ -49,6 +69,7 @@ from test_tdd_commit_check import BOT, GitRepoMixin  # noqa: E402
 OIDC = "console/backend/github_oidc.py"
 SOURCES = "console/backend/sources.py"
 RUNNER_ROUTING = "console/backend/runner-routing.json"
+ORG_TENANTS = "console/backend/org-tenants.json"
 FACTS = (SOURCES, OIDC, RUNNER_ROUTING)
 
 # The contract DRE-7379 writes for `foundry`, byte for byte.
@@ -109,6 +130,30 @@ def runner_routing(repos=("atlas",), readme="Which runner each repo uses.",
         slug: {v: variable() for v in VARIABLES} for slug in repos}}
     doc["repos"].update(overrides)
     return json.dumps(doc, indent=2) + "\n"
+
+
+ORG_TENANTS_COMMENT = ("Which console tenant each GitHub org belongs to "
+                       "(DRE-8210): the org, lowercased, to a tenant slug.")
+ORGS = {"dreadnought-foundry": "dreadnought-foundry",
+        "everybite": "everybite"}
+
+
+def org_tenants(orgs=None, comment=ORG_TENANTS_COMMENT, **added):
+    """org-tenants.json the way agent-bureau keeps it: `_comment`, then the
+    `orgs` object, as `json.dumps(indent=2)` lays it out. `added` is appended
+    to `orgs` after its existing members, where the routing step puts one."""
+    doc = {"_comment": comment, "orgs": {**(ORGS if orgs is None else orgs),
+                                         **added}}
+    return json.dumps(doc, indent=2) + "\n"
+
+
+def appended_as_text(text, org, tenant):
+    """`text` with one member appended to `orgs` as text, the way
+    `80_routing`'s `add_org_entry` writes it: after the last member, so no
+    other line moves."""
+    last = '"everybite": "everybite"'
+    assert text.count(last) == 1
+    return text.replace(last, f'{last},\n    "{org}": "{tenant}"')
 
 
 def fact_commit(path, before, after):
@@ -399,16 +444,603 @@ class OnboardFactsCliTest(GitRepoMixin, unittest.TestCase):
                 self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
 
     def test_any_other_branch_fails(self):
-        for branch in ("bot/onboard-x", "agent/DRE-7431-x"):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-7431-x"):
             with self.subTest(branch=branch):
                 self._replay(branch=branch)
                 p = self.run_check(head_ref=branch, author=BOT)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn("[code]", p.stdout)
 
+    def test_the_same_change_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
+
     def test_any_other_opener_fails(self):
         self._replay()
         for opener in ("mallory", "agent-bureau-qa-bot[bot]"):
+            with self.subTest(opener=opener):
+                p = self.run_check(head_ref=ONBOARD, author=opener)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("[code]", p.stdout)
+
+    def test_no_attested_opener_fails(self):
+        self._replay()
+        p = self.run_check(head_ref=ONBOARD)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+
+# DRE-8249 — the owner org's tenant, one member of `orgs` in org-tenants.json.
+
+NEWCO_BEFORE = org_tenants()
+NEWCO_AFTER = appended_as_text(NEWCO_BEFORE, "newco", "demo")
+
+
+class OrgTenantsSetTest(unittest.TestCase):
+
+    def test_org_tenants_is_a_routing_path(self):
+        self.assertIn(ORG_TENANTS, tdd.ONBOARD_ROUTING_PATHS)
+
+    def test_org_tenants_is_code_without_the_relief(self):
+        # Guards the passes below from going vacuous.
+        self.assertEqual(tdd.classify_path(ORG_TENANTS), "code")
+
+    def test_the_text_insertion_is_the_documents_new_member(self):
+        # The fixture is faithful: appending as text reads as the document
+        # with `newco` added last.
+        self.assertEqual(json.loads(NEWCO_AFTER),
+                         json.loads(org_tenants(newco="demo")))
+
+
+class OrgTenantsReliefTest(unittest.TestCase):
+
+    def test_one_new_org_is_relieved_once_marked(self):
+        c = fact_commit(ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER)
+        self.assertEqual(code_paths(c), [])
+        self.assertNotIn("code", tdd.commit_categories(
+            tdd.mark_routing_paths([c])[0]))
+        self.assertTrue(tdd.is_routing_entry_change(
+            ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER))
+
+    def test_one_new_org_is_code_unmarked(self):
+        c = fact_commit(ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER)
+        self.assertEqual(tdd._code_paths(c), [ORG_TENANTS])
+
+    def test_one_new_org_passes_the_rule_once_marked(self):
+        commits = [fact_commit(ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER)]
+        ok, reason = tdd.check_commits(tdd.mark_routing_paths(commits))
+        self.assertTrue(ok, reason)
+        ok, reason = tdd.check_commits(commits)
+        self.assertFalse(ok)
+        self.assertEqual(reason, tdd.FAILURE_MESSAGE)
+
+    def test_a_new_org_in_the_first_empty_orgs_is_relieved(self):
+        self.assertEqual(code_paths(fact_commit(
+            ORG_TENANTS, org_tenants({}), org_tenants({}, newco="demo"))), [])
+
+    def test_it_rides_with_the_other_facts(self):
+        commits = onboarding_commits() + [
+            fact_commit(ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER)]
+        ok, reason = tdd.check_commits(tdd.mark_routing_paths(commits))
+        self.assertTrue(ok, reason)
+
+    def test_it_is_not_a_mirror_change(self):
+        # org-tenants.json is a fact file: no generator proves a region in
+        # it, so repo-mirror markers relieve nothing there.
+        self.assertFalse(tdd.is_routing_mirror_change(
+            ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER))
+
+
+class OrgTenantsExactnessTest(unittest.TestCase):
+    """Any change to org-tenants.json but one new lowercased org with a
+    string tenant stays code."""
+
+    def assert_code(self, before, after):
+        self.assertEqual(
+            code_paths(fact_commit(ORG_TENANTS, before, after)),
+            [ORG_TENANTS])
+
+    def test_an_existing_orgs_tenant_changed_is_code(self):
+        changed = {**ORGS, "everybite": "dreadnought-foundry"}
+        self.assert_code(NEWCO_BEFORE, org_tenants(changed))
+        self.assert_code(NEWCO_BEFORE, org_tenants(changed, newco="demo"))
+
+    def test_an_entry_removed_is_code(self):
+        self.assert_code(NEWCO_BEFORE,
+                         org_tenants({"dreadnought-foundry":
+                                      "dreadnought-foundry"}))
+        # The removal relief is not extended to this file either: the
+        # routing step never removes an org, and retirement leaves it.
+        self.assert_code(NEWCO_AFTER, NEWCO_BEFORE)
+        self.assertFalse(tdd.is_routing_entry_removal(
+            ORG_TENANTS, NEWCO_AFTER, NEWCO_BEFORE))
+
+    def test_an_entry_renamed_is_code(self):
+        self.assert_code(NEWCO_BEFORE, org_tenants(
+            {"dreadnought-foundry": "dreadnought-foundry",
+             "newco": "everybite"}))
+
+    def test_two_entries_added_is_code(self):
+        self.assert_code(NEWCO_BEFORE,
+                         org_tenants(newco="demo", otherco="demo"))
+
+    def test_the_comment_edited_is_code(self):
+        self.assert_code(NEWCO_BEFORE, org_tenants(
+            comment="Rewritten.", newco="demo"))
+        self.assert_code(NEWCO_BEFORE, org_tenants(comment="Rewritten."))
+
+    def test_an_org_that_is_not_lowercased_is_code(self):
+        for org in ("NewCo", "NEWCO", "newCo"):
+            with self.subTest(org=org):
+                self.assert_code(NEWCO_BEFORE, org_tenants(**{org: "demo"}))
+
+    def test_a_tenant_that_is_not_a_string_is_code(self):
+        for tenant in ({"slug": "demo"}, ["demo"], None, 7, True):
+            with self.subTest(tenant=tenant):
+                self.assert_code(NEWCO_BEFORE, org_tenants(newco=tenant))
+
+    def test_another_top_level_change_is_code(self):
+        doc = json.loads(NEWCO_AFTER)
+        doc["default"] = "demo"
+        self.assert_code(NEWCO_BEFORE, json.dumps(doc, indent=2))
+        doc = json.loads(NEWCO_AFTER)
+        del doc["_comment"]
+        self.assert_code(NEWCO_BEFORE, json.dumps(doc, indent=2))
+
+    def test_the_new_org_outside_orgs_is_code(self):
+        doc = json.loads(NEWCO_BEFORE)
+        doc["newco"] = "demo"
+        self.assert_code(NEWCO_BEFORE, json.dumps(doc, indent=2))
+
+    def test_a_repeated_member_is_code(self):
+        after = NEWCO_AFTER.replace(
+            '"_comment"', '"_comment": "Rewritten.",\n  "_comment"', 1)
+        self.assert_code(NEWCO_BEFORE, after)
+        after = NEWCO_AFTER.replace(
+            '"everybite": "everybite"',
+            '"everybite": "dreadnought-foundry",\n    "everybite": "everybite"')
+        self.assert_code(NEWCO_BEFORE, after)
+
+    def test_json_that_will_not_parse_is_code(self):
+        self.assert_code(NEWCO_BEFORE, NEWCO_AFTER + "}")
+        self.assert_code(NEWCO_BEFORE, NEWCO_AFTER.replace(
+            '"newco"', "newco"))
+
+    def test_orgs_that_is_not_an_object_is_code(self):
+        doc = {"_comment": ORG_TENANTS_COMMENT, "orgs": [["newco", "demo"]]}
+        self.assert_code(json.dumps({**doc, "orgs": []}, indent=2),
+                         json.dumps(doc, indent=2))
+
+    def test_a_new_or_deleted_org_tenants_is_code(self):
+        self.assert_code(None, NEWCO_AFTER)
+        self.assert_code(NEWCO_AFTER, None)
+
+    def test_a_rider_beside_the_org_is_code(self):
+        c = fact_commit(ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER)
+        c["paths"].append("scripts/widget.py")
+        self.assertEqual(code_paths(c), ["scripts/widget.py"])
+
+
+class OrgTenantsCliTest(GitRepoMixin, unittest.TestCase):
+    """End-to-end over a real temp repo, replaying the commit `80_routing`
+    writes for a company new to the console: org-tenants.json exists on
+    main, and the branch appends one `"newco": "demo"` member to `orgs`."""
+
+    def setUp(self):
+        super().setUp()
+        self.write(ORG_TENANTS, NEWCO_BEFORE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: seed org-tenants.json")
+
+    def _replay(self, after=NEWCO_AFTER, branch=ONBOARD):
+        self.git("checkout", "-q", "-B", branch, "main")
+        self.write(ORG_TENANTS, after)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m",
+                 f"chore(routing): onboard newco — {ORG_TENANTS}",
+                 "--author", f"{BOT} <{BOT}@users.noreply.github.com>")
+
+    def test_one_new_org_on_bot_onboard_by_the_bot_exits_0(self):
+        self._replay()
+        p = self.run_check(head_ref=ONBOARD, author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertRegex(
+            p.stdout, rf"(?m)\[docs\] .*— {re.escape(ORG_TENANTS)}$")
+        self.assertNotIn("[code]", p.stdout)
+
+    def test_the_opener_can_arrive_from_the_event_payload(self):
+        self._replay()
+        p = self.run_check(github_head_ref=ONBOARD, event_author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_any_other_change_to_the_file_fails(self):
+        for name, after in (
+            ("tenant changed", org_tenants(
+                {**ORGS, "everybite": "dreadnought-foundry"})),
+            ("entry removed", org_tenants(
+                {"dreadnought-foundry": "dreadnought-foundry"})),
+            ("two entries added", org_tenants(newco="demo", otherco="demo")),
+            ("comment edited", org_tenants(comment="Rewritten.",
+                                           newco="demo")),
+        ):
+            with self.subTest(name=name):
+                self._replay(after)
+                p = self.run_check(head_ref=ONBOARD, author=BOT)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
+                self.assertIn("[code]", p.stdout)
+
+    def test_any_other_branch_fails(self):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-8249-x",
+                       "main-onboard"):
+            with self.subTest(branch=branch):
+                self._replay(branch=branch)
+                p = self.run_check(head_ref=branch, author=BOT)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("[code]", p.stdout)
+
+    def test_the_same_change_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
+
+    def test_any_other_opener_fails(self):
+        self._replay()
+        for opener in ("mallory", "agent-bureau-qa-bot[bot]",
+                       "agent-bureau-bot-3"):
+            with self.subTest(opener=opener):
+                p = self.run_check(head_ref=ONBOARD, author=opener)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("[code]", p.stdout)
+
+    def test_no_attested_opener_fails(self):
+        self._replay()
+        p = self.run_check(head_ref=ONBOARD)
+        self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+
+
+# DRE-8534 — the new repo's ids, one top-level member of agent-bureau's
+# infra/lib/agent-log-repo-ids.json.
+
+AGENT_LOG_IDS = "infra/lib/agent-log-repo-ids.json"
+AGENT_LOG_COMMENT = ("Repos whose OIDC tokens carry GitHub's id-based "
+                     "subject. Onboarding adds new entries.")
+OWNER_ID = 226758887
+# foundry's ids are DRE-8154's; portico's repo id is a placeholder.
+REPO_ID_ENTRIES = {
+    "foundry": {"owner_id": OWNER_ID, "repo_id": 1412115043},
+    "portico": {"owner_id": OWNER_ID, "repo_id": 1000000001},
+}
+SANDBOX = "onboard-sandbox-5"
+SANDBOX_IDS = {"owner_id": OWNER_ID, "repo_id": 1098765432}
+
+
+def agent_log_repo_ids(entries=None, comment=AGENT_LOG_COMMENT, **added):
+    """agent-log-repo-ids.json the way agent-bureau keeps it: `_comment`,
+    then one top-level member per repo slug, sorted, the way `80_routing`
+    writes them (DRE-8211). `added` joins the entries and the slugs are
+    re-sorted, so a new one lands where the step puts it."""
+    members = {**(REPO_ID_ENTRIES if entries is None else entries), **added}
+    doc = {"_comment": comment}
+    doc.update(sorted(members.items()))
+    return json.dumps(doc, indent=2) + "\n"
+
+
+def agent_log_doc(*members):
+    """The file from `(name, value)` pairs in exactly this order."""
+    return json.dumps(dict(members), indent=2) + "\n"
+
+
+SANDBOX_BEFORE = agent_log_repo_ids()
+# Commit 00d6bbc's shape: the one new member, between foundry and portico.
+SANDBOX_AFTER = agent_log_repo_ids(**{SANDBOX: SANDBOX_IDS})
+
+
+class AgentLogRepoIdsSetTest(unittest.TestCase):
+
+    def test_it_is_a_routing_path_and_a_fact_file(self):
+        self.assertIn(AGENT_LOG_IDS, tdd.ONBOARD_ROUTING_PATHS)
+        self.assertIn(AGENT_LOG_IDS, tdd._ROUTING_FACT_FILES)
+
+    def test_it_is_code_without_the_relief(self):
+        # Guards the passes below from going vacuous.
+        self.assertEqual(tdd.classify_path(AGENT_LOG_IDS), "code")
+
+    def test_the_fixture_is_commit_00d6bbcs_shape(self):
+        # One member added, between foundry and portico, nothing else moved.
+        self.assertEqual(list(json.loads(SANDBOX_AFTER)),
+                         ["_comment", "foundry", SANDBOX, "portico"])
+        doc = json.loads(SANDBOX_AFTER)
+        del doc[SANDBOX]
+        self.assertEqual(json.dumps(doc), json.dumps(json.loads(
+            SANDBOX_BEFORE)))
+
+
+class AgentLogRepoIdsReliefTest(unittest.TestCase):
+
+    def test_one_new_entry_is_relieved_once_marked(self):
+        c = fact_commit(AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER)
+        self.assertEqual(code_paths(c), [])
+        self.assertNotIn("code", tdd.commit_categories(
+            tdd.mark_routing_paths([c])[0]))
+        self.assertTrue(tdd.is_routing_entry_change(
+            AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER))
+
+    def test_one_new_entry_is_code_unmarked(self):
+        c = fact_commit(AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER)
+        self.assertEqual(tdd._code_paths(c), [AGENT_LOG_IDS])
+
+    def test_it_passes_the_rule_as_the_first_and_only_code_commit(self):
+        # Commit 00d6bbc was the pull request's only commit; no test came
+        # before it, and no TDD-Exempt trailer covers a first code commit.
+        commits = [fact_commit(AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER)]
+        ok, reason = tdd.check_commits(tdd.mark_routing_paths(commits))
+        self.assertTrue(ok, reason)
+        ok, reason = tdd.check_commits(commits)
+        self.assertFalse(ok)
+        self.assertEqual(reason, tdd.FAILURE_MESSAGE)
+
+    def test_the_new_entry_may_sit_at_any_position(self):
+        sandbox = (SANDBOX, SANDBOX_IDS)
+        comment = ("_comment", AGENT_LOG_COMMENT)
+        rest = list(REPO_ID_ENTRIES.items())
+        for name, after in (
+            ("first", agent_log_doc(sandbox, comment, *rest)),
+            ("after the comment", agent_log_doc(comment, sandbox, *rest)),
+            ("last", agent_log_doc(comment, *rest, sandbox)),
+        ):
+            with self.subTest(position=name):
+                self.assertEqual(code_paths(fact_commit(
+                    AGENT_LOG_IDS, SANDBOX_BEFORE, after)), [])
+
+    def test_a_first_entry_in_a_file_with_none_is_relieved(self):
+        self.assertEqual(code_paths(fact_commit(
+            AGENT_LOG_IDS, agent_log_repo_ids({}),
+            agent_log_repo_ids({}, **{SANDBOX: SANDBOX_IDS}))), [])
+
+    def test_a_slug_with_digits_and_hyphens_is_relieved(self):
+        for slug in ("5-sandbox", "a", "atlas2", "x-1-y"):
+            with self.subTest(slug=slug):
+                self.assertTrue(tdd.is_routing_entry_change(
+                    AGENT_LOG_IDS, SANDBOX_BEFORE,
+                    agent_log_repo_ids(**{slug: SANDBOX_IDS})))
+
+    def test_it_rides_with_the_other_facts(self):
+        commits = onboarding_commits() + [
+            fact_commit(ORG_TENANTS, NEWCO_BEFORE, NEWCO_AFTER),
+            fact_commit(AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER)]
+        ok, reason = tdd.check_commits(tdd.mark_routing_paths(commits))
+        self.assertTrue(ok, reason)
+
+    def test_it_is_not_a_mirror_change(self):
+        # A fact file, not a slug mirror: no generator proves a region in it.
+        self.assertFalse(tdd.is_routing_mirror_change(
+            AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER))
+        marked = (f'{{"_comment": "{BEGIN}", "_end": "{END}"}}\n')
+        self.assertFalse(tdd.is_routing_mirror_change(
+            AGENT_LOG_IDS, marked, marked.replace('"_end"', '"_x": 1, "_end"')))
+
+
+class AgentLogRepoIdsExactnessTest(unittest.TestCase):
+    """Any change to agent-log-repo-ids.json but one new slug with exactly
+    two positive integer ids stays code."""
+
+    def assert_code(self, before, after):
+        self.assertEqual(
+            code_paths(fact_commit(AGENT_LOG_IDS, before, after)),
+            [AGENT_LOG_IDS])
+
+    def with_sandbox(self, value):
+        return agent_log_repo_ids(**{SANDBOX: value})
+
+    def test_an_existing_entry_changed_beside_the_new_one_is_code(self):
+        changed = {**REPO_ID_ENTRIES,
+                   "portico": {"owner_id": OWNER_ID, "repo_id": 7}}
+        self.assert_code(SANDBOX_BEFORE, agent_log_repo_ids(
+            changed, **{SANDBOX: SANDBOX_IDS}))
+        self.assert_code(SANDBOX_BEFORE, agent_log_repo_ids(changed))
+
+    def test_an_existing_entry_removed_beside_the_new_one_is_code(self):
+        self.assert_code(SANDBOX_BEFORE, agent_log_repo_ids(
+            {"foundry": REPO_ID_ENTRIES["foundry"]},
+            **{SANDBOX: SANDBOX_IDS}))
+
+    def test_an_existing_entry_renamed_is_code(self):
+        self.assert_code(SANDBOX_BEFORE, agent_log_repo_ids(
+            {"foundry": REPO_ID_ENTRIES["foundry"],
+             SANDBOX: REPO_ID_ENTRIES["portico"]}))
+
+    def test_two_entries_added_is_code(self):
+        self.assert_code(SANDBOX_BEFORE, agent_log_repo_ids(
+            **{SANDBOX: SANDBOX_IDS, "harbor": SANDBOX_IDS}))
+
+    def test_the_comment_edited_is_code(self):
+        self.assert_code(SANDBOX_BEFORE, agent_log_repo_ids(
+            comment="Rewritten.", **{SANDBOX: SANDBOX_IDS}))
+        self.assert_code(SANDBOX_BEFORE,
+                         agent_log_repo_ids(comment="Rewritten."))
+
+    def test_another_members_order_changed_is_code(self):
+        comment = ("_comment", AGENT_LOG_COMMENT)
+        self.assert_code(SANDBOX_BEFORE, agent_log_doc(
+            comment, ("portico", REPO_ID_ENTRIES["portico"]),
+            (SANDBOX, SANDBOX_IDS), ("foundry", REPO_ID_ENTRIES["foundry"])))
+
+    def test_a_new_underscore_member_is_code(self):
+        for name, value in (("_note", SANDBOX_IDS), ("_note", "added"),
+                            ("_sandbox", SANDBOX_IDS)):
+            with self.subTest(name=name, value=value):
+                self.assert_code(SANDBOX_BEFORE,
+                                 agent_log_repo_ids(**{name: value}))
+
+    def test_a_name_that_is_not_a_slug_is_code(self):
+        for name in ("Onboard-Sandbox-5", "onboard-Sandbox-5", "-sandbox",
+                     "onboard_sandbox_5", "onboard sandbox", "sandbox.5",
+                     "", "sandbox-5\n", "sändbox", "ｓandbox", "sandbox/5"):
+            with self.subTest(name=name):
+                self.assert_code(SANDBOX_BEFORE,
+                                 agent_log_repo_ids(**{name: SANDBOX_IDS}))
+
+    def test_ids_that_are_not_positive_integers_are_code(self):
+        for owner_id, repo_id in (
+            ("226758887", 1098765432),
+            (OWNER_ID, "1098765432"),
+            (True, 1098765432),
+            (OWNER_ID, True),
+            (OWNER_ID, False),
+            (0, 1098765432),
+            (OWNER_ID, 0),
+            (-226758887, 1098765432),
+            (OWNER_ID, -1),
+            (226758887.0, 1098765432),
+            (OWNER_ID, 1.5),
+            (None, 1098765432),
+            ([OWNER_ID], 1098765432),
+        ):
+            with self.subTest(owner_id=owner_id, repo_id=repo_id):
+                self.assert_code(SANDBOX_BEFORE, self.with_sandbox(
+                    {"owner_id": owner_id, "repo_id": repo_id}))
+
+    def test_a_value_with_a_missing_or_third_member_is_code(self):
+        for value in (
+            {"owner_id": OWNER_ID},
+            {"repo_id": 1098765432},
+            {},
+            {**SANDBOX_IDS, "name": "sandbox"},
+            {"owner": OWNER_ID, "repo_id": 1098765432},
+        ):
+            with self.subTest(value=value):
+                self.assert_code(SANDBOX_BEFORE, self.with_sandbox(value))
+
+    def test_a_value_that_is_not_an_object_is_code(self):
+        for value in ([OWNER_ID, 1098765432], "226758887/1098765432",
+                      1098765432, None, True):
+            with self.subTest(value=value):
+                self.assert_code(SANDBOX_BEFORE, self.with_sandbox(value))
+
+    def test_an_entry_removed_on_its_own_is_code(self):
+        # Retirement never removes this file's entry, so nothing on
+        # `bot/onboard` writes one and the removal relief is not extended.
+        self.assert_code(SANDBOX_AFTER, SANDBOX_BEFORE)
+        self.assertFalse(tdd.is_routing_entry_removal(
+            AGENT_LOG_IDS, SANDBOX_AFTER, SANDBOX_BEFORE))
+
+    def test_a_repeated_member_is_code(self):
+        after = SANDBOX_AFTER.replace(
+            '"_comment"', '"_comment": "Rewritten.",\n  "_comment"', 1)
+        self.assert_code(SANDBOX_BEFORE, after)
+        after = SANDBOX_AFTER.replace(
+            '"portico"', '"foundry": {"owner_id": 1, "repo_id": 2},\n'
+                         '  "portico"', 1)
+        self.assert_code(SANDBOX_BEFORE, after)
+        # A repeated id inside the new entry hides which one is read.
+        after = SANDBOX_AFTER.replace(
+            '"repo_id": 1098765432',
+            '"repo_id": 1, "repo_id": 1098765432', 1)
+        self.assert_code(SANDBOX_BEFORE, after)
+
+    def test_json_that_will_not_parse_is_code(self):
+        self.assert_code(SANDBOX_BEFORE, SANDBOX_AFTER + "}")
+        self.assert_code(SANDBOX_BEFORE, SANDBOX_AFTER.replace(
+            f'"{SANDBOX}"', SANDBOX))
+        self.assert_code(SANDBOX_BEFORE + "}", SANDBOX_AFTER)
+
+    def test_a_document_that_is_not_an_object_is_code(self):
+        self.assert_code(json.dumps([["foundry", 1]]),
+                         json.dumps([["foundry", 1], [SANDBOX, 2]]))
+
+    def test_the_entry_nested_under_a_section_is_code(self):
+        before = json.dumps({"_comment": AGENT_LOG_COMMENT,
+                             "repos": REPO_ID_ENTRIES}, indent=2)
+        after = json.dumps({"_comment": AGENT_LOG_COMMENT, "repos": {
+            **REPO_ID_ENTRIES, SANDBOX: SANDBOX_IDS}}, indent=2)
+        self.assert_code(before, after)
+
+    def test_a_new_or_deleted_file_is_code(self):
+        self.assert_code(None, SANDBOX_AFTER)
+        self.assert_code(SANDBOX_AFTER, None)
+
+    def test_a_rider_beside_the_entry_is_code(self):
+        c = fact_commit(AGENT_LOG_IDS, SANDBOX_BEFORE, SANDBOX_AFTER)
+        c["paths"].append("scripts/widget.py")
+        self.assertEqual(code_paths(c), ["scripts/widget.py"])
+
+
+class AgentLogRepoIdsCliTest(GitRepoMixin, unittest.TestCase):
+    """End-to-end over a real temp repo, replaying commit 00d6bbc: the file
+    exists on main, and the branch's one commit adds `onboard-sandbox-5`."""
+
+    def setUp(self):
+        super().setUp()
+        self.write(AGENT_LOG_IDS, SANDBOX_BEFORE)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "chore: seed agent-log-repo-ids.json")
+
+    def _replay(self, after=SANDBOX_AFTER, branch=ONBOARD):
+        self.git("checkout", "-q", "-B", branch, "main")
+        self.write(AGENT_LOG_IDS, after)
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m",
+                 f"chore(routing): onboard {SANDBOX} — {AGENT_LOG_IDS}",
+                 "--author", f"{BOT} <{BOT}@users.noreply.github.com>")
+
+    def test_one_new_entry_on_bot_onboard_by_the_bot_exits_0(self):
+        self._replay()
+        p = self.run_check(head_ref=ONBOARD, author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertRegex(
+            p.stdout, rf"(?m)\[docs\] .*— {re.escape(AGENT_LOG_IDS)}$")
+        self.assertNotIn("[code]", p.stdout)
+
+    def test_the_opener_can_arrive_from_the_event_payload(self):
+        self._replay()
+        p = self.run_check(github_head_ref=ONBOARD, event_author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_any_other_change_to_the_file_fails(self):
+        for name, after in (
+            ("entry changed", agent_log_repo_ids(
+                {**REPO_ID_ENTRIES,
+                 "portico": {"owner_id": OWNER_ID, "repo_id": 7}},
+                **{SANDBOX: SANDBOX_IDS})),
+            ("two entries added", agent_log_repo_ids(
+                **{SANDBOX: SANDBOX_IDS, "harbor": SANDBOX_IDS})),
+            ("comment edited", agent_log_repo_ids(
+                comment="Rewritten.", **{SANDBOX: SANDBOX_IDS})),
+            ("string ids", agent_log_repo_ids(
+                **{SANDBOX: {"owner_id": "226758887", "repo_id": "1"}})),
+        ):
+            with self.subTest(name=name):
+                self._replay(after)
+                p = self.run_check(head_ref=ONBOARD, author=BOT)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
+                self.assertIn("[code]", p.stdout)
+
+    def test_any_other_branch_fails(self):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-8534-x",
+                       "main-onboard"):
+            with self.subTest(branch=branch):
+                self._replay(branch=branch)
+                p = self.run_check(head_ref=branch, author=BOT)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIn("[code]", p.stdout)
+
+    def test_the_same_change_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
+
+    def test_any_other_opener_fails(self):
+        self._replay()
+        for opener in ("mallory", "agent-bureau-qa-bot[bot]",
+                       "agent-bureau-bot-3"):
             with self.subTest(opener=opener):
                 p = self.run_check(head_ref=ONBOARD, author=opener)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)

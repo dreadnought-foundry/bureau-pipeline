@@ -19,12 +19,14 @@ document built with `with_project`, judged by `model_home.home_errors` on the
 frozen code-side facts and prices, and a walk it makes is read off a fixture
 tree's selector that has read it (`fixture_module(..., doc=...)`). A rule about
 the rest of the frozen `models.yaml` — its keys' shapes, rule 10 — is still
-`policy_errors` on a copy of it, the frozen document's choices written into it
-in the file's own shape (`fixture()`): a choice is read off the document, never
-the file, whose choices DRE-6983 takes out (DRE-8018). What holds for any saved state — the
-committed `projects` block validates with the committed repo map, `ungrouped`
-and `agents` are disjoint and every name in them has an `about` line — keeps
-reading the committed file and derives what it expects from it.
+`policy_errors`, on the frozen file's code-side facts beside the frozen
+document's choices in the shape of the defaults in the code (`fixture()`): a choice is read
+off the document, never the file, which carries none since DRE-6983
+(DRE-8018). What holds for any saved state — the defaults' `projects` name
+repos of the committed repo map, `ungrouped` and `agents` are disjoint and
+every name in them has an `about` line in the committed file — reads the
+committed file and the defaults in the code and derives what it expects from
+them.
 
 ANY PRICED MODEL (DRE-6785, the CEO's decision of 2026-10-10)
 -------------------------------------------------------------
@@ -97,24 +99,31 @@ UNBOUND_ADVISORY = next(r for r, k in _KINDS.items()
 
 
 def committed() -> dict:
+    """The committed config/models.yaml: code-side facts only (DRE-6983)."""
     return yaml.safe_load(CONFIG_PATH.read_text())
 
 
+def defaults() -> dict:
+    """The defaults in the code, normalized: where the committed choices are
+    when no home is read — the file carries none (DRE-6983)."""
+    return mf.code_defaults()
+
+
 def fixture() -> dict:
-    """The frozen `models.yaml` as a file of today's shape: its code-side
-    facts, and the frozen document's choices written the way the file writes
-    them — each group a kind with its label and purpose on a ladder of its
-    key, and every name with an `about` line and no group ungrouped. A fresh
-    copy, for a test that edits a key to break a rule `policy_errors` holds
-    about its shape."""
-    side = {key: value for key, value in model_fixture.fixture_config().items()
-            if key not in mf._CHOICE_KEYS}
+    """The frozen `models.yaml`'s code-side facts beside the frozen document's
+    choices, as one document of choices in the shape of the defaults in the code — each group
+    a kind on a ladder of its key with its label and purpose under `groups`,
+    and every name with an `about` line and no group ungrouped. A fresh copy,
+    for a test that edits a key to break a rule `policy_errors` holds about
+    its shape."""
+    side = model_fixture.fixture_config()
     doc = fixture_home()
     return {
         **side,
         "default_ladder": mf.WORKHORSE_KIND,
-        "kinds": {key: {"ladder": key, "label": group["label"], "purpose": group["purpose"]}
-                  for key, group in doc["groups"].items()},
+        "kinds": {key: key for key in doc["groups"]},
+        "groups": {key: {"label": group["label"], "purpose": group["purpose"]}
+                   for key, group in doc["groups"].items()},
         "ladders": {key: list(group["models"]) for key, group in doc["groups"].items()},
         "agents": dict(doc["agents"]),
         "ungrouped": [name for name in side["about"] if name not in doc["agents"]],
@@ -203,33 +212,35 @@ class TestTheFixtureHoldsTheRows:
 class TestCommittedData:
 
     def test_every_kind_carries_its_label_and_purpose(self):
-        # The words are the console's to change; that each group has them is not.
-        for kind, spec in committed()["kinds"].items():
+        # The words are the console's to change, in the home; that each group
+        # of the defaults in the code has them is not.
+        for kind, spec in defaults()["groups"].items():
             assert isinstance(spec["label"], str) and spec["label"].strip(), kind
             assert isinstance(spec["purpose"], str) and spec["purpose"].strip(), kind
 
     def test_every_session_agent_is_in_a_group_or_in_none_and_only_they_are_in_none(self):
         # DRE-6889: the CEO moves these agents into groups and adds new ones,
         # so the claim is the one that holds for any saved state — every
-        # session-run agent is in a group or in none, and only they are in none.
-        cfg = committed()
-        assert cfg["session_agents"]
-        for name in cfg["session_agents"]:
+        # session-run agent the file names is in a group of the defaults or in
+        # none, and only they are in none.
+        cfg, side = defaults(), committed()
+        assert side["session_agents"]
+        for name in side["session_agents"]:
             assert name in cfg["agents"] or name in cfg["ungrouped"], name
-        assert set(cfg["ungrouped"]) <= set(cfg["session_agents"])
+        assert set(cfg["ungrouped"]) <= set(side["session_agents"])
         assert not set(cfg["ungrouped"]) & set(cfg["agents"])
 
     def test_about_has_one_line_for_every_agent_and_every_ungrouped_name(self):
-        cfg = committed()
-        assert sorted(cfg["about"]) == sorted(list(cfg["agents"]) + cfg["ungrouped"])
-        for name, line in cfg["about"].items():
+        cfg, side = defaults(), committed()
+        assert sorted(side["about"]) == sorted(list(cfg["agents"]) + cfg["ungrouped"])
+        for name, line in side["about"].items():
             assert isinstance(line, str) and line.strip(), name
             assert "\n" not in line.strip(), name
 
     def test_every_project_exception_names_a_declared_repo(self):
-        # The console writes exceptions here (DRE-6624); each one is a repo
-        # the repo map declares and a kind the file declares.
-        cfg = committed()
+        # A project's own model is a choice in the home; each the defaults in
+        # the code name is a repo the repo map declares and a kind they declare.
+        cfg = defaults()
         for slug, entry in cfg["projects"].items():
             assert slug in slugs(), slug
             assert set(entry) <= set(cfg["kinds"]), slug
@@ -250,20 +261,20 @@ class TestCommittedData:
 class TestNormalizedShape:
 
     def test_the_loaded_config_carries_the_four_keys(self):
+        # The choices are the defaults in the code's, and `about` — a
+        # code-side fact — the file's.
         cfg = mf.CONFIG
-        assert cfg["groups"] == {
-            kind: {"label": spec["label"], "purpose": spec["purpose"]}
-            for kind, spec in committed()["kinds"].items()}
-        assert cfg["ungrouped"] == committed()["ungrouped"]
+        assert cfg["groups"] == defaults()["groups"]
+        assert cfg["ungrouped"] == defaults()["ungrouped"]
         assert cfg["about"] == committed()["about"]
-        assert cfg["projects"] == committed()["projects"]
+        assert cfg["projects"] == defaults()["projects"]
 
     def test_a_kind_with_no_label_or_purpose_gets_the_defaults(self):
         # From a file with no session-run agent in a group — the frozen
         # document groups none: with `session_agents` popped, one the CEO
         # grouped would be a stranger.
         raw = fixture()
-        for spec in raw["kinds"].values():
+        for spec in raw["groups"].values():
             spec.pop("label")
             spec.pop("purpose")
         for key in ("ungrouped", "session_agents", "about", "projects"):
@@ -351,12 +362,12 @@ class TestMalformedKeys:
 
     def test_a_non_string_label_is_refused(self):
         cfg = fixture()
-        cfg["kinds"]["workhorse"]["label"] = 3
+        cfg["groups"]["workhorse"]["label"] = 3
         self._only(errors(cfg), "kinds.workhorse.label: ")
 
     def test_a_non_string_purpose_is_refused(self):
         cfg = fixture()
-        cfg["kinds"]["advisory"]["purpose"] = ["two", "lines"]
+        cfg["groups"]["advisory"]["purpose"] = ["two", "lines"]
         self._only(errors(cfg), "kinds.advisory.purpose: ")
 
     @pytest.mark.parametrize("value", ["designer", {"designer": 1}, ["designer", 7]])
@@ -578,17 +589,18 @@ class TestSelectionIsUnchanged:
         mf.clear_availability_cache()
 
     def test_every_role_selects_the_top_of_its_kinds_ladder(self):
-        # Every pipeline-run role, read off the file. A session-run agent the
-        # CEO put in a group selects as an unknown name — the default ladder's
-        # top — whatever its group (DRE-6833).
-        cfg = committed()
-        session = set(cfg["session_agents"])
+        # Every pipeline-run role, read off the defaults in the code — no home
+        # is read here. A session-run agent the CEO put in a group selects as
+        # an unknown name — the default ladder's top — whatever its group
+        # (DRE-6833).
+        cfg = defaults()
+        session = set(committed()["session_agents"])
         roles = {r: k for r, k in cfg["agents"].items() if r not in session}
         assert roles
         for role, kind in roles.items():
             mf.clear_availability_cache()
-            assert mf.select(role, probe=lambda m: True) == ladder(cfg, kind)[0], role
-        default_top = [r["model"] for r in cfg["ladders"][cfg["default_ladder"]]][0]
+            assert mf.select(role, probe=lambda m: True) == cfg["ladders"][cfg["kinds"][kind]][0], role
+        default_top = cfg["ladders"][cfg["default_ladder"]][0]
         for role in session & set(cfg["agents"]):
             mf.clear_availability_cache()
             assert mf.select(role, probe=lambda m: True) == default_top, role
@@ -606,15 +618,15 @@ class TestDocumented:
 
     def test_the_readme_documents_the_keys_the_walk_and_rule_10(self):
         text = README.read_text()
-        start = text.index("# `models.yaml` — the ONE model config")
+        start = text.index("# `models.yaml` — the model config's code-side facts")
         section = " ".join(text[start:text.index("\n---\n", start)].split())
         for needle in ("`label`", "`purpose`", "`ungrouped`", "`about`", "`projects`",
-                       "own ladder", "`JUDGEMENT_ROLES`", "rule 10",
-                       "config/repo-map.json"):
+                       "`JUDGEMENT_ROLES`", "rule 10", "config/repo-map.json"):
             assert needle in section, needle
 
-    def test_the_yaml_shows_the_projects_shape_in_a_comment(self):
-        lines = CONFIG_PATH.read_text().splitlines()
-        at = next(i for i, l in enumerate(lines) if l.startswith("projects:"))
-        above = " ".join(l for l in lines[max(0, at - 30):at] if l.lstrip().startswith("#"))
-        assert "atlas:" in above and "workhorse:" in above
+    def test_the_readme_shows_a_projects_walk(self):
+        # The per-project exception is the home's now (DRE-6983); the record
+        # of its walk is the README's.
+        text = " ".join(README.read_text().split())
+        assert "`projects: {atlas: {workhorse:" in text
+        assert "has atlas's builders walk" in text

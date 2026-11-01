@@ -103,21 +103,20 @@ def committed() -> dict:
 
 
 def frozen() -> dict:
-    """The frozen `models.yaml` as a file of today's shape: its code-side
-    facts, and the frozen document's choices written the way the file writes
-    them — each group a kind with its label and purpose on a ladder of its
-    key, and every name with an `about` line and no group ungrouped. A fresh
-    copy, for a test that edits it and asks `policy_errors`. The choices come
-    off the document, never the file, whose choices DRE-6983 takes out
-    (DRE-8018)."""
-    side = {key: value for key, value in model_fixture.fixture_config().items()
-            if key not in mf._CHOICE_KEYS}
+    """The frozen `models.yaml`'s code-side facts beside the frozen document's
+    choices, as one document of choices in the defaults' shape — each group a
+    kind on a ladder of its key with its label and purpose under `groups`, and
+    every name with an `about` line and no group ungrouped. A fresh copy, for
+    a test that edits it and asks `policy_errors`. The choices come off the
+    document, never the file, which carries none since DRE-6983 (DRE-8018)."""
+    side = model_fixture.fixture_config()
     doc = fixture_home()
     return {
         **side,
         "default_ladder": mf.WORKHORSE_KIND,
-        "kinds": {key: {"ladder": key, "label": group["label"], "purpose": group["purpose"]}
-                  for key, group in doc["groups"].items()},
+        "kinds": {key: key for key in doc["groups"]},
+        "groups": {key: {"label": group["label"], "purpose": group["purpose"]}
+                   for key, group in doc["groups"].items()},
         "ladders": {key: list(group["models"]) for key, group in doc["groups"].items()},
         "agents": dict(doc["agents"]),
         "ungrouped": [name for name in side["about"] if name not in doc["agents"]],
@@ -141,7 +140,7 @@ def errors(cfg: dict, with_prices: dict | None = None) -> list[str]:
 
 
 def ladder_name(cfg: dict, kind: str) -> str:
-    return cfg["kinds"][kind]["ladder"]
+    return cfg["kinds"][kind]
 
 
 def code_side(excluded: list[str] | None = None) -> dict:
@@ -349,7 +348,7 @@ def test_reviewers_for_reads_the_raw_and_the_normalized_shape():
     assert mf.reviewers_for(cfg, OPUS55, "atlas") == \
         mf.reviewers_for(norm, OPUS55, "atlas") == [SONNET55, SONNET5]
     # No slug, or one with no entry, is the fleet's walk.
-    fleet = ladder(cfg, "advisory")
+    fleet = cfg["ladders"][ladder_name(cfg, "advisory")]
     assert mf.reviewers_for(cfg, None) == fleet
     assert mf.reviewers_for(cfg, OPUS5, "portico") == fleet
     assert mf.reviewers_for(cfg, SONNET55, "nowhere") == [OPUS55, SONNET5]
@@ -457,12 +456,12 @@ def test_an_added_kind_on_the_builders_ladder_is_refused_in_rule_1s_words():
     added group is admitted on a ladder of its own name, and one that would
     walk the Builders' ladder is refused, as sharing a ladder always was."""
     cfg = frozen()
-    cfg["kinds"]["designers"] = {"ladder": ladder_name(cfg, "workhorse")}
+    cfg["kinds"]["designers"] = ladder_name(cfg, "workhorse")
     found = errors(cfg)
     assert found and all(e.startswith("kinds") for e in found), found
     assert any(e.startswith("kinds.designers: ") for e in found), found
-    cfg["kinds"]["designers"] = {"ladder": "designers"}
-    cfg["ladders"]["designers"] = [{"model": ladder(cfg, "workhorse")[0], "reason": "own"}]
+    cfg["kinds"]["designers"] = "designers"
+    cfg["ladders"]["designers"] = [cfg["ladders"][ladder_name(cfg, "workhorse")][0]]
     assert errors(cfg) == []
 
 

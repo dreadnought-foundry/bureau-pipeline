@@ -34,6 +34,11 @@ per concept.
 - Every UI card carries a `**Design:**` line naming the EXACT exported screen
   PNG to build to (e.g. `console/design/images/screens/desktop/board.png`).
   Non-UI cards omit it — its absence is normal, never a defect.
+- An approved design the console attached to the epic is a valid ref too:
+  `<design folder>/approved/<initiative-slug>/<file>` — `.png`, `.jpg`,
+  `.jpeg`, `.svg` or `.html` — under `console/design` or a root `design`. The
+  epic's first UI card commits it from its Linear attachment, and every other
+  card naming it is blocked by that card (`briefs/planner.md`, DRE-8304).
 - **Engineer:** Read that PNG (it's a normal-sized export) BEFORE building, and
   match it — layout, structure, components, spacing, copy. Divergence requires
   explicit justification in the PR description.
