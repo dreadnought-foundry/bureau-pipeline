@@ -486,6 +486,47 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$STATUS"
+      # DRE-8452: a proof's record pull request stays open only while its
+      # record can merge (DRE-8437). The sweep closes each open one whose
+      # record cannot, keeping its branch, with the hold on its card. Under
+      # the proof dispatcher's gate, stub check and switch: dry (`would:`
+      # lines, nothing written) until PROOF_DISPATCH_LIVE is `true`.
+      - name: Close proof records that cannot merge
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # The close and its comment go out as the bot token, as the
+          # dispatch's writes do.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+        run: |
+          if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
+            echo "proof-record-sweep: no proof-run stub in this repository — nothing read, nothing closed"
+            exit 0
+          fi
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO" 2>&1 | tee proof-record-sweep.log || STATUS=$?
+          SUMMARY=$(grep -E '^(proof-record-sweep:|would:)' proof-record-sweep.log || true)
+          {
+            echo "### Proof record sweep"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then
+              printf '%s\n' "$SUMMARY"
+            else
+              echo "no proof-record-sweep: line — the sweep exited before it"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
       # DRE-6138: a comment the CEO leaves on an epic waiting in Green Light
       # sends the plan back for a review, once per comment, with one receipt.
       # Its own process and its own trailer, in the proof step's shape; dry
