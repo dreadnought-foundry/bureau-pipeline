@@ -65,7 +65,7 @@ REVISED = "One-off revision — what the planner did"
 CLAUSES = (
     "steps.gate.outputs.bounced != 'true'",
     "steps.dedupe.outputs.skip != 'true'",
-    "steps.slot.outputs.admitted == 'true'",
+    "steps.allowance.outputs.start == 'true'",
     "steps.ask.outputs.review != 'true'",
 )
 
