@@ -635,6 +635,18 @@ def _drive_triage_repair(mp):
     triage_repair.claim("DRE-1")
 
 
+@site("alarm-repair", "alarm-repair")
+def _drive_alarm_repair(mp):
+    """The Alarm Repair's claim (DRE-8633): an alert's first attempt, on a
+    card with no receipt for that raise. Frozen from its first render: there
+    was no earlier wording to read it off."""
+    import alarm_repair  # noqa: PLC0415 — only this driver needs it
+
+    mp.setattr(alarm_repair.linear_ops, "comment_records", lambda *_a, **_k: [])
+    _card_recorder(mp)
+    alarm_repair.claim("DRE-1", "pipeline_stuck:DRE-1", "2026-11-01T10:00:00Z")
+
+
 @site("promotion-stalled", "promotion-stalled")
 def _drive_promotion_stalled(mp):
     """The promotion stall clock (DRE-4210): a parentless card refused for
