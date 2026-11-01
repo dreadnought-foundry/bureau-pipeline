@@ -467,6 +467,56 @@ def test_reading_reads_the_record_on_its_branch_and_writes_nothing(monkeypatch):
     assert any("/contents/architecture/proofs/logs.md" in " ".join(a) for a in gh.calls)
 
 
+class ReleaseGitHub(RecordingGitHub):
+    """A sibling build card merged, its release record named — and the record
+    branch there or gone (`branch`)."""
+
+    def __init__(self, record: str, *, branch: bool):
+        super().__init__(record)
+        self.branch = branch
+
+    def __call__(self, args):
+        args = list(args)
+        if args[:2] == ["pr", "list"] and "head:agent/DRE-9201" in args:
+            self.calls.append(args)
+            return json.dumps([{"number": 41, "url": "u", "headRefName": "agent/DRE-9201-x",
+                                "state": "MERGED", "mergeCommit": {"oid": "abc1234"},
+                                "mergedAt": CREATED}])
+        if args[0] == "api" and args[1].endswith("/contents/.github/bureau/release.json"):
+            self.calls.append(args)
+            raise RuntimeError("gh: Not Found (HTTP 404)")
+        if args == ["api", "repos/dreadnought-foundry/agent-bureau"]:
+            self.calls.append(args)
+            return json.dumps({"full_name": "dreadnought-foundry/agent-bureau"})
+        if not self.branch and args[0] == "api" and "/git/ref/heads/" in args[1]:
+            self.calls.append(args)
+            raise RuntimeError("gh: Not Found (HTTP 404)")
+        return super().__call__(args)
+
+
+class SiblingLinear(RecordingLinear):
+    def card(self, identifier):
+        issue = super().card(identifier)
+        issue["parent"]["children"]["nodes"] = [
+            {"identifier": "DRE-9201", "title": "agent-bureau: the build", "state": {"name": "Done"},
+             "labels": {"nodes": [{"name": "repo:agent-bureau"}]}}]
+        return issue
+
+
+@pytest.mark.parametrize("branch", [True, False])
+def test_the_release_is_read_only_for_a_card_never_run(branch):
+    linear = SiblingLinear({"DRE-9000": _thread()})
+    gh = ReleaseGitHub(RECORD, branch=branch)
+    saved = proof_overdue.gather("DRE-9000", now=NOW, gh=gh, linear=linear)
+    read = any("release.json" in " ".join(a) for a in gh.calls)
+    if branch:  # a record on its branch: the card has run, receipt or not
+        assert saved["record"]["text"] and not read and saved["release"] is None
+    else:
+        assert saved["record"]["text"] is None and read
+        assert saved["release"]["state"] == "ready"
+    _no_writes(linear, gh)
+
+
 def test_a_record_that_modifies_its_file_is_still_found_for_diagnosis():
     files = [{"path": "architecture/proofs/agent-working-logs.md", "changeType": "MODIFIED"}]
     assert proof_record.find_record(files)[0] is None  # the gate's refusal is unchanged
