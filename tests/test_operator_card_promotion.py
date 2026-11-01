@@ -45,6 +45,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 os.environ.setdefault("REPO", "dreadnought-foundry/bureau-pipeline")
 os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 
+import hold  # noqa: E402
 import lane_contract  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
@@ -339,12 +340,27 @@ class TestWhatStaysRefused:
         assert board.lane_of("DRE-3385") == "Backlog"
 
     def test_a_held_workbench_child_is_never_auto_promoted(self):
+        """A hold the pipeline stamped still stops a person's card. Before
+        DRE-8646 this held by a bare label; a label a person applied by hand
+        now carries the card to its lane (the test below)."""
         board = _Board(_card(
-            comments=[WORKBENCH],
+            comments=[WORKBENCH, hold.stamp_line("dead-run-cap", "none", "scripts/reconcile.py")],
             labels=("repo:bureau-pipeline", "agent:ops", reconcile.HOLD_LABEL),
         ))
         assert board.promote() == 0
         assert board.lane_of("DRE-3385") == "Backlog"
+
+    def test_a_workbench_child_held_by_hand_is_carried_with_its_label_kept(self):
+        """DRE-8646: `needs-human` with no stamp on a person's card is not a
+        reason to leave it in the queue. It reaches its lane and keeps the
+        label, which only a person removes."""
+        board = _Board(_card(
+            comments=[WORKBENCH],
+            labels=("repo:bureau-pipeline", "agent:ops", reconcile.HOLD_LABEL),
+        ))
+        assert board.promote() == 1
+        assert board.lane_of("DRE-3385") == routing_verdict.destination("WORKBENCH")
+        assert "label was kept" in board.receipt_for("DRE-3385")
 
 
 # --------------------------------------------------------------------------
@@ -526,7 +542,9 @@ class TestAFullFleetDoesNotHoldAPersonsCard:
         assert board.lane_of("DRE-3390") == routing_verdict.destination("OPERATOR")
         assert board.lane_of("DRE-3389") == "Backlog"
         assert board.lane_of("DRE-3391") == "Backlog"
-        assert board.comments_on("DRE-3389") == []
+        # Its one word on the card is why it waits (DRE-8646) — no refusal.
+        notes = board.comments_on("DRE-3389")
+        assert len(notes) == 1 and notes[0].startswith("🧾 promotion-wait: wip-cap —"), notes
         out = capsys.readouterr().out
         assert "WIP at cap (1/1)" in out
         waiting = [ln for ln in out.splitlines() if "not considered" in ln]
