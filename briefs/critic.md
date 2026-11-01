@@ -107,7 +107,10 @@ line of its own:
 
 The criterion is the row's, as the record's table copies it, with its
 whitespace collapsed and, when it runs past 70 characters, its first 69 kept
-(trailing space dropped) and `…` added — the cut the gate compares. The seen
+(trailing space dropped) and `…` added — the cut the gate compares. A pipe
+the table escapes as `\|` may be quoted escaped or not: the gate reads it as
+the pipe it stands for on both sides, and still matches the whole quote to
+one row, never a part of it (DRE-8560). The seen
 quote is copied from the record word for word: a quote the record does not
 hold accepts nothing. The reason is one sentence of your own on why only the
 words differ. An accepted row is no reason to send the record back.

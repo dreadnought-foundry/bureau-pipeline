@@ -167,6 +167,10 @@ NOT_SEEN = ("the checker accepts only a row seen working, and this one was "
             "not observed")
 #: What a candidate is held for when the checker's seen-quote is not in it.
 UNQUOTED = "the checker's acceptance quotes text the record does not hold"
+#: What a candidate is held for when the checker's verdict carries an
+#: acceptance whose criterion is no row's (DRE-8560) — said, so it is not
+#: read as no acceptance at all; the quoted criteria follow it.
+UNMATCHED = "the checker's acceptance names no row's criterion as the record writes it"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -458,15 +462,34 @@ def _verdict_link(verdict) -> str | None:
     return url if isinstance(url, str) and _VERDICT_LINK.fullmatch(url) else None
 
 
+def _folded(text: str) -> str:
+    """`text` with each escaped pipe read as the pipe it stands for, as
+    `_cells` reads a cell, and its whitespace collapsed (DRE-8560)."""
+    return " ".join((text or "").replace("\\|", "|").split())
+
+
+def _names(named: str, criterion: str) -> bool:
+    """Is an acceptance's quoted criterion this row's, cut to 70 as `_cut`
+    renders it? Both sides are `_folded` first, and the cut is taken from the
+    row as the reader holds it or as the record's source spells it, pipes
+    escaped — a pipe before character 70 moves the cut by one character.
+    Equality, never a substring: no acceptance names another row (DRE-8560)."""
+    folded = _folded(named)
+    return folded in (_cut(_folded(criterion), 70),
+                      _folded(_cut(criterion.replace("|", "\\|"), 70)))
+
+
 def _naming(lines: list, criterion: str) -> list:
-    """The seen-quotes of the acceptance lines whose criterion is this row's,
-    cut to 70 as `_cut` renders it."""
-    cut = _cut(criterion, 70)
-    return [seen for named, seen in lines if named == cut]
+    """The seen-quotes of the acceptance lines whose criterion is this row's
+    (`_names`)."""
+    return [seen for named, seen in lines if _names(named, criterion)]
 
 
-def _refusal(criterion: str, result: str, checker: list, own: list) -> str | None:
-    """Why an unmet row an acceptance named was not accepted, or None."""
+def _refusal(criterion: str, result: str, checker: list, own: list,
+             stray: list = ()) -> str | None:
+    """Why an unmet row an acceptance named was not accepted, or None. A
+    candidate the checker named not at all, while its verdict carries
+    acceptances naming no row (`stray`), is held for `UNMATCHED`."""
     if _CHECKER.match(_plain(result).lower()):
         return OWN_ACCEPTANCE
     wording = row_wording(result)
@@ -476,6 +499,8 @@ def _refusal(criterion: str, result: str, checker: list, own: list) -> str | Non
         return NOT_SEEN
     if wording and _naming(checker, criterion):
         return UNQUOTED
+    if wording and stray:
+        return f"{UNMATCHED}: " + "; ".join(f"“{_cut(named, 70)}”" for named in stray)
     return None
 
 
@@ -485,8 +510,10 @@ def reading(text: str, verdict=None, others=()) -> Reading:
     `verdict` is the critic verdict the caller binds to the head — its
     `{"body", "url"}`, qa-bot authored — or None (DRE-7949). A candidate row
     (`row_wording`) is accepted only when that verdict carries an
-    `ACCEPTANCE_MARK` line whose criterion is the row's, cut to 70, and whose
-    seen-quote appears in the record's text. `others` are the bodies of every
+    `ACCEPTANCE_MARK` line whose criterion is the row's, cut to 70 (`_names`:
+    an escaped pipe read as a pipe, DRE-8560), and whose seen-quote appears in
+    the record's text. An acceptance that names no row is said against each
+    candidate it left unmet (`UNMATCHED`). `others` are the bodies of every
     other comment the caller read: an acceptance there, or written into the
     record, or a row opening `CHECKER_OPENING`, accepts nothing and is named
     the reading run's own (`refused`). A `Not observed.` row is never accepted.
@@ -495,6 +522,8 @@ def reading(text: str, verdict=None, others=()) -> Reading:
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
     url = _verdict_link(verdict)
     checker = acceptances(verdict["body"]) if url else []
+    stray = [named for named, _ in checker
+             if not any(_names(named, criterion) for criterion, _ in rows or [])]
     own = acceptances(text) + [a for body in others or () for a in acceptances(body)]
     flat = " ".join((text or "").split())
     met, accepted, unmet, checked, refused = [], [], [], [], []
@@ -509,7 +538,7 @@ def reading(text: str, verdict=None, others=()) -> Reading:
             checked.append((criterion, url))
         else:
             unmet.append(row)
-            why = _refusal(criterion, result, checker, own)
+            why = _refusal(criterion, result, checker, own, stray)
             if why is not None:
                 refused.append((row, why))
     caused = [(c, row_cause(r)) for c, r in unmet if row_cause(r)]
