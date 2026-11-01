@@ -463,6 +463,26 @@ class ScreenTest(_TmpDir):
         self.assertNotEqual(0, _cli("choices-block", "--file", refused).returncode)
 
 
+class QuestionWithChoicesTest(_TmpDir):
+    def test_the_recommendation_is_the_recommended_choice_s_label(self):
+        q = self.write("q.json", json.dumps(QUESTION))
+        c = self.write("c.json", json.dumps(TWO_CHOICES))
+        lines = mns.question(q, report_path=None, choices_path=c)
+        esc = console_escalation.parse(lines)
+        self.assertEqual(QUESTION["finding"], esc.finding)
+        self.assertEqual(QUESTION["question"], esc.question)
+        self.assertEqual("Keep the old prices", esc.recommendation)
+        self.assertEqual(TWO_CHOICES["why"], esc.why)
+        body = lines + "\n\n" + planning_escalation.choices_block(TWO_CHOICES)
+        self.assertEqual([], console_escalation.problems(body))
+
+    def test_a_refused_block_leaves_the_question_s_own_lines(self):
+        q = self.write("q.json", json.dumps(QUESTION))
+        c = self.write("c.json", json.dumps({**TWO_CHOICES, "recommended": "x"}))
+        esc = console_escalation.parse(mns.question(q, report_path=None, choices_path=c))
+        self.assertEqual(QUESTION["recommendation"], esc.recommendation)
+
+
 class HousekeepingNoteTest(_TmpDir):
     def test_the_note_opens_with_the_stall_tag_and_carries_the_three_lines(self):
         import dedupe_dispatch

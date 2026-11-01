@@ -403,7 +403,10 @@ class TheParkTest(unittest.TestCase):
         esc = console_escalation.parse(question)
         self.assertEqual(PLAIN_QUESTION["finding"], esc.finding)
         self.assertEqual(PLAIN_QUESTION["question"], esc.question)
-        self.assertEqual(PLAIN_QUESTION["recommendation"], esc.recommendation)
+        # A block rides with the lines, so the Recommendation's answer is the
+        # recommended choice's label and its why the block's (DRE-3893).
+        self.assertEqual("Keep the old prices", esc.recommendation)
+        self.assertEqual(TWO_CHOICES["why"], esc.why)
         self.assertIn(RUN_URL, question)
         # DRE-8592: the choices block, exactly as the planner's, last.
         self.assertTrue(question.rstrip("\n").endswith(
@@ -582,10 +585,11 @@ class TheFallbackTest(unittest.TestCase):
                  json.dumps({k: "  " for k in medic_next_step.QUESTION_FIELDS}))
 
     def test_a_missing_or_malformed_file_still_parks_with_the_fallback_lines(self):
+        # No choices file, so the lines ride in the operator's note (DRE-8592).
         for question in self.MALFORMED:
             with self.subTest(question=question):
-                r = _run_job(question=question)
-                (body,) = _questions(r)
+                r = _run_job(question=question, choices=None)
+                (body,) = _notes(r)
                 esc = console_escalation.parse(body)
                 if question and "only this" in question:
                     self.assertEqual("only this", esc.finding)
@@ -602,8 +606,8 @@ class TheFallbackTest(unittest.TestCase):
                 self.assertEqual(1, len(r.called("linear_ops.py", "advance")))
 
     def test_with_no_report_as_well_the_finding_says_the_diagnosis_did_not_finish(self):
-        r = _run_job(report=None, question=None)
-        (body,) = _questions(r)
+        r = _run_job(report=None, question=None, choices=None)
+        (body,) = _notes(r)
         esc = console_escalation.parse(body)
         self.assertEqual(medic_next_step.NO_REPORT_FINDING, esc.finding)
         self.assertEqual(medic_next_step.FALLBACK_QUESTION, esc.question)
@@ -627,8 +631,13 @@ class TheGuardTest(unittest.TestCase):
     }
 
     def test_code_shaped_lines_never_reach_the_card(self):
-        r = _run_job(question=self.LEAKY)
-        (body,) = _questions(r)
+        for choices in (None, TWO_CHOICES):
+            with self.subTest(choices=choices is not None):
+                r = _run_job(question=self.LEAKY, choices=choices)
+                (body,) = _questions(r) if choices else _notes(r)
+                self.assert_guarded(body, recommended=choices is not None)
+
+    def assert_guarded(self, body: str, *, recommended: bool):
         for leak in ("scripts/medic_next_step.py", "gh run rerun", "VERDICT"):
             self.assertNotIn(leak, body)
         lines = _three_lines(body)
@@ -638,14 +647,20 @@ class TheGuardTest(unittest.TestCase):
         esc = console_escalation.parse(body)
         self.assertEqual(REPORT_FINDING, esc.finding)
         self.assertEqual(medic_next_step.FALLBACK_QUESTION, esc.question)
-        self.assertIsNone(esc.recommendation)
+        if recommended:
+            self.assertEqual("Keep the old prices", esc.recommendation)
+        else:
+            self.assertIsNone(esc.recommendation)
         self.assertEqual([], console_escalation.problems(body))
 
     def test_the_real_reader_ran(self):
         r = _run_job(question=self.LEAKY)
         self.assertEqual([["medic_next_step.py", "question", "--file", QUESTION_FILE,
-                           "--report", REPORT]],
+                           "--report", REPORT, "--choices-file", CHOICES_FILE]],
                          r.called("medic_next_step.py", "question"))
+        r = _run_job(question=self.LEAKY, choices=None)
+        self.assertEqual([], r.called("medic_next_step.py", "question"))
+        self.assertEqual(1, len(r.called("medic_next_step.py", "housekeeping-note")))
 
 
 # ── 5. the diagnosis agent itself died ─────────────────────────────────────
