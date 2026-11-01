@@ -28,9 +28,10 @@ A first-run candidate is in `Hand-work`, and it stays there for the whole run
 the run-state reading (condition 5), not a lane. A card in `Green Light` is
 read by the return branch when it is parked on the CEO's press, and by the
 re-run branch when its hold is the sweep's review-cap park (DRE-6406) — never
-by both: the return is taken first. A card in `In Review` has an open record
-pull request and is read only by the re-run branch. The re-run branch moves
-nothing: the card stays in the lane it is in while its record is amended.
+by both: the return is taken first. A card in `In Review` is read only by the
+re-run branch, off its open record pull request — or, with none open, off its
+record branch (below, DRE-8440). The re-run branch moves nothing: the card
+stays in the lane it is in while its record is amended.
 
 A hold naming the CEO's press on a card outside `Green Light` still holds it,
 and the re-run's line says whose it is (`PRESS_OUTSIDE`, DRE-7741): the return
@@ -66,7 +67,10 @@ alarms it for the operator, who gets his answer or re-sorts the hold.
      thread read — answers it once with `proof_record.unread_reply`,
      quoting its first line. Not live, `would: answer` and nothing written.
   5. Nobody else is on it and its run is not alive: only `none`,
-     `never-started` and `dead` go on.
+     `never-started` and `dead` go on. A run that reads `finished` and left
+     a record branch with no pull request goes to the re-run's rules over
+     that branch instead (below, DRE-8440); with no record branch, or a
+     chase owed, it is refused here as before.
   6. The first-run budget: two dispatches. The second names why the first
      did not finish; after two, one hold, and never again.
   7. The release carrying the siblings' merges is `ready` — `waiting` and
@@ -265,6 +269,69 @@ the note; a record not read there is refused. Then, after the stops:
      decline still at the head, one hold. Under the gate's trigger, a record
      whose unmet rows are all plain `Not met.` files a fix card instead of
      the operator's hold (below, DRE-7953).
+
+## The record on its branch (DRE-8440)
+
+Once a waiting proof keeps no pull request open (DRE-8441), its record lives
+only on `agent/DRE-<n>-proof-record`. Without this a waiting proof never
+re-ran when its date passed: the re-run refused "no open record pull
+request", and a Hand-work card whose run read `finished` was refused at
+condition 5 for good.
+
+The record a re-run reads is a `RecordSource` (`_record_source`): the open
+record pull request when there is one, as before (`PULL_SOURCE`), and
+otherwise the record branch at its head (`BRANCH_SOURCE`) — a record pull
+request closed, or none. A merged one is never read on its branch. The
+branch is read with `proof_record.record_blob` and `proof_record.record_text`
+over the pass's GitHub read seam (`_BranchReads`, `reconcile.gh_read` in
+production), each path once, and the record is found through the card's
+`**Files:**` line, which the lane read carries. The source is dated by the
+card's newest `🔬 proof-run` receipt, the run that left the record, and a
+card with no timed receipt is refused.
+
+A card enters it from `In Review`, where its record pull request was closed,
+or from `Hand-work`, where its first run finished and left a record with no
+pull request: conditions 1 to 4 are read first, as for any first run, and the
+time lift of condition 4 is the lift the re-run reads. A run in flight still
+holds either one, and nothing here moves a lane.
+
+Only a record whose blocking rows (`proof_record_pr.can_merge`) are all
+waiting rows (`proof_record.row_waiting`) is read on. Any other is refused
+with `BRANCH_NOT_YET`, posting nothing, before any hold is read: the re-arm on
+a shipped fix or a new `🔬 proof-observed`, and the fix card for a build that
+fails its rows, are DRE-8451's. A waiting record has no critic verdict and no
+gate note, so its trigger is read as the gate's (`trigger.gate`) at the
+receipt's time, and the same rules hold and lift it: the run's own hold —
+the one `proof_record_pr.hold_line` composes for the record at the head,
+exactly the hold `_hold_waiting` writes, so `_waiting` posts no second one —
+lifts at its time and one timed re-run is dispatched (DRE-7316), and an
+unstamped row gets its re-check twelve hours after its hold (DRE-7951). The
+budgets counted since the pull request opened are counted on the branch
+since the card's first `🔬 proof-run` receipt, and the lines name the branch
+where they named the pull request. A record the operator's note discharged
+before its time is re-run `re-run of the record on its branch at <sha7>`;
+its spent budget's holds are the gate's, and their branch wording is
+DRE-8451's.
+
+**A branch that is gone, or a head with no record, is told once.** A read
+that raised — GitHub answering with an error other than not-found — is
+refused as unread and posts nothing; the next pass reads again. A read
+GitHub answered — the branch does not exist (`BRANCH_GONE`), or the head it
+names carries no record file (`BRANCH_EMPTY`) — is refused as unread too,
+and an `In Review` card is told once: one plain comment whose first line is
+`BRANCH_GONE_COMMENT`, then `BRANCH_GONE_REST`, posted with
+`linear_ops.cmd_comment` only when no comment on the thread has that exact
+first line (`_tell_once`). So the card gets one comment per state, and a
+branch that returns and is lost again at a new head gets one more. Not live,
+`would: comment`. A card whose `**Files:**` line names no one record has
+nothing GitHub could answer for, so it is unread the same way and told
+nothing; the line says why. A Hand-work card with no record branch is
+refused at condition 5 as before, and told nothing.
+
+The DRE-7787 shortcut compares a spent record with no pull request open at
+its branch's head (`branch_head`): one read of its ref per pass, through the
+same seam, for each branch the lane read shows marked and the open heads
+read does not list. Unread, and the card is a candidate.
 
 ## A spent budget on a build that fails its rows (DRE-7953)
 
@@ -519,7 +586,10 @@ A re-run spent with nothing new (DRE-7787) is not a candidate: it costs no
 read of its own, and however many there are they cost together one GitHub
 read of the open pull requests' heads and one Linear read of their relations
 per lane read that shows them (DRE-8156), made only on a pass whose lane read
-shows a marked budget hold. The filing of a fix card for a failing build's
+shows a marked budget hold — and one read of a record branch's ref for each
+such record with no pull request open (DRE-8440). A re-run read on its
+record branch costs two GitHub reads more — its ref and the record
+file at the head — and its thread is read once. The filing of a fix card for a failing build's
 spent budget (DRE-7953) happens once per PROOF card: one read of the card's
 epic and the filer's own reads and writes. Its `linear-budget:` trailer is its own, lifted
 into the step summary.
@@ -579,6 +649,7 @@ CLI (the step's own call; reads `REPO`, `REPO_SLUG`, `PROOF_DISPATCH_LIVE`,
 
 from __future__ import annotations
 
+import binascii
 import contextlib
 import json
 import os
@@ -586,7 +657,7 @@ import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Callable
+from typing import Callable, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -614,6 +685,18 @@ from proof_record import (  # noqa: E402,F401 — the names this phase and its c
     proof_record_branch,
 )
 from proof_record import open_holds as _open_holds  # noqa: E402
+# The waiting rows' readers live once, in the leaf that decides whether a
+# record may have a pull request (DRE-8437); the old names stay bound for
+# this module's callers and tests (DRE-8440).
+import proof_record_pr  # noqa: E402
+from proof_record_pr import (  # noqa: E402,F401 — read here and by callers
+    OPERATOR_PRESS,
+    WAITING_RECHECK_HOURS,
+)
+from proof_record_pr import not_before as _not_before  # noqa: E402
+from proof_record_pr import waiting_criterion as _waiting_criterion  # noqa: E402,F401
+from proof_record_pr import waiting_observed as _waiting_observed  # noqa: E402
+from proof_record_pr import waiting_rows as _waiting_rows  # noqa: E402
 import proof_run_state  # noqa: E402
 import prose_blockers  # noqa: E402
 import reconcile  # noqa: E402 — the lane read, the repo label, the GitHub read seam
@@ -706,10 +789,10 @@ CHASE_REASON = "chase of the event hold of {at}"
 CHASE_COUNT = "chase"
 #: The `config/hold-deadlines.json` row the chase is timed by (DRE-7964).
 CHASE_TAG = "proof-waiting"
-#: How long after the pass that posts it a waiting hold over a row nobody
-#: stamped — a prose event, or the operator's press — lifts itself, and how
-#: long after its post a prose waiting hold already standing does (DRE-7951).
-WAITING_RECHECK_HOURS = 12
+#: `WAITING_RECHECK_HOURS` — how long after the pass that posts it a waiting
+#: hold over a row nobody stamped lifts itself, and how long after its post a
+#: prose waiting hold already standing does (DRE-7951) — is
+#: `proof_record_pr`'s, imported above (DRE-8440).
 
 #: The re-run budget: per record pull request, apart from the first run's.
 RERUN_BUDGET = 2
@@ -802,6 +885,52 @@ TIMED_EXHAUSTED_NEEDS = ("an operator reading the record's waiting rows and the 
 RECHECK_EXHAUSTED_OBSERVED = "the record still waited after three re-checks"
 RECHECK_EXHAUSTED_NEEDS = ("an operator reading the record's waiting rows and the "
                            "three re-check receipts")
+
+#: Where a re-run reads its record (DRE-8440): the open record pull request,
+#: as before, or — with none open — the record branch at its head, where a
+#: waiting proof's record lives once the proof run keeps no pull request open
+#: (DRE-8441).
+BRANCH_SOURCE = "branch"
+PULL_SOURCE = "pull"
+
+
+class RecordSource(NamedTuple):
+    """The record a re-run reads (DRE-8440). `kind` is `BRANCH_SOURCE` or
+    `PULL_SOURCE`; `number` the pull request's, None on the branch; `head`
+    the commit the record is read at; `text` the record there, or None when
+    it could not be read — and, for a pull request, None until the re-run
+    reads it at the head, where it always has (`_record_at_head`). `at` is the
+    trigger's time: on the branch, the card's newest `🔬 proof-run` receipt,
+    the run that left the record; None for a pull request, whose trigger is
+    the critic's verdict or the gate's note, read off it."""
+    kind: str
+    number: int | None
+    branch: str
+    head: str
+    text: str | None
+    at: datetime | None
+
+
+#: The one comment a card is told when GitHub answers that its record branch
+#: cannot give a record (DRE-8440), once per first line: `what` is
+#: `BRANCH_GONE` or `BRANCH_EMPTY`. A read that raised tells nothing.
+BRANCH_GONE_COMMENT = "Proof not re-run — no record can be read on {branch}: {what}."
+BRANCH_GONE = "the branch is gone"
+BRANCH_EMPTY = "its head {sha7} carries no record"
+BRANCH_GONE_REST = ("The card's 🔬 proof-waiting hold still says what the proof "
+                    "waited on. Nothing re-runs it until the branch carries its "
+                    "record again; the sweep's held-proof alarm reports the hold "
+                    "to the operator once it has stood past its due time.")
+#: The refusal of a branch record whose blocking rows are not all waiting rows
+#: (DRE-8440), posting nothing. DRE-8451 deletes it with the re-arm and the
+#: fix card on the branch.
+BRANCH_NOT_YET = ("re-run: the record on its branch has a row that does not wait "
+                  "— the re-arm on the branch is DRE-8451's")
+#: A re-run of a branch record the operator's `🔬 proof-observed` discharged
+#: before its time: no verdict and no note to answer, so it names the branch.
+BRANCH_RERUN_REASON = "re-run of the record on its branch at {sha7}"
+#: How the gh CLI reports GitHub's not-found: `gh: Not Found (HTTP 404)`.
+_NOT_FOUND = re.compile(r"\(HTTP 404\)")
 
 #: What the sweep's promotion posts as a card lands in `Hand-work` — the one
 #: time on the lane read that says when the card entered the lane. The receipt
@@ -1027,6 +1156,56 @@ def open_record_heads(repo: str) -> dict:
             if proof_record_branch(pr.get("headRefName"))}
 
 
+class _BranchReads:
+    """`gh` for `proof_record.record_blob` and `record_text` (DRE-8440), over
+    the pass's GitHub read seam — `github_read`, so `reconcile.gh_read`, in
+    production. Each `gh api` path is read once, so the record file is read
+    once for its blob and its text. The branch's open pull requests are
+    answered by the read that found none open (`record_pr`), so `record_blob`
+    finds the record through the card's `**Files:**` line. The first read
+    GitHub refused is kept, with its error: a 404 is GitHub's answer, any
+    other error a read that raised."""
+
+    def __init__(self, read: Callable):
+        self.read, self.got, self.refused = read, {}, None
+
+    def __call__(self, args) -> str:
+        args = list(args)
+        # record_blob's open-pull-request read, which names --state open
+        # itself; it is answered here, never listed (DRE-2316).
+        if " ".join(args[:2]) == "pr list":
+            return "[]"
+        if len(args) != 2 or args[0] != "api":
+            raise RuntimeError(f"gh {' '.join(args)} is not read here")
+        path = args[1]
+        if path not in self.got:
+            try:
+                self.got[path] = json.dumps(self.read(path))
+            except Exception as error:  # noqa: BLE001 — kept, then raised to the reader
+                self.refused = self.refused or (path, error)
+                raise RuntimeError(str(error)) from error
+        return self.got[path]
+
+    def head(self, ref: str) -> str:
+        """The head the branch's ref read answered, or ""."""
+        try:
+            return json.loads(self.got.get(ref) or "null")["object"]["sha"] or ""
+        except (TypeError, KeyError, ValueError):
+            return ""
+
+    def answered(self, head: str) -> str | None:
+        """What GitHub answered of a record not read — `BRANCH_GONE` for a ref
+        not found, `BRANCH_EMPTY` for no record file at the head — or None
+        when nothing it said was a not-found: the read raised."""
+        if self.refused is None or not _NOT_FOUND.search(str(self.refused[1])):
+            return None
+        if "/git/ref/heads/" in self.refused[0]:
+            return BRANCH_GONE
+        if "/contents/" in self.refused[0] and head:
+            return BRANCH_EMPTY.format(sha7=head[:7])
+        return None
+
+
 def record_pr(identifier: str, repo: str) -> dict | None:
     """The card's newest counting pull request on `repo`, its record branch
     asked for first, with what the re-run reads off it."""
@@ -1066,6 +1245,21 @@ class _Refused(Exception):
     def __init__(self, line: str, bucket: str = "refused"):
         super().__init__(line)
         self.line, self.bucket = line, bucket
+
+
+class _BranchUnread(_Refused):
+    """The record branch gave no record (DRE-8440). `what` is GitHub's answer
+    — `BRANCH_GONE` or `BRANCH_EMPTY`, told on the card once — or None for a
+    read that raised, which posts nothing."""
+
+    def __init__(self, line: str, branch: str, what: str | None = None):
+        super().__init__(line)
+        self.branch, self.what = branch, what
+
+
+def _said(refusal: _Refused) -> str:
+    """A re-run's refusal line without its `re-run: `, for a first run's."""
+    return refusal.line.removeprefix("re-run: ")
 
 
 def _say(identifier: str, text: str) -> None:
@@ -1559,8 +1753,8 @@ def _pipeline_note(body: str) -> bool:
     return LIFTED_BY in (body or "") or text.startswith(CEO_ANSWERED)
 
 
-#: A waiting row's event that names the operator's press (DRE-6837).
-OPERATOR_PRESS = "the operator's press"
+#: `OPERATOR_PRESS`, a waiting row's event that names the operator's press
+#: (DRE-6837), is `proof_record_pr`'s, imported above (DRE-8440).
 
 #: Every `needs` wording this dispatcher defines for a hold, by who it waits
 #: on (DRE-7739). The operator's: the seven holds that stop a proof for an
@@ -1627,35 +1821,9 @@ def _is_event_hold(line: str) -> bool:
     return not any(own.match(needs) for own in _OWN_NEEDS)
 
 
-def _waiting_criterion(criterion: str, event: str) -> str:
-    """The criterion as a waiting hold names it: one waiting on the
-    operator's press never says `proof_record.CEO_PRESS`, which
-    `proof_record.open_holds` would keep through a `🔬 proof-observed`."""
-    if event.startswith(OPERATOR_PRESS):
-        return criterion.replace(CEO_PRESS, proof_cause_park.PRESS_NAMED)
-    return criterion
-
-
-def _waiting_rows(unmet: list) -> list:
-    """`(criterion, event, stamp)` for each unmet row waiting on an event, in
-    the record's order; `stamp` is the row's `[not-before=<T>]` or None."""
-    return [(criterion, event, proof_record.row_not_before(result))
-            for criterion, result in unmet
-            if (event := proof_record.row_waiting(result))]
-
-
-def _waiting_observed(waiting: list) -> str:
-    """The observed half of the waiting rows' hold: their criteria."""
-    return "; ".join(proof_record._cut(_waiting_criterion(c, event), 70)
-                     for c, event, _ in waiting)
-
-
-def _not_before(when: datetime) -> str:
-    """`not-before=<T>`, keeping `when`'s own offset, and its seconds only
-    when it has any."""
-    exact = when.second or when.microsecond
-    return (f"{linear_ops.NOT_BEFORE}"
-            f"{when.isoformat(timespec='auto' if exact else 'minutes')}")
+def _where(source: RecordSource) -> str:
+    """How a line names the record: its pull request, or its branch."""
+    return f"#{source.number}" if source.kind == PULL_SOURCE else source.branch
 
 
 class _Pass:
@@ -1679,6 +1847,12 @@ class _Pass:
         #: the error that stopped the read (DRE-8251): a failing build's spent
         #: budget looks in them for a fix already filed before it files one.
         self.relations: dict = {}
+        #: Each card's thread as this pass read it (DRE-8440): the branch
+        #: source dates its record by the newest receipt on it, and the
+        #: re-run reads it again — one request either way.
+        self.threads: dict = {}
+        #: Each record branch's head the DRE-7787 shortcut read this pass.
+        self.branch_heads: dict = {}
 
     # -- the reads every candidate shares (conditions 2 and 3) ------------- #
 
@@ -1709,6 +1883,8 @@ class _Pass:
 
     def _thread(self, card: dict):
         ident = card["identifier"]
+        if ident in self.threads:
+            return self.threads[ident]
         try:
             comments, viewer = self.linear.thread(ident)
             voices = self.voices(comments, viewer, card=ident)
@@ -1716,7 +1892,8 @@ class _Pass:
             raise _condition(4, "hold", f"the thread could not be read, so no "
                                         f"hold can be ruled out: {error}")
         self._answer_unread(ident, voices)
-        return comments, viewer, voices
+        self.threads[ident] = comments, viewer, voices
+        return self.threads[ident]
 
     def _answer_unread(self, ident: str, voices: list) -> None:
         """Answer each note opening `🔬 proof-observed` without its colon
@@ -1834,14 +2011,21 @@ class _Pass:
         comments, viewer, voices = self._thread(card)
         held = proof_record.open_holds_at(voices)
         chase = self._chase(held, voices)
+        lifted = None
         if held and chase is None:
-            self._lift_or_hold(ident, [line for line, _ in held], voices)
+            lifted = self._lift_or_hold(ident, [line for line, _ in held], voices)
 
         got = self.run_state(self.repo, ident, comments, viewer,
                              read=self.read, now=self.now)
         why = "; ".join(got.lines)
         if got.state == "someone-else":
             raise _condition(5, "run", why, "someone_else")
+        if got.state == "finished" and chase is None:
+            # A first run that finished left its record on its branch with no
+            # pull request (DRE-8440): the re-run's rules read it there.
+            source = self._finished_on_branch(card, why)
+            return self._rerun(card, source, None, self._branch_trigger(source),
+                               source.text, voices, got, lifted)
         if got.state not in FREE:
             raise _condition(5, "run", why, "running")
 
@@ -1852,6 +2036,21 @@ class _Pass:
         merged = self._released(issue, ident)
         self._observable(issue, ident, voices, merged)
         return reason, FIRST_COUNT.format(n=got.dispatches + 1)
+
+    def _finished_on_branch(self, card: dict, why: str) -> RecordSource:
+        """The branch source of a Hand-work card whose run reads `finished`
+        (DRE-8440), or condition 5's refusal as before when there is none to
+        read: no record branch, no record on it, or a record pull request
+        open. A branch whose blocking rows do not all wait is
+        `BRANCH_NOT_YET`'s."""
+        try:
+            source, _ = self._source(card)
+        except _Refused as refusal:
+            raise _condition(5, "run", f"{why}; {_said(refusal)}", "running")
+        if source.kind != BRANCH_SOURCE:
+            raise _condition(5, "run", why, "running")
+        self._all_waiting(source)
+        return source
 
     def _lift_or_hold(self, ident: str, holds: list, voices: list,
                       refuse: Callable = _held_first,
@@ -2171,7 +2370,22 @@ class _Pass:
             return None  # a fix filed against it since: the reads decide (DRE-8156)
         return found.group(1), line
 
-    def _parked_on(self, card: dict, comments: list, number, head: str) -> None:
+    def branch_head(self, branch: str) -> str:
+        """A record branch's head now, for the DRE-7787 shortcut on a record
+        with no pull request open (DRE-8440): one read of its ref per pass,
+        through the pass's GitHub read seam. Unread is "", and the card is
+        read as a candidate."""
+        if branch not in self.branch_heads:
+            try:
+                ref = self.read(f"repos/{self.repo}/git/ref/heads/{branch}") or {}
+                self.branch_heads[branch] = (ref.get("object") or {}).get("sha") or ""
+            except Exception as error:  # noqa: BLE001 — unread spares no read
+                self.branch_heads[branch] = ""
+                print(f"{PREFIX} the head of {branch} could not be read — its card "
+                      f"is read as a candidate: {error}")
+        return self.branch_heads[branch]
+
+    def _parked_on(self, card: dict, comments: list, where: str, head: str) -> None:
         """For a `Green Light` card, the one refusal an `In Review` card does
         not have: the sweep's review-cap stamp, read off the whole thread,
         must be on the record's current head. On an older head the holds lane
@@ -2187,47 +2401,139 @@ class _Pass:
         at = (hold.read_stamp(bodies) or {}).get("at") or ""
         if at != head:
             raise _Refused(f"re-run: the review-cap park is on {at[:7]}, and "
-                           f"#{number}'s head is now {head[:7]} — the holds lane "
+                           f"{where}'s head is now {head[:7]} — the holds lane "
                            "lifts it on that new head and returns the card to "
                            f"{RERUN_LANE}; nothing dispatched", "held")
 
-    def rerunning(self, card: dict) -> tuple:
-        """`(reason, count)` for a record the critic sent back, or raises
-        `_Refused` naming why nothing is dispatched."""
+    def _record_source(self, card: dict) -> RecordSource:
+        """The record a re-run reads (DRE-8440): the open record pull request
+        when there is one, as before, and otherwise the record branch at its
+        head, read with `proof_record.record_blob` and `record_text` over
+        `reconcile.gh_read`. Raises `_Refused` as unread when neither can be
+        read — `_BranchUnread` for the branch."""
+        return self._source(card)[0]
+
+    def _source(self, card: dict) -> tuple:
+        """`(RecordSource, pr)`: `pr` is the open record pull request, None
+        on the branch. A merged record is never read on its branch: the gates
+        closed it."""
         ident = card["identifier"]
         try:
             pr = self.find_record(ident)
         except Exception as error:  # noqa: BLE001 — unread is never sent back
             raise _Refused(f"re-run: the record pull request could not be "
                            f"read: {error}")
-        if card_pr.pr_state(pr) != card_pr.OPEN:
-            raise _Refused("re-run: no open record pull request — nothing for "
-                           "the critic to send back")
-        number, branch = pr.get("number"), pr.get("headRefName")
-        if not proof_record_branch(branch):
-            raise _Refused(f"re-run: #{number} is on {branch}, not a "
-                           "proof-record branch")
-        head = pr.get("headRefOid") or ""
-        verdicts = reconcile.critic_comments(pr)
-        standing = reconcile.standing_verdict(verdicts, merge_gate.CRITIC_MARKER,
-                                              head)
-        if standing == SENT_BACK:
-            trigger = self._sent_back(verdicts, number)
-        elif (reconcile.critic_token(pr) == APPROVED
-              and reconcile.verdict_bound(pr)):
-            # The gate's reading of the approval (DRE-6650): written at the
-            # head or carried to it across a merge of main (DRE-2340).
-            trigger = self._declined(pr, number, head)
+        number = (pr or {}).get("number")
+        if card_pr.pr_state(pr) == card_pr.OPEN:
+            branch = pr.get("headRefName")
+            if not proof_record_branch(branch):
+                raise _Refused(f"re-run: #{number} is on {branch}, not a "
+                               "proof-record branch")
+            return RecordSource(PULL_SOURCE, number, branch,
+                                pr.get("headRefOid") or "", None, None), pr
+        if card_pr.pr_state(pr) == card_pr.MERGED:
+            raise _Refused(f"re-run: #{number} is merged — no open record pull "
+                           "request, and nothing for the critic to send back")
+        return self._branch_source(card, number), None
+
+    def _branch_source(self, card: dict, closed) -> RecordSource:
+        """The record on `agent/<card>-proof-record` at its head (DRE-8440),
+        dated by the card's newest `🔬 proof-run` receipt. A read that raised
+        — or a `**Files:**` line naming no one record — is `_BranchUnread`
+        with no `what`; a branch GitHub says is gone, or a head with no
+        record file, is one with GitHub's answer."""
+        ident = card["identifier"]
+        branch = f"agent/{ident}-proof-record"
+        none_open = ("no open record pull request"
+                     + (f" — #{closed} is closed" if closed is not None else ""))
+        _, _, voices = self._thread(card)
+        seen = _BranchReads(self.read)
+        blob, why = proof_record.record_blob(self.repo, ident,
+                                             card.get("description") or "", seen)
+        head = blob.commit if blob is not None else seen.head(
+            f"repos/{self.repo}/git/ref/heads/{branch}")
+        text = None
+        if blob is not None:
+            try:
+                text = proof_record.record_text(self.repo, blob.path, blob.commit, seen)
+            except (RuntimeError, ValueError, TypeError, binascii.Error,
+                    UnicodeDecodeError) as error:
+                why = f"{blob.path} could not be read at {head[:7]}: {error}"
+        if text is None:
+            what = seen.answered(head)
+            if what is None:
+                raise _BranchUnread(f"re-run: {none_open}, and the record on {branch} "
+                                    f"could not be read — {proof_record._one_line(why)}; "
+                                    "nothing dispatched, the next pass reads it again",
+                                    branch)
+            raise _BranchUnread(f"re-run: {none_open}, and no record can be read on "
+                                f"{branch}: {what}; nothing dispatched", branch, what)
+        stamps = [_when(v.created_at) for v in voices
+                  if v.kind == spoken_thread.PIPELINE
+                  and proof_run_state.receipt(v.body or "") is not None]
+        if not stamps or any(t is None or t.tzinfo is None for t in stamps):
+            raise _Refused(f"re-run: {none_open}, and no 🔬 proof-run receipt with a "
+                           f"time dates the record on {branch} — nothing to read the "
+                           "receipts against")
+        return RecordSource(BRANCH_SOURCE, None, branch, head, text, max(stamps))
+
+    def _all_waiting(self, source: RecordSource) -> None:
+        """`BRANCH_NOT_YET` for a branch record whose blocking rows
+        (`proof_record_pr.can_merge`) are not all waiting rows (DRE-8440):
+        the re-arm and the fix card on the branch are DRE-8451's."""
+        blocking = proof_record_pr.can_merge(source.text).blocking
+        if not blocking or not all(proof_record.row_waiting(result)
+                                   for _, result in blocking):
+            raise _Refused(BRANCH_NOT_YET)
+
+    def _branch_trigger(self, source: RecordSource) -> _Trigger:
+        """A branch record's trigger (DRE-8440): no critic verdict and no gate
+        note, so it is read as the gate's, at the run that left the record.
+        Its spent holds are the gate's; their branch wording is DRE-8451's."""
+        return _Trigger(source.at, BRANCH_RERUN_REASON, "the record's waiting rows",
+                        ("the record", "the newest proof-run receipt"),
+                        "the record still waits on its branch",
+                        (GATE_EXHAUSTED_OBSERVED, GATE_EXHAUSTED_NEEDS),
+                        (GATE_UNANSWERED_OBSERVED, GATE_UNANSWERED_NEEDS), gate=True)
+
+    def rerunning(self, card: dict) -> tuple:
+        """`(reason, count)` for a record the critic sent back, the gate
+        declined, or that waits on its branch (DRE-8440), or raises `_Refused`
+        naming why nothing is dispatched."""
+        ident = card["identifier"]
+        try:
+            source, pr = self._source(card)
+        except _BranchUnread as unread:
+            if unread.what is not None:
+                _, _, voices = self._thread(card)
+                self._tell_once(ident, voices, BRANCH_GONE_COMMENT.format(
+                    branch=unread.branch, what=unread.what), BRANCH_GONE_REST)
+            raise
+        number, head = source.number, source.head
+        if source.kind == BRANCH_SOURCE:
+            self._all_waiting(source)
+            trigger = self._branch_trigger(source)
         else:
-            raise _Refused(f"re-run: the critic's newest verdict on #{number} "
-                           f"at {head[:7]} is {standing} — nothing to answer")
+            verdicts = reconcile.critic_comments(pr)
+            standing = reconcile.standing_verdict(verdicts, merge_gate.CRITIC_MARKER,
+                                                  head)
+            if standing == SENT_BACK:
+                trigger = self._sent_back(verdicts, number)
+            elif (reconcile.critic_token(pr) == APPROVED
+                  and reconcile.verdict_bound(pr)):
+                # The gate's reading of the approval (DRE-6650): written at the
+                # head or carried to it across a merge of main (DRE-2340).
+                trigger = self._declined(pr, number, head)
+            else:
+                raise _Refused(f"re-run: the critic's newest verdict on #{number} "
+                               f"at {head[:7]} is {standing} — nothing to answer")
 
         comments, viewer, voices = self._thread(card)
-        self._parked_on(card, comments, number, head)
+        self._parked_on(card, comments, _where(source), head)
         holds = _open_holds(voices)
         lane = (card.get("state") or {}).get("name")
-        text = None
-        if (holds and lane == RERUN_LANE
+        text = source.text
+        if (text is None and holds and lane == RERUN_LANE
                 and any(proof_record.time_only(h) is None for h in holds)):
             # A cause hold is a receipt for the operator, never a hold on this
             # reading: under either trigger, once the record at the head is
@@ -2269,6 +2575,23 @@ class _Pass:
         if got.state in IN_FLIGHT:
             raise _Refused(f"re-run: a run is in flight or unreadable — {why}",
                            "running")
+        return self._rerun(card, source, pr, trigger, text, voices, got, lifted)
+
+    def _rerun(self, card: dict, source: RecordSource, pr: dict | None,
+               trigger: _Trigger, text: str | None, voices: list, got,
+               lifted: datetime | None) -> tuple:
+        """The re-run's decision once its holds are read and no run is in
+        flight — the rows, the receipts, the budgets — for a record pull
+        request and a record branch alike (DRE-8440). A Hand-work card whose
+        first run finished on its branch enters here from `first_run`, its
+        holds read by condition 4 and `lifted` the time a lift there named."""
+        ident = card["identifier"]
+        number, head = source.number, source.head
+        why = "; ".join(got.lines)
+        # The budgets counted since the pull request opened count, on the
+        # branch, since the card's first proof-run receipt (DRE-8440).
+        span = (f"#{number} since it opened" if source.kind == PULL_SOURCE
+                else f"{source.branch} since the first proof-run receipt")
 
         # Either trigger (DRE-6814): a row waiting on an event holds the
         # record, because no re-run before the event can make it merge.
@@ -2290,8 +2613,10 @@ class _Pass:
                     and (r := proof_run_state.receipt(v.body or "")) is not None]
         newer = [r for when, r in receipts if when is None or when > trigger.at]
         # One budget, whichever reader held the record: every `re-run`
-        # receipt since the pull request opened counts (DRE-6488).
-        opened = _when(pr.get("createdAt"))
+        # receipt since the pull request opened counts (DRE-6488) — on the
+        # branch, since the first receipt (DRE-8440).
+        opened = (_when(pr.get("createdAt")) if pr is not None
+                  else min((when for when, _ in receipts if when is not None), default=None))
         since = [(when, r) for when, r in receipts
                  if opened is None or when is None or when > opened]
         spent = sum(1 for _, r in since if r.count.startswith("re-run"))
@@ -2303,7 +2628,7 @@ class _Pass:
         lifted = lifted or _lifted_at(voices)
         if lifted is not None:
             return self._after_lift(ident, voices, read, receipts, since,
-                                    number, head, lifted)
+                                    span, head, lifted)
         # A spent budget looks for a re-arm event before either refusal that
         # ends it (DRE-7740): with one, neither refuses and one run goes. Its
         # fixes are the record's `fix:` cells and the cards filed against the
@@ -2338,9 +2663,9 @@ class _Pass:
                 # The build fails its rows (DRE-7953): a fix card, and a hold
                 # that waits for it to ship, never for an operator's reading.
                 # Relations not read file nothing and hold nothing (DRE-8251).
-                self._defect_held(ident, pr, read, voices, receipts, observed, head,
-                                  f"re-run: budget — {spent} re-runs on #{number} "
-                                  f"since it opened and {trigger.again}", unarmed)
+                self._defect_held(ident, pr or {}, read, voices, receipts, observed, head,
+                                  f"re-run: budget — {spent} re-runs on {span} "
+                                  f"and {trigger.again}", unarmed)
             if read is not None and not named and not unread:
                 # Neither source names a fix (DRE-7787, DRE-8156): the head it
                 # was read at lets a later pass's lane read spare the read,
@@ -2348,9 +2673,8 @@ class _Pass:
                 # Relations not read never say "names none".
                 needs += SPENT_AT.format(sha7=head[:7])
             self._hold_once(ident, voices, observed, needs, open_only=True)
-            raise _Refused(f"re-run: budget — {spent} re-runs on #{number} since "
-                           f"it opened and {trigger.again}; {NEVER_ANOTHER}"
-                           f"{unarmed}", "held")
+            raise _Refused(f"re-run: budget — {spent} re-runs on {span} and "
+                           f"{trigger.again}; {NEVER_ANOTHER}{unarmed}", "held")
         return (trigger.reason.format(sha7=head[:7]),
                 RERUN_COUNT.format(n=spent + 1))
 
@@ -2376,7 +2700,7 @@ class _Pass:
         return times
 
     def _after_lift(self, ident: str, voices: list, read, receipts: list,
-                    since: list, number, head: str, lifted: datetime) -> tuple:
+                    since: list, span: str, head: str, lifted: datetime) -> tuple:
         """The run a time lift starts. Waiting rows the record at the head did
         not all stamp get a re-check (DRE-7951), once per head and spending
         neither budget, `RECHECK_BUDGET` per record pull request and then one
@@ -2390,7 +2714,7 @@ class _Pass:
                 self._hold_once(ident, voices, RECHECK_EXHAUSTED_OBSERVED,
                                 RECHECK_EXHAUSTED_NEEDS)
                 raise _Refused(f"re-run: re-check budget — {rechecks} re-checks on "
-                               f"#{number} since it opened and the record still "
+                               f"{span} and the record still "
                                "waits; held for an operator, no further re-check",
                                "held")
             reason = RECHECK_REASON.format(sha7=head[:7])
@@ -2404,7 +2728,7 @@ class _Pass:
             self._hold_once(ident, voices, TIMED_EXHAUSTED_OBSERVED,
                             TIMED_EXHAUSTED_NEEDS)
             raise _Refused(f"re-run: timed budget — {timed} timed re-runs on "
-                           f"#{number} since it opened and the record still "
+                           f"{span} and the record still "
                            "waits; held for an operator, no further timed re-run", "held")
         template = LAST_TIMED_REASON if timed + 1 >= TIMED_BUDGET else TIMED_REASON
         return (template.format(at=_pt(lifted), sha7=head[:7]),
@@ -2826,7 +3150,11 @@ class _Pass:
         event, or the operator's press — read as stamped
         `WAITING_RECHECK_HOURS` after this pass (DRE-7951). The hold waits for
         the latest. A criterion naming the CEO's press keeps the prose hold,
-        which only his answer discharges."""
+        which only his answer discharges. It is exactly the hold
+        `proof_record_pr.hold_line` composes for the same rows, the one the
+        proof run's `decide` posts for a record whose rows all wait
+        (`tests/test_proof_record_pr.py` holds the two equal), so `_waiting`
+        never posts a second one over the record on its branch (DRE-8440)."""
         observed = _waiting_observed(waiting)
         recheck = (self.now + timedelta(hours=WAITING_RECHECK_HOURS)).replace(
             second=0, microsecond=0)
@@ -2956,19 +3284,25 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
 
     # So is a re-run whose budget is spent with nothing new (DRE-7787), once
     # one read of the open heads shows its record still at the marked head.
+    # A record with no pull request open is compared at its branch's head
+    # (DRE-8440), read once this pass for each branch it needs.
     shown = {c["identifier"]: got for c in reruns if (got := one.spent_on_the_lane(c))}
-    heads: dict = {}
+    heads: dict | None = {}
     if shown:
         try:
             heads = (open_heads or (lambda: open_record_heads(repo)))()
         except Exception as error:  # noqa: BLE001 — unread spares no read
+            heads = None
             print(f"{PREFIX} the open record pull requests' heads could not be "
                   f"read — every spent re-run is read as a candidate: {error}")
     spent = []
     for card in reruns:
         ident = card["identifier"]
         sha7, line = shown.get(ident) or ("", "")
-        if sha7 and (heads.get(f"agent/{ident}-proof-record") or "").startswith(sha7):
+        branch = f"agent/{ident}-proof-record"
+        head = "" if not sha7 or heads is None else (
+            heads[branch] if branch in heads else one.branch_head(branch))
+        if sha7 and (head or "").startswith(sha7):
             spent.append(ident)
             _say(ident, f"{SPENT_NAMED} — held by {line}; nothing follows it "
                         f"and the record is still at {sha7} — read again once a "
