@@ -34,7 +34,7 @@ the model step after it, so none of them can be handed to `emit`; the portal
 mint is pinned to its one checkout. So the plan job re-mints the READER's pool
 map once more, directly before `emit` (`app_calls`) — the reader's installation
 again. The plan job's `before` carries the reader's own gate (a bounced,
-refused or unadmitted dispatch does no work and records nothing; and
+refused or unstarted dispatch does no work and records nothing; and
 tests/test_plan_dispatch_dedupe.py lets no step after the guard run
 ungated), and the reading's mint and `emit` run only where `before` did.
 The slot-1 bot is handed no second token: no step after the last model step
