@@ -1159,8 +1159,8 @@ jobs:
               read-only mint was refused: every GitHub row is `Not observed.`
               with that reason — never observe with GH_TOKEN instead.
             - GH_TOKEN — the worker token, already in your env. Use it only to
-              push the record branch and open the pull request; never to
-              observe.
+              push the record branch; never to observe, and never for a pull
+              request.
             - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
               and for reading cards (never writing them) up to
               PROOF_LINEAR_REQUESTS requests in all, counted as
@@ -1218,12 +1218,15 @@ jobs:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
                Check it against that shape (`⏳ 4/5 local checks`).
-            3. Push the branch with GH_TOKEN and open the pull request with
-               `gh pr create`, titled `PROOF record: <card title>`, its body as
-               the brief says — only if none is open for the branch. Post
-               `⏳ 5/5 PR opened`, and again on every amended push. The workflow
-               rebuilds the body from the record after every push; never edit it
-               yourself.
+            3. Push the branch with GH_TOKEN, and never run `gh pr create`,
+               `gh pr reopen` or `gh pr close` — you never open, reopen or close
+               a pull request. The workflow's
+               `Open the record pull request only when it can merge` step decides
+               after you finish: it opens the pull request when the record can
+               merge, and otherwise leaves the record on its branch and posts the
+               card's hold. Post `⏳ 5/5 record pushed`, and again on every
+               amended push. The workflow writes the pull request's body from the
+               record; never write or edit it yourself.
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
@@ -1246,7 +1249,7 @@ jobs:
                `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
                with no escalation file, and the record closes with a fix card.
                briefs/proof.md says which press is whose. For the CEO's press,
-               AFTER the pull request is open, write one plain sentence naming
+               AFTER the record is pushed, write one plain sentence naming
                the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
@@ -1424,8 +1427,8 @@ jobs:
               read-only mint was refused: every GitHub row is `Not observed.`
               with that reason — never observe with GH_TOKEN instead.
             - GH_TOKEN — the worker token, already in your env. Use it only to
-              push the record branch and open the pull request; never to
-              observe.
+              push the record branch; never to observe, and never for a pull
+              request.
             - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
               and for reading cards (never writing them) up to
               PROOF_LINEAR_REQUESTS requests in all, counted as
@@ -1483,12 +1486,15 @@ jobs:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
                Check it against that shape (`⏳ 4/5 local checks`).
-            3. Push the branch with GH_TOKEN and open the pull request with
-               `gh pr create`, titled `PROOF record: <card title>`, its body as
-               the brief says — only if none is open for the branch. Post
-               `⏳ 5/5 PR opened`, and again on every amended push. The workflow
-               rebuilds the body from the record after every push; never edit it
-               yourself.
+            3. Push the branch with GH_TOKEN, and never run `gh pr create`,
+               `gh pr reopen` or `gh pr close` — you never open, reopen or close
+               a pull request. The workflow's
+               `Open the record pull request only when it can merge` step decides
+               after you finish: it opens the pull request when the record can
+               merge, and otherwise leaves the record on its branch and posts the
+               card's hold. Post `⏳ 5/5 record pushed`, and again on every
+               amended push. The workflow writes the pull request's body from the
+               record; never write or edit it yourself.
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
@@ -1511,7 +1517,7 @@ jobs:
                `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
                with no escalation file, and the record closes with a fix card.
                briefs/proof.md says which press is whose. For the CEO's press,
-               AFTER the pull request is open, write one plain sentence naming
+               AFTER the record is pushed, write one plain sentence naming
                the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
@@ -1687,8 +1693,8 @@ jobs:
               read-only mint was refused: every GitHub row is `Not observed.`
               with that reason — never observe with GH_TOKEN instead.
             - GH_TOKEN — the worker token, already in your env. Use it only to
-              push the record branch and open the pull request; never to
-              observe.
+              push the record branch; never to observe, and never for a pull
+              request.
             - LINEAR_API_KEY — for your heartbeats, receipts and escalation,
               and for reading cards (never writing them) up to
               PROOF_LINEAR_REQUESTS requests in all, counted as
@@ -1746,12 +1752,15 @@ jobs:
                one row per criterion, each opening `Met.`, `Not met.` or
                `Not observed.` with the evidence (`⏳ 3/5 record written`).
                Check it against that shape (`⏳ 4/5 local checks`).
-            3. Push the branch with GH_TOKEN and open the pull request with
-               `gh pr create`, titled `PROOF record: <card title>`, its body as
-               the brief says — only if none is open for the branch. Post
-               `⏳ 5/5 PR opened`, and again on every amended push. The workflow
-               rebuilds the body from the record after every push; never edit it
-               yourself.
+            3. Push the branch with GH_TOKEN, and never run `gh pr create`,
+               `gh pr reopen` or `gh pr close` — you never open, reopen or close
+               a pull request. The workflow's
+               `Open the record pull request only when it can merge` step decides
+               after you finish: it opens the pull request when the record can
+               merge, and otherwise leaves the record on its branch and posts the
+               card's hold. Post `⏳ 5/5 record pushed`, and again on every
+               amended push. The workflow writes the pull request's body from the
+               record; never write or edit it yourself.
             4. A criterion only the CEO's own press can satisfy: never sign in
                as him and never wait for it. That is a press that is a business
                decision of his, and only its row reads
@@ -1774,7 +1783,7 @@ jobs:
                `Not observed. cause: operator-step-unblocked — <what you saw instead>`,
                with no escalation file, and the record closes with a fix card.
                briefs/proof.md says which press is whose. For the CEO's press,
-               AFTER the pull request is open, write one plain sentence naming
+               AFTER the record is pushed, write one plain sentence naming
                the press and the one decision asked, with your recommendation, to
                /tmp/agent-escalation.txt. Never ask twice for a press already
                asked and not yet answered.
@@ -2102,15 +2111,19 @@ jobs:
       # credential — not only `gh`'s — at the fresh token (unsetting the stale
       # extraheader first: http.extraheader is multi-valued and `git config`
       # REFUSES to overwrite a key holding more than one value, which is what
-      # actions/checkout leaves behind on a repo with submodules), pushes the
-      # card's branch if GitHub does not have it, and opens the PR if the card
-      # has none. A STRICT no-op when the agent pushed its own work, and it
-      # never fails the job: a red step here summons the medic to re-run a run
-      # that already did the work. On a record branch the pull request it
-      # opens is the record's, and the result step below reports it as exit 1.
+      # actions/checkout leaves behind on a repo with submodules) and pushes
+      # the card's branch if GitHub does not have it. A STRICT no-op when the
+      # agent pushed its own work, and it never fails the job: a red step here
+      # summons the medic to re-run a run that already did the work.
       #
-      # BEFORE the two steps below on purpose: both resolve this card's branch
-      # from `git branch -r`, and both must see the branch this step delivers.
+      # `--push-only` (DRE-8441): it opens no pull request. The record's pull
+      # request opens only when the record can merge, and the step after this
+      # one decides that — a rescue that opened one for every record branch
+      # without one would open every record, and the decision would close it.
+      #
+      # BEFORE the steps below on purpose: they resolve this card's branch
+      # from `git branch -r` or read it at its head on the remote, and all of
+      # them must see the branch this step delivers.
       #
       # Never in a shadow (DRE-7286): its one branch is `Push the shadow
       # record`'s, and it opens no pull request.
@@ -2148,6 +2161,7 @@ jobs:
             --card "$CARD" --repo "$REPO" --base "$BASE" \
             --card-url "$CARD_URL" --card-title "$CARD_TITLE" \
             --patch "${RUNNER_TEMP:-/tmp}/rescue-$CARD.patch" \
+            --push-only \
             >> "$GITHUB_OUTPUT"
 
       # THE RUNNER IS NEVER THE LAST COPY (DRE-3098). `patch` is set only when
@@ -2164,6 +2178,56 @@ jobs:
           path: ${{ steps.rescue.outputs.patch }}
           if-no-files-found: warn
           retention-days: 30
+
+      # THE RECORD'S PULL REQUEST OPENS ONLY WHEN THE RECORD CAN MERGE
+      # (DRE-8437, DRE-8441). On 2026-10-29, 12 of the fleet's 19 open pull
+      # requests were proof records waiting on a date, a fix, an operator's
+      # step or a re-run, and the CEO decided a record's pull request opens
+      # only when its record can merge. The agent pushes the record branch
+      # and never opens, reopens or closes a pull request (its prompt's step
+      # 3); this step reads the record at the branch's head and decides:
+      # `opened`, `reopened` or `kept-open` when it can merge, and otherwise
+      # `closed-and-held` or `held` — the open one closed, never the branch,
+      # and the card's one `🔬 proof-waiting` hold posted — or `no-record`.
+      # The word goes to the result step as RECORD_PR_DECISION (DRE-8461),
+      # which reports a held record without moving the card.
+      #
+      # `--no-hold` when the run escalated: the CEO-press park in
+      # report_proof_result.sh posts the card's one hold. Read as the result
+      # step reads the file — present and non-empty — so an empty file, which
+      # parks nothing, still gets its hold here.
+      #
+      # After the push rescue, so a branch it delivered is read, and before
+      # the body refresh, so a pull request opened here gets its body on this
+      # run. The worker's App token, freshly minted when it can be (DRE-3043):
+      # an App token, so the `pull_request` event fires and qa-review.yml
+      # reviews the opened record and moves its card. No `continue-on-error`:
+      # a refused read or write turns the run red, as the refresh's does.
+      #
+      # Never in a shadow (DRE-7286): it writes a pull request and a hold.
+      - name: Open the record pull request only when it can merge
+        id: record_pr
+        if: always() && !inputs.shadow
+        env:
+          GH_TOKEN: ${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+          CARD: ${{ github.event.client_payload.identifier }}
+          CARD_URL: ${{ github.event.client_payload.url }}
+          CARD_TITLE: ${{ steps.card.outputs.title }}
+          # The sanitized description: with no pull request open, `decide`
+          # finds the record through the card's `**Files:**` line.
+          CARD_DESCRIPTION: ${{ steps.card.outputs.description }}
+          ESCALATION_FILE: /tmp/agent-escalation.txt
+        run: |
+          HOLD=()
+          if [ -s "$ESCALATION_FILE" ]; then
+            HOLD=(--no-hold)
+          fi
+          python3 .bureau-pipeline/scripts/proof_record_pr.py decide \
+            --repo "$REPO" --card "$CARD" --card-url "$CARD_URL" \
+            --title "$CARD_TITLE" "${HOLD[@]}"
 
       # THE BODY IS THE RECORD'S (DRE-7813). A resumed run amends the record
       # and pushes, and opens no second pull request, so the body the first
@@ -2240,9 +2304,9 @@ jobs:
       # baseline and reports as exit 1.
       #
       # The escalation is read AFTER the pull request, on purpose: a run that
-      # meets a CEO-only press opens its record first (briefs/proof.md), so
-      # exit 3 must not shadow the receipt of the pull request it opened — the
-      # step acts on both, the pull request receipt first. A pull request
+      # meets a CEO-only press pushes its record first (briefs/proof.md), so
+      # exit 3 must not shadow the receipt of a pull request the record step
+      # opened — the step acts on both, the pull request receipt first. A pull request
       # lookup GitHub cannot answer is never reported as an opened record.
       #
       # No `${{ }}` in the script: every value arrives through env, and
@@ -2268,6 +2332,8 @@ jobs:
           RECORD_BRANCH: agent/${{ github.event.client_payload.identifier }}-proof-record
           ESCALATION_FILE: /tmp/agent-escalation.txt
           CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          # `proof_record_pr.decide`'s word (DRE-8441), read for exit 5.
+          RECORD_PR_DECISION: ${{ steps.record_pr.outputs.decision }}
           # The record as the run found it (DRE-8259), empty on a first run.
           RECORD_BASELINE_PATH: ${{ steps.record_baseline.outputs.path }}
           RECORD_BASELINE_SHA: ${{ steps.record_baseline.outputs.sha }}
