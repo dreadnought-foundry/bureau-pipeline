@@ -154,8 +154,11 @@ class TestTheContract:
 
 
 class TestTheRegistryGuards:
-    """`pipeline_act.py check` and `check_act_receipts.py` pass with the row,
-    and fail with it removed."""
+    """`pipeline_act.py check` and `check_act_receipts.py` pass with the row.
+    With it removed the receipt site is an act nothing declares, and
+    `check_act_receipts.py` fails naming it. `pipeline_act.py check` alone
+    binds tags only in the files the registry already names as emitters, so a
+    removed row takes this module out of its scan."""
 
     @staticmethod
     def _without_row() -> dict:
@@ -165,10 +168,6 @@ class TestTheRegistryGuards:
 
     def test_pipeline_act_check_passes_with_the_row(self):
         assert pipeline_act.problems() == []
-
-    def test_pipeline_act_check_fails_without_it(self):
-        found = pipeline_act.problems(self._without_row())
-        assert any("alarm-repair" in p for p in found), found
 
     def test_check_act_receipts_passes_with_the_row(self):
         assert check_act_receipts.problems() == []

@@ -1134,6 +1134,24 @@
       }
     },
     {
+      "name": "alarm-repair",
+      "tag": "alarm-repair-receipt",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "An open console alert that names a card, at WARN or CRITICAL and open for at least ALARM_REPAIR_AFTER_HOURS (2), got its one automatic repair attempt, once per raise of the alert — keyed on its kind and its raised_at. `started` is the claim, posted before the repair agent runs; `repaired` (a relation the card's own prose declares was added, or a hold lift its own rule says is due was performed — always move=pipeline), `diagnosed` (nothing written but the receipt, with the agent's move=operator or move=ceo) and `unfinished` (a refused or malformed decision, or a failed write, named with every write already made — always move=operator) are finished outcomes, each posted last.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": 1500,
+      "cadence_why": "Taken from the triage-repair row's pattern, which is the bound of the run its outcome hands the card to: a repaired card stays in its lane with a relation added or its hold lifted, and the next to act on it is the full sweep, scripts/reconcile.py, which runs every 15 minutes inside .github/workflows/reconcile.yml's timeout-minutes: 10, so 1500 seconds after the receipt the sweep has read the card at its own gates, whatever it did.",
+      "why": "DRE-8633 (epic DRE-8606). Alarms fired and nothing acted on them. `scripts/alarm_repair.py select` reads `bureau_read.open_alerts()` and answers repair, spent (a contract receipt for the alert's kind and raised_at stands) or skip (no card, too young, card closed, card unreadable) per alert, oldest first, with classes — prose-blocker, queued-terminal-blockers, standing-defect, other — as the agent's hint; `claim` posts `🔩 alarm-repair: started · alert=<kind> · raised=<raised_at>`; `apply` reads the agent's decision.json and applies add-relation (each id in the card's live prose_blockers.undeclared_claims, through linear_ops._add_blocked_by — the description, title, labels and lane are never written, DRE-2676), lift-hold (hold.lift_due answers a lift kind, or blockers-terminal for an operator-step stamp whose blockers are all terminal) or none, then posts the receipt last. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🔩 alarm-repair:` and names an alert's kind and raised_at is that raise's one attempt, so `select` answers spent and `claim` exits 3. The tag is `alarm-repair-receipt`, never the bare act name, so a `tag in body` count of this act never reads the lift line `by=scripts/alarm_repair.py` as one of its receipts. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/alarm_repair.py",
+        "anchor": "pipeline_act.receipt(\"alarm-repair\""
+      }
+    },
+    {
       "name": "proof-run-dispatched",
       "tag": "proof-run",
       "adopted": true,
