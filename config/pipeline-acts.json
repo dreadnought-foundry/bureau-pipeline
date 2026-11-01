@@ -3018,6 +3018,13 @@
       "why": "It is already machine-readable, in its own single-definition grammar — `🎟️ planner-slot:`, owned by scripts/planner_queue.py and read back by that module alone — the same reason the model-attempt heartbeat gives. Two grammars on one line would give its readers two keys to disagree over. A new act ships console-first in agent-bureau, and this epic does not reach into that repo."
     },
     {
+      "file": "scripts/planner_allowance.py",
+      "anchor": "linear_ops.cmd_comment(card, body)",
+      "kind": "not-an-act",
+      "means": "A planner run's planner-hold receipt (DRE-8616): `held` while the planners' Linear allowance is below the threshold and the run waits to read it again, `started` when it starts after that wait — the record the sweep and the console read a held planner by.",
+      "why": "It is already machine-readable, in its own single-definition grammar — `🪫 planner-hold:`, owned by scripts/planner_allowance.py and read back through its one reader, `planner_allowance.held` — the same reason the planner-slot ledger it replaces gives. It hands the work to nobody: the run that posts it is the run that starts the planner. Two grammars on one line would give its readers two keys to disagree over, and a new act ships console-first in agent-bureau, which this card does not reach into."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "linear_ops.cmd_comment(ident, urgent_fast_path_note(ident, raised, attempts[ident]))",
       "kind": "undeclared-act",
