@@ -290,6 +290,8 @@ import os, sys
 cmd = sys.argv[1]
 if cmd == "children-json":
     sys.stdout.write(open(os.environ["FAKE_CHILDREN"], encoding="utf-8").read())
+elif cmd == "description":
+    sys.stdout.write(open(os.environ["FAKE_DESCRIPTION"], encoding="utf-8").read())
 elif cmd == "comment":
     with open(os.environ["FAKE_COMMENTS"], "a", encoding="utf-8") as fh:
         fh.write(sys.argv[3] + "\\n")
@@ -460,18 +462,30 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
                             "body": "Edit them.\n**Files:** "
                                     + ", ".join(f"`{f}`" for f in files) + "\n"}],
                           fh)
+            # What the real run always has beside the children: the plan
+            # artifact and the epic's description, which the inventory check
+            # (DRE-8612) reads. Without them its note says they could not be
+            # read, which is not what this test is about.
+            description = os.path.join(tmp, "description.md")
+            with open(description, "w", encoding="utf-8") as fh:
+                fh.write("Split the ledger files.\n")
+            with open(os.path.join(runner_temp, "plan-artifact.md"), "w",
+                      encoding="utf-8") as fh:
+                fh.write("# Plan\n\nOne card edits the ledger files.\n")
             script = (review_mechanical_step()["run"]
                       .replace("${{ github.event.client_payload.identifier }}", epic)
                       .replace("${{ runner.temp }}", runner_temp))
             self.assertNotIn("${{", script)
             proc = run_step(script, tmp, {**without_ledger_env(), key: value,
                                           "FAKE_CHILDREN": children,
+                                          "FAKE_DESCRIPTION": description,
                                           "FAKE_COMMENTS": comments})
             self.assertEqual(proc.returncode, 0, proc.stderr)
             note = open(comments, encoding="utf-8").read()
         self.assertIn("DRE-9501: shares 2 file(s) with DRE-9402", proc.stdout)
         self.assertIn("DRE-9402", note)
         self.assertIn("1 death row(s)", note)
+        self.assertIn("Inventory: none — the plan names no approved mockup", note)
         self.assertNotIn("could not be read", note)
 
     def test_without_the_path_the_context_step_says_could_not_be_read(self):
