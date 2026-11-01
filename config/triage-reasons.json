@@ -24,7 +24,7 @@
       "unit": "reconcile.py#escalate_out_of_planning",
       "reason_at": "reconcile.py#escalate_out_of_planning",
       "anchor": "stall_park_note(ident, reason)",
-      "note": "A park note says why Planning produced nothing — a stall, the planner line's bound or a hold nobody was asked about — and the way back."
+      "note": "A park note says why Planning produced nothing — a stall or a hold nobody was asked about — and the way back."
     },
     {
       "unit": "reconcile.py#_route_to_defect_lane",

@@ -1824,7 +1824,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "stall_park_note(ident, reason)",
       "kind": "undeclared-act",
-      "means": "The Planning stall exit parks a card nothing has happened to — or one the planner line never served, or one the old rule froze — in Triage, the note landing first and saying what was seen and the way back (DRE-5286).",
+      "means": "The Planning stall exit parks a card nothing has happened to — or one the old rule froze — in Triage, the note landing first and saying what was seen and the way back (DRE-5286).",
       "why": "Act-shaped, and the registry has no row for it. The note was `planning_escalation`'s question until DRE-5286 moved this exit to Triage, and that module's notes were already declared here rather than in the registry; giving the park a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber and a cadence — and the console is the registry's consumer, so it is its own card. It carries its own idempotency key, `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry; a trailer appended after the tag would leave that reading intact, but converting it moves a key two modules read."
     },
     {
