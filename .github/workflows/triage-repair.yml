@@ -11,7 +11,9 @@
 # planner between `claim` and `apply`. Every decision is in the core and its
 # tests; the wiring is held by tests/test_triage_repair_workflow.py. It runs
 # HERE, over the whole fleet, the way hygiene.yml does, so no product repo
-# carries a stub.
+# carries a stub. Its last job, `unrepaired` (DRE-8649), runs
+# scripts/triage_unrepaired.py on every run: one console alert listing every
+# Triage card the repair could not fix, resolved when none is left.
 #
 # IT DOES NOT RUN LIVE ON MERGE. A scheduled run is a dry run until the
 # repository variable TRIAGE_REPAIR_LIVE is exactly `true`, and a hand dispatch
@@ -48,7 +50,9 @@
 #      LINEAR_API_KEY, given to the `select`, `claim`, `apply` and planner
 #      context steps only and never to the agent step; and BUREAU_APP_ID /
 #      BUREAU_APP_PRIVATE_KEY, for the mints. The Claude call goes through
-#      claude-code-action, never a raw Messages API call (DRE-3074).
+#      claude-code-action, never a raw Messages API call (DRE-3074). The
+#      `unrepaired` job holds the same Linear key, the BUREAU_READ_URL
+#      variable and `id-token: write`, for the console's notice door.
 #   Q3 re-run — a re-run finds the claim and stops: `claim` exits 3 and posts
 #      nothing when any `🩹 triage-repair:` receipt stands on the card, and
 #      the leg ends green with no model run. `apply` acts only while the
@@ -57,7 +61,9 @@
 #   Q4 command limits — while TRIAGE_REPAIR_LIVE is off the run selects and
 #      prints: one Triage board read and one whole-thread read per card in
 #      Triage, at most 3 cards worked a run (`select`'s limit, oldest arrival
-#      first — 12 an hour against a few arrivals a day), one at a time.
+#      first — 12 an hour against a few arrivals a day), one at a time. The
+#      `unrepaired` job adds one Triage board read, one whole-thread read per
+#      card in Triage and one door call a run, dry or live.
 #   Q5 our crash — a crash after the claim leaves the card in Triage with a
 #      `started` receipt; `apply` runs under `!cancelled()`, so a dead planner
 #      still reaches the `unfinished` receipt. A job killed outright leaves
@@ -527,3 +533,42 @@ jobs:
         run: |
           if [ -e "$TRUSTED_PIPELINE" ]; then chmod -R u+w "$TRUSTED_PIPELINE"; fi
           rm -rf "$TRUSTED_PIPELINE"
+
+  # ONE console alert lists every card in Triage the repair could not fix
+  # (DRE-8649): its newest receipt `unfinished` or `unrepairable`, or its only
+  # receipt a `started` past hygiene's TRIAGE_REPAIR_RUNNING_HOURS. Every run,
+  # dry or live, after the repair legs and whatever they did — under
+  # `!cancelled()`. scripts/triage_unrepaired.py raises the one key on a list
+  # (`repeat` while it is open), resolves it on a complete read that lists no
+  # card, and calls the door not at all on a short read that lists none. It
+  # keeps no state: the alert's state at the door is the state. It files no
+  # fallback card — one filed here would land in Triage as an arrival.
+  unrepaired:
+    name: List the cards the repair could not fix
+    needs: [select, repair]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    # The workflow's read, and `id-token: write`: the OIDC token the console's
+    # notice door reads, as nightly-watch.yml's watch job has it. A job-level
+    # block replaces the workflow's, so the read is restated.
+    permissions:
+      contents: read
+      id-token: write
+    # The select job's Linear bucket, for the same reads.
+    env:
+      LINEAR_IDENTITY: fleet
+      LINEAR_KEY_HOME: planner-oauth
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Reads only on Linear — the Triage lane once, each card's whole
+      # thread — with the key the receipts were posted under, so the
+      # pipeline's own receipts read as its own.
+      - name: Raise or resolve the unrepaired-cards alert
+        env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+        run: python3 scripts/triage_unrepaired.py
