@@ -54,6 +54,13 @@ does not land is named too. Each turns the step red, at the end of the pass,
 after every other card has been handled. A list of cards that cannot be read
 writes nothing at all.
 
+One read failure is not red (DRE-8696): a card whose read GitHub refused for
+its rate limit — `gh_read_retry.is_rate_limit_refusal` on the error's whole
+text — is named as skipped on its own line and read on the next pass, the way
+the main sweep records a throttled read as degraded. No retry: an empty hourly
+bucket does not refill in the minute a retry waits, and the next pass is the
+retry.
+
 CLI (the step's own call; reads `REPO` and `PROOF_DISPATCH_LIVE`):
 
     python3 scripts/proof_overdue_sweep.py --repo <slug>
@@ -69,6 +76,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gh_read_retry  # noqa: E402 — the one classifier of a rate-limit refusal
 import linear_ops  # noqa: E402 — the comment, and who wrote each one
 import pipeline_notice  # noqa: E402 — the console alert
 import proof_overdue  # noqa: E402 — the one reader of what an overdue proof waits on
@@ -271,6 +279,11 @@ def sweep(slug: str, *, now: datetime | None = None, live: bool | None = None,
         try:
             got = proof_overdue.reading(card, now=now, gh=gh, linear=lanes)
         except Exception as error:  # noqa: BLE001 — named on its own line
+            # The whole text, not `_why`'s first 300 characters (DRE-8696).
+            if gh_read_retry.is_rate_limit_refusal(str(error)):
+                print(f"{TAG} {card} · skipped — GitHub refused the read for its rate "
+                      "limit; it is read on the next pass")
+                continue
             print(f"{TAG} {card} · could not be read — {_why(error)}")
             failures.append(f"{card} could not be read")
             continue
