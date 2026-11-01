@@ -617,7 +617,9 @@ def _release(issue: dict, identifier: str, slug: str, full: str, gh) -> dict | N
 def gather(card: str, *, now: datetime, gh=None, linear=None) -> dict:
     """The card as it stands, saved in the shape `from_saved` judges: its
     issue, thread and viewer, its record, the states of the cards its holds
-    and rows name, and its release reading when it never ran. Read-only."""
+    and rows name, and its release reading when it never ran and is overdue
+    at `now` — the reading walks every release tag, and a card under the age
+    has no class to read. Read-only."""
     gh = gh or proof_record._gh
     linear = linear or LinearReads()
     issue = linear.card(card)
@@ -631,8 +633,10 @@ def gather(card: str, *, now: datetime, gh=None, linear=None) -> dict:
     named += [i for _, result in _unmet(_rows(saved)) for i in _IDS.findall(result)]
     named = [i for i in dict.fromkeys(i.upper() for i in named) if i != card]
     saved["states"] = dict(linear.states(named)) if named else {}
-    record = saved["record"]
-    if facts(saved)["first_run"] is None and not record["pr"] and not record["text"]:
+    record, known = saved["record"], facts(saved)
+    clock = _clock(known)
+    overdue = clock is not None and (now - clock).total_seconds() / 86400 > AGE_DAYS
+    if overdue and known["first_run"] is None and not record["pr"] and not record["text"]:
         saved["release"] = _release(issue, card, slug, full, gh)
     return saved
 
