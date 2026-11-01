@@ -301,9 +301,15 @@ jobs:
     # `bot/standards-sync`, the nightly standards regeneration (DRE-2777),
     # `bot/onboard`, the onboarding process's routing pull requests (DRE-7209),
     # and `bot/test-durations`, the nightly's re-measured unit test durations
-    # record (DRE-7577).
-    # scripts/evaluate_and_merge.sh's branch case and
-    # reconcile.PIPELINE_BRANCH_PREFIXES hold the same set.
+    # record (DRE-7577). One family joins them (DRE-8658): `bot/onboard-<slug>`,
+    # one routing branch per onboarding declaration, so one stuck onboarding
+    # stops blocking the others. It is the literal plus a slug-shaped suffix,
+    # never `bot/*`: `startsWith` here only wakes the job, and the step
+    # re-checks the whole name against `^bot/onboard-[a-z0-9][a-z0-9-]*$`.
+    # The literal `bot/onboard` stays while pull requests are open on it.
+    # scripts/evaluate_and_merge.sh's branch case holds the same set, and
+    # reconcile.PIPELINE_BRANCH_PREFIXES too, owning the family through its
+    # `bot/onboard` entry's prefix match.
     if: >
       !cancelled() &&
       ((github.event_name == 'workflow_dispatch' &&
@@ -325,6 +331,7 @@ jobs:
          startsWith(github.event.workflow_run.head_branch, 'dependabot/') ||
          github.event.workflow_run.head_branch == 'bot/standards-sync' ||
          github.event.workflow_run.head_branch == 'bot/onboard' ||
+         startsWith(github.event.workflow_run.head_branch, 'bot/onboard-') ||
          github.event.workflow_run.head_branch == 'bot/test-durations') &&
         ((needs.resolve.result == 'skipped' &&
           github.event.workflow_run.pull_requests[0].number) ||

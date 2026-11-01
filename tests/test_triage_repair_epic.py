@@ -166,18 +166,20 @@ class TestSelect:
         assert board.events == []
         assert ("comment_records", CARD, True) in board.reads
 
-    def test_a_pipeline_bound_rewrite_receipt_answers_spent(self, tmp_path, capsys):
+    def test_a_pipeline_bound_rewrite_receipt_answers_none(self, tmp_path, capsys):
+        """DRE-8647: the second park is no longer silent — it is claimed and
+        receipted `unrepairable`, naming the spent rewrite."""
         board = TriageRepairBoard()
         receipt = pipeline_act.receipt(
             "plan-bound-rewrite", plan_bound.receipt_body(["An earlier finding."]))
         _epic(board, extra=[receipt])
         _, rows = _select(board, tmp_path)
-        assert rows == []
+        assert [r["action"] for r in rows] == ["none"]
         out = capsys.readouterr().out
-        assert f"triage-repair: {CARD} → spent — " in out
+        assert f"triage-repair: {CARD} → none — " in out
         assert "bound rewrite" in out
 
-    def test_a_bound_rewrite_receipt_sixty_comments_back_answers_spent(
+    def test_a_bound_rewrite_receipt_sixty_comments_back_answers_none(
             self, tmp_path, capsys):
         board = TriageRepairBoard()
         receipt = pipeline_act.receipt(
@@ -196,8 +198,8 @@ class TestSelect:
         assert bodies[-60].startswith(plan_bound.RECEIPT_KEY)
         assert len(bodies) - bodies.index(receipt) == 60
         _, rows = _select(board, tmp_path)
-        assert rows == []
-        assert f"triage-repair: {CARD} → spent — " in capsys.readouterr().out
+        assert [r["action"] for r in rows] == ["none"]
+        assert f"triage-repair: {CARD} → none — " in capsys.readouterr().out
         assert ("comment_records", CARD, False) not in board.reads
 
     def test_a_bound_rewrite_receipt_from_a_person_grants_nothing(self, tmp_path):
@@ -215,14 +217,15 @@ class TestSelect:
         assert f"triage-repair: {CARD} → spent — " in capsys.readouterr().out
 
     def test_without_children_the_same_thread_is_not_replanned(self, tmp_path, capsys):
-        """No children: the one-off reading is DRE-7178's and is unchanged —
-        its park note carries no list, so it is skipped."""
+        """No children: the one-off reading is DRE-7178's — its park note
+        carries no list, so the note itself is the finding (DRE-8647)."""
         board = TriageRepairBoard()
         board.add("DRE-1", comments=[c["body"] for c in _thread()
                                      if c["authored_by_pipeline"]])
         _, rows = _select(board, tmp_path)
-        assert rows == []
-        assert "triage-repair: DRE-1 → skip — " in capsys.readouterr().out
+        assert [r["action"] for r in rows] == ["repair"]
+        assert rows[0]["findings"] == [_flat(_thread()[-1]["body"])]
+        assert "triage-repair: DRE-1 → repair — " in capsys.readouterr().out
 
 
 class TestEpicFindings:
@@ -467,17 +470,18 @@ class TestNotReplanned:
         assert rows[0]["findings"] == ["A step nothing runs.", DECISION]
         assert rows[0]["decisions"] == [DECISION]
 
-    def test_an_epic_with_no_findings_is_skipped(self, tmp_path, capsys):
+    def test_an_epic_with_no_findings_is_replanned_on_its_park_note(self, tmp_path, capsys):
+        """DRE-8647: no card is skipped — the newest park note is the finding."""
         board = TriageRepairBoard()
         _bound_epic(board)
         _, rows = _select(board, tmp_path)
-        assert rows == []
-        assert "triage-repair: DRE-9 → skip — " in capsys.readouterr().out
+        assert [r["action"] for r in rows] == ["replan"]
+        assert rows[0]["findings"] == [PARKED]
+        assert "triage-repair: DRE-9 → replan — " in capsys.readouterr().out
         assert board.events == []
 
     @pytest.mark.parametrize("findings,said", [
         ((DECISION,), "only the CEO can make"),
-        ((), "no findings"),
     ])
     def test_apply_replan_refuses_and_spends_no_grant(self, findings, said):
         board = TriageRepairBoard()

@@ -326,7 +326,9 @@ EXPIRES_EXPR = "${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}"
 TOKEN_JOBS = {
     **{name: (job,) for name, (job, _floor) in AGENT_WORKFLOWS.items()},
     "plan.yml": ("plan", "publish"),
-    "triage-repair.yml": ("select", "repair"),
+    # DRE-8649: `unrepaired` reads the same Triage lane and threads `select`
+    # reads, with the same key, so its receipts read as the pipeline's own.
+    "triage-repair.yml": ("select", "repair", "unrepaired"),
 }
 
 

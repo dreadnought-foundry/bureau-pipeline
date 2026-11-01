@@ -1,0 +1,23 @@
+[
+  {
+    "identifier": "DRE-9301",
+    "body": "## Problem\n\nThe Initiatives page has no header or rows.\n\n**Design:** console/design/images/screens/desktop/initiatives.png\n\n## Acceptance criteria\n\n- [ ] The page header renders the title and the initiative count.\n- [ ] Each initiative renders as a row with its name, owner and status pill.\n",
+    "labels": ["agent:frontend", "repo:agent-bureau"],
+    "parent": "DRE-9300",
+    "state": "Queued"
+  },
+  {
+    "identifier": "DRE-9302",
+    "body": "## Problem\n\nStatus has no color.\n\n## Acceptance criteria\n\n- [ ] Each status pill renders in its status color.\n",
+    "labels": ["agent:frontend", "repo:agent-bureau"],
+    "parent": "DRE-9300",
+    "state": "Queued"
+  },
+  {
+    "identifier": "DRE-9303",
+    "body": "## Problem\n\nThe page reads no live data.\n\n## Acceptance criteria\n\n- [ ] The rows render from the initiatives query.\n",
+    "labels": ["agent:engineer", "repo:agent-bureau"],
+    "parent": "DRE-9300",
+    "state": "Queued"
+  }
+]

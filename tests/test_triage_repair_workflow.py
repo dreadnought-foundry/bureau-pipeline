@@ -57,9 +57,10 @@ OUT_DIR = "${{ runner.temp }}/triage-repair/${{ matrix.card }}"
 TRUSTED = "${{ runner.temp }}/pipeline-trusted"
 COPY_STEP = "Keep a trusted copy of bureau-pipeline"
 DROP_STEP = "Remove the trusted copy"
-#: The four files the planner may write (`triage_repair`'s names).
+#: The five files the planner may write (`triage_repair`'s names): the
+#: four of a rewrite or a question, and a relabel's `repo.txt` (DRE-8647).
 OUTPUT_FILES = ("revised-card.md", "repair-answers.md", "question.md",
-                "question-choices.json")
+                "question-choices.json", "repo.txt")
 #: Every expression carrying card text or critic findings: each may stand in
 #: the agent's prompt only between the two sentinel lines.
 UNTRUSTED = ("steps.card.outputs.title", "steps.card.outputs.description",
@@ -693,7 +694,12 @@ class TestThePrompt:
         prompt = self._prompt()
         for words in ("You are the PLANNER", "plan critic's bound", "ONCE",
                       "one numbered line per finding", "CEO", "escalate",
-                      "${{ matrix.action }}", "steps.card.outputs.decisions"):
+                      "${{ matrix.action }}", "steps.card.outputs.decisions",
+                      # DRE-8647: a relabel names one key of the repo map,
+                      # and a card with no findings list hands its park note
+                      # or its own description to the planner as the finding.
+                      "When the action is `relabel`", "config/repo-map.json",
+                      "exactly one key", "the card's own description"):
             assert words in prompt, words
 
 
@@ -764,3 +770,50 @@ class TestTheDecisionRoute:
     def test_a_replan_card_is_applied_with_no_directory(self, tmp_path):
         argv = _apply_argv(_row("DRE-3", "replan"), tmp_path / "temp", tmp_path)
         assert argv == ["apply", "DRE-3", "--action", "replan"]
+
+
+# --------------------------------------------------------------------------- #
+# the unrepaired-cards alert (DRE-8649)                                        #
+# --------------------------------------------------------------------------- #
+
+UNREPAIRED_JOB = "unrepaired"
+UNREPAIRED_STEP = "Raise or resolve the unrepaired-cards alert"
+
+
+class TestTheUnrepairedAlert:
+    """One job at the end of the file runs `scripts/triage_unrepaired.py` on
+    every run, after the repair legs, whatever they did — under `!cancelled()`
+    — with the OIDC token and the door's URL, as nightly-watch.yml's raise
+    step has them."""
+
+    def test_it_is_the_last_job_and_runs_after_the_repair_legs(self):
+        jobs = list(_doc()["jobs"])
+        assert jobs[-1] == UNREPAIRED_JOB
+        assert _job(UNREPAIRED_JOB)["needs"] == ["select", "repair"]
+
+    def test_it_runs_under_not_cancelled(self):
+        gate = str(_job(UNREPAIRED_JOB)["if"])
+        assert "!cancelled()" in gate
+        # Whatever select and the legs did — skipped, red or green — it runs,
+        # and only a canceled run stops it.
+        assert _evaluate(gate, {}) is True
+        assert not eval(  # noqa: S307 — test-only, a literal expression
+            re.sub(r"!(?!=)", " not ", gate.strip()[3:-2].replace("cancelled()", "True")),
+            {"__builtins__": {}}, {})
+
+    def test_it_holds_the_oidc_token_and_nothing_more(self):
+        assert _job(UNREPAIRED_JOB)["permissions"] == {"contents": "read",
+                                                       "id-token": "write"}
+
+    def test_it_runs_the_module_with_the_door_and_the_linear_key(self, tmp_path):
+        step = _step(UNREPAIRED_JOB, UNREPAIRED_STEP)
+        assert step["env"]["BUREAU_READ_URL"] == "${{ vars.BUREAU_READ_URL }}"
+        assert step["env"]["LINEAR_API_KEY"] == _step(
+            "select", "Select the cards to repair")["env"]["LINEAR_API_KEY"]
+        result, _, argvs = _bash(step["run"], {}, tmp_path)
+        assert result.returncode == 0, result.stderr
+        assert argvs == [["scripts/triage_unrepaired.py"]]
+
+    def test_it_checks_out_the_repo_first(self):
+        first = _job(UNREPAIRED_JOB)["steps"][0]
+        assert str(first.get("uses", "")).startswith("actions/checkout@")

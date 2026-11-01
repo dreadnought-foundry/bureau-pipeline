@@ -403,7 +403,10 @@ the plan afterwards needs to know.
   is a decision the CEO can read and veto. Full rule:
   `standards/design-parity.md` (in your assembled context). (Origin: the
   DeltaSolv gap audit, 2026-07-13 — ~67 designed screens never carded, the
-  epic closed anyway.)
+  epic closed anyway.) An epic built from an approved mockup also accounts for
+  every row of its committed inventory — an `**Inventory:**` line and an
+  `inventory-coverage` block — under "An approved mockup — every inventory
+  row, one to one (DRE-8612)" in that standard.
 
 ## The lanes, and the verdict you owe every card (DRE-2724 / DRE-2824)
 
