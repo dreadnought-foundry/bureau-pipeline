@@ -3112,6 +3112,16 @@ jobs:
               --detail-file "$DETAIL" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # A blocker between two sibling build cards whose footprints never
+          # meet — no shared file, or only a declared ledger whose lines are
+          # apart — and whose Blocked by line states no reason (DRE-8688),
+          # APPENDED to the same structural file. The ledger is read from this
+          # checkout. Its `Blockers:` line lands in the note either way.
+          python3 .bureau-pipeline/scripts/plan_blocker_footprint.py findings \
+              --detail-file "$DETAIL" \
+              --caller "$REPO_SLUG" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
           # An epic built from an approved mockup whose committed inventory
           # rows are not each covered by an open child's criterion or a
           # deferral (DRE-8612), APPENDED to the same structural file. Its
@@ -3624,6 +3634,13 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --detail-file "$DETAIL" \
+              --structural-file "${{ runner.temp }}/plan-structural.txt" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The blocker-footprint check against the revision (DRE-8688),
+          # appended after the CEO-step check, on the same two board reads.
+          python3 .bureau-pipeline/scripts/plan_blocker_footprint.py findings \
+              --detail-file "$DETAIL" \
+              --caller "$REPO_SLUG" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           # The inventory check against the revision (DRE-8612), appended after
@@ -5387,6 +5404,13 @@ jobs:
           python3 .bureau-pipeline/scripts/plan_ceo_steps.py findings \
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --detail-file "$DETAIL" \
+              --note-file "$NOTE" < "$CHILDREN"
+          # The blocker-footprint check (DRE-8688), on the note only, for the
+          # same reason. A children's detail that could not be read carries no
+          # relations, so its note says `Blockers: UNKNOWN`.
+          python3 .bureau-pipeline/scripts/plan_blocker_footprint.py findings \
+              --detail-file "$DETAIL" \
+              --caller "$REPO_SLUG" \
               --note-file "$NOTE" < "$CHILDREN"
           # The inventory check (DRE-8612), on the note only, for the same
           # reason and on the same artifact.
