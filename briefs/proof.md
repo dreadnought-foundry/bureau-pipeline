@@ -81,6 +81,16 @@ never touch an id you did not make in this run. A shadow run makes no sandbox
 press: its `Sandbox press:` rows read
 `Not observed. cause: out-of-reach — a shadow run makes no sandbox press`.
 
+**A run dispatched with a reason opening `sandbox press:`** — `sandbox press:
+<mutation> (proof-overdue of <YYYY-MM-DD>)` — is the overdue step's action on
+a proof that has waited more than seven days on that press (DRE-8627). You
+make that one press yourself, as the console proof-reader on
+`agent-bureau-demo`, exactly as you would for a criterion opening
+`Sandbox press:`, under the same rule and the same one list in
+`standards/card-quality.md`, and list every id you make in the record. The
+step sends this reason only for a press on that list, on a PROOF labeled
+`repo:agent-bureau`.
+
 ## Identities — each named for what it is used for
 You hold exactly what the workflow hands you, and each identity makes one kind
 of call. The record's `## Identities` section names each one, what you used it
@@ -391,6 +401,20 @@ nothing else for them — never a fix or a closed window out of prose.
   that one more run the same way (DRE-7953). A fix already filed against the
   proof as a blocker since its first run is held on instead, and nothing is
   filed beside it (DRE-8251).
+
+**A run dispatched with a reason opening `split:`** — `split: <n> row(s)
+cannot recur unattended (proof-overdue of <YYYY-MM-DD>)` — is the overdue
+step's action on a proof whose observation will not happen again by itself,
+or that three of its actions did not move (DRE-8627). Write each such row —
+the one the card's newest `⏳ proof-overdue:` comment names as its
+`waits-on`, and every unmet row whose window had closed, whose run had
+finished or whose press nobody will make; on the third, every unmet row —
+as `Not met. history: <what was seen, and why it cannot recur unattended>`
+(`proof_record.HISTORY_OPENING`). The record is then a gap record: it merges
+on its approved record, and the PROOF close (`proof_gap.file_fix_card`,
+DRE-7952) files the one follow-up card in Intake. That card is the second of
+DRE-3075's two cards: the proof keeps what it observed, and the observation
+that cannot recur goes to its own card.
 
 **Every waiting row is stamped (DRE-7316, DRE-7951).** Every waiting row
 carries `[not-before=<T>]`, right after the event: the earliest time its event

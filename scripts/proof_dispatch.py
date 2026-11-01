@@ -864,6 +864,10 @@ RECHECK_COUNT = "re-check"
 #: the counted ones, so it spends no budget.
 CHASE_REASON = "chase of the event hold of {at}"
 CHASE_COUNT = "chase"
+#: How the overdue step's count opens (`proof_overdue_act`, DRE-8627): a run
+#: the dispatcher did not send, so it never answers the critic's findings or
+#: the gate's decline for a re-run (`newer`), and spends no budget here.
+OVERDUE_COUNT = "overdue "
 #: The `config/hold-deadlines.json` row the chase is timed by (DRE-7964).
 CHASE_TAG = "proof-waiting"
 #: `WAITING_RECHECK_HOURS` — how long after the pass that posts it a waiting
@@ -2888,7 +2892,8 @@ class _Pass:
         receipts = [(_when(v.created_at), r) for v in voices
                     if v.kind == spoken_thread.PIPELINE
                     and (r := proof_run_state.receipt(v.body or "")) is not None]
-        newer = [r for when, r in receipts if when is None or when > trigger.at]
+        newer = [r for when, r in receipts if (when is None or when > trigger.at)
+                 and not r.count.startswith(OVERDUE_COUNT)]
         # One budget, whichever reader held the record: every `re-run`
         # receipt since the pull request opened counts (DRE-6488) — on the
         # branch, since the first receipt (DRE-8440).
