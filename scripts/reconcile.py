@@ -289,6 +289,7 @@ import reviewer_down  # noqa: E402
 import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
+import crashed_review_alert  # noqa: E402 — DRE-8690: a review stuck at its cap is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -13612,28 +13613,89 @@ def _hold_without_spending_the_retry(pr: dict) -> bool:
     return _hold_crashed_review(pr, card, linear_ops.comment_bodies(card))
 
 
-def _report_crashed_review_cap(pr: dict, receipts: int) -> None:
-    """The one automatic re-dispatch is spent: HOLD when the cause is the
-    runner's environment, `reviewer-down` when it is not.
+def _limit_recovery_owns(pr: dict, bodies: list[str], run_id: str) -> bool:
+    """Is this capped head's review a Claude limit death limit recovery is
+    still waiting on? Says so on one line when it is (DRE-8690).
 
-    ONE card read serves both questions. `_report_reviewer_down`'s
+    Yes when the card's live marker (`limit_recovery.waiting`) is `kind=claude
+    stage=review` and names `run_id`, the crashed review run at this head. On
+    2026-11-01 the `🚨 reviewer-down` this cap posted closed both such markers
+    — `🚨` is a receipt glyph — and limit recovery stopped watching the two
+    reviews it would have re-run. Posting nothing leaves the marker open,
+    which keeps its reset clock, the wall-down trigger (a later verdict in the
+    repository) and its six-hour stood clock, which reaches a console alert
+    on its own (DRE-8632)."""
+    marker = limit_recovery.waiting(bodies)
+    if (not run_id or marker is None or marker.get("kind") != "claude"
+            or marker.get("stage") != "review" or marker.get("run") != run_id):
+        return False
+    print(
+        f"crashed-review: PR #{pr['number']} head {pr['headRefOid'][:8]} — the "
+        f"review died on the Claude limit (run {run_id}); limit-recovery owns it "
+        "and re-runs it once the wall is down"
+    )
+    return True
+
+
+def _report_crashed_review_cap(pr: dict, receipts: int) -> crashed_review_alert.Capped | None:
+    """The one automatic re-dispatch is spent: HOLD when the cause is the
+    runner's environment, WAIT when it is a Claude limit death limit recovery
+    owns, `reviewer-down` when it is neither.
+
+    ONE card read serves every question. `_report_reviewer_down`'s
     idempotency check already fetched `linear_ops.comment_bodies(card)`, and
     the cause is read off the same bodies, so naming the cause costs nothing
     new: an evidence note for THIS head means the medic has already said this
     runner cannot run Claude here, and the report that named no cause and no
     check is replaced by the hold that names both.
 
-    With no evidence the existing path runs exactly as it did — the behaviour
+    The limit question (DRE-8690) costs one Actions run listing, the crashed
+    review run at this head (`_crashed_review_run_at_head`), which the medic's
+    marker has to name. The same run id goes into the head's console alert.
+
+    Returns the head's alert row when it reached `_report_reviewer_down` with
+    a card to name, else None. With no evidence and no live limit marker the
+    existing path runs exactly as it did — the behaviour
     `tests/test_crashed_review_recovery.py` holds unchanged.
     """
     card = branch_card(pr["headRefName"])
     if not card:
         _report_reviewer_down(pr, receipts)  # its own no-card warning
-        return
+        return None
     bodies = linear_ops.comment_bodies(card)
     if _hold_crashed_review(pr, card, bodies):
-        return
+        return None
+    run_id = _crashed_review_run_at_head(pr["headRefOid"])
+    if _limit_recovery_owns(pr, bodies, run_id):
+        return None
     _report_reviewer_down(pr, receipts, bodies=bodies)
+    return crashed_review_alert.Capped(card, pr["number"], pr["headRefOid"], run_id)
+
+
+def _read_pr_for_alert(number: int) -> dict:
+    """One pull request the open listing does not hold, for the reviewer-down
+    alert's resolve (DRE-8690): its state, head and comments. Raises when the
+    read fails, and the alert then stays open."""
+    pr = json.loads(gh_read(
+        "pr", "view", str(number), "--repo", REPO,
+        "--json", "number,state,headRefName,headRefOid,baseRefName,comments",
+    ))
+    if not isinstance(pr, dict):
+        raise ValueError(f"PR #{number} read back as {type(pr).__name__}")
+    return pr
+
+
+def _settle_reviewer_down_alerts(capped: list, prs: list[dict], unread: set) -> None:
+    """Hand this pass's capped heads to `crashed_review_alert.settle`
+    (DRE-8690). An alert never decides the sweep: a fault is one line."""
+    try:
+        crashed_review_alert.settle(
+            capped, REPO_SLUG, unread, repo=REPO, prs=prs,
+            read_pr=_read_pr_for_alert, bound=verdict_bound,
+        )
+    except Exception as e:  # noqa: BLE001 — an alert never fails the sweep
+        print(f"{crashed_review_alert.TAG} not settled this pass — "
+              f"{type(e).__name__}: {e}")
 
 
 def _report_stale_verdict(pr: dict) -> None:
@@ -13694,7 +13756,13 @@ def recover_crashed_reviews() -> None:
         the count lives in the sha-bound receipts, so repeated sweeps can
         never accumulate dispatches the way the DRE-1921 loop did.
       * cap spent → the outage is REPORTED, once per head, on the linked
-        card in plain English (_report_reviewer_down) — never looped on.
+        card in plain English (_report_reviewer_down) — never looped on —
+        and raised as a WARN console alert naming the card on every pass
+        (`crashed_review_alert`, DRE-8690), which resolves only on positive
+        evidence the review is no longer stuck.
+      * cap spent AND the card's live limit marker says the review died on
+        the Claude limit (DRE-8690) → nothing posted and nothing raised:
+        limit recovery re-runs it once the wall is down.
       * cap spent AND the medic's evidence note says the cause is the
         RUNNER'S ENVIRONMENT (DRE-3431) → a HOLD naming the cause and the one
         command that confirms it, instead of that report. A hold standing
@@ -13732,6 +13800,8 @@ def recover_crashed_reviews() -> None:
     holds = {p.get("number"): _hold_state(p, verdict) for p in prs}
     standing = any(h.held_at and not h.release for h in holds.values())
     released = []  # held heads whose signal arrived — they join `eligible`
+    capped = []  # heads that reached `_report_reviewer_down` (DRE-8690)
+    unread = set()  # PRs this pass holds only part of — their alert stays open
     for pr in prs:
         try:
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
@@ -13739,6 +13809,7 @@ def recover_crashed_reviews() -> None:
             if pr.get(THREAD_UNREADABLE):
                 # DRE-7510: the verdict or the receipt may sit past the page
                 # we hold — recorded by the listing, never acted on here.
+                unread.add(pr.get("number"))
                 print(
                     f"crashed-review: PR #{pr['number']} — its full comment "
                     "thread could not be read; nothing dispatched, nothing posted"
@@ -13803,7 +13874,9 @@ def recover_crashed_reviews() -> None:
                     pr, CRASHED_REVIEW_DISPATCH_TAG, by=is_worker_pool_comment
                 )
                 if receipts >= CRASHED_REVIEW_RETRY_CAP:
-                    _report_crashed_review_cap(pr, receipts)
+                    stuck = _report_crashed_review_cap(pr, receipts)
+                    if stuck is not None:
+                        capped.append(stuck)
                     continue
                 if standing and _hold_without_spending_the_retry(pr):
                     continue  # the crash next door already spent this retry
@@ -13819,6 +13892,7 @@ def recover_crashed_reviews() -> None:
                     continue  # a live dispatch may be posting the fresh verdict
                 _report_stale_verdict(pr)
         except Exception as e:  # noqa: BLE001 — isolate the one PR, sweep the rest
+            unread.add(pr.get("number"))
             _write_failures.append(
                 f"crashed-review recovery on PR #{pr.get('number')}: {e}"
             )
@@ -13863,6 +13937,10 @@ def recover_crashed_reviews() -> None:
             f"per-sweep dispatch cap ({CRASHED_REVIEW_SWEEP_CAP}) — the next "
             "sweep picks them up oldest-first (DRE-2049)"
         )
+    # DRE-8690: every capped head is a console alert naming its card, and an
+    # alert resolves only on positive evidence — never because a head was
+    # skipped this pass.
+    _settle_reviewer_down_alerts(capped, prs, unread)
 
 
 # The fleet-outage backstop (DRE-3435, the sweep half of epic DRE-3420).
@@ -14978,6 +15056,12 @@ def recover_limit_deaths() -> None:
     Every card it moves or posts a receipt on is recorded in
     `_limit_recovered` (DRE-5841), so the Planning watchdog later in this pass,
     reading the same snapshot and its old marker, leaves the card alone.
+
+    The wall-down trigger (DRE-8690) is the time of the newest critic verdict
+    in this repository, read by `_newest_repo_verdict` off the sweep's own
+    open-PR listing (`_open_pr_listing`) — the listing the crashed-review pass
+    reads later anyway, so it costs no GitHub call. An unreadable listing hands
+    over None, and the clock alone decides, as before.
     """
     def move(ident: str, lane: str) -> None:
         _limit_recovered.add(ident)
@@ -14987,6 +15071,7 @@ def recover_limit_deaths() -> None:
     try:
         cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
         backfill_limit_records(cards)
+        wall_down_at = _wall_down_at(_open_pr_listing())
         # The lane each card is in NOW, as this pass knows it: the board's
         # reading, then each move this pass makes. A move decided on the read
         # door's facts is from-lane-conditional on it (item 33), and a refused
@@ -14999,7 +15084,7 @@ def recover_limit_deaths() -> None:
             MAX_WIP - wip_count(wip_base(active_cards())),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
-            move=move, dispatch=redispatch, cards=cards,
+            move=move, dispatch=redispatch, cards=cards, wall_down_at=wall_down_at,
         ):
             acted = True
             print(line)
@@ -15023,6 +15108,20 @@ def recover_limit_deaths() -> None:
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
         _ledger_unread.append(f"recover_limit_deaths ({type(e).__name__})")
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
+
+
+def _wall_down_at(prs: list[dict] | None) -> datetime | None:
+    """When the newest critic verdict in this repository landed, or None when
+    the listing is unreadable, holds no verdict, or names an unreadable time
+    (DRE-8690). A review that succeeded is the proof the Claude wall is down."""
+    newest = _newest_repo_verdict(prs) if prs is not None else None
+    if not newest:
+        return None
+    try:
+        at = datetime.fromisoformat(newest[0].replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
 
 
 def _post_limit_receipt(ident: str, receipt: str):
