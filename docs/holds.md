@@ -29,7 +29,9 @@ Twelve reasons, seven lift kinds and four readers, as exact strings:
 - **Readers:** `sweep` (`reconcile.held`, `reconcile.live_promotion_refusal`),
   `fix-dispatch` (`reconcile.card_parked_for_human`, asked by
   `reconcile.fix_dispatch_blocked`), `medic` (`medic_retry.park_reason`) and
-  `limit-recovery` (`limit_recovery._held`).
+  `limit-recovery` (`limit_recovery._held`). Both `sweep` readers let one
+  held card through: a person's card under a `manual` hold
+  (`promotion_wait.admits_manual_hold`, DRE-8646, below).
 
 ## Each reason, its lift and where the lift sends the card
 
@@ -52,7 +54,7 @@ moves itself (below).
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
 | `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Queued → Hand-work |
 | `wip-cap-held` | `cap-restored` | A Queued child of an approved epic whose repo's WIP cap is 0. Nothing in that repo is built or promoted, so the child waits on the cap, and the sweep lifts the hold once the cap is above 0 again. | Nothing moves |
-| `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves |
+| `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves, save a person's card (OPERATOR or WORKBENCH) whose blockers are all finished: the sweep carries it Queued → Hand-work with the label kept (DRE-8646) |
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
 label with no stamp — is lifted only by `card-closed` or by a person. Outside
@@ -121,6 +123,39 @@ The one-time pass over the cards filed before that,
 `hand_work_migration.py operator-backlog`, is its second writer: it stamps a `manual`
 operator hold `by=hand_work_migration.py`, and lifts and moves the ones with
 nothing left to wait on (DRE-6429).
+
+A card that still reads `manual` is no longer stuck for that reason alone
+(DRE-8646, next section): the sweep carries a person's card under it to
+Hand-work, but it never lifts the hold — nothing a sweep can read says a
+`manual` hold is over.
+
+### A person's card under a `manual` hold goes to Hand-work
+
+DRE-7909 — an OPERATOR card, both blockers Done, a `needs-human` label with no
+stamp — sat in Queued for seven days while every sweep logged that it was held
+and wrote nothing on the card (DRE-8646). Hand-work is the lane a person works
+from and dispatches nothing, so a hand-applied hold has no reason to keep a
+person's card out of it.
+
+`promotion_wait.admits_manual_hold(labels, bodies)` is the one predicate. It
+answers True only when `hold.reason_of` is `manual` and the card's one routing
+verdict is a person's (`routing_verdict.is_person_verdict`: OPERATOR or
+WORKBENCH). Two verdicts, or none, answer False. Both `sweep` hold lines ask
+it — the hold exit in `promote_ready` and the live re-check in
+`live_promotion_refusal` — so the board read and the live read agree.
+
+Such a card goes on past the hold exit through every gate after it, exactly as
+an OPERATOR card does: the epic's lane, the relations read, the prose-blocker
+gate, the open-agent-blocker gate, the epic gate, its own relation blockers and
+the verdict reads. It is moved only where an OPERATOR card is moved, after all
+of them. The move keeps the label: `hold.lift` is not called, no lift line is
+posted, and the `🧹 Auto-promoted Queued → Hand-work:` receipt says
+``Its `needs-human` label was kept: a person applied it with no hold stamp,
+and only a person removes it.`` A person removes the label. A card held as an
+`operator-step` is lifted on its move exactly as before.
+
+A FLEET card under a `manual` hold, and every stamped hold the sweep stands
+down for, is still not moved, and the live re-check still refuses it.
 
 ### `wip-cap-held` is lifted by the sweep when the cap is restored
 
@@ -206,6 +241,43 @@ ways:
 
 Either one lifts the hold. A card still wearing an off-rail slug, or no `repo:`
 label, does not lift, even if the slug in its stamp has since joined the rail.
+
+## Why a Queued card has not moved — `🧾 promotion-wait:`
+
+A Queued card whose blockers are all terminal can still be refused at five
+exits of `promote_ready` that used to only log. Each is now said on the card,
+once per card per reason (DRE-8646). The first line is
+
+    🧾 promotion-wait: <reason> — <card id> <plain sentence>
+
+followed by what the card waits on and what releases it. `<reason>` is one of:
+
+- `wip-cap` — the fleet's WIP budget is spent. A build finishing frees a slot.
+- `held` — a `needs-human` label a person applied by hand, with no stamp, on
+  a card the sweep does not carry to Hand-work (a FLEET card — see "A person's
+  card under a `manual` hold goes to Hand-work"). A person removing the label
+  releases it.
+- `epic-not-active` — its epic is not In Progress. The epic's approval
+  releases it.
+- `epic-gate` — the epic gate holds its epic (`epic_blockers_unmet`).
+- `epic-cap-queued` — the epic cap has queued its epic in line.
+
+The once-only key is the pair `(card, reason)`: the comment's own head,
+`🧾 promotion-wait: <reason> —`, read back off the card's whole thread through
+`reconcile._surface_once`. A second reason gets its own comment. At the budget
+exit, which comes first in the loop, the reason is read off facts already in
+hand with no Linear read — `held` first, then `epic-not-active`, then
+`wip-cap`. `epic-gate` and `epic-cap-queued` each cost a read, so they are said
+on the first pass with room.
+
+Nothing is posted for a card with a blocker that is not terminal (the blockers
+line names it), another repo's card, an epic, or a card whose relations were
+not read to the end. A stamped hold is not said again — its `🔒 hold:` stamp
+already says why — nor is an open `🛑 Agent blocked` marker, nor any of the
+ten refusals that already post once under their own tags.
+`promotion_wait.SAYS_WHY` lists every opener a Queued card's thread may carry
+as the sweep's answer. The comment is a report, not an act: it is declared
+`not-an-act` in `config/pipeline-acts.json`'s `unconverted` block.
 
 ## The stamp
 
@@ -408,7 +480,10 @@ change (DRE-4208).
 
 Every row names all four readers today, so no reader's answer changed when
 they moved onto the registry. A later card that lets a reader through for one
-reason changes that row's `readers`, and nothing else.
+reason changes that row's `readers`, and nothing else. The one exception is
+not a row: `manual` has none, so the sweep's two promotion lines ask
+`promotion_wait.admits_manual_hold` after `respects` and let a person's card
+through to Hand-work (DRE-8646).
 
 Some code still reads the bare label alone, and that is deliberate. Each of
 these refuses or reports on any hold, whatever its reason — the same
