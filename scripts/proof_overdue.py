@@ -29,7 +29,8 @@ and rows read more than one — the first class in it that the card reads is
 the one it gets:
 
   * `release` — a release not yet out (`proof_release.reading`, read only
-    for a card never run), or a named card whose shipping a row or a hold
+    for a card never run: no `🔬 proof-run` receipt, no record pull request
+    and no record on its branch), or a named card whose shipping a row or a hold
     waits on and which is not `Done`: a `<DRE-n> shipped` needs half
     (`proof_dispatch.FIX_SHIPPED_NEEDS`), a card hold whose needs half
     opens with card ids (`proof_dispatch._card_hold`), a waiting row's
@@ -630,7 +631,8 @@ def gather(card: str, *, now: datetime, gh=None, linear=None) -> dict:
     named += [i for _, result in _unmet(_rows(saved)) for i in _IDS.findall(result)]
     named = [i for i in dict.fromkeys(i.upper() for i in named) if i != card]
     saved["states"] = dict(linear.states(named)) if named else {}
-    if facts(saved)["first_run"] is None:
+    record = saved["record"]
+    if facts(saved)["first_run"] is None and not record["pr"] and not record["text"]:
         saved["release"] = _release(issue, card, slug, full, gh)
     return saved
 
