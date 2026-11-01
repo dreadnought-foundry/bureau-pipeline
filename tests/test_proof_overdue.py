@@ -517,6 +517,16 @@ def test_the_release_is_read_only_for_a_card_never_run(branch):
     _no_writes(linear, gh)
 
 
+def test_a_card_under_the_age_reads_no_release():
+    linear = SiblingLinear({"DRE-9000": _thread()})
+    gh = ReleaseGitHub(RECORD, branch=False)
+    young = datetime(2026, 10, 15, tzinfo=timezone.utc)  # three days after the lane entry
+    saved = proof_overdue.gather("DRE-9000", now=young, gh=gh, linear=linear)
+    assert saved["release"] is None
+    assert not any("release.json" in " ".join(a) for a in gh.calls)
+    assert proof_overdue.from_saved(saved) is None
+
+
 def test_a_record_that_modifies_its_file_is_still_found_for_diagnosis():
     files = [{"path": "architecture/proofs/agent-working-logs.md", "changeType": "MODIFIED"}]
     assert proof_record.find_record(files)[0] is None  # the gate's refusal is unchanged
