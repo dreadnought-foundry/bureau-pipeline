@@ -34,8 +34,10 @@ the one it gets:
     (`proof_dispatch.FIX_SHIPPED_NEEDS`), a card hold whose needs half
     opens with card ids (`proof_dispatch._card_hold`), a waiting row's
     event naming `DRE-<n> shipped` (or ships, shipping, merged, live), or a
-    row's `fix: DRE-<n>` (`proof_record.row_fixes`). `waits_on` is the id,
-    or the release's tag.
+    row's `fix: DRE-<n>` (`proof_record.row_fixes`) — or a card on one of
+    its `blocks` relations that is not closed (`prose_blockers.TERMINAL`),
+    the dispatcher's condition 3, which holds a first run and names no hold.
+    `waits_on` is the id, or the release's tag.
   * `date` — a waiting row stamped `[not-before=<T>]`
     (`proof_record.row_not_before`), or a time-only hold
     (`proof_record.time_only`) with no waiting row behind it. `waits_on` is
@@ -78,7 +80,8 @@ record pull request at the head, as `proof_dispatch.record_pr` and
 record pull request that MODIFIES its one record file under `docs/` or
 `architecture/` instead of adding one (DRE-5357's #3876) is still read
 (`record_path`); the gate's refusal of that shape is unchanged. The states of
-the cards the holds and rows name are read in one request.
+the cards the holds and rows name are read in one request, and the card's
+`blocks` relations ride on the card's own read.
 
 `diagnose` is the judgment, over facts already read. `reading` reads them —
 `gather` assembles the saved card — and `from_saved` judges a saved card, so
@@ -349,8 +352,9 @@ def diagnose(card: dict, holds: list, rows: list, *, now: datetime,
     """The card's diagnosis, or None when it is not overdue. Pure.
 
     `card` is the card's facts (`facts`): `identifier`, `repo` (its slug),
-    `lane`, `entered`, `first_run` and `record_opened` (times, or None), and
-    `states` — the state of each card its holds and rows name. `holds` are
+    `lane`, `entered`, `first_run` and `record_opened` (times, or None),
+    `states` — the state of each card its holds and rows name — and
+    `blockers`, each card on an open `blocks` relation with its state. `holds` are
     its open `🔬 proof-waiting` lines (`proof_record.open_holds`), `rows` its
     record's (criterion, result) pairs (`proof_record.criterion_rows`), and
     `release` the release reading for a card never run, or None."""
@@ -364,6 +368,9 @@ def diagnose(card: dict, holds: list, rows: list, *, now: datetime,
     behind = any(proof_record.row_waiting(r) for _, r in unmet)
     reads = [read for c, r in unmet for read in _row_reads(c, r, card)]
     reads += [read for line in holds or () for read in _hold_reads(line, card, behind=behind)]
+    reads += [("release", i, None, f"blocked by {i} ({state})")
+              for i, state in (card.get("blockers") or {}).items()
+              if state not in prose_blockers.TERMINAL]
     reads += _release_reads(release)
     found = next((cls for cls in CLASSES if any(r[0] == cls for r in reads)), None)
     if found is None:
@@ -434,11 +441,19 @@ def facts(saved: dict) -> dict:
     receipts = [t for t in receipts if t is not None]
     pr = (saved.get("record") or {}).get("pr") or {}
     opened = _time(pr.get("createdAt")) if card_pr.pr_state(pr) == card_pr.OPEN else None
+    blockers = {}
+    for rel in (issue.get("inverseRelations") or {}).get("nodes") or []:
+        other = rel.get("issue") or {}
+        state = (other.get("state") or {}).get("name")
+        if (rel.get("type") == "blocks" and other.get("identifier")
+                and state not in prose_blockers.TERMINAL):
+            blockers[other["identifier"]] = state or "unread"
     return {"identifier": issue.get("identifier") or "",
             "repo": _slug(issue) or saved.get("repo") or "",
             "labels": _labels(issue), "lane": (issue.get("state") or {}).get("name"),
             "entered": _time(_entered(issue)), "first_run": min(receipts) if receipts else None,
-            "record_opened": opened, "states": dict(saved.get("states") or {})}
+            "record_opened": opened, "states": dict(saved.get("states") or {}),
+            "blockers": blockers}
 
 
 def _rows(saved: dict) -> list:
@@ -468,6 +483,7 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
              identifier title createdAt description state { name }
              labels { nodes { name } }
              history(first: 100) { nodes { createdAt toState { name } } }
+             inverseRelations(first: 100) { nodes { type issue { identifier state { name } } } }
              parent { identifier children(first: 100) { nodes {
                identifier title state { name } labels { nodes { name } } } } }
            } }"""
@@ -480,6 +496,10 @@ PROOFS_QUERY = """query($label: String!) { issues(first: 100, filter: {
 PR_KEPT = ("number", "state", "createdAt", "headRefName", "headRefOid", "files")
 #: The fields of the record branch's pull requests, closed ones too.
 BRANCH_PR_FIELDS = "number,state,createdAt,headRefName,headRefOid,files"
+#: The record pull request's fields: what the record and the clock are read
+#: off — `proof_dispatch.RECORD_FIELDS` without the comments and checks only
+#: a re-run reads.
+RECORD_PR_FIELDS = f"url,{BRANCH_PR_FIELDS}"
 
 
 class LinearReads:
@@ -541,7 +561,7 @@ def _record(identifier: str, full: str, description: str, gh) -> dict:
     raises, and the card is named as not read."""
     dispatch = _dispatch()
     branch = f"agent/{identifier}-proof-record"
-    pr = card_pr.find(identifier, branch=branch, repo=full, fields=dispatch.RECORD_FIELDS, run=gh)
+    pr = card_pr.find(identifier, branch=branch, repo=full, fields=RECORD_PR_FIELDS, run=gh)
     if pr and card_pr.pr_state(pr) == card_pr.OPEN:
         head, path = pr.get("headRefOid"), record_path(pr.get("files"))
     else:

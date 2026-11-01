@@ -37,7 +37,7 @@ one decimal.
 
 | Class | What the proof waits on | Action |
 | -- | -- | -- |
-| `release` | A release not yet out, or a named card (`DRE-n`) that a row or hold waits on and that is not Done yet | `rerun-on-release` |
+| `release` | A release not yet out, or a named card (`DRE-n`) that is not Done yet and that a row, a hold or an open `blocks` relation waits on | `rerun-on-release` |
 | `date` | A waiting row stamped `not-before=<T>`, or a time-only hold with no waiting row behind it | `rerun-on-date` |
 | `press` | A press from the sandbox list in `standards/card-quality.md`, on the sandbox, on a PROOF labeled `repo:agent-bureau` | `sandbox-press` |
 | `deploy` | A row or hold whose event names a deploy: a deployment record, a deploy run, a service rollout | `rerun-on-deploy` |
@@ -98,6 +98,11 @@ is nothing the pipeline will wait out.
   the head, or from its record branch at the head when no pull request is open.
 - For a card never run, the release reading of its siblings' merges.
 - The state of every card its holds and rows name, read in one request.
+- Its `blocks` relations. A card blocking it that is not closed holds its first
+  run (the dispatcher's condition 3) without posting a hold, so it reads
+  `release`, naming that card. On 2026-11-01 three bureau-pipeline proofs waited
+  in Queued this way, DRE-7293, DRE-7622 and DRE-7979, each on an operator card
+  not yet Done.
 
 A record pull request that changes an existing record file under `docs/` or
 `architecture/`, instead of adding one, is still read here (DRE-5357's #3876).
