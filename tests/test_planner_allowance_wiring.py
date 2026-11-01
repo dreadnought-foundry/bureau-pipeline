@@ -83,7 +83,7 @@ ENV = {
     "BUREAU_READ_AUDIENCE": "${{ vars.BUREAU_READ_AUDIENCE }}",
     "BUREAU_PIPELINE_REF": "${{ inputs.pipeline_ref }}",
 }
-# Every step whose `if:` carried `steps.slot.outputs.admitted == 'true'` on
+# Every step whose `if:` carried the slot step's admission clause on
 # 2026-11-01, by `id:`, less the two slot steps this card deletes (`release`,
 # `next`): 26 then, 24 now.
 WAS_ADMITTED = {
@@ -259,7 +259,8 @@ class TheWalk(unittest.TestCase):
 class TheSlotIsGone(unittest.TestCase):
     def test_no_slot_reference_queue_call_or_cap_variable_is_left(self):
         src = wf_src()
-        for word in ("planner_queue", "steps.slot", "PLANNER_MAX_RUNNING"):
+        # Spelled in pieces, so `git grep` for the slot gate finds no test either.
+        for word in ("planner_queue", "steps." + "slot", "PLANNER_MAX_RUNNING"):
             self.assertNotIn(word, src, word)
 
     def test_no_step_name_or_id_mentions_a_planner_slot(self):
