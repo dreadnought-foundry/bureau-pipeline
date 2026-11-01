@@ -481,6 +481,21 @@ Canceled or Duplicate, which it holds on instead, filing nothing (DRE-8251); onc
 re-arm gives one more run. It is read after the first runs, under the same
 one-per-pass cap, and moves nothing.
 
+**A waiting record with no pull request is read on its branch** (DRE-8440).
+Once a waiting proof keeps no pull request open, its record lives only on
+`agent/DRE-<n>-proof-record`. A card in `In Review` whose record pull request
+was closed, and a `Hand-work` card whose first run reads `finished` and left a
+record branch, are read there: the record at the branch head, dated by the
+card's newest receipt and read as the gate's trigger. When every blocking row
+of it waits, the same rules hold and lift it — the time lift and one timed
+re-run, the 12-hour re-check of an unstamped row — with the budgets counted
+since the card's first receipt; any other branch record is refused, posting
+nothing, until DRE-8451 brings the re-arm to the branch. A branch GitHub says
+is gone, or a head with no record file, is told once on the card in a plain
+comment (`Proof not re-run — no record can be read on <branch>: …`), and a read
+that failed posts nothing. A run in flight still holds either card, and
+nothing moves a lane.
+
 **An event hold in `Hand-work` is chased once** (DRE-7967). A hold on a
 first-run candidate whose needs half waits on an event — not a time, not a
 person's press — once held the card for good, so the event could happen and
