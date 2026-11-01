@@ -24,6 +24,16 @@ WHAT IS UNDER TEST, and every one of these fails before the fix:
     is refused, and one with no verdict is refused as today;
   * the live re-check passes the held card the same way.
 
+DRE-8646 widened the first point to a person's card under a hand-applied
+hold. A card held `manual` — `needs-human` with no stamp — whose verdict is a
+person's (OPERATOR or WORKBENCH) goes on through the same gates
+(`promotion_wait.admits_manual_hold`, asked at both hold lines) and is carried
+to Hand-work with its label KEPT: a person applied it, and only a person
+removes it. So `test_a_manual_and_an_operator_step_card_in_one_pass` and the
+`manual` case of `test_skipped_with_no_write_and_the_reason_named`, which
+pinned that card left in place with no write, now pin the new rule; a FLEET
+card under the same hold is still not promoted.
+
 The registry is a fixture: the real one, plus one `operator-step` row naming
 the readers `fix-dispatch`, `medic` and `limit-recovery` — as the real rows
 will, since the sweep is this reason's lifter and never its reader.
@@ -60,14 +70,16 @@ OPERATOR_STAMP = hold.stamp_line(hold.OPERATOR_STEP_REASON, "none", "scripts/pla
 LIFT_LINE = (f"{hold.LIFT_PREFIX} reason={hold.OPERATOR_STEP_REASON} "
              f"because={hold.BLOCKERS_TERMINAL} by=reconcile.py")
 HELD_OPENER = f"promotion: {CARD} is held for a human ("
+KEPT = (f"Its `{LABEL}` label was kept: a person applied it with no hold "
+        "stamp, and only a person removes it.")
 ROUTED_OPENER = f"promotion: {CARD} is held as an operator step but routed"
 
-# The stamps of the reasons the sweep stands down for. `manual` is the label
-# with no stamp at all.
+# The stamps of the reasons the sweep stands down for. `manual` — the label
+# with no stamp at all — is no longer one of them for a person's card
+# (DRE-8646): `TestAHandAppliedHoldOnAPersonsCard` below.
 STAND_DOWN = {
     "review-cap-spent": [hold.stamp_line("review-cap-spent", SHA, "scripts/merge_gate.py")],
     "dead-run-cap": [hold.stamp_line("dead-run-cap", "none", "scripts/reconcile.py")],
-    "manual": [],
 }
 
 
@@ -265,15 +277,21 @@ class TestAnOpenBlockerHoldsIt:
     def test_a_manual_and_an_operator_step_card_in_one_pass(self, capsys):
         """The skip site and the blockers message's local `held` in the same
         call: a skip that called the module-level `held` raises
-        UnboundLocalError here."""
+        UnboundLocalError here. Since DRE-8646 the `manual` OPERATOR card is
+        carried to Hand-work with its label kept, so the skip site is the
+        stamped stand-down card's."""
         manual = _card("DRE-6001", stamp=[])
+        stood_down = _card("DRE-6003", stamp=STAND_DOWN["dead-run-cap"])
         waiting = _card("DRE-6002", blockers={"DRE-6500": "Backlog"})
-        board = _Board(manual, waiting)
-        assert board.promote() == 0
-        assert board.writes == []
+        board = _Board(manual, stood_down, waiting)
+        assert board.promote() == 1
+        assert ("advance", "Hand-work") in board.on("DRE-6001")
+        assert ("unlabel", LABEL) not in board.on("DRE-6001")
+        assert board.on("DRE-6002") == [] and board.on("DRE-6003") == []
         out = capsys.readouterr().out
-        assert (f"promotion: DRE-6001 is held for a human ('{LABEL}' label, "
-                "reason=manual)") in out
+        assert "promotion: DRE-6001 is held for a human" not in out
+        assert (f"promotion: DRE-6003 is held for a human ('{LABEL}' label, "
+                "reason=dead-run-cap)") in out
         assert "promotion: DRE-6002 is held by DRE-6500 (Backlog)" in out
 
 
@@ -293,6 +311,115 @@ class TestTheSweepStandsDownForEveryOtherReason:
             f"promotion: {CARD} is held for a human ('{LABEL}' label, "
             f"reason={reason}) — never auto-promoted; skipping"
         ]
+
+
+    def test_a_manual_hold_on_a_person_s_card_is_not_skipped(self, capsys):
+        """The `manual` case of the test above, under DRE-8646's rule: the
+        card is carried, and no skip line is printed for it."""
+        board = _Board(_card(stamp=[]))
+        assert board.promote() == 1
+        assert ("advance", "Hand-work") in board.on()
+        assert not _lines(capsys.readouterr().out, HELD_OPENER)
+
+
+# --------------------------------------------------------------------------- #
+# 3b. a hand-applied hold on a person's card (DRE-8646)                       #
+# --------------------------------------------------------------------------- #
+
+
+def _manual(identifier: str = CARD, *, verdict: str | None = OPERATOR):
+    """DRE-7909's shape: a person's card wearing only the hand-applied label —
+    no stamp, no marks yet — with every blocker Done."""
+    return _card(identifier, verdict=verdict, stamp=[],
+                 labels=("repo:bureau-pipeline", LABEL))
+
+
+class TestAHandAppliedHoldOnAPersonsCard:
+    def _receipt(self, board, identifier=CARD):
+        receipts = [c for c in board.comments_on(identifier)
+                    if c.startswith("🧹 Auto-promoted Queued → Hand-work:")]
+        assert len(receipts) == 1, board.comments_on(identifier)
+        return receipts[0]
+
+    def test_it_is_carried_to_hand_work_marks_first(self):
+        board = _Board(_manual())
+        assert board.promote() == 1
+        writes = board.on()
+        advance = writes.index(("advance", "Hand-work"))
+        for mark in ("operator-step", "no-code"):
+            assert writes.index(("label", mark)) < advance
+        receipt = self._receipt(board)
+        assert writes.index(("comment", receipt)) > advance
+
+    def test_the_label_is_kept_and_the_receipt_says_so(self):
+        board = _Board(_manual())
+        board.promote()
+        receipt = self._receipt(board)
+        assert KEPT in receipt
+        assert "lifted" not in receipt
+        assert ("unlabel", LABEL) not in board.on()
+        assert LIFT_LINE not in board.comments_on()
+        assert not [c for c in board.comments_on() if c.startswith(hold.LIFT_PREFIX)]
+
+    def test_nothing_is_dispatched(self):
+        board = _Board(_manual())
+        board.promote()
+        assert [w for w in board.on() if w[0] == "advance"] == [("advance", "Hand-work")]
+
+    def test_hold_lift_is_never_called(self):
+        with patch.object(reconcile.hold, "lift", side_effect=AssertionError("lift")):
+            assert _Board(_manual()).promote() == 1
+
+    def test_a_workbench_card_is_carried_too(self):
+        workbench = routing_verdict.verdict_comment("WORKBENCH", "a person builds it")
+        board = _Board(_manual(verdict=workbench))
+        assert board.promote() == 1
+        assert ("advance", "Hand-work") in board.on()
+        assert KEPT in self._receipt(board)
+
+    def test_the_door_sourced_card_passes_the_live_re_check(self, capsys):
+        board = _Board(_manual())
+        assert board.promote(door={CARD}) == 1
+        assert ("advance", "Hand-work") in board.on()
+        assert KEPT in self._receipt(board)
+        assert ("unlabel", LABEL) not in board.on()
+        assert "the live re-check refused it" not in capsys.readouterr().out
+
+    def test_a_door_sourced_fleet_card_is_not_moved_and_is_told_held(self):
+        board = _Board(_manual(verdict=FLEET))
+        assert board.promote(door={CARD}) == 0
+        assert not [w for w in board.on() if w[0] in ("advance", "label", "unlabel")]
+        waits = [c for c in board.comments_on() if c.startswith("🧾 promotion-wait:")]
+        assert len(waits) == 1 and waits[0].startswith(f"🧾 promotion-wait: held — {CARD} ")
+
+    def test_a_fleet_card_is_not_moved_and_is_told_held(self):
+        board = _Board(_manual(verdict=FLEET))
+        assert board.promote() == 0
+        assert not [w for w in board.on() if w[0] in ("advance", "label", "unlabel")]
+        (comment,) = board.comments_on()
+        assert comment.startswith(f"🧾 promotion-wait: held — {CARD} ")
+        waits, releases = comment.split("What releases it:")
+        assert f"`{LABEL}`" in waits and "no hold stamp" in waits
+        assert "removing" in releases and f"`{LABEL}`" in releases
+
+
+class TestTheLiveReCheckAsksTheSamePredicate:
+    def _ask(self, card):
+        with patch.object(reconcile, "_fetch_backlog_linear",
+                          side_effect=lambda ids: [copy.deepcopy(card)]):
+            return reconcile.live_promotion_refusal(card, reconcile.card_comment_bodies(card))
+
+    def test_a_person_s_card_under_a_manual_hold_is_not_refused(self):
+        live, why = self._ask(_manual())
+        assert live is not None and why is None
+
+    def test_a_fleet_card_under_a_manual_hold_is_refused_as_today(self):
+        _, why = self._ask(_manual(verdict=FLEET))
+        assert why == f"it carries '{LABEL}' now"
+
+    def test_a_stamped_stand_down_is_refused_as_today(self):
+        _, why = self._ask(_card(stamp=STAND_DOWN["dead-run-cap"]))
+        assert why == f"it carries '{LABEL}' now"
 
 
 # --------------------------------------------------------------------------- #
