@@ -344,6 +344,7 @@ _FALLBACK_REPO_MAP = {
     "portico": "dreadnought-foundry/portico",
     "foundry": "dreadnought-foundry/foundry",
     "onboard-sandbox-5": "dreadnought-foundry/onboard-sandbox-5",
+    "archive-sandbox": "dreadnought-foundry/archive-sandbox",
 }
 # --- END generated repo mirror ---
 
