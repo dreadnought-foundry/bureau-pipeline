@@ -553,6 +553,55 @@ def test_the_replay_names_a_card_it_could_not_read_and_exits_1(capsys):
     _no_writes(linear, gh)
 
 
+class PagedLinear(RecordingLinear):
+    """`RecordingLinear` whose repo read is the module's own, over Linear
+    serving the open PROOF cards one page at a time."""
+
+    def proofs(self, slug):
+        self.calls.append(("proofs", slug))
+        return proof_overdue.LinearReads().proofs(slug)
+
+
+def test_the_replay_reads_every_page_of_a_repos_proof_cards(monkeypatch, capsys):
+    pages = {None: (["DRE-9001"], "c1"), "c1": (["DRE-9002"], None)}
+
+    def gql(query, variables=None):
+        assert query == proof_overdue.PROOFS_QUERY
+        assert variables["label"] == "repo:agent-bureau"
+        ids, cursor = pages[variables.get("after")]
+        return {"issues": {"nodes": [{"identifier": i} for i in ids],
+                           "pageInfo": {"hasNextPage": cursor is not None, "endCursor": cursor}}}
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    hold = _hold("x", proof_dispatch.FIX_SHIPPED_NEEDS.format(card="DRE-9101"))
+    linear = PagedLinear({f"DRE-{n}": _thread(hold) for n in (9001, 9002)})
+    gh = RecordingGitHub(RECORD)
+    code = proof_overdue.main(["replay", "--repo", "agent-bureau"], linear=linear, gh=gh, now=NOW)
+    out = capsys.readouterr().out.strip().splitlines()
+    assert code == 0
+    for card in ("DRE-9001", "DRE-9002"):  # the second page's card is read too
+        assert any(LINE.match(line) and LINE.match(line).group(1) == card for line in out), out
+    assert "$after" in proof_overdue.PROOFS_QUERY and "pageInfo" in proof_overdue.PROOFS_QUERY
+
+
+def test_the_states_of_more_cards_than_one_request_answers_are_all_read(monkeypatch):
+    asked = []
+
+    def gql(query, variables=None):
+        assert query == proof_dispatch.CARD_STATES_QUERY
+        numbers = variables["numbers"]
+        assert len(numbers) <= proof_dispatch.LANE_RELATIONS_CARDS
+        asked.append(numbers)
+        return {"issues": {"nodes": [{"identifier": f"DRE-{n}", "state": {"name": "Done"}}
+                                     for n in numbers]}}
+
+    monkeypatch.setattr(linear_ops, "gql", gql)
+    named = [f"DRE-{n}" for n in range(9100, 9161)]  # 61, past one request's 50
+    got = proof_overdue.LinearReads().states(named)
+    assert got == {i: "Done" for i in named}
+    assert len(asked) == 2
+
+
 def test_the_replay_says_none_overdue(capsys):
     linear = RecordingLinear({})
     assert proof_overdue.main(["replay", "--repo", "portico"], linear=linear,
