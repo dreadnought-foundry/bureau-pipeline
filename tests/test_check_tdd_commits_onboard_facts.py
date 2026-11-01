@@ -20,7 +20,8 @@ commit discipline` on all three commits, and no added commit clears that
     a second entry or an edited function is code;
   * only on an onboarding routing PR — opened by agent-bureau-bot
     (GitHub-attested) on the literal branch `bot/onboard` — exactly the
-    DRE-7209 conditions;
+    DRE-7209 conditions, which since DRE-8659 admit a per-slug
+    `bot/onboard-<slug>` too;
   * neither fact file is a slug mirror, so a repo-mirror region written into
     one relieves nothing.
 
@@ -443,12 +444,19 @@ class OnboardFactsCliTest(GitRepoMixin, unittest.TestCase):
                 self.assertIn(tdd.FAILURE_MESSAGE, p.stdout)
 
     def test_any_other_branch_fails(self):
-        for branch in ("bot/onboard-x", "agent/DRE-7431-x"):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-7431-x"):
             with self.subTest(branch=branch):
                 self._replay(branch=branch)
                 p = self.run_check(head_ref=branch, author=BOT)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn("[code]", p.stdout)
+
+    def test_the_same_change_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
 
     def test_any_other_opener_fails(self):
         self._replay()
@@ -665,12 +673,20 @@ class OrgTenantsCliTest(GitRepoMixin, unittest.TestCase):
                 self.assertIn("[code]", p.stdout)
 
     def test_any_other_branch_fails(self):
-        for branch in ("bot/onboard-x", "agent/DRE-8249-x", "main-onboard"):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-8249-x",
+                       "main-onboard"):
             with self.subTest(branch=branch):
                 self._replay(branch=branch)
                 p = self.run_check(head_ref=branch, author=BOT)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn("[code]", p.stdout)
+
+    def test_the_same_change_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
 
     def test_any_other_opener_fails(self):
         self._replay()
@@ -1006,12 +1022,20 @@ class AgentLogRepoIdsCliTest(GitRepoMixin, unittest.TestCase):
                 self.assertIn("[code]", p.stdout)
 
     def test_any_other_branch_fails(self):
-        for branch in ("bot/onboard-x", "agent/DRE-8534-x", "main-onboard"):
+        for branch in ("bot/onboard/x", "bot/onboard-X", "agent/DRE-8534-x",
+                       "main-onboard"):
             with self.subTest(branch=branch):
                 self._replay(branch=branch)
                 p = self.run_check(head_ref=branch, author=BOT)
                 self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
                 self.assertIn("[code]", p.stdout)
+
+    def test_the_same_change_on_a_per_slug_branch_exits_0(self):
+        # DRE-8659: `bot/onboard-<slug>` is relieved as `bot/onboard` is.
+        self._replay(branch="bot/onboard-x")
+        p = self.run_check(head_ref="bot/onboard-x", author=BOT)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("[code]", p.stdout)
 
     def test_any_other_opener_fails(self):
         self._replay()
