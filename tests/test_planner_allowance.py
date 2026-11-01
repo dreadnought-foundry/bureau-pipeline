@@ -368,7 +368,11 @@ def test_a_refused_receipt_is_retried_at_the_next_answered_low_read_not_before(w
     assert kinds == ["read", "card", "post:held", "sleep", "lift", "read", "card",
                      "post:held", "sleep", "read", "line", "sleep", "card", "post:started"]
     first, second, started = t.receipts()
-    assert first == second == _held_body("DRE-1", T0, run="1001")
+    assert first == _held_body("DRE-1", T0, run="1001")
+    # The retry still reports the read that began the hold; only its next
+    # read has moved on.
+    assert second == first.replace(f"next read at {_iso(T0 + timedelta(minutes=W))}",
+                                   f"next read at {_iso(T0 + timedelta(minutes=2 * W))}")
     lines = _lines(capsys)
     _assert_grammar(lines)
     assert "read answered · receipt refused" in lines[0]
