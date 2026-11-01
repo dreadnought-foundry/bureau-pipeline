@@ -84,7 +84,9 @@ ALSO_READ = {
 } | {("NAME_GUARD_LIVE", ".github/workflows/qa-review.yml", "Post verdict or neutral status")} | {
     # DRE-8452: the record sweep runs under the proof dispatcher's switch.
     ("PROOF_DISPATCH_LIVE", ".github/workflows/reconcile.yml",
-     "Close proof records that cannot merge")}
+     "Close proof records that cannot merge"),
+    # DRE-8626: the daily proof-overdue pass runs under the same switch.
+    ("PROOF_DISPATCH_LIVE", ".github/workflows/reconcile.yml", "Proof overdue")}
 
 
 def _copy_tree(tmp_path: Path) -> Path:
@@ -128,7 +130,7 @@ class TestCatalog:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "check"],
             capture_output=True, text=True, cwd=ROOT)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert "15 switch read(s), 5 row(s), 0 problem(s)" in done.stdout
+        assert "16 switch read(s), 5 row(s), 0 problem(s)" in done.stdout
 
     def test_reads_are_discovered_from_the_workflows(self):
         # Each switch is read where it acts, and once more by the sweep's
