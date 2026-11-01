@@ -71,10 +71,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import plan_critic as pc  # noqa: E402
 import plan_seam  # noqa: E402  — DRE-3395's reader, for the seam walk's input
 import review_rerun as rr  # noqa: E402
-# The three-valued reading of an Actions `if:` the planner-slot wiring tests
-# already walk plan.yml with (DRE-5179) — reused, so the review walks below ask
-# which outcome a decision REACHES of the same reader, not of a second one.
-from test_planner_queue_wiring import Walk, truth  # noqa: E402
+# The three-valued reading of an Actions `if:` that plan.yml's gate tests
+# already walk it with (`tests/workflow_walk.py`) — reused, so the review walks
+# below ask which outcome a decision REACHES of the same reader, not of a second one.
+from workflow_walk import Walk, truth  # noqa: E402
 
 SEAM_FIXTURE = os.path.join(ROOT, "tests", "fixtures",
                             "dre-3164-children-2026-09-05.json")

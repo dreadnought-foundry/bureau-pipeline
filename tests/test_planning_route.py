@@ -1196,13 +1196,13 @@ REPLAY_KEYS = {"card", "arrival", "for", "as_of", "lane", "labels", "comments"}
 #: The `Route — plan or activate` gate at `main` before this card.
 ROUTE_GATE = (
     "steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' "
-    "&& steps.slot.outputs.admitted == 'true' && steps.shape.outputs.route == 'epic'"
+    "&& steps.allowance.outputs.start == 'true' && steps.shape.outputs.route == 'epic'"
 )
 #: The `decide` step's gate, which `planning_escalation.workflow_problems`
 #: reads: unchanged by this card.
 DECIDE_GATE = (
     "steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' "
-    "&& steps.slot.outputs.admitted == 'true' && steps.classify.outputs.escalate != 'true' "
+    "&& steps.allowance.outputs.start == 'true' && steps.classify.outputs.escalate != 'true' "
     "&& steps.classify.outputs.requeue != 'true'"
 )
 WAIT_STEP = "Epic waits on its blocker — Queued, no planner"
@@ -1711,11 +1711,9 @@ class TestPlanYmlParksAWaitingEpic:
                         or "steps.post1.outputs" in gate), step.get("name")
         assert _gate(_step("Plan heartbeat")) == "steps.route.outputs.mode == 'plan'"
 
-    def test_the_planner_slot_is_still_claimed_before_and_released_always(self):
-        assert _index("Planner slot — claim or wait") < _index("Planning shape")
+    def test_the_planner_allowance_is_still_read_before_the_shape(self):
+        assert _index("Planner allowance — start or wait") < _index("Planning shape")
         assert _index("Classify the card") < _index("Planning shape")
-        assert _gate(_step("Planner slot — release")) == (
-            "always() && steps.slot.outputs.admitted == 'true'")
 
 
 class TestTheWaitActIsDeclared:

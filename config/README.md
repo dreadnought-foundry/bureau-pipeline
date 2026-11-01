@@ -82,9 +82,9 @@ mints (see `models.yaml` below).
   card may wait before the watchdog treats it as stuck. Read only through
   `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
   file rather than defaulting; `python3 scripts/planner_queue.py check`
-  validates it. `plan.yml` claims against it in its `Planner slot — claim or
-  wait` step, after the duplicate-dispatch guard and before any model step
-  (DRE-5179); a run it does not admit waits in line and ends green.
+  validates it. `plan.yml` claimed against it before any model step until
+  DRE-8617, which put `planner-allowance.json` below in that place; no planner
+  run claims a slot any more.
   Two more keys bound the number (DRE-5792): `max_running_ceiling`, a positive
   integer no smaller than `max_running`, and `ceiling_reason`, a non-empty
   string saying why the ceiling stands where it does; `check` refuses a file
@@ -121,6 +121,11 @@ mints (see `models.yaml` below).
   validates it, and refuses `hold_max_minutes` plus `wait_minutes` at or above
   the Planning stall window in `lane-contract.json`, because a held card posts
   nothing between its `🪫 planner-hold: held` and `started` receipts.
+  `plan.yml` reads it in its `Planner allowance — start or wait` step, after
+  the duplicate-dispatch guard and before any model step (DRE-8617), and the
+  plan job's `timeout-minutes` is the planner's own budget plus
+  `hold_max_minutes` plus `wait_minutes`, so raising either means raising
+  that clock too — `tests/test_planner_allowance_wiring.py` holds the sum.
 - **`whats-new-cutover.json`** — the switch for the What's New rule
   (DRE-5576): `enforced_from`, the UTC instant from which the merge gate holds
   a pull request opened without a `What's new:` line, and `why`. Absent, the

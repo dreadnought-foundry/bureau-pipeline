@@ -229,7 +229,7 @@ def walk(trigger: str, reason: str) -> tuple[list[str], dict]:
     runs, finds the stamp, and the shape step routes it `epic`. What is under
     test is which of those steps run and where the route step sends it."""
     outputs = {"gate": {"bounced": "false"}, "dedupe": {"skip": "false"},
-               "slot": {"admitted": "true"}}
+               "allowance": {"start": "true"}}
     ran: list[str] = []
     with tempfile.TemporaryDirectory() as raw:
         stubs = _stub_scripts(raw)

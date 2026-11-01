@@ -491,7 +491,7 @@ class NothingElseMoved(unittest.TestCase):
 
     def test_the_gates_this_card_must_not_touch_are_in_place(self):
         gates = {s.get("name"): str(s.get("if") or "") for s in steps()}
-        self.assertIn("steps.slot.outputs.admitted == 'true'", gates[ROUTE])
+        self.assertIn("steps.allowance.outputs.start == 'true'", gates[ROUTE])
         self.assertTrue(any("mode == 'activate'" in g for g in gates.values()))
         self.assertFalse(any("mode == 'queued'" in g for g in gates.values()),
                          "a step gated on the queued answer — nothing runs while it waits")

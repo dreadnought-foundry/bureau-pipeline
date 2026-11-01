@@ -706,7 +706,7 @@ job refuses a row the console does not carry.
 | act name | `triage-repair` |
 | kind · state · next actor | `recovery` · `dispatched` · `plan.yml` |
 | discharges | nothing |
-| cadence | `6900` — plan.yml's plan job, `timeout-minutes: 115`, the run a rewritten card's entry to Planning fires |
+| cadence | `6900` — the planner's own 115 minutes of plan.yml's plan job (`PLANNER_OWN_MINUTES`), the run a rewritten card's entry to Planning fires; the allowance hold in front of it posts `held` (DRE-8617) |
 | emitted by | `scripts/triage_repair.py`, at the `pipeline_act.receipt("triage-repair", …)` call in `_post` |
 
 A card the plan critic's bound parks in Triage, held `plan-critic-bound`, gets
