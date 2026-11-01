@@ -68,6 +68,7 @@ CONSOLE_FACTS = (
     "console/backend/github_oidc.py",
     "console/backend/runner-routing.json",
     "console/backend/org-tenants.json",
+    "infra/lib/agent-log-repo-ids.json",
 )
 # The routing paths that classify as code without this card — the ones the
 # relief actually moves.
