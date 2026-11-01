@@ -152,9 +152,15 @@ The rule (engineering standard: "commit the failing test FIRST"):
     `scripts/validate_card.py` is not in the set, because the generated-
     region rule already proves and exempts its mirror region. The same
     attested opener decides it as for standards-sync — `agent-bureau-bot`,
-    from `attested_pr_author` — plus the exact branch. It is NOT a PR
-    exemption: any other path on that branch, or any other line of a routing
-    path, is held to the rule like any other.
+    from `attested_pr_author` — plus the branch: the literal `bot/onboard`,
+    or since DRE-8659, when onboarding opens one routing PR per declaration,
+    `bot/onboard-<slug>` with the slug checked whole
+    (`[a-z0-9][a-z0-9-]*`, the shape of a repo slug). The opener is still the
+    whole of the security and the branch only narrows it, so the family is a
+    slug-checked suffix of one literal, never `bot/*`: a wider pattern would
+    hand every branch the bot opens, for any purpose, the routing relief. It
+    is NOT a PR exemption: any other path on that branch, or any other line
+    of a routing path, is held to the rule like any other.
   • The same routing PR's per-repo console facts are not code either
     (DRE-7431). Since DRE-7379 it also writes one `REPO_IDS` entry in
     `console/backend/github_oidc.py`, one `PROJECT_IDENTITIES` entry in
@@ -389,7 +395,13 @@ STANDARDS_SYNC_BOT = "agent-bureau-bot"
 # The onboarding routing PR (DRE-7209) — the literal branch the onboarding
 # process opens its routing pull requests on, here and in agent-bureau, and the
 # bot that must have OPENED one (GitHub-attested, the standards-sync signal).
+# Since DRE-8659 it opens one per declaration, on the prefix plus a repo-slug
+# shaped suffix; agent-bureau's onboarding reads the literal `bot/onboard-`
+# here at tag `stable` before it opens one.
 ONBOARD_BRANCH = "bot/onboard"
+ONBOARD_BRANCH_PREFIX = "bot/onboard-"
+_ONBOARD_SLUG_BRANCH = re.compile(
+    re.escape(ONBOARD_BRANCH_PREFIX) + r"[a-z0-9][a-z0-9-]*")
 ONBOARD_BOT = "agent-bureau-bot"
 
 # The paths a routing PR changes, in either repo. The `config/` paths are ops
@@ -549,13 +561,16 @@ def is_onboard_routing_pr(head_ref: str | None,
                           pr_author: str | None) -> bool:
     """True iff this is an onboarding routing PR (DRE-7209): opened by the
     bot — `pr_author` from `attested_pr_author`, the one signal here the PR's
-    contents cannot write — on exactly `bot/onboard`. No commit-author
+    contents cannot write — on exactly `bot/onboard`, or on
+    `bot/onboard-<slug>` matched whole (DRE-8659). No commit-author
     condition: what narrows this one is `mark_routing_paths`, which moves
     only the routing set out of `code` and leaves every other path on the
     branch under the rule. Fail-closed on a missing opener or branch."""
     if not pr_author or _normalized_bot_login(pr_author) != ONBOARD_BOT:
         return False
-    return (head_ref or "").strip() == ONBOARD_BRANCH
+    ref = (head_ref or "").strip()
+    return (ref == ONBOARD_BRANCH
+            or _ONBOARD_SLUG_BRANCH.fullmatch(ref) is not None)
 
 
 def mark_routing_paths(commits) -> list[dict]:
@@ -1541,7 +1556,7 @@ def main(argv: list[str]) -> int:
         commits = mark_routing_paths(commits)
         print(f"routing: the onboarding routing PR — opened by "
               f"{ONBOARD_BOT}[bot] (GitHub-attested), on branch "
-              f"{ONBOARD_BRANCH}; a routing path changed only inside its "
+              f"{head_ref.strip()}; a routing path changed only inside its "
               f"generated repo-mirror region, or only by the one console-"
               f"fact entry the routing step writes, is not code here, and "
               f"any other line or path is held to the rule")
