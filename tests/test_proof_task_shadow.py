@@ -14,7 +14,8 @@ grepped:
     the same steps, the same `if:`s, the same Select model command, the same
     `--model` on all three agent attempts, the same prompt and the job name
     `bureau-card: <CARD>` — compared to a snapshot of the pre-change job taken
-    from `main` at 16becdd2;
+    from `main` at 16becdd2, re-taken by DRE-8441 so the record pull request's
+    decision step and the prompt's push-only step 3 are the baseline;
   * that a shadow run is named `bureau-shadow: <CARD>`, which none of the
     three readers of the card's own run (`dedupe_dispatch`, the sweep through
     it, and the medic's `card_from_log`) reads as the card's run;
@@ -24,7 +25,9 @@ grepped:
   * that a bad request is refused before any agent step, by running the two
     refusing steps and walking the job after the failure;
   * that no writing step can run in shadow mode, with the writers discovered
-    by what their `run:` calls — never by a list of names — and a planted,
+    by what their `run:` calls — never by a list of names, and
+    `proof_record_pr.py decide`, the one step that can open a pull request,
+    among them — and a planted,
     unguarded writer in a copy of the workflow turning the check red;
   * that `Push the shadow record`, the one writer a shadow runs, runs after
     every agent attempt whatever their outcome, never after a refused model,
@@ -180,6 +183,8 @@ PRE_CHANGE_STEPS = [
     ('Mint rescue retry token', 'always()'),
     ('Push rescue', 'always()'),
     ('Upload rescued work', "always() && steps.rescue.outputs.patch != ''"),
+    # DRE-8441: the record pull request opens only when the record can merge.
+    ('Open the record pull request only when it can merge', 'always()'),
     # DRE-7813: the record pull request's body rebuilt from the record.
     ("Refresh the record pull request's body", 'always()'),
     ('Report proof result to Linear', 'always()'),
@@ -239,7 +244,8 @@ PRE_CHANGE_AGENT_ENV = {
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 }
 
-# PRE_CHANGE_PROMPT — the agent's prompt on main at 16becdd2, byte for byte. It
+# PRE_CHANGE_PROMPT — the agent's prompt on main at 16becdd2, byte for byte,
+# re-taken by DRE-8441 with step 3 pushing and never opening a pull request. It
 # lives in a fixture, not here: it names the agent's fixed escalation path,
 # which no test source may name outside an assertion (test_agent_notes_dir.py).
 PRE_CHANGE_PROMPT = (TESTS / "fixtures" / "proof-task-prompt-16becdd2.txt").read_text(encoding="utf-8")
@@ -707,6 +713,7 @@ def _writer_pattern() -> re.Pattern:
       | \bgh\s+pr\s+create\b
       | proof_shadow\.py["']?\s+push\b
       | push_rescue\.py
+      | proof_record_pr\.py["']?\s+(?:decide|sweep)\b
     """, re.X)
 
 
@@ -715,6 +722,8 @@ _GH_API_WRITE = re.compile(
     r"|\s(?:-f|-F|--field|--raw-field|--input)\s)", re.I)
 
 SHADOW_PUSH = "Push the shadow record"
+#: The step that opens, reopens or closes the record's pull request (DRE-8441).
+DECIDE_STEP = "Open the record pull request only when it can merge"
 
 
 def _writers(doc: dict | None = None) -> list[dict]:
@@ -769,6 +778,7 @@ PLANTED = {
     "a gh api POST": "gh api -X POST repos/o/r/issues/1/comments -f body=x",
     "a gh api field": "gh api repos/o/r/issues/1/labels -f labels[]=x",
     "a push rescue": "python3 .bureau-pipeline/scripts/push_rescue.py rescue --card X",
+    "a record pull request": 'python3 .bureau-pipeline/scripts/proof_record_pr.py decide --card "$CARD"',
 }
 
 
@@ -786,6 +796,7 @@ class ShadowWritesNothingButItsBranchTest(unittest.TestCase):
         for name in ("Record the model attempt",
                      "Return from Green Light on the CEO's answer",
                      "Push rescue",
+                     DECIDE_STEP,
                      "Report proof result to Linear",
                      SHADOW_PUSH):
             self.assertIn(name, found)
@@ -812,7 +823,7 @@ class ShadowWritesNothingButItsBranchTest(unittest.TestCase):
 
     def test_a_shadow_guard_dropped_from_a_real_writer_turns_the_check_red(self):
         for name in ("Report proof result to Linear", "Push rescue",
-                     "Record the model attempt"):
+                     DECIDE_STEP, "Record the model attempt"):
             with self.subTest(step=name):
                 doc = copy.deepcopy(_doc())
                 step = next(s for s in _steps(doc) if s.get("name") == name)
