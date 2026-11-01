@@ -355,6 +355,146 @@ class ReceiptTest(_TmpDir):
         self.assertIn(mns.finding(report), result.stdout)
 
 
+    def test_an_ask_person_receipt_names_the_lane_it_moved_the_card_to(self):
+        # DRE-8592: Green Light for a business choice, Triage for housekeeping.
+        step = mns.NextStep("platform-fault", "ask-person", "")
+        for lane in ("Green Light", planning_escalation.HOUSEKEEPING_LANE):
+            with self.subTest(lane=lane):
+                body = mns.receipt(step, run_url=RUN_URL, finding=self.FINDING,
+                                   moved_to=lane)
+                first, paragraph = body.split("\n", 1)
+                self.assertEqual(first, f"🩺 medic-next-step: class=platform-fault "
+                                        f"step=ask-person run={RUN_ID}")
+                self.assertIn(f"moved the card to {lane}", paragraph)
+                other = ({"Green Light", planning_escalation.HOUSEKEEPING_LANE}
+                         - {lane}).pop()
+                self.assertNotIn(other, paragraph)
+
+    def test_a_triage_receipt_says_the_operator_and_carries_the_park_tag(self):
+        import dedupe_dispatch
+
+        body = mns.receipt(mns.NextStep("platform-fault", "ask-person", ""),
+                           run_url=RUN_URL, finding=self.FINDING,
+                           moved_to=planning_escalation.HOUSEKEEPING_LANE)
+        self.assertIn("the operator", body)
+        self.assertIn(dedupe_dispatch.STALL_PARK_TAG, body.split("\n", 1)[1])
+
+    def test_a_refused_ask_person_move_names_where_it_meant_to_go_and_was_left(self):
+        body = mns.receipt(mns.NextStep("platform-fault", "ask-person", ""),
+                           run_url=RUN_URL, finding=self.FINDING, moved=False,
+                           lane="In Review",
+                           moved_to=planning_escalation.HOUSEKEEPING_LANE)
+        first, paragraph = body.split("\n", 1)
+        self.assertTrue(first.endswith(" moved=no"), first)
+        self.assertIn(f"move the card to {planning_escalation.HOUSEKEEPING_LANE}",
+                      paragraph)
+        self.assertIn("left in In Review", paragraph)
+
+    def test_the_cli_takes_moved_to(self):
+        report = self.write("r.md", CLEAN_REPORT)
+        result = _cli("receipt", "--class", "platform-fault", "--step", "ask-person",
+                      "--run-url", RUN_URL, "--report", report,
+                      "--moved-to", planning_escalation.HOUSEKEEPING_LANE)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(f"moved the card to {planning_escalation.HOUSEKEEPING_LANE}",
+                      result.stdout)
+
+
+# ── the screen and the operator's note (DRE-8592) ──────────────────────────
+
+
+TWO_CHOICES = {
+    "question": "Should this customer's import keep its old prices or take the new ones?",
+    "context": "The import stopped because the price list changed while it ran.",
+    "choices": [
+        {"id": "keep-old", "label": "Keep the old prices",
+         "effect": "The import runs again with the prices it started with.",
+         "outcome": "proceed"},
+        {"id": "take-new", "label": "Take the new prices",
+         "effect": "The import runs again with the new price list.",
+         "outcome": "proceed"},
+    ],
+    "recommended": "keep-old",
+    "why": "the customer agreed to the old prices",
+}
+QUESTION = {"finding": "The pipeline lost its access to the card tracker.",
+            "question": "Can the operator renew the access?",
+            "recommendation": "Renew it", "why": "only the access is missing"}
+
+
+class ScreenTest(_TmpDir):
+    def test_no_choices_file_names_no_decision_by_the_medic(self):
+        q = self.write("q.json", json.dumps(QUESTION))
+        broken = mns.screen(q, str(self.tmp / "missing.json"))
+        self.assertTrue(broken.startswith(planning_escalation.RULE_NO_DECISION), broken)
+        self.assertIn("the medic wrote no choices for it", broken)
+
+    def test_a_valid_file_passes(self):
+        q = self.write("q.json", json.dumps(QUESTION))
+        self.assertIsNone(mns.screen(q, self.write("c.json", json.dumps(TWO_CHOICES))))
+
+    def test_the_question_s_own_words_are_screened(self):
+        q = self.write("q.json", json.dumps({**QUESTION, "why": "this is housekeeping"}))
+        broken = mns.screen(q, self.write("c.json", json.dumps(TWO_CHOICES)))
+        self.assertTrue(broken.startswith(planning_escalation.RULE_SAYS_NOT), broken)
+
+    def test_a_missing_question_file_is_still_screened_on_the_choices(self):
+        c = self.write("c.json", json.dumps(TWO_CHOICES))
+        self.assertIsNone(mns.screen(None, c))
+        self.assertIsNone(mns.screen(str(self.tmp / "missing.json"), c))
+
+    def test_the_cli_prints_the_rule_and_exits_1_or_prints_nothing_and_exits_0(self):
+        q = self.write("q.json", json.dumps(QUESTION))
+        result = _cli("screen", "--file", q, "--choices-file", str(self.tmp / "none.json"))
+        self.assertEqual(1, result.returncode)
+        self.assertIn(planning_escalation.RULE_NO_DECISION, result.stdout)
+        c = self.write("c.json", json.dumps(TWO_CHOICES))
+        result = _cli("screen", "--file", q, "--choices-file", c)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("", result.stdout)
+
+    def test_the_choices_block_is_the_planner_s(self):
+        c = self.write("c.json", json.dumps(TWO_CHOICES))
+        result = _cli("choices-block", "--file", c)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(planning_escalation.choices_block(TWO_CHOICES),
+                         result.stdout.rstrip("\n"))
+        refused = self.write("bad.json", json.dumps({**TWO_CHOICES, "recommended": "x"}))
+        self.assertNotEqual(0, _cli("choices-block", "--file", refused).returncode)
+
+
+class HousekeepingNoteTest(_TmpDir):
+    def test_the_note_opens_with_the_stall_tag_and_carries_the_three_lines(self):
+        import dedupe_dispatch
+
+        q = self.write("q.json", json.dumps(QUESTION))
+        note = mns.housekeeping_note("DRE-1", "it names no decision: x", q,
+                                     report_path=None, run_url=RUN_URL)
+        first = note.split("\n", 1)[0]
+        self.assertTrue(first.startswith(f"🧹 {dedupe_dispatch.STALL_PARK_TAG}: DRE-1 — "),
+                        first)
+        self.assertIn("it names no decision: x", first)
+        self.assertIn(planning_escalation.HOUSEKEEPING_LANE, note)
+        self.assertIn("for the operator, not the CEO", note)
+        esc = console_escalation.parse(note)
+        self.assertEqual(QUESTION["question"], esc.question)
+        self.assertIn(f"The failed run: {RUN_URL}", note)
+        self.assertFalse(note.startswith("🙋"))
+
+    def test_a_blank_rule_still_names_one(self):
+        note = mns.housekeeping_note("DRE-1", "  ", None, report_path=None,
+                                     run_url=RUN_URL)
+        self.assertIn(mns.SCREEN_UNREAD, note.split("\n", 1)[0])
+
+    def test_the_cli(self):
+        q = self.write("q.json", json.dumps(QUESTION))
+        result = _cli("housekeeping-note", "--card", "DRE-1", "--broken", "it names no "
+                      "decision: x", "--file", q, "--report", str(self.tmp / "r.md"),
+                      "--run-url", RUN_URL)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertTrue(result.stdout.startswith("🧹 planning-stall-park: DRE-1 — "))
+
+
 # ── comment_bodies and waiting ─────────────────────────────────────────────
 
 
