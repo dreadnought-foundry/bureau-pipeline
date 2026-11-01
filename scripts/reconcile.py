@@ -1041,6 +1041,20 @@ def _degrade(step: str, what: str, err: object,
     print(f"DEGRADED: {entry}")
 
 
+def _print_recorded_failures() -> None:
+    """Every recorded write and read failure as an `ERROR:` line on stderr,
+    printed just before a red exit whose summary says "see ERROR lines
+    above" (DRE-8570). Some sites record a failure without printing it (the
+    crashed-review hold post), and one printed it as `CRITICAL:` — the
+    summary then pointed at nothing. A failure its site already printed
+    prints twice, which is the cheap side of that trade. `_stale_defects`
+    are not here: each prints its own `ERROR:` line where it is recorded."""
+    for failure in _write_failures:
+        print(f"ERROR: write failure: {failure}", file=sys.stderr)
+    for failure in _read_failures:
+        print(f"ERROR: read failure: {failure}", file=sys.stderr)
+
+
 def _report_degraded() -> None:
     """One line, only when there is something to say — the run stays green
     and this is where a reader learns it was not a complete one."""
@@ -14086,14 +14100,20 @@ def dependabot_branch_token(ecosystem: str) -> str:
     return _DEPENDABOT_BRANCH_TOKENS.get(ecosystem, ecosystem.replace("-", "_"))
 
 
-def parse_dependabot_limits(text: str) -> dict:
-    """{ecosystem: {"limit": int|None, "groups": [names]}} from a
-    dependabot.yml body. Stdlib on purpose: this sweep runs on the runner's
-    bare python3 — reconcile.yml has no pip-install step, so PyYAML is not
-    guaranteed. The shape understood here is the one the config guard pins
+def parse_dependabot_entries(text: str) -> list[dict]:
+    """The `updates` entries of a dependabot.yml body, in file order, each
+    {"ecosystem", "directory", "limit": int|None, "groups": [names]}.
+
+    One record per ENTRY, never per ecosystem (DRE-8570): Dependabot applies
+    open-pull-requests-limit to each entry, and Foundry runs six npm entries,
+    one per manifest folder — keyed by ecosystem, the last overwrote the other
+    five. Stdlib on purpose: this sweep runs on the runner's bare python3 —
+    reconcile.yml has no pip-install step, so PyYAML is not guaranteed. The
+    shape understood here is the one the config guard pins
     (tests/test_dependabot_config.py), and parser drift against the LIVE
-    file turns tests/test_dependabot_limit_alerts.py red."""
-    result: dict[str, dict] = {}
+    file turns tests/test_dependabot_limit_alerts.py red. The plural
+    `directories:` key is not read."""
+    result: list[dict] = []
     entry = None
     item_indent = None    # indent of the `- ` update-entry dashes
     groups_indent = None  # indent of the current entry's `groups:` key
@@ -14112,7 +14132,8 @@ def parse_dependabot_limits(text: str) -> dict:
             continue
         if stripped.startswith("- ") and (item_indent is None or indent == item_indent):
             item_indent = indent
-            entry = {"limit": None, "groups": []}
+            entry = {"ecosystem": None, "directory": None, "limit": None, "groups": []}
+            result.append(entry)
             groups_indent = name_indent = None
             indent += 2
             stripped = stripped[2:].strip()
@@ -14135,7 +14156,9 @@ def parse_dependabot_limits(text: str) -> dict:
                 entry["groups"].append(key)
             continue
         if key == "package-ecosystem" and val:
-            result[val] = entry
+            entry["ecosystem"] = val
+        elif key == "directory" and val:
+            entry["directory"] = val
         elif key == "open-pull-requests-limit":
             try:
                 entry["limit"] = int(val)
@@ -14143,12 +14166,53 @@ def parse_dependabot_limits(text: str) -> dict:
                 pass
         elif key == "groups" and not val:
             groups_indent = indent
-    return result
+    return [e for e in result if e["ecosystem"]]
+
+
+def _dependabot_entry_dir(entry: dict) -> str:
+    """The entry's directory as branch segments: "templates/company/web" for
+    `/templates/company/web`, "" for the root `/`."""
+    return (entry.get("directory") or "").strip("/")
+
+
+def _dependabot_entry_label(entry: dict) -> str:
+    """`npm /templates/company/web` — the ecosystem and the entry's folder,
+    `/` for a root entry, so an alert names the one entry it is about."""
+    return f"{entry['ecosystem']} /{_dependabot_entry_dir(entry)}"
+
+
+def dependabot_entry_for(branch: str, entries: list[dict]) -> dict | None:
+    """The update entry a Dependabot branch belongs to, or None (DRE-8570).
+
+    A branch reads `dependabot/<token>/<directory>/<name>`, the directory
+    segment left out for `/`. Only entries whose ecosystem maps to <token>
+    are candidates. An entry with directory `/a/b` matches when the rest of
+    the branch starts with the whole segments `a/b/`; a root entry matches
+    every branch. The longest matching directory wins, so a root entry gets
+    only what no nested entry claims, and `/libraries/js/offline` beats
+    `/libraries/js`. A non-default branch-name separator is not read."""
+    parts = (branch or "").split("/")
+    if len(parts) < 3:
+        return None
+    token, rest = parts[1], "/".join(parts[2:])
+    best, best_depth = None, -1
+    for entry in entries:
+        if entry.get("directory") is None:
+            continue
+        if dependabot_branch_token(entry["ecosystem"]) != token:
+            continue
+        d = _dependabot_entry_dir(entry)
+        if d and not rest.startswith(f"{d}/"):
+            continue
+        depth = len(d.split("/")) if d else 0
+        if depth > best_depth:  # ties keep the first entry in the file
+            best, best_depth = entry, depth
+    return best
 
 
 def _is_grouped_dependabot_branch(pr: dict, groups: list) -> bool:
-    """True when the PR is one of the ecosystem's grouped updates — its
-    branch's final segment is `<group-name>-<hash>`. Everything else is a
+    """True when the PR is one of its entry's grouped updates — its branch's
+    final segment is `<group-name>-<hash>`. Everything else is a
     single-dependency PR: the human-merge lane condition D parks."""
     last = (pr.get("headRefName") or "").rsplit("/", 1)[-1]
     return any(last.startswith(f"{g}-") for g in groups)
@@ -14158,15 +14222,17 @@ def check_dependabot_capacity() -> None:
     """DRE-2119: WARN/CRITICAL before open-pull-requests-limit starves the
     minor/patch group.
 
-    Read-only monitor, per configured ecosystem: count(open dependabot-
-    authored PRs on dependabot/<token>/...) against the CONFIGURED limit
-    (vendor default 5 when the key is omitted; 0 = version updates
-    disabled, skipped). At ceil(80%): a WARNING sweep line, console-only.
-    AT the limit: a CRITICAL on the fail-loudly rail (_write_failures ->
-    red run -> medic -> Linear) naming the parked human-lane PRs — the
-    singles the merge gate never auto-merges — so the operator decision
-    (merge, or a config `ignore` rule) is forced BEFORE Dependabot silently
-    stops opening new version-update PRs.
+    Read-only monitor, per configured update ENTRY (DRE-8570 — Dependabot
+    applies the limit to each entry, not to an ecosystem): count(open
+    dependabot-authored PRs whose branch `dependabot_entry_for` places on the
+    entry) against that entry's CONFIGURED limit (vendor default 5 when the
+    key is omitted; 0 = version updates disabled, skipped). At ceil(80%): a
+    WARNING sweep line, console-only. AT the limit: a CRITICAL on the
+    fail-loudly rail (_write_failures -> red run -> medic -> Linear), printed
+    as an `ERROR:` line, naming the parked human-lane PRs — the singles the
+    merge gate never auto-merges, judged by the PR's own entry's groups — so
+    the operator decision (merge, or a config `ignore` rule) is forced BEFORE
+    Dependabot silently stops opening new version-update PRs.
 
     Fail-safe per the DRE-2034 read discipline: no config file = the repo
     doesn't run Dependabot, silence; an EXISTING config that parses to
@@ -14181,8 +14247,8 @@ def check_dependabot_capacity() -> None:
             config_text = fh.read()
     except FileNotFoundError:
         return  # no dependabot config -> no limit to starve
-    config = parse_dependabot_limits(config_text)
-    if not config:
+    entries = parse_dependabot_entries(config_text)
+    if not entries:
         err = (
             f"{DEPENDABOT_CONFIG} exists but no update entries parsed — the "
             "slot-capacity check is blind (parser drift or malformed "
@@ -14203,42 +14269,41 @@ def check_dependabot_capacity() -> None:
         _read_failures.append(err)
         print(f"ERROR: {err}", file=sys.stderr)
         return
-    by_token = {dependabot_branch_token(eco): eco for eco in config}
-    counted: dict[str, list[dict]] = {eco: [] for eco in config}
+    counted: dict[int, list[dict]] = {id(entry): [] for entry in entries}
     for pr in prs:
         if not is_dependabot_pr(pr):
             continue
-        parts = (pr.get("headRefName") or "").split("/")
-        eco = by_token.get(parts[1]) if len(parts) >= 3 else None
-        if eco is None:
+        entry = dependabot_entry_for(pr.get("headRefName") or "", entries)
+        if entry is None:
             # A genuine dependabot PR the mapping can't place still occupies
             # a slot somewhere — invisible would mean undercounting, so say so.
             print(
                 f"WARNING: dependabot PR #{pr['number']} "
-                f"({pr.get('headRefName')}) matches no configured ecosystem "
+                f"({pr.get('headRefName')}) matches no configured entry "
                 "— the slot count may be low (token mapping or config drift)"
             )
             continue
-        counted[eco].append(pr)
-    for eco, cfg in config.items():
-        limit = cfg["limit"] if cfg["limit"] is not None else DEPENDABOT_DEFAULT_PR_LIMIT
+        counted[id(entry)].append(pr)
+    for entry in entries:
+        limit = entry["limit"] if entry["limit"] is not None else DEPENDABOT_DEFAULT_PR_LIMIT
         if limit <= 0:
-            continue  # 0 disables version updates for the ecosystem
-        open_prs = sorted(counted[eco], key=lambda p: p["number"])
+            continue  # 0 disables version updates for the entry
+        label = _dependabot_entry_label(entry)
+        open_prs = sorted(counted[id(entry)], key=lambda p: p["number"])
         n = len(open_prs)
         if n >= limit:
             parked = [
                 p for p in open_prs
-                if not _is_grouped_dependabot_branch(p, cfg["groups"])
+                if not _is_grouped_dependabot_branch(p, entry["groups"])
             ]
             listing = ", ".join(
                 f"#{p['number']} ({(p.get('title') or '').strip()[:80]})"
                 for p in parked
             ) or "none identified — every slot is a grouped PR"
             err = (
-                f"CRITICAL: dependabot {eco} is at its open-PR limit "
+                f"CRITICAL: dependabot {label} is at its open-PR limit "
                 f"({n}/{limit}) — Dependabot now silently opens NO new "
-                f"version-update PRs for {eco}, the grouped minor/patch "
+                f"version-update PRs for {label}, the grouped minor/patch "
                 f"(security-relevant) stream included. Parked human-lane "
                 f"PR(s) holding slots: {listing}. Operator decision needed "
                 "per the majors playbook: merge each, or add a config "
@@ -14247,10 +14312,12 @@ def check_dependabot_capacity() -> None:
                 "ignore walks down to the next major — DRE-2064)."
             )
             _write_failures.append(err)
-            print(err, file=sys.stderr)
+            # An ERROR line, because the red exit's summary says "see ERROR
+            # lines above" (DRE-8570).
+            print(f"ERROR: {err}", file=sys.stderr)
         elif n >= max(1, math.ceil(limit * DEPENDABOT_WARN_FRACTION)):
             print(
-                f"WARNING: dependabot {eco}: {n}/{limit} open-PR slots used "
+                f"WARNING: dependabot {label}: {n}/{limit} open-PR slots used "
                 f"— at {limit} Dependabot silently stops opening new "
                 "version-update PRs (grouped minor/patch included); merge "
                 "or config-ignore the parked PRs before the limit bites "
@@ -16088,6 +16155,7 @@ def main(
         # here or below (DRE-4214): a step that handled its fault owes the
         # line above, not a red run.
         if _write_failures or _stale_defects:
+            _print_recorded_failures()
             sys.exit(
                 f"reconcile: {len(_write_failures)} write failure(s), "
                 f"{len(_stale_defects)} unfixed card defect(s) — see ERROR lines above"
@@ -16588,6 +16656,7 @@ def main(
         # a report nobody reads is how five cards froze for five days).
         # `_degraded` is deliberately not in this list (DRE-4214): a fault a
         # step handled by reporting nothing is said above, not exited on.
+        _print_recorded_failures()
         sys.exit(
             f"reconcile: {len(_write_failures)} write / {len(_read_failures)} read "
             f"failure(s), {len(_stale_defects)} unfixed card defect(s) — see "
