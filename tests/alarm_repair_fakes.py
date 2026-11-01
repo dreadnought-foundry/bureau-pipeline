@@ -71,6 +71,9 @@ class Card:
     comments: list[Comment] = field(default_factory=list)
     children: list[str] = field(default_factory=list)
     parent: str | None = None
+    #: True when the read's relation page did not reach the end — the card
+    #: holds more relations than `relations` (DRE-5379).
+    relations_unread: bool = False
 
 
 def iso(when: datetime) -> str:
@@ -236,7 +239,7 @@ class AlarmRepairBoard:
             "labels": {"nodes": [{"name": n} for n in card.labels]},
             "parent": {"identifier": card.parent} if card.parent else None,
             "children": {"nodes": [{"id": f"id-{c}"} for c in card.children]},
-            "inverseRelations": {"pageInfo": {"hasNextPage": False},
+            "inverseRelations": {"pageInfo": {"hasNextPage": card.relations_unread},
                                  "nodes": [blocker(i) for i in card.relations]},
         }
 

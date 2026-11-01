@@ -273,6 +273,13 @@ class TestSelect:
         _rc, rows = _select(board, tmp_path)
         assert "queued-terminal-blockers" not in rows[0]["classes"]
 
+    def test_relations_not_read_to_the_end_are_not_terminal(self, tmp_path):
+        board = AlarmRepairBoard()
+        board.add("DRE-7604", relations=["DRE-7300"]).relations_unread = True
+        board.alert("pipeline_stuck:DRE-7604", raised_at=ago(hours=5))
+        _rc, rows = _select(board, tmp_path)
+        assert "queued-terminal-blockers" not in rows[0]["classes"]
+
     def test_at_most_limit_repair_records(self, tmp_path):
         board = AlarmRepairBoard()
         for n in range(7700, 7705):
@@ -453,6 +460,21 @@ class TestLiftHold:
         assert hold.read_stamp(board.bodies("DRE-7501"))["reason"] == "operator-step"
         assert not any(b.startswith(hold.LIFT_PREFIX) for b in board.bodies("DRE-7501"))
         assert _first(board.newest("DRE-7501")) == _finished("unfinished", alert, "operator")
+
+    def test_relations_not_read_to_the_end_refuse_the_lift(self, tmp_path):
+        board = AlarmRepairBoard()
+        board.add("DRE-7300", lane="Done")
+        alert = self._held(board, "DRE-7504", ["DRE-7300"])
+        board.cards["DRE-7504"].relations_unread = True
+        assert _claim(board, "DRE-7504", alert) == 0
+        directory = _decide(tmp_path, {"action": "lift-hold", "why": "x"})
+        assert _apply(board, "DRE-7504", alert, directory) != 0
+        assert "needs-human" in board.labels("DRE-7504")
+        assert hold.read_stamp(board.bodies("DRE-7504"))["reason"] == "operator-step"
+        assert not any(b.startswith(hold.LIFT_PREFIX) for b in board.bodies("DRE-7504"))
+        newest = board.newest("DRE-7504")
+        assert _first(newest) == _finished("unfinished", alert, "operator")
+        assert "relations were not read to the end" in newest
 
     def test_a_lift_lift_due_answers_is_performed(self, tmp_path):
         board = AlarmRepairBoard()
