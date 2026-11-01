@@ -97,6 +97,12 @@
       "when": "full passes only"
     },
     {
+      "tag": "proof-overdue:",
+      "printed_by": "scripts/proof_overdue_sweep.py",
+      "constant": "TAG",
+      "when": "every full reconcile pass since DRE-8626, in the `Proof overdue` step's log, where the repo carries a proof-run stub: one line per overdue card, then the note line"
+    },
+    {
       "tag": "proof identity:",
       "printed_by": ".github/workflows/proof-task.yml",
       "constant": null,

@@ -527,6 +527,59 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$STATUS"
+      # DRE-8626: once a PT day, each PROOF card open more than seven days
+      # gets one comment naming what it waits on (`proof_overdue.reading`,
+      # DRE-8625), and the note line counts them and names the oldest. It
+      # says, and takes no action: the action module, when it has shipped,
+      # runs after it in this step. Under the proof dispatcher's gate, stub
+      # check and switch: dry (`would:` lines, nothing written) until
+      # PROOF_DISPATCH_LIVE is `true`. Each command's status is kept, so one
+      # failing does not skip the other, and the step fails at the end.
+      - name: Proof overdue
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # The dispatch's tokens: the record reads go out as they do, and
+          # nothing here writes to GitHub — the comments are Linear's.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+        run: |
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          export REPO_SLUG
+          if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
+            echo "proof-overdue: no proof-run stub in this repository — nothing read, nothing posted"
+            exit 0
+          fi
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/proof_overdue_sweep.py --repo "$REPO_SLUG" 2>&1 | tee proof-overdue.log || STATUS=$?
+          ACT_STATUS=0
+          if [ -f .bureau-pipeline/scripts/proof_overdue_act.py ]; then
+            python3 .bureau-pipeline/scripts/proof_overdue_act.py 2>&1 | tee -a proof-overdue.log || ACT_STATUS=$?
+          else
+            echo "proof-overdue: action step not shipped yet" | tee -a proof-overdue.log
+          fi
+          SUMMARY=$(grep -E '^(proof-overdue: (note|action step)|would:)' proof-overdue.log || true)
+          {
+            echo "### Proof overdue"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then
+              printf '%s\n' "$SUMMARY"
+            else
+              echo "no proof-overdue: note line — the pass exited before it"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
+          exit "$ACT_STATUS"
       # DRE-6138: a comment the CEO leaves on an epic waiting in Green Light
       # sends the plan back for a review, once per comment, with one receipt.
       # Its own process and its own trailer, in the proof step's shape; dry

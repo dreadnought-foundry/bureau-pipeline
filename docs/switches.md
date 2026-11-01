@@ -17,7 +17,7 @@ This page is the version of that file a person reads.
 
 | Switch | Read by | What `true` does |
 | -- | -- | -- |
-| `PROOF_DISPATCH_LIVE` | `reconcile.yml`, `Dispatch proof runs` | The sweep starts a proof run at each PROOF card whose epic's build cards are Done and released. The sweep's `Close proof records that cannot merge` step reads it too: it closes each open record pull request whose record cannot merge, keeping its branch, instead of printing `would: close #<n>` lines (DRE-8452). |
+| `PROOF_DISPATCH_LIVE` | `reconcile.yml`, `Dispatch proof runs` | The sweep starts a proof run at each PROOF card whose epic's build cards are Done and released. The sweep's `Close proof records that cannot merge` step reads it too: it closes each open record pull request whose record cannot merge, keeping its branch, instead of printing `would: close #<n>` lines (DRE-8452). So does its `Proof overdue` step: it tells each PROOF card open more than seven days, once a PT day, what it waits on and raises the day's console alert, instead of printing `would:` lines (DRE-8626). |
 | `GREEN_LIGHT_REPLY_LIVE` | `reconcile.yml`, `Reply to the CEO's Green Light comments` | A comment the CEO leaves on an epic waiting in Green Light sends the plan back for a review. |
 | `HYGIENE_LIVE` | `hygiene.yml`, `Decide dry run` | The scheduled hygiene run writes to the board. |
 | `TRIAGE_REPAIR_LIVE` | `triage-repair.yml`, `Decide dry run` | The scheduled Triage Repair run claims parked cards and has the planner repair them. |

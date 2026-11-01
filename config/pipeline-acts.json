@@ -1464,6 +1464,13 @@
       "why": "Act-shaped — it reports a hold no writer will clear — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. The `🧱 proof-record-stuck #<n>:` mark it opens with is the once-a-day key the next sweep reads back before it names the record again, so a trailer is a change to that key; the card that declares the act owns both."
     },
     {
+      "file": "scripts/proof_overdue_sweep.py",
+      "anchor": "linear_ops.cmd_comment(d.card, comment(d, day))",
+      "kind": "not-an-act",
+      "means": "A PROOF card open more than seven days is told, at most once per PT day, what it waits on — the `⏳ proof-overdue: <YYYY-MM-DD> · class=… · action=… · waits-on=… · age=…d` first line, then plain English — read by `proof_overdue.reading`; a card in Green Light is never told (DRE-8626).",
+      "why": "A REPORT, not an act: it moves no lane, writes no label, posts no hold and touches no pull request, and hands the work to nobody new — the action step (`scripts/proof_overdue_act.py`) reads its first line and takes the one action. Giving it a row would be a REGISTRY change that ships console-first (docs/pipeline-acts.md). Its `⏳ proof-overdue: <PT day>` first line is the once-a-day key the next pass reads back, by a pipeline-authored comment, before it says it again, so a trailer would be a change to that key."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "head_desync.unresolved_notice(number, head, tip, \"after\")",
       "kind": "undeclared-act",
