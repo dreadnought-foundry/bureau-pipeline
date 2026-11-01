@@ -502,6 +502,31 @@ def test_an_unreadable_defect_age_resolves_no_open_alert(board, notice_door, mon
     assert f"standing-defect-alert: ledger not evaluated — {EPIC}'s prose defect age" in out
 
 
+def test_an_unreadable_refusal_age_resolves_no_open_alert(board, notice_door, monkeypatch,
+                                                          capsys):
+    """The child stands refused for want of a routing verdict — a clocked
+    refusal — but when that refusal was first posted cannot be read, so it is
+    not clocked this pass: its promotion-stall entry is absent for want of a
+    date, not because the card moved, and its alert stays open."""
+    child = _child()
+    child["comments"] = {"nodes": []}
+    monkeypatch.setattr(reconcile, "backlog_children", mock.MagicMock(return_value=[child]))
+    monkeypatch.setattr(reconcile, "_fetch_epic_relations", mock.MagicMock(
+        return_value={"identifier": EPIC, "description": "fixed",
+                      "inverseRelations": {"nodes": []}}))
+    monkeypatch.setattr(reconcile.linear_ops, "first_comment_at", mock.MagicMock(
+        side_effect=reconcile.linear_ops.LinearError("HTTP 502")))
+    monkeypatch.setattr(bureau_read, "open_alerts", lambda: {
+        **OPEN_EPIC, "alerts": [alert(f"pipeline_notice:standing-defect:{REPO}:DRE-7310")]})
+    _exit_of()
+    assert reconcile._stale_defects == []
+    assert _standing_sends(notice_door) == []
+    out = capsys.readouterr().out
+    assert ("standing-defect-alert: ledger not evaluated — DRE-7310's "
+            "routing-no-verdict receipt age (LinearError); nothing resolved this pass") in out
+
+
+
 def test_an_idle_pass_resolves_the_open_alert(board, notice_door, monkeypatch):
     """The decision: an idle pass skips promotion because nothing of this
     repo's is in motion or waiting to be promoted, so no gate of its can be
