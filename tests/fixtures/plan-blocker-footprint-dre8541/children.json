@@ -1,0 +1,32 @@
+[
+  {
+    "identifier": "DRE-8553",
+    "body": "## Problem\n\nThe mobile shell, quick jump and what's-new panel still carry raw color values.\n\n**Files:** console/web/src/components/mobile/MobileDashboard.tsx, console/web/src/components/mobile/MobileTopBar.tsx, console/web/src/components/mobile/StateChipsFilter.tsx, console/web/src/components/mobile/SubTabStrip.tsx, console/web/src/components/mobile/MoreMenu.tsx, console/web/src/components/mobile/MobileTabBar.tsx, console/web/src/components/mobile/BoardCardItem.tsx, console/web/src/components/mobile/IconRail.tsx, console/web/src/components/quickjump/QuickJump.tsx, console/web/src/components/whatsnew/WhatsNewPanel.tsx, console/web/src/components/whatsnew/WhatsNewButton.tsx, console/web/src/components/mobile/MobileDashboard.test.tsx, console/web/src/components/mobile/MobileDashboard.loading.test.tsx, console/web/src/components/mobile/MobileDashboard.operatorSplit.test.tsx, console/web/src/components/mobile/MobileDashboard.wrap.test.tsx, console/web/src/components/mobile/MobileTopBar.test.tsx, console/web/src/components/mobile/StateChipsFilter.test.tsx, console/web/src/components/mobile/SubTabStrip.test.tsx, console/web/src/components/mobile/MoreMenu.test.tsx, console/web/src/components/mobile/MobileTabBar.test.tsx, console/web/src/components/mobile/BoardCardItem.test.tsx, console/web/src/components/mobile/MobileShell.test.tsx, console/web/src/components/quickjump/QuickJump.test.tsx, console/web/src/components/quickjump/QuickJump.loading.test.tsx, console/web/src/components/whatsnew/WhatsNewPanel.test.tsx, console/web/src/components/whatsnew/WhatsNewButton.test.tsx, console/web/src/theme/rawValues.baseline.json\n\n## Acceptance criteria\n\n- [ ] Every raw value in these files reads from a theme token, and the ledger's entries for them are lowered or deleted.\n",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:engineer"
+    ],
+    "parent": "DRE-8541",
+    "state": "Queued"
+  },
+  {
+    "identifier": "DRE-8554",
+    "body": "## Problem\n\nThe desktop sidebar, top bar and shell still carry raw color values.\n\n**Blocked by:** DRE-8553\n\n**Files:** console/web/src/components/AppSidebar.tsx, console/web/src/components/TopBar.tsx, console/web/src/components/AppShell.tsx, console/web/src/components/SidebarDrawer.tsx, console/web/src/components/DemoBanner.tsx, console/web/src/components/ReleaseReloadHost.tsx, console/web/src/components/AgentsSectionTabs.tsx, console/web/src/components/AlertBellBadge.tsx, console/web/src/components/BlockingAlertDialog.tsx, console/web/src/components/sidebar/FavoritesGroup.tsx, console/web/src/components/sidebar/RecentGroup.tsx, console/web/src/components/atoms/CountBadge.tsx, console/web/src/lib/documentIdentity.ts, console/web/src/components/AppSidebar.test.tsx, console/web/src/components/AppSidebar.collapse.test.tsx, console/web/src/components/AppSidebar.accountFooter.test.tsx, console/web/src/components/TopBar.test.tsx, console/web/src/components/TopBar.fit.test.tsx, console/web/src/components/AppShell.test.tsx, console/web/src/components/SidebarDrawer.test.tsx, console/web/src/components/DemoBanner.test.tsx, console/web/src/components/ReleaseReloadHost.test.tsx, console/web/src/components/AgentsSectionTabs.test.tsx, console/web/src/components/BlockingAlertDialog.test.tsx, console/web/src/components/sidebar/FavoritesGroup.test.tsx, console/web/src/components/sidebar/RecentGroup.test.tsx, console/web/src/components/atoms/CountBadge.test.tsx, console/web/src/lib/documentIdentity.test.ts, console/web/src/theme/rawValues.baseline.json\n\n## Acceptance criteria\n\n- [ ] Every raw value in these files reads from a theme token, and the ledger's entries for them are lowered or deleted.\n",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:engineer"
+    ],
+    "parent": "DRE-8541",
+    "state": "Queued"
+  },
+  {
+    "identifier": "DRE-8555",
+    "body": "## Problem\n\nThe badge, sheet, composed chips and settings pages still carry raw color values.\n\n**Blocked by:** DRE-8554\n\n**Files:** console/web/src/components/ui/badge.tsx, console/web/src/components/ui/badge.test.tsx, console/web/src/components/ui/dropdown-menu.tsx, console/web/src/components/ui/sheet.tsx, console/web/src/components/ui/sheet.test.tsx, console/web/src/components/cards/ProjectCard.tsx, console/web/src/components/composed/HealthBadge.tsx, console/web/src/components/composed/ModelChip.tsx, console/web/src/components/composed/ReasonChip.tsx, console/web/src/components/dashboard/PlannerChip.tsx, console/web/src/components/desk/ContextRing.tsx, console/web/src/components/initiatives/HealthChip.tsx, console/web/src/components/initiatives/InitiativeDecisionsPanel.tsx, console/web/src/pages/projectSettings/LifecycleCard.tsx, console/web/src/pages/settings/CreateCustomerPage.tsx, console/web/src/pages/settings/DemoResetPage.tsx, console/web/src/pages/settings/IntegrationsPage.tsx, console/web/src/pages/settings/MembersPage.tsx, console/web/src/pages/settings/NotificationsPage.tsx, console/web/src/pages/settings/OrgSecurityPage.tsx, console/web/src/pages/settings/PlanPage.tsx, console/web/src/pages/settings/ProfilePage.tsx, console/web/src/pages/settings/SecurityPage.tsx, console/web/src/components/cards/ProjectCard.test.tsx, console/web/src/components/composed/HealthBadge.test.tsx, console/web/src/components/composed/ModelChip.test.tsx, console/web/src/components/composed/ReasonChip.test.tsx, console/design/system/src/parts/02-atoms.html, console/design/system/src/parts/08-status.html, console/design/system/src/parts/09-changelog.html, console/design/system/dist/index.html, console/web/src/theme/rawValues.baseline.json\n\n## Acceptance criteria\n\n- [ ] Every raw value in these files reads from a theme token, and the ledger's entries for them are lowered or deleted.\n",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:engineer"
+    ],
+    "parent": "DRE-8541",
+    "state": "Queued"
+  }
+]
