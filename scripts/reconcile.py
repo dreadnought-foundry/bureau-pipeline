@@ -285,6 +285,7 @@ import reviewer_down  # noqa: E402
 # strings.
 import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
+import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -997,6 +998,14 @@ _read_failures: list[str] = []
 #: gets in place of the lane move a defective CARD gets, since Triaging an epic
 #: would dispatch a planning run at a problem that is a sentence.
 _stale_defects: list[str] = []
+
+#: What kept `_stale_defects` from being complete this pass (DRE-8632): a
+#: gate that appends to it and was skipped or failed partway — promotion on a
+#: held board, a limit recovery that stopped — or a defect it found and could
+#: not date. An empty ledger beside one of these is absence, not green, so
+#: `standing_defect_alert.settle` resolves no alert on it. Never decides the
+#: exit. Cleared at the top of `main`.
+_ledger_unread: list[str] = []
 
 #: What this sweep could not read and HANDLED (DRE-4214): the step that owns
 #: the read said so, reported nothing for it, and the rest of the sweep went
@@ -7714,6 +7723,7 @@ def _report_epic_prose_defect(epic_identifier: str, claims: set[str]) -> None:
             f"has stood: {e}",
             file=sys.stderr,
         )
+        _ledger_unread.append(f"{epic_identifier}'s prose defect age ({type(e).__name__})")
         return
     if first_seen is None:
         return  # nothing on the card yet — this sweep is the one that spoke
@@ -8459,6 +8469,9 @@ def promote_ready(
                     f"this sweep: {e}",
                     file=sys.stderr,
                 )
+                if promotion_stall.clocked(tag):
+                    _ledger_unread.append(
+                        f"{identifier}'s {tag} receipt age ({type(e).__name__})")
         refused.append(promotion_stall.Refused(identifier, tag, first_seen, epic))
 
     # Which cap, and from where (DRE-3994): a run that holds or promotes must
@@ -14932,9 +14945,15 @@ def recover_limit_deaths() -> None:
         if not acted:
             print(f"limit-recovery: nothing to re-enter — {len(cards)} card(s) read, "
                   "none with a limit death to recover")
+    except BoardHeld as held:
+        # Its stood markers were not read, so the ledger is short of them
+        # (DRE-8632). An idle pass is not: nothing of this repo's is in motion.
+        _ledger_unread.append(f"recover_limit_deaths ({held.reason})")
+        raise  # skipped by its phase (Stage 2 item 34)
     except BoardNotRead:
-        raise  # skipped by its phase (Stage 2 item 34; an idle pass)
+        raise  # an idle pass, skipped by its phase
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
+        _ledger_unread.append(f"recover_limit_deaths ({type(e).__name__})")
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
 
 
@@ -15703,6 +15722,19 @@ def _phase(name: str, enabled: bool = True):
     return _pass_spend.phase(name, enabled)
 
 
+@contextlib.contextmanager
+def _fills_ledger(name: str):
+    """A phase whose gates append to `_stale_defects`: a held board skips it,
+    and that skip goes on `_ledger_unread` before its phase swallows it
+    (DRE-8632). An idle pass does not — nothing of this repo's is in motion or
+    waiting, so no gate of its can be standing."""
+    try:
+        yield
+    except BoardHeld as held:
+        _ledger_unread.append(f"{name} ({held.reason})")
+        raise
+
+
 def _reports_spend(pass_fn):
     """Open a spend ledger for the pass, and print its total on every way out.
 
@@ -15766,6 +15798,7 @@ def main(
     # must not inherit it — every invocation starts from a fresh snapshot,
     # including the two event-driven ones above.
     reset_sweep_cards()
+    _ledger_unread.clear()  # DRE-8632: what this pass's ledger is short of
     # The read door's mode, read ONCE per process and said (Stage 2 item 35):
     # a pass keeps the mode it started in, whatever the variable does next.
     bureau_read.mode()
@@ -16123,7 +16156,7 @@ def main(
     # (DRE-3236) — read in one request by identifier, through the same gates.
     # A card promotable for any other reason waits for the cron, which
     # merge_sweep_gate already made the backstop for what the gate declines.
-    with _phase("promote_ready"):
+    with _phase("promote_ready"), _fills_ledger("promote_ready"):
         if _door_hold:
             raise BoardHeld(_door_hold[0])  # skipped, one line — never on an empty board
         if _idle_pass:
@@ -16650,6 +16683,16 @@ def main(
     print(cycles_line())
     print(f"sweep complete: {nudges} nudge(s)")
     _report_degraded()
+    # Each card on the standing-defect ledger is a console alert, and an alert
+    # whose card has left it is resolved (DRE-8632). The full sweep's alone:
+    # the `--promote-only` gate returned above, so it cannot flap the alert.
+    # A pass whose ledger is short (`_ledger_unread`) resolves nothing.
+    # Nothing it raises moves the exit below.
+    try:
+        standing_defect_alert.settle(_stale_defects, REPO_SLUG, unread=_ledger_unread)
+    except Exception as e:  # noqa: BLE001 — an alert never decides the exit
+        print(f"{standing_defect_alert.TAG} not settled this pass — "
+              f"{type(e).__name__}: {e}")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
         # when a write we claimed to make didn't happen (DRE-1254 lesson), when
