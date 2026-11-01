@@ -61,6 +61,28 @@ alarms it for the operator, who gets his answer or re-sorts the hold.
      time hold beside any other open hold lifts nothing — one note would
      lift that hold too — and the line names the hold that still holds.
 
+     A card hold lifts itself the same way when every card it names is Done
+     (DRE-8593). A card hold (`_card_hold`) is an open hold whose needs
+     half — the text after its last `— needs` — opens with one or more
+     `DRE-<n>` ids, joined by `, ` or `and`, and that is none of the kinds
+     read another way: time-only, naming `CEO_PRESS`, a cause or history
+     hold, the record's own hold, an `_OWN_NEEDS` wording, or `<DRE-n>
+     shipped`, which stays the re-arm's. Only the ids the needs half opens
+     with are read; anything after them is the writer's explanation and is
+     not judged. It is met when every card it names reads `Done` — a card
+     Canceled, Duplicate, in any other state or not read holds, and the
+     line names it and its state — and a hold naming more than
+     `REARM_FIX_CARDS` cards is not read, its line saying how many it
+     names. When every open hold is a time hold whose time has passed or a
+     card hold that is met, the one `🔬 proof-observed` names each time and
+     each card as `DRE-<n> Done`, and carries `LIFTED_BY`, so it re-arms
+     nothing (`_pipeline_note`). The states are read in one request for
+     the holds of a card (`LinearReads.states`), and only when every other
+     standing hold is a time hold. So the pipeline judges two kinds of hold
+     as met, a passed time and a closed card; every other hold — a
+     free-text event, the CEO's press, a cause or history hold, a budget
+     hold for the operator — stays with a person, as before.
+
      A card holding the record's own hold (`proof_record_pr.is_record_hold`)
      is read here after condition 5 instead (DRE-8451): a run that finished
      reads its record on the branch, and the hold is read past (below); any
@@ -117,6 +139,14 @@ thread read's to decide, in order, as before — and so is a newest hold that is
 time-only with its time passed (DRE-7228), which the thread read may lift,
 and a newest event hold old enough to chase (below, DRE-7967).
 
+A newest hold that is a card hold (DRE-8593) is judged off one request for
+the whole lane (`read_card_holds`), as `LinearReads.lane` reads the marked
+cards' relations: the states of every card the lane's card holds name. Every
+card Done, and the card is left to the thread read, which lifts it; any other
+state, and the card is named held with each card and its state. A failed
+request, or a card it did not answer for, names nothing held on that account
+— the thread read reads it. A lane with no card hold makes no request.
+
 ## The chase of an event hold in Hand-work (DRE-7967)
 
 A hold on a first-run candidate whose needs half waits on an event — not a
@@ -127,8 +157,10 @@ answers by itself: not time-only, not naming `CEO_PRESS`, not a cause or
 history hold (`proof_cause_park.is_cause_hold`), not one whose needs half
 opens one of this module's own wordings (`_OWN_NEEDS`: `OPERATOR_PRESS` and
 every string constant named `*_NEEDS`, discovered off the module, never
-listed — `OPERATOR_NEEDS` is the alarm's and is not read), and not one that
-waits for fix cards to ship (`<DRE-n> shipped`).
+listed — `OPERATOR_NEEDS` is the alarm's and is not read), not one that
+waits for fix cards to ship (`<DRE-n> shipped`), and not a card hold, which
+lifts itself once its cards are Done (condition 4, DRE-8593) and is never
+chased.
 
 When every open hold is an event hold, the oldest has stood the
 `proof-waiting` row's `chase_after_hours` (`hold_deadline.phase`,
@@ -623,6 +655,10 @@ for a set not already re-armed, at most `REARM_FIX_CARDS` Linear card reads
 and one more for each duplicate's canonical card (DRE-8250), each card's —
 or each epic's build card's — pull request on its own repo, and one release
 reading per repo.
+A card hold (DRE-8593) costs one request more: on the lane read, one for
+every card hold the Hand-work lane shows together, made only when it shows
+one, and on the thread read, one for a candidate whose standing holds are
+card holds and time holds.
 A re-run spent with nothing new (DRE-7787) is not a candidate: it costs no
 read of its own, and however many there are they cost together one GitHub
 read of the open pull requests' heads and one Linear read of their relations
@@ -1062,6 +1098,12 @@ LANE_RELATIONS_QUERY = """query($numbers: [Float!]) { issues(first: %d, filter: 
 #: What a marked card's relations read as when that request failed or did
 #: not answer for it: not read to the end, so the card is read as a candidate.
 UNREAD_RELATIONS = {"pageInfo": {"hasNextPage": True, "endCursor": None}, "nodes": []}
+#: The states of the cards card holds name (DRE-8593), every one in ONE
+#: request — for a candidate's holds on the thread read, and for every card
+#: hold the Hand-work lane read shows.
+CARD_STATES_QUERY = """query($numbers: [Float!]) { issues(first: %d, filter: {
+                 team: {key: {eq: "DRE"}}, number: {in: $numbers}}) { nodes {
+                   identifier state { name } } } }""" % LANE_RELATIONS_CARDS
 
 _DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
 #: The gate's hold note's first line (`evaluate_and_merge.sh`):
@@ -1167,6 +1209,16 @@ class LinearReads:
                 break
         raise LookupError(f"{identifier}'s relations were not read to the end "
                           f"({len(nodes)} read)")
+
+    def states(self, identifiers: list) -> dict:
+        """Each named card's state, by identifier, in one request (DRE-8593)
+        — at most `LANE_RELATIONS_CARDS` of them. A card Linear did not answer
+        for is absent, and a failed read raises."""
+        numbers = [int(i.split("-")[1]) for i in identifiers[:LANE_RELATIONS_CARDS]]
+        data = linear_ops.gql(CARD_STATES_QUERY, {"numbers": numbers})
+        return {node.get("identifier"): (node.get("state") or {}).get("name")
+                for node in ((data or {}).get("issues") or {}).get("nodes") or []
+                if node.get("identifier")}
 
 
 def github_read(path: str):
@@ -1617,6 +1669,23 @@ PRESS_OUTSIDE = (f"it names {CEO_PRESS} on a card in {{lane}}, not {RETURN_LANE}
 LIFTED_BY = "lifted by the proof dispatcher"
 LIFTED_ONE = "the hold waited for that time and nothing else"
 LIFTED_MANY = "the holds waited for those times and nothing else"
+#: Why a lift that names cards was all it needed (DRE-8593).
+LIFTED_CARDS = "each hold waited for its time or for its cards to be Done, and nothing else"
+
+
+def _too_many(cards: list) -> str:
+    """Why a card hold naming more cards than the dispatcher reads holds."""
+    return (f"the hold names {len(cards)} cards, more than the {REARM_FIX_CARDS} a "
+            "card hold is read for, so none is read")
+
+
+def _cards_left(cards: list, states: dict, error: Exception | None = None) -> str:
+    """Why a card hold still holds off `states` — each card not `Done` and its
+    state, or not read — or "" when every card it names reads `Done`."""
+    left = [card for card in cards if states.get(card) != SHIPPED_STATE]
+    unread = f": {error}" if error is not None else ": Linear answered no card"
+    return ", ".join(f"{card} is {states[card]}" if states.get(card)
+                     else f"{card} could not be read{unread}" for card in left)
 
 
 def _lifts_at(until: datetime | None) -> str:
@@ -1861,24 +1930,50 @@ def _needs_half(line: str) -> str:
     return needs.strip() if mark else ""
 
 
+#: The card ids a card hold's needs half opens with (DRE-8593), joined by
+#: `, ` or `and`; whatever follows them is the writer's and is not read.
+_CARD_IDS = re.compile(r"^DRE-\d+\b(?:(?:, (?:and )?| and )DRE-\d+\b)*")
+
+
+def _read_another_way(line: str) -> bool:
+    """Is this hold one the dispatcher reads by its own rule — time-only,
+    naming `CEO_PRESS`, a cause or history hold, the record's own hold
+    (DRE-8451), waiting for fix cards to ship, or one whose needs half opens
+    one of the dispatcher's own wordings (`_OWN_NEEDS`)?"""
+    if CEO_PRESS in line or proof_record.time_only(line) is not None:
+        return True
+    if proof_cause_park.is_cause_hold(line) or proof_record_pr.is_record_hold(line):
+        return True
+    needs = _needs_half(line)
+    return bool(_CARDS_SHIPPED.match(needs)) or any(own.match(needs) for own in _OWN_NEEDS)
+
+
+def _card_hold(line: str) -> list:
+    """The card ids a card hold waits on (DRE-8593), or [] for any other
+    line. A card hold is an open hold whose needs half opens with one or more
+    `DRE-<n>` ids, joined by `, ` or `and`, and that the dispatcher reads no
+    other way (`_read_another_way`). Only the ids it opens with are read:
+    anything after them is the writer's explanation."""
+    line = _first_line(line)
+    if not line.startswith(HOLD_MARK) or _read_another_way(line):
+        return []
+    opening = _CARD_IDS.match(_needs_half(line))
+    return list(dict.fromkeys(re.findall(r"DRE-\d+", opening.group(0)))) if opening else []
+
+
 def _is_event_hold(line: str) -> bool:
     """Is this open hold one that nothing in the pipeline lifts or answers by
     itself (DRE-7967)? Not a time-only hold (`_lift_or_hold` lifts it), not
     one naming `CEO_PRESS`, not a cause or history hold, not the record's
     own hold — the record, not a person, decides what it waits on (DRE-8451)
     — not one whose needs half opens one of the dispatcher's own wordings
-    (`_OWN_NEEDS`), and not one that waits for fix cards to ship."""
+    (`_OWN_NEEDS`), not one that waits for fix cards to ship, and not a card
+    hold (`_card_hold`), which lifts itself once its cards are Done
+    (DRE-8593)."""
     line = _first_line(line)
-    if not line.startswith(HOLD_MARK) or CEO_PRESS in line:
+    if not line.startswith(HOLD_MARK) or _read_another_way(line):
         return False
-    if proof_record.time_only(line) is not None or proof_cause_park.is_cause_hold(line):
-        return False
-    if proof_record_pr.is_record_hold(line):
-        return False
-    needs = _needs_half(line)
-    if _CARDS_SHIPPED.match(needs):
-        return False
-    return not any(own.match(needs) for own in _OWN_NEEDS)
+    return not _card_hold(line)
 
 
 def _where(source: RecordSource) -> str:
@@ -1913,6 +2008,10 @@ class _Pass:
         self.threads: dict = {}
         #: Each record branch's head the DRE-7787 shortcut read this pass.
         self.branch_heads: dict = {}
+        #: The states of the cards the Hand-work lane's card holds name, read
+        #: once this pass (`read_card_holds`, DRE-8593); None when that read
+        #: failed.
+        self.lane_states: dict | None = {}
 
     # -- the reads every candidate shares (conditions 2 and 3) ------------- #
 
@@ -1993,9 +2092,41 @@ class _Pass:
         thread read's, which reads the record and decides (DRE-8451): it is
         read past here, and the re-run budget's hold beside it, as
         `first_run` reads past them over the record on its branch. A card
-        with nothing else open is left to the reads."""
+        with nothing else open is left to the reads.
+
+        A card hold (`_card_hold`, DRE-8593) is judged off the states
+        `read_card_holds` read for the whole lane: every card `Done`, or not
+        read, and the thread read decides; any other state, and the line
+        names each card and its state."""
         if "needs-human" in _labels(card):
             return "it carries needs-human"
+        shown = self._window_hold(card)
+        if shown is None:
+            return None
+        line, voices, either = shown
+        until = proof_record.time_only(line)
+        if until is not None and until <= self.now:
+            return None  # a time that has passed: the thread read may lift it
+        cards = _card_hold(line)
+        if len(cards) > REARM_FIX_CARDS:
+            return f"held by {line} — {_too_many(cards)}"
+        if cards:
+            states = self.lane_states
+            if states is None or any(c not in states for c in cards):
+                return None  # not read: the thread read reads them
+            left = _cards_left(cards, states)
+            return f"held by {line} — {left}" if left else None
+        partial = linear_ops.window_is_partial(card.get("comments"))
+        if self._chase(proof_record.open_holds_at(voices, discharge=either), voices,
+                       unseen=partial, kinds=either):
+            return None  # a chase the window shows owed: the thread read decides
+        return f"held by {line}{_lifts_at(until)}"
+
+    def _window_hold(self, card: dict) -> tuple | None:
+        """`(line, voices, either)` for the open hold the card's lane window
+        decides on — its newest hold, or the newest past the record's own
+        hold and the budget's beside it — with nothing after it that could
+        discharge it; None when the window leaves it to the reads."""
         window = linear_ops.window_nodes(card.get("comments"))
         try:
             voices = self.voices(window, None, card=card["identifier"])
@@ -2021,14 +2152,33 @@ class _Pass:
             if not rest:
                 return None  # the record decides: the thread read reads it
             line = rest[-1]
-        until = proof_record.time_only(line)
-        if until is not None and until <= self.now:
-            return None  # a time that has passed: the thread read may lift it
-        partial = linear_ops.window_is_partial(card.get("comments"))
-        if self._chase(proof_record.open_holds_at(voices, discharge=either), voices,
-                       unseen=partial, kinds=either):
-            return None  # a chase the window shows owed: the thread read decides
-        return f"held by {line}{_lifts_at(until)}"
+        return line, voices, either
+
+    def read_card_holds(self, cards: list) -> None:
+        """The states of every card a card hold in the lane names (DRE-8593),
+        in ONE request, as `LinearReads.lane` reads the marked cards'
+        relations: for each card whose window's deciding hold
+        (`_window_hold`) is a card hold naming at most `REARM_FIX_CARDS`
+        cards. No such hold, no request; a failed request leaves
+        `lane_states` None, so no card is named held on its account."""
+        named = []
+        for card in cards:
+            if "needs-human" in _labels(card):
+                continue
+            shown = self._window_hold(card)
+            ids = _card_hold(shown[0]) if shown else []
+            if len(ids) <= REARM_FIX_CARDS:
+                named.extend(ids)
+        named = list(dict.fromkeys(named))
+        self.lane_states = {}
+        if not named:
+            return
+        try:
+            self.lane_states = self.linear.states(named)
+        except Exception as error:  # noqa: BLE001 — unread spares no read
+            self.lane_states = None
+            print(f"{PREFIX} the states of {', '.join(named)}, named by card holds, "
+                  f"could not be read — each is left to the thread read: {error}")
 
     def _chase(self, held: list, voices: list, *, unseen: bool = False,
                kinds: tuple = (spoken_thread.PIPELINE,)) -> tuple | None:
@@ -2138,43 +2288,79 @@ class _Pass:
 
     def _lift_or_hold(self, ident: str, holds: list, voices: list,
                       refuse: Callable = _held_first,
-                      times: dict | None = None) -> datetime:
-        """Condition 4 over the open holds (DRE-7228): when every one is
-        time-only (`proof_record.time_only`) and every time is at or before
-        the pass's `now`, one `🔬 proof-observed` lifts them, the card goes
-        on, and the latest time lifted is returned; otherwise `refuse(why)`
-        is raised, naming the hold that still holds. One note lifts every
-        open hold but the CEO's press, so a time hold beside any other is
-        never lifted by time. The re-run branch passes its own `refuse`
-        (DRE-7316), and `times` for a prose waiting hold it reads as lifting
-        itself (DRE-7951); the rule is this one."""
+                      times: dict | None = None) -> datetime | None:
+        """Condition 4 over the open holds (DRE-7228): when every one is met
+        — time-only (`proof_record.time_only`) with its time at or before the
+        pass's `now`, or a card hold (`_card_hold`) whose every card reads
+        `Done` (DRE-8593) — one `🔬 proof-observed` lifts them, the card goes
+        on, and the latest time lifted is returned, None when no time was;
+        otherwise `refuse(why)` is raised, naming the hold that still holds.
+        One note lifts every open hold but the CEO's press, so a met hold
+        beside any other is never lifted. The cards are read only when every
+        hold no read can lift is a time hold, in one request for them all.
+        The re-run branch passes its own `refuse` (DRE-7316), and `times` for
+        a prose waiting hold it reads as lifting itself (DRE-7951); the rule
+        is this one."""
         times = times or {}
         timed = [(h, times.get(h) or proof_record.time_only(h)) for h in holds]
         standing = [(h, t) for h, t in timed if t is None or t > self.now]
+        named = {h: cards for h, t in standing if t is None and (cards := _card_hold(h))}
+        other = [h for h, t in standing if t is None and h not in named]
+        said = self._cards_unmet(named) if named and not other else {}
+        standing = [(h, t) for h, t in standing if said.get(h) != ""]
         if not standing:
-            self._lift(ident, holds, refuse, times)
-            return max(t for _, t in timed)
-        untimed = [h for h, t in standing if t is None]
+            cards = list(dict.fromkeys(c for h in holds for c in named.get(h, ())))
+            self._lift(ident, holds, refuse, times, cards)
+            stamps = [t for _, t in timed if t is not None]
+            return max(stamps) if stamps else None
+        untimed = other or [h for h, t in standing if t is None]
         if untimed:
             line, until = untimed[-1], None
         else:
             line, until = max(standing, key=lambda pair: pair[1])
+        why = f" — {said[line]}" if said.get(line) else ""
         note = f"; {UNCHECKED_NOTE}" if _unchecked_after_hold(voices) else ""
-        raise refuse(f"held by {line}{_lifts_at(until)}{note}")
+        raise refuse(f"held by {line}{why}{_lifts_at(until)}{note}")
+
+    def _cards_unmet(self, named: dict) -> dict:
+        """For each card hold in `named` (hold → its cards), why it still
+        holds — or "" when every card it names reads `Done` (DRE-8593). A
+        hold naming more than `REARM_FIX_CARDS` cards is not read, and the
+        rest are read in one request: a card in any other state, `Canceled`
+        and `Duplicate` included, or one not read, holds."""
+        said = {h: _too_many(cards) for h, cards in named.items()
+                if len(cards) > REARM_FIX_CARDS}
+        read = list(dict.fromkeys(c for h, cards in named.items() if h not in said
+                                  for c in cards))
+        if not read:
+            return said
+        try:
+            states, error = self.linear.states(read), None
+        except Exception as failed:  # noqa: BLE001 — unread is never Done
+            states, error = {}, failed
+        for h, cards in named.items():
+            if h not in said:
+                said[h] = _cards_left(cards, states, error)
+        return said
 
     def _lift(self, ident: str, holds: list, refuse: Callable = _held_first,
-              times: dict | None = None) -> None:
+              times: dict | None = None, cards: list = ()) -> None:
         """Post the one `🔬 proof-observed` that lifts time-only holds whose
         times have passed, under the pipeline's key — a prose waiting hold
         read as lifting itself (`times`, DRE-7951) quoted by its time, as a
-        stamped one is. Not live, `would:` and nothing written; a note not
-        posted is a failure of the pass, and the card is held on it."""
+        stamped one is, and each card a card hold waited on named
+        `DRE-<n> Done` beside them (DRE-8593). Not live, `would:` and nothing
+        written; a note not posted is a failure of the pass, and the card is
+        held on it."""
         times = times or {}
         clauses = list(dict.fromkeys(proof_record.time_only_clause(h)
-                                     or _not_before(times[h]) for h in holds))
-        text = (f"{', '.join(clauses)} {'has' if len(clauses) == 1 else 'have'} "
-                f"passed (read at {_pt(self.now)}) — {LIFTED_BY}; "
-                + (LIFTED_ONE if len(clauses) == 1 else LIFTED_MANY))
+                                     or _not_before(times[h]) for h in holds
+                                     if h in times or proof_record.time_only(h)))
+        said = ([f"{', '.join(clauses)} {'has' if len(clauses) == 1 else 'have'} passed"]
+                if clauses else [])
+        said += [", ".join(f"{card} {SHIPPED_STATE}" for card in cards)] if cards else []
+        why = (LIFTED_CARDS if cards else LIFTED_ONE if len(clauses) == 1 else LIFTED_MANY)
+        text = f"{'; '.join(said)} (read at {_pt(self.now)}) — {LIFTED_BY}; {why}"
         if not self.live:
             print(f"would: lift {ident} — {text}")
             return
@@ -2182,7 +2368,8 @@ class _Pass:
             linear_ops.cmd_proof_observed(ident, text)
         except Exception as error:  # noqa: BLE001
             self.tally.failures.append(f"{ident}: the lift could not be posted: {error}")
-            raise refuse(f"held by {holds[-1]} — its time has passed, and the "
+            met = "what it waited for has come" if cards else "its time has passed"
+            raise refuse(f"held by {holds[-1]} — {met}, and the "
                          f"lift could not be posted: {error}")
         _say(ident, f"lifted: {text}")
 
@@ -3358,7 +3545,7 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
     green = one.linear.lane(RETURN_LANE)
     returns = [c for c in green if one.is_return(c)]
     returning = {c["identifier"] for c in returns}
-    first, held = [], []
+    first, held, ours = [], [], []
     for card in one.linear.lane(FIRST_RUN_LANE):
         if not proof_and_demo.is_proof(card.get("title") or ""):
             continue
@@ -3368,6 +3555,10 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
                                      f"{slug_on_card or 'no repo'}, not {slug}")
             tally.refused += 1
             continue
+        ours.append(card)
+    # Every card hold the lane shows is judged off one read (DRE-8593).
+    one.read_card_holds(ours)
+    for card in ours:
         why = one.held_on_the_lane(card)
         if why:
             held.append((card, why))
