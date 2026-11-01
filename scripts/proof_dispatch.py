@@ -323,8 +323,10 @@ and an `In Review` card is told once: one plain comment whose first line is
 `linear_ops.cmd_comment` only when no comment on the thread has that exact
 first line (`_tell_once`). So the card gets one comment per state, and a
 branch that returns and is lost again at a new head gets one more. Not live,
-`would: comment`. A Hand-work card with no record branch is refused at
-condition 5 as before, and told nothing.
+`would: comment`. A card whose `**Files:**` line names no one record has
+nothing GitHub could answer for, so it is unread the same way and told
+nothing; the line says why. A Hand-work card with no record branch is
+refused at condition 5 as before, and told nothing.
 
 The DRE-7787 shortcut compares a spent record with no pull request open at
 its branch's head (`branch_head`): one read of its ref per pass, through the
@@ -2435,8 +2437,9 @@ class _Pass:
     def _branch_source(self, card: dict, closed) -> RecordSource:
         """The record on `agent/<card>-proof-record` at its head (DRE-8440),
         dated by the card's newest `🔬 proof-run` receipt. A read that raised
-        is `_BranchUnread` with no `what`; a branch GitHub says is gone, or a
-        head with no record file, is one with GitHub's answer."""
+        — or a `**Files:**` line naming no one record — is `_BranchUnread`
+        with no `what`; a branch GitHub says is gone, or a head with no
+        record file, is one with GitHub's answer."""
         ident = card["identifier"]
         branch = f"agent/{ident}-proof-record"
         none_open = ("no open record pull request"
