@@ -51,6 +51,91 @@
      }
     }
    ]
+  },
+  "inverseRelations": {
+   "nodes": [
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-8608",
+      "state": {
+       "name": "In Progress"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-7391",
+      "state": {
+       "name": "Intake"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-6432",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-6007",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-6006",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-6005",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-6004",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-6003",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-6002",
+      "state": {
+       "name": "Done"
+      }
+     }
+    }
+   ]
   }
  },
  "thread": [

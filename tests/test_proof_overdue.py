@@ -57,10 +57,11 @@ def _hold(observed: str, needs: str) -> str:
 
 
 def _card(*, repo="agent-bureau", lane="Hand-work", entered=OLD, first_run=None,
-          record_opened=None, states=None, identifier="DRE-9000"):
+          record_opened=None, states=None, blockers=None, identifier="DRE-9000"):
     return {"identifier": identifier, "repo": repo, "labels": [f"repo:{repo}", "agent:ops"],
             "lane": lane, "entered": entered, "first_run": first_run,
-            "record_opened": record_opened, "states": states or {}}
+            "record_opened": record_opened, "states": states or {},
+            "blockers": blockers or {}}
 
 
 def _diagnose(holds=(), rows=(), release=None, **card):
@@ -111,6 +112,25 @@ def test_a_card_hold_whose_card_is_done_is_not_a_release():
     assert _diagnose([line], states={"DRE-9101": "In Progress"}).cls == "release"
     done = _diagnose([line], states={"DRE-9101": "Done"})
     assert done.cls == "unrepeatable" and done.by_elimination is True
+
+
+def test_an_open_blocker_reads_release_and_a_closed_one_reads_nothing():
+    got = _diagnose(blockers={"DRE-9105": "Hand-work", "DRE-9106": "Done"})
+    assert (got.cls, got.action, got.waits_on) == ("release", "rerun-on-release", "DRE-9105")
+    assert got.evidence == "blocked by DRE-9105 (Hand-work)"
+    closed = _diagnose(blockers={"DRE-9106": "Done", "DRE-9107": "Canceled"})
+    assert closed.by_elimination is True
+
+
+def test_the_saved_cards_blockers_are_its_open_blocks_relations():
+    saved = json.loads((FIXTURES / "DRE-5357.json").read_text())
+    saved["card"]["inverseRelations"] = {"nodes": [
+        {"type": "blocks", "issue": {"identifier": "DRE-9105", "state": {"name": "Queued"}}},
+        {"type": "related", "issue": {"identifier": "DRE-9108", "state": {"name": "Queued"}}},
+        {"type": "blocks", "issue": {"identifier": "DRE-4271", "state": {"name": "Done"}}}]}
+    assert proof_overdue.facts(saved)["blockers"] == {"DRE-9105": "Queued"}
+    got = proof_overdue.from_saved(saved)
+    assert (got.cls, got.waits_on) == ("release", "DRE-9105")
 
 
 def test_a_release_not_yet_out_reads_release_with_its_tag():

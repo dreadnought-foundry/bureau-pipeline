@@ -45,6 +45,289 @@
      }
     }
    ]
+  },
+  "inverseRelations": {
+   "nodes": [
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-8608",
+      "state": {
+       "name": "In Progress"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-7513",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-7484",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "related",
+     "issue": {
+      "identifier": "DRE-5407",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4245",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5356",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5354",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5353",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5352",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5351",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5350",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-5032",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4925",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4907",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4906",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4905",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4387",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4386",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4385",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4375",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4353",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4352",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4351",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4350",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4349",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4348",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4343",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4271",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4270",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4269",
+      "state": {
+       "name": "Done"
+      }
+     }
+    },
+    {
+     "type": "blocks",
+     "issue": {
+      "identifier": "DRE-4268",
+      "state": {
+       "name": "Done"
+      }
+     }
+    }
+   ]
   }
  },
  "thread": [
