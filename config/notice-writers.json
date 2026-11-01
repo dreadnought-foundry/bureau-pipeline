@@ -92,6 +92,15 @@
       "reason": "repointed by this epic — closed by the writer on the next successful run"
     },
     {
+      "id": "triage-unrepaired",
+      "repo": "bureau-pipeline",
+      "file": "scripts/triage_unrepaired.py",
+      "title": "Triage cards the repair could not fix",
+      "disposition": "notice",
+      "notice_key": "triage_repair:fleet:unrepaired",
+      "reason": "a new notice (DRE-8609) — closed by the writer on the first complete Triage Repair run that lists no card; it files no fallback card"
+    },
+    {
       "id": "spending-decision",
       "repo": "bureau-pipeline",
       "file": "scripts/model_adoption_actions.py",

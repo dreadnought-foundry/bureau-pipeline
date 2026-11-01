@@ -203,6 +203,12 @@
       "printed_by": "scripts/planner_allowance.py",
       "constant": "TAG",
       "when": "every read of the planners' Linear allowance since DRE-8616, one line on stdout: start or hold, the card, the remaining and the limit, the threshold, whether the read was answered or refused, the receipt and the run's request count"
+    },
+    {
+      "tag": "triage-unrepaired:",
+      "printed_by": "scripts/triage_unrepaired.py",
+      "constant": "TAG",
+      "when": "every Triage Repair run since DRE-8649, on stdout: one line per Triage card the repair could not fix (its card, its receipt word and when it arrived in Triage), then one closing line — the cards listed, whether every thread was read, and the console door's outcome, or unread when the door was not called"
     }
   ],
   "causes": [
