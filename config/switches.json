@@ -8,7 +8,7 @@
       "name": "PROOF_DISPATCH_LIVE",
       "reader": ".github/workflows/reconcile.yml",
       "step": "Dispatch proof runs",
-      "means": "The sweep dispatches a proof run at each PROOF card whose epic's build cards are Done and released, instead of printing what it would dispatch."
+      "means": "The sweep dispatches a proof run at each PROOF card whose epic's build cards are Done and released, instead of printing what it would dispatch. The sweep's `Close proof records that cannot merge` step reads it too: it closes each open record pull request whose record cannot merge, keeping its branch, instead of printing what it would close (DRE-8452)."
     },
     {
       "name": "GREEN_LIGHT_REPLY_LIVE",

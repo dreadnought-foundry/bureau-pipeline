@@ -556,7 +556,11 @@ person's account, which observes the criteria and pushes the record to
 `agent/DRE-<n>-proof-record`. The run never opens a pull request itself: the
 workflow does, and the pull request opens only when the record can merge
 (DRE-8437, DRE-8441) — while the proof waits, the record stays on its branch
-and the card's `🔬 proof-waiting` hold says what it waits on. The card closes
+and the card's `🔬 proof-waiting` hold says what it waits on. The reconcile
+sweep closes a record pull request whose record cannot merge, keeping its
+branch, and the card keeps its lane under its hold (DRE-8452). It runs on the
+canary channel as soon as it merges, in every other repository as its `stable`
+tag advances past it, and only where `PROOF_DISPATCH_LIVE` is `true`. The card closes
 on the approved merge of that record, by `card-done` under DRE-5919's PROOF rule or by the hygiene
 agent's `hyg-proof-closed` receipt (DRE-5365), and nothing waits on him. The
 card still routes `OPERATOR`, by its `agent:ops` label, and the five conditions

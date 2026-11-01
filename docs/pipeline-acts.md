@@ -570,7 +570,10 @@ each proof a person is already working with `linear_ops.py proof-waiting
 <card> "being observed by hand" "the operator's record pull request"`, and the
 phase leaves it alone by name — until that hold has stood a day, when it is
 an event hold owed its one chase (DRE-7967), unless the run reading finds
-somebody else on the card.
+somebody else on the card. The same switch governs the step after it, `Close
+proof records that cannot merge` (DRE-8452): until it is `true`, that step
+prints `would: close #<n>` for each open record pull request whose record
+cannot merge and closes nothing.
 
 **A proof shadow posts no receipt** (DRE-7287). While the repository variable
 `PROOF_SHADOW_MODEL` names a model, each confirmed dispatch on a live pass is

@@ -77,9 +77,10 @@ Not live — `PROOF_DISPATCH_LIVE` is not exactly `true` — it prints
 requests is full, and the sweep says so.
 
 A LEAF, like `proof_record`: nothing here imports `proof_dispatch` or
-`reconcile`, which reads `os.environ["REPO"]` when it is imported. Nothing
-calls it yet: DRE-8441 wires `decide` into the proof run, DRE-8452 `sweep`
-into the reconcile workflow.
+`reconcile`, which reads `os.environ["REPO"]` when it is imported. The proof
+run's `Open the record pull request only when it can merge` step calls
+`decide` (DRE-8441); the reconcile workflow's `Close proof records that cannot
+merge` step calls `sweep` on every full pass (DRE-8452).
 
 CLI:
 
