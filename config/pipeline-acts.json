@@ -2281,6 +2281,14 @@
       "why": "A REPORT about the run, the no-record receipt's sibling, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the In Review move a record makes is the one thing it withholds. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
     },
     {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "$RECORD_HELD_RECEIPT Run:",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof run left its record on its branch with no pull request, because `proof_record_pr.decide` held it (RECORD_PR_DECISION `held` or `closed-and-held`); the card keeps its lane, and its 🔬 proof-waiting hold says what it waits on (DRE-8461).",
+      "why": "A REPORT about the run, the no-record receipt's sibling, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane; the hold that creates the obligation is the 🔬 proof-waiting comment `decide` already posted, which has its own row. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
+    },
+    {
       "file": ".github/workflows/groomer.yml",
       "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
       "step": "Judgement receipt — the model that answered",
