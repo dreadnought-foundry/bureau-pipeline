@@ -148,7 +148,7 @@ def _serve_one_off(ident: str, labels: list) -> FakeDispatch:
             mock.patch.object(reconcile.plan_run, "fire", side_effect=real_fire), \
             _fake_dispatch() as fake:
         reconcile.serve_planner_line()
-    served = world.receipts("dispatched")
+    served = world.receipts("released")
     assert [ident for ident, _ in served] == [card["identifier"]]
     return fake
 

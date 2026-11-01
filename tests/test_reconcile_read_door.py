@@ -728,7 +728,7 @@ def test_a_repo_served_the_fleet_spends_no_linear_request_on_these_lanes(monkeyp
         assert _fleet_asks(door) == ["Planning,Intake"]
     reconcile.reset_sweep_cards()
     with door_at(monkeypatch, *board, repository=repository) as door, wired(linear):
-        assert reconcile.serve_planner_line() >= 0  # an empty line
+        assert reconcile.serve_planner_line() == []  # an empty line
         assert linear_ops.requests_made() == 0
         assert _fleet_asks(door) == ["Planning,Intake", "Green Light"]
     assert {"DRE-11", "DRE-12", "DRE-13", "DRE-14"} <= reconcile._door_sourced
@@ -975,7 +975,7 @@ def test_a_groom_release_of_a_fleet_served_card_is_conditional(monkeypatch):
     _groom_queue(monkeypatch)
     linear = Linear(_queued("Canceled"))
     with door_at(monkeypatch, _queued("Intake")), wired(linear):
-        assert reconcile.release_groom_queue(1) == []
+        assert reconcile.release_groom_queue() == []
     assert linear.writes == [] and linear.comments == []
     assert "get_issue DRE-541" in linear.queries
 
@@ -984,7 +984,7 @@ def test_a_groom_release_of_a_fleet_served_card_still_in_intake_lands(monkeypatc
     _groom_queue(monkeypatch)
     linear = Linear(_queued("Intake"))
     with door_at(monkeypatch, _queued("Intake")), wired(linear):
-        assert reconcile.release_groom_queue(1) == ["DRE-541"]
+        assert reconcile.release_groom_queue() == ["DRE-541"]
     assert linear.writes == [("state", "DRE-541", reconcile.GROOM_RELEASE_TO, (),
                               ("Intake",), ())]
 

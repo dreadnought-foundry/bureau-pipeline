@@ -1,28 +1,27 @@
-"""A card waiting in the planner line is not a dead planner (DRE-5177, epic DRE-5167).
+"""A card waiting in the old planner line is measured by the stall clock alone
+(DRE-8618, epic DRE-8539; the rule it replaces was DRE-5177's).
 
-THE TRAP. `reconcile.flag_stalled_planning` escalates any Planning card whose
-`updatedAt` is `PLANNING_MINUTES` (120) old, saying "planning has produced
-nothing". Once the fleet-wide planner cap is live (DRE-5176) a card can sit in
-Planning for hours with only its `waiting` planner-slot receipt on it — every
-fifth card of a groomer batch — and that rule would park each one in the CEO's
-queue as a failure. The same cap puts an approved epic whose activate run was
-not admitted `In Progress` with a `waiting` receipt and no second-critic round,
-and `post_critic_hold_is_overdue` would stamp "re-run the review" on every
-child thirty minutes after the approval.
+THE RULE THAT WENT. Under the fleet-wide planner cap (DRE-5176) a card could
+sit in Planning for hours with only its `waiting` planner-slot receipt on it,
+so `reconcile.flag_stalled_planning` read the line before the clock: a card in
+line inside the line's bound was skipped, and one past it was parked with the
+line's own reason after a `because parked` release. The same line silenced
+`post_critic_hold_is_overdue` while an approved epic waited in it.
 
-THE RULE UNDER TEST — the watchdog reads the line before it reads the clock:
+THE CAP IS GONE (`architecture/decisions/adr-planner-cap-removed.md`). Since
+DRE-8617 a plan run claims no slot, and the sweep drains what the line still
+holds (`tests/test_planner_queue_sweep.py`). So:
 
-  1. in line (`waiting`, or `dispatched` inside the grace) and inside the
-     bound: skipped, with one log line naming the card and the word waiting;
-  2. in line and past the line's bound (360 minutes): escalated once, through
-     the same seam, with the line's own reason — parked in Triage under the
-     stall-park note since DRE-5286, never in Green Light;
-  3. `claimed`: measured as today;
-  4. no receipt: measured as today;
+  1. a Planning card whose only recent comment is a `waiting` receipt is
+     parked by the stall clock exactly as a card with nothing on it would
+     be, with the stall clock's reason and no planner-slot release;
+  2. a young one — a receipt posted inside the window bumped `updatedAt` —
+     is left alone, by the clock;
+  3. `claimed`, or no receipt: measured as before;
 
-and the hold notice speaks only once the epic's review has started — while the
-epic is in line it is logged, and once it is claimed the grace runs from the
-claim.
+and a `waiting` or `claimed` receipt no longer changes when the hold notice
+speaks: it is timed from the green light (a held planner is
+`tests/test_planner_hold_notices.py`'s).
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_planner_queue_escalation.py -v
 """
@@ -55,7 +54,8 @@ import validate_card  # noqa: E402
 CARD = "DRE-9001"
 EPIC = "DRE-9100"
 CHILD = "DRE-9101"
-BOUND = 360  # the line's bound, read through planner_queue.waiting_max() below
+#: A wait the old line's bound (360 minutes) would have kept unparked.
+LONG = 300
 
 
 @pytest.fixture(autouse=True)
@@ -227,155 +227,58 @@ class _Board:
         return [r for i, r in self.escalations if i == identifier]
 
 
-def test_the_bound_is_the_config_files():
-    """The numbers every test below is written around, read through the one
-    reader the card is allowed to use."""
-    assert planner_queue.waiting_max() == BOUND
+def test_the_window_is_the_stall_clocks():
+    """The number every test below is written around."""
     assert reconcile.PLANNING_MINUTES == 120
 
 
 # ===========================================================================
-# 1. In line and inside the bound: skipped, whatever updatedAt says
+# 1 & 2. In line: measured by the stall clock, whatever the receipt says
 # ===========================================================================
-class TestAWaitingCardIsNotAStrand:
-    def test_three_hours_in_line_is_not_escalated(self, capsys):
+class TestAWaitingCardIsMeasuredByTheStallClock:
+    def test_three_hours_in_line_is_parked_with_the_stall_clocks_reason(self, capsys):
         board = _Board(_card(minutes_stale=180, bodies=[_waiting(180)]))
-        assert board.watch() == set()
-        assert board.escalations == []
-        assert board.posted == []
-        assert board.states == []
-        assert board.lane() == "Planning"
-        out = capsys.readouterr().out
-        line = next(l for l in out.splitlines() if CARD in l and "waiting" in l)
-        assert "not a strand" in line
-        assert "place 3 of 7" in line, "the place is read off its receipt"
-        assert "180 minutes" in line, "the wait is named"
+        assert board.watch() == {CARD}
+        assert board.reasons() == [reconcile.stalled_planning_reason()]
+        assert board.states == [(CARD, reconcile.PARKED_STATE)]
+        assert "waiting for a planner slot" not in capsys.readouterr().out
+
+    def test_a_wait_the_old_bound_allowed_is_parked_too(self):
+        board = _Board(_card(minutes_stale=LONG, bodies=[_waiting(LONG)]))
+        assert board.watch() == {CARD}
+        (reason,) = board.reasons()
+        assert reason == reconcile.stalled_planning_reason()
+        assert "waiting in line for a planner" not in reason
+
+    def test_the_park_posts_no_planner_slot_release(self):
+        board = _Board(_card(minutes_stale=180, bodies=[_waiting(180)]))
+        board.watch()
+        posted = [b for i, b in board.posted if i == CARD]
+        assert len(posted) == 1, "the stall-park note and nothing else"
+        assert posted[0].startswith(f"🧹 {dedupe_dispatch.STALL_PARK_TAG}")
+        assert all(planner_queue.parse_receipt(b) is None for b in posted)
 
     def test_no_planning_escalation_comment_is_posted(self):
         board = _Board(_card(minutes_stale=180, bodies=[_waiting(180)]))
         board.watch()
         assert not any(planning_escalation.ESCALATION_TAG in b for _, b in board.posted)
 
-    def test_the_skip_is_logged_once_per_card_per_sweep(self, capsys):
-        board = _Board(_card(minutes_stale=180, bodies=[_waiting(180)]))
-        board.watch()
-        out = capsys.readouterr().out
-        hits = [l for l in out.splitlines()
-                if CARD in l and "waiting for a planner slot" in l]
-        assert len(hits) == 1, out
-
-    def test_359_minutes_is_still_inside_the_bound(self):
-        board = _Board(_card(minutes_stale=BOUND - 1, bodies=[_waiting(BOUND - 1)]))
+    def test_a_young_card_in_line_is_left_alone_by_the_clock(self):
+        """A receipt posted inside the window bumped `updatedAt`: the clock,
+        not the line, leaves it alone."""
+        bodies = [_waiting(LONG + 30), _receipt("dispatched", 5)]
+        assert planner_queue.in_line(bodies)
+        board = _Board(_card(minutes_stale=5, bodies=bodies))
         assert board.watch() == set()
         assert board.escalations == []
         assert board.lane() == "Planning"
 
-
-# ===========================================================================
-# 2. In line and past the bound: escalated once, with the line's own reason
-# ===========================================================================
-class TestAWaitPastTheBoundIsEscalated:
-    def test_361_minutes_is_escalated_once_with_the_lines_reason(self):
-        board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
-        assert board.watch() == {CARD}
-        reasons = board.reasons()
-        assert len(reasons) == 1, reasons
-        reason = reasons[0]
-        assert "about 6 hours" in reason, reason
-        assert "waiting in line for a planner" in reason
-        assert reason.endswith(
-            "Sending it back through Planning gives it a fresh place in line.")
-        assert "planning has produced nothing" not in reason
-        assert "in front of you" not in reason
-        assert board.states == [(CARD, reconcile.PARKED_STATE)]
-        assert reconcile.PARKED_STATE == "Triage"
-        assert all(lane != "Green Light" for _, lane in board.states)
-        assert reconcile._write_failures == [], (
-            "the planner's question seam was reached")
-
-    def test_the_stall_park_note_lands_before_the_triage_move(self):
-        board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
-        board.watch()
-        notes = [n for n, (i, b) in enumerate(board.posted)
-                 if i == CARD and dedupe_dispatch.STALL_PARK_TAG in b]
-        assert len(notes) == 1
-        assert board.posted[notes[0]][1].startswith(
-            f"🧹 {dedupe_dispatch.STALL_PARK_TAG}")
-        assert board.events.index(("state", CARD)) > [
-            n for n, e in enumerate(board.events) if e == ("comment", CARD)][-1], (
-            "the note must be the last comment before the move")
-
-    def test_the_whole_reason_reaches_the_card(self):
-        board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
-        board.watch()
-        posted = [b for i, b in board.posted
-                  if i == CARD and planner_queue.parse_receipt(b) is None]
-        assert len(posted) == 1
-        assert "waiting in line for a planner" in posted[0]
-        assert planning_escalation.NOT_PLAIN_ENGLISH not in posted[0]
-
     def test_the_once_ever_marker_holds_on_the_next_pass(self):
-        """The WATCHDOG_TAG comment is present: the card is not escalated
-        again, however long it has waited."""
-        board = _Board(_card(minutes_stale=BOUND + 60,
-                             bodies=[_waiting(BOUND + 60), _watchdog_receipt()]))
+        board = _Board(_card(minutes_stale=LONG + 60,
+                             bodies=[_waiting(LONG + 60), _watchdog_receipt()]))
         assert board.watch() == set()
         assert board.escalations == []
         assert board.states == []
-
-    def test_a_dispatch_inside_the_grace_measures_from_the_line_entry(self):
-        """Dispatched five minutes ago — in line by the foundation card's rule —
-        and its line entry is past the bound. The dispatch bumped updatedAt,
-        which is exactly why the line's clock and not the stall clock decides."""
-        bodies = [_waiting(BOUND + 30), _receipt("dispatched", 5)]
-        assert planner_queue.in_line(bodies)
-        board = _Board(_card(minutes_stale=5, bodies=bodies))
-        assert board.watch() == {CARD}
-        (reason,) = board.reasons()
-        assert "waiting in line for a planner" in reason
-        assert board.states == [(CARD, reconcile.PARKED_STATE)]
-
-
-# ===========================================================================
-# 2b. The park ends the card's place in line (DRE-5378)
-# ===========================================================================
-class TestAParkEndsThePlaceInLine:
-    """DRE-5213, 2026-09-30: waiting from 07:35 PT, parked by this watchdog at
-    13:40 PT, re-sent to Planning by the operator at 14:00 PT — and parked
-    again at 14:26 PT as "waited 411 minutes", because the park posted no
-    release and the wait still ran from 07:35. The reason the CEO reads says
-    "Sending it back through Planning gives it a fresh place in line"; the
-    release is what makes that sentence true."""
-
-    def test_the_park_posts_a_release_for_the_card(self):
-        board = _Board(_card(minutes_stale=BOUND + 1, bodies=[_waiting(BOUND + 1)]))
-        assert board.watch() == {CARD}
-        receipts = [planner_queue.parse_receipt(b) for i, b in board.posted if i == CARD]
-        releases = [r for r in receipts if r is not None and r.state == "released"]
-        assert [(r.card, r.because) for r in releases] == [(CARD, "parked")]
-        nodes = board._find(CARD)["comments"]["nodes"]
-        assert not planner_queue.in_line(nodes)
-
-    def test_a_card_inside_the_bound_is_not_released(self):
-        board = _Board(_card(minutes_stale=180, bodies=[_waiting(180)]))
-        board.watch()
-        assert board.posted == []
-
-    def test_a_resend_after_the_park_is_not_overdue(self):
-        """411 minutes after its first wait, 30 after the re-send's."""
-        park = planner_queue.format_receipt(
-            "released", card=CARD, run="36774224458",
-            repo="dreadnought-foundry/agent-bureau", trigger="Planning",
-            at=_iso(46), because="parked")
-        bodies = [_receipt("claimed", 411, run="36726491495"),
-                  _waiting(411, run="36726491495"),
-                  park,
-                  _receipt("claimed", 30, run="36776079981"),
-                  _waiting(30, run="36776079981")]
-        board = _Board(_card(minutes_stale=30, bodies=bodies))
-        assert board.watch() == set()
-        assert board.escalations == []
-        assert board.lane() == "Planning"
 
 
 # ===========================================================================
@@ -403,7 +306,7 @@ class TestEverythingElseIsMeasuredAsToday:
 # The existing skips run first, for both rules
 # ===========================================================================
 class TestTheExistingSkipsRunFirst:
-    @pytest.mark.parametrize("wait", [180, BOUND + 60])
+    @pytest.mark.parametrize("wait", [180, LONG + 60])
     def test_a_held_card_is_left_alone(self, wait, capsys):
         board = _Board(_card(labels=(reconcile.HOLD_LABEL,), minutes_stale=wait,
                              bodies=[_waiting(wait)]))
@@ -411,7 +314,7 @@ class TestTheExistingSkipsRunFirst:
         assert board.escalations == []
         assert "waiting for a planner slot" not in capsys.readouterr().out
 
-    @pytest.mark.parametrize("wait", [180, BOUND + 60])
+    @pytest.mark.parametrize("wait", [180, LONG + 60])
     def test_a_hand_built_card_is_left_alone(self, wait, capsys):
         board = _Board(_card(labels=(reconcile.HAND_BUILT_LABEL,),
                              minutes_stale=wait, bodies=[_waiting(wait)]))
@@ -421,7 +324,7 @@ class TestTheExistingSkipsRunFirst:
         assert reconcile.HAND_BUILT_LABEL in out
         assert "waiting for a planner slot" not in out
 
-    @pytest.mark.parametrize("wait", [180, BOUND + 60])
+    @pytest.mark.parametrize("wait", [180, LONG + 60])
     def test_another_repos_card_is_left_alone(self, wait, capsys):
         board = _Board(_card(labels=("repo:atlas",), minutes_stale=wait,
                              bodies=[_waiting(wait)]))
@@ -434,15 +337,15 @@ class TestTheExistingSkipsRunFirst:
 # The state rule 2 leaves behind: a waiting receipt on a Green Light card
 # ===========================================================================
 class TestAWaitingCardInGreenLight:
-    """What rule 2 leaves behind, or a person's hand move. The watchdog reads
+    """What the old line's park left behind, or a person's hand move. The watchdog reads
     Planning cards only, and the ledger the sweep's backstop dispatches from
     (`planner_queue.ledger` → `next_in_line`) reads a Green Light card for its
     open claim only — so one pass over one board, holding one fixture, pins
     both readings: nothing escalates it and nothing would dispatch at it."""
 
     def _green(self):
-        return _card(state="Green Light", minutes_stale=BOUND + 60,
-                     bodies=[_waiting(BOUND + 60)])
+        return _card(state="Green Light", minutes_stale=LONG + 60,
+                     bodies=[_waiting(LONG + 60)])
 
     def test_the_watchdog_does_not_read_it(self):
         board = _Board(self._green())
@@ -471,14 +374,14 @@ class TestAWaitingCardInGreenLight:
 
     def test_moved_back_to_planning_with_a_newer_claim_it_is_measured_as_today(self):
         card = _card(minutes_stale=121,
-                     bodies=[_waiting(BOUND + 180), _receipt("claimed", 121)])
+                     bodies=[_waiting(LONG + 180), _receipt("claimed", 121)])
         board = _Board(card)
         assert board.watch() == {CARD}
         assert board.reasons() == [reconcile.stalled_planning_reason()]
 
 
 # ===========================================================================
-# 5. The post-approval hold notice waits for the line too
+# 5. The post-approval hold notice no longer reads the line
 # ===========================================================================
 GREEN_LIT_45 = 45
 
@@ -487,27 +390,21 @@ def _epic_waiting() -> list[str]:
     return [_waiting(40, card=EPIC, trigger="In Progress", place=1, of=2)]
 
 
-class TestTheHoldNoticeReadsTheLine:
+class TestTheHoldNoticeNoLongerReadsTheLine:
     UNREAD = plan_critic.POST_UNREAD_TAG
 
-    def test_in_line_it_is_logged_not_posted(self, capsys):
+    def test_in_line_it_speaks_from_the_green_light(self, capsys):
         assert reconcile.post_critic_hold_is_overdue(
-            self.UNREAD, _iso(GREEN_LIT_45), _epic_waiting()) is False
-        out = capsys.readouterr().out
-        line = next(l for l in out.splitlines() if EPIC in l)
-        assert "waiting" in line
+            self.UNREAD, _iso(GREEN_LIT_45), _epic_waiting()) is True
+        assert "waiting for a planner slot" not in capsys.readouterr().out
 
-    def test_claimed_ten_minutes_ago_is_inside_the_grace(self):
+    def test_a_claim_no_longer_restarts_the_grace(self):
         bodies = _epic_waiting() + [_receipt("claimed", 10, card=EPIC,
                                              trigger="In Progress")]
         assert reconcile.post_critic_hold_is_overdue(
-            self.UNREAD, _iso(GREEN_LIT_45), bodies) is False
-
-    def test_claimed_31_minutes_ago_speaks(self):
-        bodies = _epic_waiting() + [_receipt("claimed", 31, card=EPIC,
-                                             trigger="In Progress")]
-        assert reconcile.post_critic_hold_is_overdue(
             self.UNREAD, _iso(GREEN_LIT_45), bodies) is True
+        assert reconcile.post_critic_hold_is_overdue(
+            self.UNREAD, _iso(10), bodies) is False
 
     def test_no_receipt_answers_as_today(self):
         assert reconcile.post_critic_hold_is_overdue(
@@ -602,37 +499,28 @@ class _Promotion:
                 if i == CHILD and plan_critic.POST_UNREAD_TAG in b]
 
 
-class TestThePromotionGateWaitsForTheLine:
-    def test_an_epic_in_line_holds_its_child_and_posts_nothing(self, capsys):
+class TestThePromotionGateNoLongerWaitsForTheLine:
+    def test_an_epic_in_line_holds_its_child_and_posts_the_notice_once(self, capsys):
         board = _Promotion(_epic_waiting())
-        assert board.promote() == 0
-        assert board.advanced == []
-        assert board.unread_notices() == []
-        out = capsys.readouterr().out
-        assert any(EPIC in l and "waiting for a planner" in l
-                   for l in out.splitlines()), out
-
-    def test_a_claim_31_minutes_old_posts_the_notice_once(self):
-        board = _Promotion(_epic_waiting() + [
-            _receipt("claimed", 31, card=EPIC, trigger="In Progress")])
         assert board.promote() == 0
         board.promote()
         assert board.advanced == []
         notices = board.unread_notices()
         assert len(notices) == 1, notices
         assert EPIC in notices[0]
+        assert "waiting for a planner" not in capsys.readouterr().out
 
 
 # ===========================================================================
 # The lane contract says what the sweep now does
 # ===========================================================================
-def test_the_planning_clause_names_the_line_and_its_bound():
-    """A contract that still describes every long wait as a stall describes a
-    stall the sweep no longer raises, and misses the one it now does."""
+def test_the_planning_clause_no_longer_names_the_line_or_its_bound():
+    """A contract that still exempts a card waiting in the planner line
+    describes a skip the sweep no longer makes."""
     text = lane_contract.lane("Planning")["clauses"]["exit"]["text"]
-    assert "waiting in the planner line is not stalled" in text
-    assert "line order" in text
-    assert "config/planner-queue.json" in text
-    assert "Green Light" in text
+    assert "waiting in the planner line is not stalled" not in text
+    assert "config/planner-queue.json" not in text
+    assert "held by the planners' Linear allowance is not stalled" in text
     rendered = (ROOT / "docs" / "lane-contract.md").read_text(encoding="utf-8")
-    assert "waiting in the planner line is not stalled" in rendered
+    assert "waiting in the planner line is not stalled" not in rendered
+    assert "held by the planners' Linear allowance is not stalled" in rendered
