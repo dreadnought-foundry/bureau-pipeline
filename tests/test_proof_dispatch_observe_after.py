@@ -231,6 +231,20 @@ def test_the_docstring_names_condition_8():
     assert "Observe after" in first_runs
 
 
+def test_the_card_standard_says_the_dispatcher_waits_on_the_line():
+    """`standards/card-quality.md` told a planner the line was not yet waited
+    on until this gate shipped; with the gate in, it says the dispatcher waits."""
+    text = (ROOT / "standards" / "card-quality.md").read_text(encoding="utf-8")
+    start = text.index("A PROOF card can say when it can first be observed")
+    paragraph = text[start:text.index("**Proofs never wait on the CEO's sign-in", start)]
+    flat = " ".join(paragraph.split())
+    assert "not yet waited on" not in flat
+    assert "until that gate ships" not in flat
+    assert "condition 8" in flat and "DRE-8439" in flat
+    assert "proof-waiting" in flat
+    assert "dispatch 1 of 2" in flat
+
+
 # --------------------------------------------------------------------------- #
 # the DRE-6678 replay                                                          #
 # --------------------------------------------------------------------------- #
