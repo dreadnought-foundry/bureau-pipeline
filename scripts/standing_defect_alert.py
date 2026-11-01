@@ -7,12 +7,12 @@ with no relation behind it. The only signal was the medic's `standing_defect`
 class (DRE-6467), one `::notice::` on a run nobody opens, so there was nothing
 to read the defect off and nothing to act on.
 
-`settle(entries, repo_slug)` is the full sweep's last step before its red or
-green exit, handed `reconcile._stale_defects` as it stands. It raises one WARN
-console alert per card the ledger names and resolves this repo's alerts whose
-card has left it. The `--promote-only` gate never calls it: the scheduled full
-sweep is the one place that raises and resolves the alert, so the event-driven
-gate cannot flap it.
+`settle(entries, repo_slug, unread)` is the full sweep's last step before its
+red or green exit, handed `reconcile._stale_defects` as it stands. It raises
+one WARN console alert per card the ledger names and resolves this repo's
+alerts whose card has left it. The `--promote-only` gate never calls it: the
+scheduled full sweep is the one place that raises and resolves the alert, so
+the event-driven gate cannot flap it.
 
 ## The card an entry names
 
@@ -43,6 +43,21 @@ Every open standing-defect alert of this repo, read off
 resolved. An unreadable read resolves nothing this pass and says so. A green
 sweep, with an empty ledger, resolves every one of them.
 
+## A ledger the pass did not finish
+
+A card off the ledger is fixed only when the pass asked about it. `unread`
+is `reconcile._ledger_unread`: each gate that appends to the ledger and was
+skipped or stopped this pass — promotion on a held board, a limit recovery
+that was held or failed partway — and each defect found whose age could not
+be read. When it is not empty the empty half of the ledger is absence, not
+green (`standards/console-honesty.md`), so nothing is resolved, the open
+alerts are not read, and one line names what was missed. The raise half runs
+as ever: what the pass did find is standing.
+
+An idle pass skips promotion too, and still resolves. It is idle because
+nothing of this repo's is in motion or waiting to be promoted, so no gate of
+its can be standing, and its empty ledger is the true one.
+
 ## The lines
 
 Each opens with `TAG`, on stdout, and `settle` returns them in order:
@@ -52,6 +67,7 @@ Each opens with `TAG`, on stdout, and `settle` returns them in order:
     standing-defect-alert: none standing
     standing-defect-alert: <k> entry(ies) name no card
     standing-defect-alert: open alerts unreadable — <reason>
+    standing-defect-alert: ledger not evaluated — <what>; nothing resolved this pass
 
 The epic's proof does not read them: it reads the console alert and the
 `pipeline-notice:` line the notice client prints for every raise and resolve,
@@ -65,7 +81,9 @@ printed as the client returned it.
   (`groom_stall`, `reviewer_outage:fleet`), and the console door admits it.
 * Q2, the credentials: the sweep job already holds `id-token: write` and
   `BUREAU_READ_URL`, the two the notice client and the read door need.
-* Q3, a retry: a re-run repeats the same raise, and the door answers `repeat`.
+* Q3, a retry: a re-run repeats the same raise, and the door answers `repeat`
+  — and a pass that could not evaluate the ledger leaves the alert open rather
+  than resolving it, so the next full pass's raise is a `repeat` too.
 * Q4, the limits: the door refuses a key outside `^[A-Za-z0-9_.:-]{1,120}$`,
   and `standing-defect:<repo>:DRE-<n>` is inside it.
 * Q5, a crash mid-flow: a crash between the raise and the resolve leaves an
@@ -122,9 +140,10 @@ def _open_cards(answer: dict, repo_slug: str) -> list[str]:
     return cards
 
 
-def settle(entries, repo_slug: str) -> list[str]:
+def settle(entries, repo_slug: str, unread: Iterable[str] = ()) -> list[str]:
     """Raise one alert per card `entries` names, resolve this repo's alerts
-    whose card it no longer names, and return the lines printed."""
+    whose card it no longer names — none when `unread` says the ledger is
+    short — and return the lines printed."""
     lines: list[str] = []
 
     def say(text: str) -> None:
@@ -151,6 +170,10 @@ def settle(entries, repo_slug: str) -> list[str]:
     if no_card:
         say(f"{no_card} entry(ies) name no card")
 
+    unread = list(unread)
+    if unread:
+        say(f"ledger not evaluated — {', '.join(unread)}; nothing resolved this pass")
+        return lines
     try:
         answer = bureau_read.open_alerts()
     except bureau_read.ReadUnknown as e:
