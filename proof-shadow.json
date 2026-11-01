@@ -1,0 +1,7 @@
+{
+  "card": "DRE-8462",
+  "model": "claude-sonnet-5-5",
+  "run_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/41314367731",
+  "dispatched_at": "2026-11-01T14:04:32Z",
+  "record_path": "docs/proof-record-pr-opens-when-it-can-merge-proof-2026-11.md"
+}
