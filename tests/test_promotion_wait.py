@@ -342,7 +342,7 @@ class TestEachReasonIsSaidOnce:
         board = _Board(_card(epic_lane="Planning"))
         board.promote()
         (text,) = board.waits_on()
-        assert f"{EPIC} is in Planning" in text.splitlines()[0]
+        assert f"epic {EPIC}, which is in Planning" in text.splitlines()[0]
 
     def test_the_wip_comment_names_the_count(self):
         board = _Board(_card())

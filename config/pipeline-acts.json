@@ -1815,6 +1815,15 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "cmd_comment(identifier, notice)",
+      "kind": "not-an-act",
+      "opener": "🧾 promotion-wait:",
+      "reasons": ["wip-cap", "held", "epic-not-active", "epic-gate", "epic-cap-queued"],
+      "means": "Why a Queued card whose blockers are all finished has not moved: the WIP budget is spent, a person put `needs-human` on it by hand, its epic is not active, the epic gate holds the epic, or the epic cap has queued the epic. Said once per card per reason, its first line `🧾 promotion-wait: <reason> — <card id> <plain sentence>` (DRE-8646).",
+      "why": "A REPORT about a gate that was already holding the card, not something the pipeline did on its own. It moves no lane, adds or removes no label, dispatches nobody and creates no obligation. Each of the five exits held the card before this comment existed and holds it the same way now. The three questions a trailer answers all read 'not applicable'. It is posted through `_surface_once`, the seam declared just above, and this row names that same one site: the seam row says the site decides only whether to post, and this row declares the report that rides it, its opener and its five reasons, which `scripts/promotion_wait.py` holds as `OPENER` and `REASONS`. The once-only key is the first line's own head, `🧾 promotion-wait: <reason> —`, read back off the card's thread, and no act's tag is inside it."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-promoted {QUEUE_LANE} → {destination}",
       "kind": "undeclared-act",
       "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: In Progress for FLEET, where the move is the dispatch (DRE-7120), Hand-work for WORKBENCH and OPERATOR (DRE-5322).",

@@ -245,6 +245,9 @@ import review_cap_question  # noqa: E402
 # relations are the gate, the description's declaring lines are evidence, and a
 # claim the board does not corroborate is a defect in the card.
 import prose_blockers  # noqa: E402
+# DRE-8646: ONE source for why a Queued card whose blockers are all finished
+# waits — the hold line's predicate, and the comment said once per reason.
+import promotion_wait  # noqa: E402
 # DRE-6225: ONE reader of the `PROOF:` title — a proof card receives no person
 # marker, so `hand_built` reads it as a person's card by its title.
 import proof_and_demo  # noqa: E402
@@ -7095,8 +7098,10 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
         return live, "it is an epic now"
     labels = {(lbl.get("name") or "").lower() for lbl in live["labels"]["nodes"]}
     # The board read's own question, asked of the live card (DRE-6182), so
-    # the two reads give one answer.
-    if hold.respects(live["labels"]["nodes"], live_bodies, "sweep"):
+    # the two reads give one answer — a person's card under a hand-applied
+    # hold passes both (DRE-8646).
+    if (hold.respects(live["labels"]["nodes"], live_bodies, "sweep")
+            and not promotion_wait.admits_manual_hold(live["labels"]["nodes"], live_bodies)):
         return live, f"it carries '{HOLD_LABEL}' now"
     before = {(lbl.get("name") or "").lower()
               for lbl in ((card.get("labels") or {}).get("nodes") or [])}
@@ -7967,6 +7972,30 @@ def _surface_once(identifier: str, tag: str | None, notice: str) -> None:
         )
 
 
+def _say_promotion_wait(card: dict, bodies: list[str], reason: str | None,
+                        **facts) -> None:
+    """Say on the card, once per reason, why it waits (DRE-8646).
+
+    Only for a card whose blockers are all terminal, read off the relations
+    the candidates query returned — a blocker still open is the wait, and the
+    blockers line already names it. Nothing for a card whose relations were
+    not read to the end (the next pass reads it again), for an epic, or for
+    no reason at all. Keyed `(card, reason)` through `_surface_once`, so each
+    reason is said once and a second reason gets its own comment. A WRITE that
+    never raises a LinearError — `_surface_once` reports its own failure — so
+    it is safe inside the gate's read-guard. `facts` is `notice`'s: the WIP
+    count at the budget exit."""
+    if reason is None or not promotion_wait.blockers_terminal(card):
+        return
+    if prose_blockers.relations_unknown(card) or card_is_epic(card, bodies):
+        return
+    ident = card["identifier"]
+    parent = card.get("parent") or {}
+    _surface_once(ident, promotion_wait.key(reason), promotion_wait.notice(
+        reason, ident, epic=parent.get("identifier"),
+        epic_lane=(parent.get("state") or {}).get("name"), **facts))
+
+
 def _route_to_defect_lane(identifier: str) -> None:
     """Move a card whose own text is malformed into the broken-card lane
     (DRE-2676).
@@ -8602,6 +8631,17 @@ def promote_ready(
                         "promotion: Urgent card(s) held at the cap, gates not "
                         f"yet asked: {', '.join(urgent)}"
                     )
+            # Said on the card, once (DRE-8646), off two facts already in
+            # hand and no Linear read: a hand-applied hold names `held`, an
+            # epic that does not admit the card `epic-not-active`, and only
+            # then the budget. The epic gate and the cap's queue each cost a
+            # read, so they are said past this exit, on a pass with room.
+            waiting_on = card.get("parent")
+            _say_promotion_wait(card, bodies, promotion_wait.budget_reason(
+                labels, bodies,
+                not waiting_on or epic_parent_admits(
+                    card, (waiting_on.get("state") or {}).get("name"))),
+                active=active_count, cap=MAX_WIP)
             continue
         if card_is_epic(card, bodies):
             print(
@@ -8616,7 +8656,14 @@ def promote_ready(
         # before the move. Asked of `hold` directly and never through the
         # module-level `held()`: this function binds a local `held` (the
         # blockers message below), so that name here is UnboundLocalError.
-        if hold.respects(labels, bodies, "sweep"):
+        #
+        # A person's card under a hand-applied hold goes on too (DRE-8646):
+        # OPERATOR or WORKBENCH, `needs-human` with no stamp. It meets every
+        # gate below and is carried to Hand-work with its label kept — the
+        # lane a person works from, which dispatches nothing. One predicate,
+        # asked here and at the live re-check, so the two reads agree.
+        if (hold.respects(labels, bodies, "sweep")
+                and not promotion_wait.admits_manual_hold(labels, bodies)):
             # A deliberately held card is exactly what "why is this not moving"
             # is asking about, so it says so (DRE-1403 held it, DRE-2918 made
             # the hold legible).
@@ -8625,6 +8672,10 @@ def promote_ready(
                 f"('{HOLD_LABEL}' label, reason={hold.reason_of(labels, bodies)}) "
                 "— never auto-promoted; skipping"
             )
+            # And on the card, once, for a hold a person applied by hand
+            # (DRE-8646). A stamped hold already says why on the card.
+            if hold.reason_of(labels, bodies) == "manual":
+                _say_promotion_wait(card, bodies, promotion_wait.HELD)
             # Left in Backlog wearing the label (DRE-4210): dated by the stamp a
             # pipeline park writes; a label applied by hand has none.
             stand(card["identifier"], HOLD_LABEL, hold.STAMP_PREFIX)
@@ -8640,6 +8691,7 @@ def promote_ready(
                 f"promotion: {card['identifier']}'s epic {parent['identifier']} is "
                 f"not active ({parent['state']['name']}) — skipping"
             )
+            _say_promotion_wait(card, bodies, promotion_wait.EPIC_NOT_ACTIVE)  # DRE-8646
             continue
         # A dependency is a `blockedBy` relation (DRE-2676). A description line
         # that CLAIMS one the board does not hold is a defect in the card, not a
@@ -8765,6 +8817,9 @@ def promote_ready(
                         "releasing its children — see the epic-gate line above "
                         "for which — skipping"
                     )
+                    # A write inside the read-guard, safe there: it reports
+                    # its own failure and never raises one (DRE-8646).
+                    _say_promotion_wait(card, bodies, promotion_wait.EPIC_GATE)
                     continue
             # THE GATE (DRE-2676): the non-terminal formal `blocks` relations,
             # and nothing else. Read inline off the query the candidates came
@@ -8874,6 +8929,9 @@ def promote_ready(
                                 "was queued in line by the epic cap this pass — "
                                 "skipping"
                             )
+                            # Said once, as the epic gate's is (DRE-8646).
+                            _say_promotion_wait(
+                                card, bodies, promotion_wait.EPIC_CAP_QUEUED)
                             continue
                     if refusal is not None:
                         refusal_tag = epic_cap.UNDECIDED_TAG
@@ -9016,7 +9074,12 @@ def promote_ready(
         # read off the vocabulary): routed anywhere else (a FLEET verdict on a
         # held card), the hold and the verdict disagree about whose turn it
         # is, and a person reads that, not the sweep.
-        lift_hold = HOLD_LABEL in labels
+        #
+        # Or held by hand (DRE-8646): a person's card under a `manual` hold
+        # is carried to Hand-work wearing it. A person applied it with no
+        # stamp, so only a person removes it — never lifted here.
+        kept_hold = HOLD_LABEL in labels and hold.reason_of(labels, bodies) == "manual"
+        lift_hold = HOLD_LABEL in labels and hold.reason_of(labels, bodies) != "manual"
         if lift_hold and destination != routing_verdict.destination("OPERATOR"):
             print(
                 f"promotion: {card['identifier']} is held as an operator step "
@@ -9060,6 +9123,11 @@ def promote_ready(
                 reason += (
                     f" Its `{HOLD_LABEL}` hold (reason={hold.OPERATOR_STEP_REASON}) "
                     "was lifted: every blocker is terminal."
+                )
+            if kept_hold:
+                reason += (
+                    f" Its `{HOLD_LABEL}` label was kept: a person applied it with "
+                    "no hold stamp, and only a person removes it."
                 )
             linear_ops.cmd_comment(
                 card["identifier"],
