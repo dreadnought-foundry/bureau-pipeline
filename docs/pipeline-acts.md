@@ -194,6 +194,16 @@ count is `timed re-run <n> of 2`, so it never spends the two re-runs counted off
 `re-run`. It has its own two per record pull request; after them, one hold for
 the operator and never a third.
 
+**Every waiting hold lifts itself** (DRE-7951). A waiting row nobody stamped —
+a prose event, or the operator's press — is read as stamped 12 hours after the
+pass that posts the hold, so that hold is time-only too, and a prose waiting
+hold posted before this lifts itself 12 hours after its post. When the rows a
+lift read were not all stamped, the run is a `re-check` — one per record head,
+spending neither budget — and the second timed re-run says it is the last.
+Re-checks have their own three per record pull request, across every head;
+after them, one hold for the operator, which the sweep alarms on, and never a
+fourth.
+
 ## The row whose NUMBERS are data — `🚨 fleet-reviewer-outage` (DRE-3433)
 
 | Field | Value |
@@ -403,13 +413,16 @@ block.
 A PROOF card routes OPERATOR and waits in `Hand-work`, a lane the sweep's nudge
 loop never reads, so every finished epic's proof waited for a person to start
 it — on 2026-10-05, thirteen of the seventeen epics counted against the epic cap.
-The `Dispatch proof runs` step of `reconcile.yml` runs right after `Sweep`, on
+The `Dispatch proof runs` step of `reconcile.yml` runs right after `Sweep`,
+whether `Sweep` passed or failed (DRE-8000), on
 full passes only and only in a repo that carries a proof-run stub
 (`self-proof-task.yml` or `proof-task.yml`), and starts one proof run a pass
-when the card's seven conditions hold: a `PROOF:` card of this repo in
+when the card's eight conditions hold: a `PROOF:` card of this repo in
 `Hand-work`, its epic `In Progress`, its blockers terminal, no hold standing,
-nobody else on it and no run alive, a dispatch left in its budget of two, and
-the release carrying its siblings' merges live. A card in `Green Light` whose
+nobody else on it and no run alive, a dispatch left in its budget of two,
+the release carrying its siblings' merges live, and the time its
+`Observe after:` line names, if it carries one, passed — before it the card
+is held once on that time and the hold lifts itself (DRE-8439). A card in `Green Light` whose
 park named the CEO's press is dispatched once per signed answer of his. A card
 in `In Review` whose record pull request the critic sent back
 (`REQUEST_CHANGES` at the head) is dispatched again to amend the record, when no
@@ -425,31 +438,104 @@ record at the head and never off the note (DRE-6488). The two triggers share
 two re-runs per record pull request, then one more per re-arm event, and never
 another without one; after the two with no event, or after a re-run that
 finished with the decline still at the head, one `🔬 proof-waiting` hold for
-an operator. The re-arm events are two, and only two (DRE-7740): every card an
-unmet row names by `fix: DRE-<n>` is Done, labelled for this repo, merged and
-live — the set re-arms once — or the operator posts a new `🔬 proof-observed`
-after the card's newest receipt, never one the pipeline wrote itself. When the
-record read at the head names no fix, the budget's hold ends `— the record at
-<sha7> names no fix`, and while nothing follows that hold and the record stays
-at that head the card is named on its line every pass and never read, so it
-spends none of the pass's candidate reads (DRE-7787). A record
+an operator. The re-arm events are two, and only two (DRE-7740): every named
+fix is Done, merged and live — the set re-arms once — or the operator posts a
+new `🔬 proof-observed` after the card's newest receipt, never one the
+pipeline wrote itself. A named fix is a card an unmet row names by
+`fix: DRE-<n>`, or a card related to the proof as blocking it after its
+newest receipt (DRE-8156); a fix labelled for another repo in
+`config/repo-map.json` is read in that repo — its pull request and its
+release there. When neither names a fix — and the relations were read, each
+with its time, against receipts that all carry theirs — the budget's hold ends `— the record
+at <sha7> names no fix`, and while nothing follows that hold, no blocker is
+related after it and the record stays at that head, the card is named on its
+line every pass and never read, so it spends none of the pass's candidate
+reads (DRE-7787). A record
 whose unmet rows are all `Not met. history: …` rows (or cause rows) is held for
 the operator's decision at once and never re-run. A row whose Result reads `Not observed. waiting for <the
 event>` — and nothing else — is waiting on something no one on the card has to
 cause: on either trigger, beside any other unmet row, the card is held with
-`🔬 proof-waiting: <the waiting criteria> — needs <their events>` instead of a
-re-run, and is re-run once the operator posts `proof-observed` (DRE-6488, and
-for the critic's trigger DRE-6814) — or, when every waiting row is stamped with
-a `[not-before=<T>]`, the hold is `— needs not-before=<T>` and the dispatcher
-lifts it itself once `<T>` passes, with a timed re-run (DRE-7316). A record the gate declined, or the critic
-sent back, whose unmet rows all carry a cause word (DRE-6607) is never re-run
-at that head, since a re-run would read the same thing: the dispatcher puts it
-to the operator once through `proof_cause_park.park` (DRE-6612) — its hold and
-its question, each skipped when the thread already carries it — and leaves the
-card In Review for the operator (DRE-6837); a caused row beside a plain one is
-re-run as before (DRE-6610). The park's own hold never holds the card off the
-record at its head: the operator's amendment discharges it. It is read after
-the first runs, under the same one-per-pass cap, and moves nothing.
+`🔬 proof-waiting: <the waiting criteria> — needs not-before=<T>` instead of a
+re-run (DRE-6488, and for the critic's trigger DRE-6814), and the dispatcher
+lifts it itself once `<T>` passes — a person's `proof-observed` before then
+lifts it sooner. `<T>` is the latest of the rows' stamps, a stamped row
+carrying `[not-before=<T>]` (DRE-7316) and a row nobody stamped — a prose
+event, or the operator's press — read as stamped 12 hours after the pass that
+posts the hold (DRE-7951). Once lifted, stamped rows get a timed re-run, and
+rows not all stamped get one `re-check` per record head, which spends neither
+budget — three per record pull request, then one hold for the operator. A record the gate declined
+whose unmet rows are all gaps — a cause word (DRE-6607) or a history row
+(DRE-7740) — is never re-run at that head, since a re-run would read the same
+thing, and is left to the gate (DRE-7953): it merges on its approval and its
+PROOF closes with one fix card (DRE-7952), so the dispatcher posts no hold and
+no question — before this it put the cause rows to the operator through
+`proof_cause_park.park` (DRE-6612), leaving the card In Review (DRE-6837). A gap row beside a plain one is
+re-run as before (DRE-6610), and a record the critic sent back is re-run on
+its findings. A cause hold posted before never holds the card off the record
+at its head. When the gate's two re-runs are spent and every unmet row is a
+plain `Not met.` naming no fix, the dispatcher files one fix card
+(`proof_gap.file_fix_card`, `kind="defect"`) and holds on `— needs <DRE-n>
+shipped`, an event wait the sweep never alarms — unless a fix is already
+filed against the proof, a blocker related since its first run and not
+Canceled or Duplicate, which it holds on instead, filing nothing (DRE-8251); once that card ships the
+re-arm gives one more run. It is read after the first runs, under the same
+one-per-pass cap, and moves nothing.
+
+**A waiting record with no pull request is read on its branch** (DRE-8440).
+Once a waiting proof keeps no pull request open, its record lives only on
+`agent/DRE-<n>-proof-record`. A card in `In Review` whose record pull request
+was closed, and a `Hand-work` card whose first run reads `finished` and left a
+record branch, are read there: the record at the branch head, dated by the
+card's newest receipt and read as the gate's trigger. When every blocking row
+of it waits, the same rules hold and lift it — the time lift and one timed
+re-run, the 12-hour re-check of an unstamped row — with the budgets counted
+since the card's first receipt. A branch GitHub says
+is gone, or a head with no record file, is told once on the card in a plain
+comment (`Proof not re-run — no record can be read on <branch>: …`), and a read
+that failed posts nothing. A run in flight still holds either card, and
+nothing moves a lane.
+
+**…and re-armed there** (DRE-8451). A branch record whose rows do not all
+wait carries its own hold, the one the run's `decide` posts (`not ready to
+merge: …`), and once the record is read that hold is read past — the record
+says what it waits on, so the hold is never chased and never stops a re-run.
+A row naming `fix: DRE-<n>` is not dispatched while that card is open and
+gets one re-armed run once it is Done, merged and live, or once a new
+`🔬 proof-observed` follows the newest receipt. Rows a re-run may answer are
+re-run `re-run of the record on its branch at <sha7>`, twice; then, every
+unmet row a plain `Not met.`, one fix card is filed and held on, as above. A
+waiting row beside them is held on its time first, then given one timed
+re-run, as the pull-request path decides the same mix.
+
+**An event hold in `Hand-work` is chased once** (DRE-7967). A hold on a
+first-run candidate whose needs half waits on an event — not a time, not a
+person's press — once held the card for good, so the event could happen and
+the card still waited. Such a hold is one nothing in the pipeline lifts or
+answers by itself: never a time-only hold (the dispatcher lifts it), one
+naming the CEO's press, a cause or history hold, one whose needs half opens a
+wording the dispatcher writes itself (`the operator's press`, or any of its
+`*_NEEDS` strings, discovered off the module), or one waiting for fix cards to
+ship (`— needs DRE-<n> shipped`, which the re-arm answers). When every open
+hold on the card is such a hold and the oldest has stood the `proof-waiting`
+row's `chase_after_hours` in `config/hold-deadlines.json` (DRE-7964), the
+card skips the hold's condition and the first-run budget, still reads its
+epic, blockers, run and release, and gets one run: `chase of the event hold
+of <PT>`, counted `(chase)`, after one `chase:` line naming the hold and how
+long it has stood. It is chased once per standing hold — no `chase` receipt
+may be newer than the oldest hold and no receipt of any count newer than the
+newest, so a copy of the hold posted later buys no second chase, and a chase
+whose run dies or never starts has spent it. The lane read applies the same
+rule to the open holds its comment window shows, so it names held only a card
+the thread read would refuse too; a window that may hide an older hold leaves
+the hold's age to the thread read. It posts no
+`🔬 proof-observed`, lifts nothing and re-posts nothing, so the hold's clock
+and due date stand; if the event has not come, the late list (DRE-7965)
+names the hold at its due date. Only `Hand-work` is chased: a record's
+waiting holds in `In Review` re-check themselves on DRE-7951's 12-hour
+`re-check`, and a chase there would be a second automatic run reading one
+event; a hold in `In Review` that does not lift itself is the late list's.
+`Green Light` is never chased — a card there waits on the CEO's press or the
+review cap's park.
 
 The receipt is posted only after `plan_run.fire` confirms the dispatch:
 
@@ -458,12 +544,21 @@ The receipt is posted only after `plan_run.fire` confirms the dispatch:
 The reasons open `first proof run`, `second dispatch — no run started after`,
 `second dispatch — run`, `re-run after the CEO's answer at`, `re-run after
 the critic's findings at`, `re-run after the gate's decline at`, `re-run after
-DRE-<n> shipped`, `re-run after the 🔬 proof-observed of` and `timed
-re-run after not-before <PT> at`; the counts are `dispatch <n> of 2`, `re-run
+DRE-<n> shipped`, `re-run after the 🔬 proof-observed of`, `timed
+re-run after not-before <PT> at`, `last timed re-run after not-before <PT> at`
+(timed re-run 2 of 2, DRE-7951), `re-check of the waiting rows at` and
+`chase of the event hold of` (DRE-7967); the
+counts are `dispatch <n> of 2`, `re-run
 <n> of 2` (DRE-5931, through the same composer), `timed re-run <n> of 2`
 (DRE-7316 — its own budget, never counted with `re-run`), `after the CEO's
-answer` and `re-armed` (DRE-7740) — one more run on a spent
-re-run budget, which does not open `re-run` and so spends none of it. **The tag is a live key**: `proof_run_state.reading`
+answer`, `re-armed` (DRE-7740) — one more run on a spent
+re-run budget, which does not open `re-run` and so spends none of it — and
+`re-check` (DRE-7951), one per record head over waiting rows nobody stamped,
+which spends neither budget and has its own three per record pull request —
+and `chase` (DRE-7967), the one run of an event hold in `Hand-work`, whose
+count is none of these and whose reason opens neither `first proof run` nor
+`second dispatch`, so it spends no budget at all; a first run after it is
+still `dispatch 1 of 2`. **The tag is a live key**: `proof_run_state.reading`
 (DRE-5922) anchors on the newest receipt to read what became of the run, and
 counts the first-run budget off the receipts whose reason opens `first proof
 run` or `second dispatch`.
@@ -473,7 +568,12 @@ run` or `second dispatch`.
 <card> — <reason>` and writes nothing. Before flipping it, the operator holds
 each proof a person is already working with `linear_ops.py proof-waiting
 <card> "being observed by hand" "the operator's record pull request"`, and the
-phase leaves it alone by name.
+phase leaves it alone by name — until that hold has stood a day, when it is
+an event hold owed its one chase (DRE-7967), unless the run reading finds
+somebody else on the card. The same switch governs the step after it, `Close
+proof records that cannot merge` (DRE-8452): until it is `true`, that step
+prints `would: close #<n>` for each open record pull request whose record
+cannot merge and closes nothing.
 
 **A proof shadow posts no receipt** (DRE-7287). While the repository variable
 `PROOF_SHADOW_MODEL` names a model, each confirmed dispatch on a live pass is
@@ -696,6 +796,44 @@ stamp read as a receipt.
 
 The console learned the tag first (DRE-7751). The `act registry consumers` job
 refuses a row the console does not carry.
+
+## The row that files a PROOF's gaps — `🩹 proof-gap-card` (DRE-7952)
+
+| Field | Value |
+| -- | -- |
+| tag | `proof-gap-card` |
+| act name | `proof-gap-filed` |
+| kind · state · next actor | `recovery` · `unchanged` · `groomer.py` |
+| discharges | nothing |
+| cadence | `null` — the fix card waits in Intake for the groomer's batch and the CEO's approval, and nothing bounds when that happens |
+| emitted by | `scripts/proof_gap.py`, at the `pipeline_act.receipt(ACT, …)` call in `file_fix_card` |
+
+A proof record whose every unmet row is a gap — a `Not observed. cause:
+<word> — …` row naming one of the four cause words in
+`config/proof-reach.json`, or a `Not met. history: …` row
+(`proof_record.gap_rows`) — passes the merge gate and closes its PROOF card on
+its approved merge (epic DRE-7944). A re-run would read those rows the same
+again, so they go where the real work goes: ONE fix card in Intake,
+parentless, labeled `repo:<the PROOF's repo>`, titled `<slug>: the gaps PROOF
+<DRE-n> closed with — <k> row(s) not observable as worded`, one line per row
+with its criterion, its kind, the record's cell and the kind of fix. The PROOF
+close (`linear_ops.merge_close_ruling`, asked by card-done and the reconcile
+backstop) files it before the card moves, and posts on the PROOF card:
+
+    🩹 proof-gap-card: <DRE-n> — the gaps it closed with are filed in Intake: <url>
+
+**The receipt key is live**: a pipeline-authored comment whose first line opens
+`🩹 proof-gap-card:` on the PROOF card names its one fix card, so a second close
+reads it and files nothing. A comment of that shape from any other author
+counts for nothing. A receipt that failed to post after the create is caught by
+the title: an open card with exactly that title is reused and receipted.
+`proof_gap.file_fix_card(..., kind="defect")` is the same filer for a spent
+re-run budget on a build that fails its rows, and words the card as a defect
+in the build.
+
+The console must learn this act before this row merges. The `act registry
+consumers` job refuses a row the console does not carry, and it knows an act
+by its tag or its name.
 
 ## Why this exists
 

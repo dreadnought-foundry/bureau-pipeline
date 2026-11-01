@@ -53,6 +53,12 @@ dropped in silence. A door that answered with no rows has begun nothing a
 marker could be mirrored by, so every marker is `history`. When the door
 could not be read, every marker is `fallback`. The newest decision per card
 wins across sources, and on an exact tie the row wins.
+
+`all_decisions` is that same reading with nothing collapsed — every decision,
+oldest first — and `remembered` keeps the last of it per card. The replay
+cases read it (`groom_replay_cases.py`, DRE-7971): a card removed on one
+proposal and put back on the next keeps one decision in `remembered`, and the
+older removal is a case all the same.
 """
 from __future__ import annotations
 
@@ -95,7 +101,25 @@ def remembered(rows: list[dict], markers: list[dict], *, reasons,
     the door was not read); `markers` are a decider's per-card markers on
     every standing card, already vouched; `reasons` are the labels the door
     served, `[{"key", "label"}…]` or `{key: label}`, or None. Each decision
-    carries exactly the contract's keys — see `_decision`.
+    carries exactly the contract's keys — see `_decision`. It is the newest
+    of `all_decisions` per card, the row winning an exact tie.
+    """
+    newest: dict[str, dict] = {}
+    for decision in all_decisions(rows, markers, reasons=reasons,
+                                  door_problem=door_problem):
+        newest[decision["card"]] = decision
+    return newest
+
+
+def all_decisions(rows: list[dict], markers: list[dict], *, reasons,
+                  door_problem: str | None) -> list[dict]:
+    """Every decision, never collapsed per card (DRE-7971) — the inputs are
+    `remembered`'s, and each decision's `source` is set as it sets it.
+
+    A marker a row mirrors, at or after the oldest row, is dropped: the two
+    are one decision, carrying the row's reason. Sorted by `recorded_at`,
+    then card number, with a row after a marker on an exact tie — so a
+    card's decisions are oldest first, and its last is `remembered`'s.
     """
     labels = _labels(reasons)
     keys = {label: key for key, label in labels.items()}
@@ -127,12 +151,8 @@ def remembered(rows: list[dict], markers: list[dict], *, reasons,
     for index, decision in enumerate(records):
         candidates.append((_instant(decision["recorded_at"]), 1, index, decision))
 
-    newest: dict[str, tuple] = {}
-    for candidate in candidates:
-        card = candidate[3]["card"]
-        if card not in newest or candidate[:3] > newest[card][:3]:
-            newest[card] = candidate
-    return {card: candidate[3] for card, candidate in newest.items()}
+    candidates.sort(key=lambda c: (c[0], _card_sort_key(c[3]["card"]), c[1], c[2]))
+    return [candidate[3] for candidate in candidates]
 
 
 def standing(remembered: dict[str, dict], *, today: str,

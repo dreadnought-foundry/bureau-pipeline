@@ -73,6 +73,8 @@ SHA8 = SHA[:8]
 REFUTED_MARKER = "refuted the finding:"
 # The act's idempotency key: one re-review per HEAD, not per PR.
 REFUTE_KEY = f"refuted-finding @{SHA8}"
+# What the dispatched receipt promises, and a hold must never say (DRE-3576).
+PROMISE = "the pipeline is having the reviewer look at this same commit once more"
 
 REFUTATION = (
     "the TDD-check finding is disproven: `python3 scripts/check_tdd_commits.py "
@@ -139,6 +141,15 @@ def record():
 
 if args[:2] == ["pr", "comment"]:
     record()
+    # gh prints the new comment's URL; the refuted branch reads its id off it
+    # (DRE-3576). Each comment gets the next id, from 9001.
+    n = sum(1 for line in open(log) if json.loads(line)[:2] == ["pr", "comment"])
+    print("https://github.com/%s/pull/%s#issuecomment-%d"
+          % (args[args.index("--repo") + 1], args[2], 9000 + n))
+elif args[:1] == ["api"] and "DELETE" in args:
+    # Matched before the generic read below: a delete is a write (DRE-3576).
+    record()
+    sys.exit(int(os.environ.get("GH_DELETE_RC", "0")))
 elif args[:2] == ["pr", "view"]:
     print(os.environ.get("GH_POST_SHA", ""))
 elif args[:2] == ["workflow", "run"]:
@@ -163,7 +174,8 @@ else:
 
 
 def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
-               refutation: str = REFUTATION, dispatch_rc: int = 0):
+               refutation: str = REFUTATION, dispatch_rc: int = 0,
+               delete_rc: int = 0):
     """Execute the real Report step down its REFUTED branch. Returns
     (proc, gh_calls, linear_calls)."""
     os.makedirs(os.path.join(td, "bin"), exist_ok=True)
@@ -225,6 +237,7 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
             GH_LOG=os.path.join(td, "gh-calls.jsonl"),
             GH_POST_SHA=SHA,
             GH_DISPATCH_RC=str(dispatch_rc),
+            GH_DELETE_RC=str(delete_rc),
             GH_TOKEN="test",
             DISPATCH_TOKEN="workflow-token",
             LINEAR_API_KEY="test-key",
@@ -256,6 +269,10 @@ def run_report(td: str, comments: list, repo: str = REPO, card: str = CARD,
 
 def dispatches(gh_calls: list) -> list:
     return [c for c in gh_calls if c[:2] == ["workflow", "run"]]
+
+
+def deletes(gh_calls: list) -> list:
+    return [c for c in gh_calls if c[:1] == ["api"] and "DELETE" in c]
 
 
 def posted_bodies(td: str, gh_calls: list) -> list:
@@ -488,14 +505,117 @@ class ReportRefutedBranchTest(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertEqual(len(dispatches(gh_calls)), 1)
 
-    def test_a_failed_dispatch_degrades_to_todays_behaviour(self):
+    def test_a_successful_dispatch_posts_before_it_dispatches_and_deletes_nothing(self):
+        # DRE-3576: on success nothing changes — one receipt, still the
+        # dispatched one, posted BEFORE the dispatch because the re-review
+        # reads it off the thread, and nothing is deleted.
+        with tempfile.TemporaryDirectory() as td:
+            proc, gh_calls, _ = run_report(td, [])
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bodies = posted_bodies(td, gh_calls)
+        self.assertEqual(len(bodies), 1, bodies)
+        self.assertIn("state: dispatched · next: qa-review.yml", bodies[0])
+        self.assertIn(PROMISE, bodies[0].lower())
+        self.assertEqual(deletes(gh_calls), [], gh_calls)
+        verbs = [c[:2] for c in gh_calls]
+        self.assertLess(verbs.index(["pr", "comment"]),
+                        verbs.index(["workflow", "run"]), gh_calls)
+
+    def test_a_refused_dispatch_replaces_the_promise_with_a_hold(self):
         # The stub's github.token needs `actions: write`; a repo that has not
-        # updated its stub 403s here. Promising a re-review nobody will run is
-        # the stall this card removes — so park, loudly.
+        # updated its stub 403s here. The receipt posted before the dispatch
+        # promised a re-review nobody will run, so a `fix-attempt-disputed`
+        # hold replaces it, and the card parks, loudly (DRE-3576).
         with tempfile.TemporaryDirectory() as td:
             proc, gh_calls, linear = run_report(td, [], dispatch_rc=1)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bodies = posted_bodies(td, gh_calls)
         self.assertIn("::warning::", proc.stdout)
+        self.assertTrue([c for c in linear if c[:3] == ["hold.py", "apply", CARD]], linear)
+        self.assertTrue(
+            [c for c in linear if c[:1] == ["comment"] and any(
+                "but the pipeline could not start the second look" in a for a in c)],
+            linear,
+        )
+        # Still posted before the dispatch, then the hold after it.
+        self.assertEqual(len(bodies), 2, bodies)
+        verbs = [c[:2] for c in gh_calls]
+        self.assertEqual(
+            [v for v in verbs if v in (["pr", "comment"], ["workflow", "run"])],
+            [["pr", "comment"], ["workflow", "run"], ["pr", "comment"]],
+            gh_calls,
+        )
+        self.assertIn("state: dispatched", bodies[0])
+        hold = bodies[1]
+        self.assertTrue(
+            hold.startswith(f"🛑 Fix attempt 1 refuted the finding: {REFUTATION}"),
+            hold,
+        )
+        self.assertIn("pipeline-act: fix-attempt-disputed · "
+                      "kind: hold · state: escalated · next: operator", hold)
+        self.assertIn("actions: write", hold)
+        self.assertIn(".github/workflows/agent-fix.yml", hold)
+        self.assertIn("Operator decision", hold)
+        self.assertNotIn(PROMISE, hold.lower())
+        self.assertNotIn("state: dispatched", hold)
+        # The body, before the trailer, ends with the per-commit key.
+        self.assertTrue(
+            hold.split("\n\n📎 pipeline-act:", 1)[0].rstrip().endswith(REFUTE_KEY),
+            hold,
+        )
+        # The dispatched receipt is deleted by the id its post printed, and
+        # only after the hold is on the thread.
+        self.assertEqual(
+            deletes(gh_calls),
+            [["api", "--method", "DELETE", f"repos/{REPO}/issues/comments/9001"]],
+            gh_calls,
+        )
+        self.assertLess(
+            [i for i, c in enumerate(gh_calls) if c[:2] == ["pr", "comment"]][1],
+            gh_calls.index(deletes(gh_calls)[0]),
+        )
+
+    def test_the_self_host_hold_names_its_own_stub(self):
+        with tempfile.TemporaryDirectory() as td:
+            proc, gh_calls, _ = run_report(td, [], repo=SELF_REPO, dispatch_rc=1)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bodies = posted_bodies(td, gh_calls)
+        self.assertEqual(len(bodies), 2, bodies)
+        self.assertIn(".github/workflows/self-agent-fix.yml", bodies[1])
+        self.assertNotIn(".github/workflows/agent-fix.yml", bodies[1])
+
+    def test_a_refused_delete_still_leaves_the_hold(self):
+        with tempfile.TemporaryDirectory() as td:
+            proc, gh_calls, linear = run_report(td, [], dispatch_rc=1, delete_rc=1)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bodies = posted_bodies(td, gh_calls)
+        self.assertEqual(len(bodies), 2, bodies)
+        self.assertIn("state: escalated", bodies[1])
+        self.assertEqual(len(deletes(gh_calls)), 1, gh_calls)
+        self.assertTrue(
+            [ln for ln in proc.stdout.splitlines()
+             if ln.startswith("::warning::") and "9001" in ln],
+            proc.stdout,
+        )
+        self.assertTrue([c for c in linear if c[:3] == ["hold.py", "apply", CARD]], linear)
+
+    def test_a_refutation_after_the_hold_takes_the_capped_route(self):
+        # The hold keeps the per-commit key, so the person-started review is
+        # the commit's one re-review: the next refutation is the second one.
+        with tempfile.TemporaryDirectory() as td:
+            _, gh_calls, _ = run_report(td, [], dispatch_rc=1)
+            hold = posted_bodies(td, gh_calls)[1]
+        with tempfile.TemporaryDirectory() as td:
+            proc, gh_calls, linear = run_report(
+                td, [comment(WORKER_BOT, hold)], refutation="the second evidence"
+            )
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            bodies = posted_bodies(td, gh_calls)
+        self.assertEqual(dispatches(gh_calls), [], gh_calls)
+        self.assertEqual(len(bodies), 1, bodies)
+        self.assertIn("pipeline-act: fix-attempt-disputed", bodies[0])
+        self.assertIn("the second evidence", bodies[0])
+        self.assertIn(f"> 🛑 Fix attempt 1 refuted the finding: {REFUTATION}", bodies[0])
         self.assertTrue([c for c in linear if c[:3] == ["hold.py", "apply", CARD]], linear)
 
     def test_a_cardless_branch_never_shells_out_with_an_empty_id(self):

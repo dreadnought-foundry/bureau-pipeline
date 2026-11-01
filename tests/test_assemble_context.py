@@ -489,7 +489,7 @@ class ProofBriefTest(unittest.TestCase):
 
     def test_the_heartbeats(self):
         for line in ("⏳ 1/5 read", "⏳ 2/5 observing", "⏳ 3/5 record written",
-                     "⏳ 4/5 local checks", "⏳ 5/5 PR opened"):
+                     "⏳ 4/5 local checks", "⏳ 5/5 record pushed"):
             self.assertIn(line, self.text, line)
 
     def test_it_emits_no_verdict_marker(self):

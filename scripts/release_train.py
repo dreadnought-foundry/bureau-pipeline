@@ -216,7 +216,7 @@ import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
@@ -446,6 +446,19 @@ SCHEMA: tuple[Field, ...] = (
           "set; `[]` turns the exclusion off. The globs are git's: `**/` "
           "matches any depth, including none.",
           optional=True),
+    Field("node_dir", "directory in the caller",
+          "The directory, relative to the caller's root, whose `.nvmrc` names "
+          "the Node major the surface's script needs (DRE-8463). The release "
+          "job reads it in `Read the surface's node` and puts that Node on "
+          "the runner in `Set up the surface's node`, through the shared node "
+          "action with nothing installed — the script installs what it needs "
+          "— after the pipeline checkout and before the identity is assumed. "
+          "A failed Node step never stops the train — the script names its "
+          "own refusal when Node is wrong. The version is never written "
+          "anywhere but that `.nvmrc`. **Optional** — omit it and the surface "
+          "gets no Node step. Never absolute, never `..`, and the schema check "
+          "refuses one with no `.nvmrc` under it.",
+          optional=True),
 )
 
 REQUIRED_FIELDS = tuple(f.name for f in SCHEMA
@@ -473,6 +486,9 @@ class Surface(NamedTuple):
     #: The globs that never count as changed (DRE-5375): the surface's own
     #: `ignore`, or `DOCUMENTATION_IGNORE` when it declares none.
     ignore: tuple = DOCUMENTATION_IGNORE
+    #: The caller directory whose `.nvmrc` names the script's Node (DRE-8463),
+    #: or `""` when the surface declares none and gets no Node step.
+    node_dir: str = ""
 
 
 class Channel(NamedTuple):
@@ -619,6 +635,8 @@ def surface(name: str, data: dict) -> Surface:
         declared_window=declared,
         ignore=(tuple(ignore) if isinstance(ignore, list)
                 else DOCUMENTATION_IGNORE),
+        node_dir=(data["node_dir"] if isinstance(data.get("node_dir"), str)
+                  else ""),
     )
 
 
@@ -723,7 +741,33 @@ def _check_surface(name: str, entry: dict, repo_root=None) -> list:
         if not (Path(repo_root) / script).is_file():
             bad("script", f"names {script}, which this repository does not carry")
 
+    if "node_dir" in entry:
+        for said in _node_dir_problems(entry["node_dir"], repo_root):
+            bad("node_dir", said)
+
     return problems
+
+
+def _node_dir_problems(node_dir, repo_root=None) -> list:
+    """What is wrong with a surface's `node_dir` (DRE-8463), unprefixed.
+
+    The value is printed into `$GITHUB_OUTPUT` and handed to the shared node
+    action as a working directory, so it is one line, inside the caller, and
+    — when the caller is read — a directory whose `.nvmrc` is actually there.
+    """
+    if not isinstance(node_dir, str) or not node_dir:
+        return ["must be a non-empty string naming a directory in this repository"]
+    if not node_dir.isprintable():
+        return ["must be one line of printable characters"]
+    if PurePosixPath(node_dir).is_absolute():
+        return [f"names {node_dir}, which is absolute — name it from the "
+                f"repository root"]
+    if ".." in PurePosixPath(node_dir).parts:
+        return [f"names {node_dir}, which climbs out with `..`"]
+    nvmrc = f"{node_dir.rstrip('/')}/.nvmrc"
+    if repo_root and not (Path(repo_root) / nvmrc).is_file():
+        return [f"names {node_dir}, but this repository carries no {nvmrc}"]
+    return []
 
 
 def _window_ok(window) -> bool:
@@ -1685,17 +1729,23 @@ def lag_state(repo_root, tag, sha, paths, ignore=DOCUMENTATION_IGNORE) -> str:
     """
     if not tag:
         return "behind"
-    contained = subprocess.run(
-        ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", sha, tag],
-        capture_output=True, text=True,
-    )
-    if contained.returncode == 0:
+    if tag_contains(repo_root, tag, sha):
         return "current"
     args = ["diff", "--name-only", f"{tag}..{sha}"]
     spec = _pathspec(paths, ignore)
     if spec:
         args += ["--", *spec]
     return "behind" if _git(repo_root, *args) else "current"
+
+
+def tag_contains(repo_root, tag, sha) -> bool:
+    """True when `tag` contains `sha` — `sha` is the tag's commit or one of
+    its ancestors. A commit the checkout does not hold is not contained."""
+    contained = subprocess.run(
+        ["git", "-C", str(repo_root), "merge-base", "--is-ancestor", sha, tag],
+        capture_output=True, text=True,
+    )
+    return contained.returncode == 0
 
 
 def ignored_changes(repo_root, tag, sha, paths, ignore=DOCUMENTATION_IGNORE) -> tuple:
@@ -2299,6 +2349,24 @@ def render_markdown() -> str:
     )
     w("")
     w(
+        "**DRE-7900.** A tag cut by hand closes it too. The tool a deferred "
+        "line names — `make deploy-console`, say — cuts the surface's tag "
+        "outside the train, so the next lap reads the surface "
+        f"`{release_deferral.CURRENT_CODE}` and runs no `Release <surface>` "
+        "job. The plan job then reads the open card itself, and a "
+        f"`{release_deferral.CURRENT_CODE}` lap whose newest tag released the "
+        "deferred commit — the tag contains the newest `Commit:` the card "
+        "records, on its description or on a later comment — closes it "
+        f"`{release_deferral.CLOSED_LANE}` under the same `Released as <tag>` "
+        "comment. A tag that does not contain that commit leaves the card "
+        f"open, with one `{release_deferral.TAG}: card <id> left open` line. "
+        "A lap that finds no open card writes nothing, and a close that "
+        "fails — no Linear key, an API error — is one `::warning::` and one "
+        f"`{release_deferral.TAG}: card not closed — <why>` line, the plan's "
+        "decision, receipt, record and exit code unchanged."
+    )
+    w("")
+    w(
         "A deferral that names its re-arm minute does none of that: it is the "
         "train's own to re-arm, owed to nobody. A deferral an open "
         f"{owners} card on the same repo speaks for is warned of and files no "
@@ -2667,6 +2735,31 @@ def _cmd_schema(args) -> int:
     return 0
 
 
+def _cmd_node_dir(args) -> int:
+    """The surface's `node_dir` as ONE line, `node_dir=<value>`, for the
+    release job's `$GITHUB_OUTPUT` (DRE-8463) — empty when the surface
+    declares none. A surface the file does not declare, or a value the schema
+    refuses, prints the empty line too, with the reason on stderr and exit 1:
+    the line is always there, and a refused value never reaches the output."""
+    entry = (load(args.file).get("surfaces") or {}).get(args.surface)
+    if not isinstance(entry, dict):
+        print("node_dir=")
+        print(f"{TAG}: {args.file} declares no surface {args.surface!r}",
+              file=sys.stderr)
+        return 1
+    if "node_dir" not in entry:
+        print("node_dir=")
+        return 0
+    problems = _node_dir_problems(entry["node_dir"], args.repo_root)
+    if problems:
+        print("node_dir=")
+        for problem in problems:
+            print(f"{TAG}: {args.surface}.node_dir: {problem}", file=sys.stderr)
+        return 1
+    print(f"node_dir={entry['node_dir']}")
+    return 0
+
+
 def _cmd_plan(args) -> int:
     # A re-armed run re-reads the head BEFORE anything is read off the
     # checkout (DRE-3791): its event sha is the commit it was dispatched at,
@@ -2707,10 +2800,18 @@ def _cmd_plan(args) -> int:
             # part of the sentence the receipt prints, so it is part of the
             # sentence the record carries. A surface that IS releasing is
             # recorded by its own job, whose decision is not made yet.
+            deployed = newest_tag(args.repo_root, entry.tag_series)[0]
             _record_decision(shown, entry=entry, repo=args.repo, phase="plan",
-                             sha=head, head=head, now=now,
-                             deployed=newest_tag(args.repo_root,
-                                                 entry.tag_series)[0])
+                             sha=head, head=head, now=now, deployed=deployed)
+            # A `current` lap runs no `Release <surface>` job, so a tag cut
+            # by hand would never reach `release_deferral.report` (DRE-7900):
+            # the plan closes the open deferral card itself when that tag
+            # contains the commit the card was deferred on. Never raises.
+            release_deferral.report_current(
+                decision, repo=args.repo, surface=entry.name, tag=deployed,
+                released=lambda commit, tag=deployed: tag_contains(
+                    args.repo_root, tag, commit),
+                warning=_warning)
         print(shown.receipt(args.repo, entry.name, decision.sha))
         _announce_channel(decision)
     _emit_output("matrix", json.dumps(matrix(planned)))
@@ -2905,6 +3006,11 @@ def main(argv=None) -> int:
     runner.add_argument("--dispatched", action="store_true")
     _re_arm_arguments(runner)
 
+    node = sub.add_parser(
+        "node-dir", help="the one line `node_dir=<value>` a surface declares, "
+                         "empty when it declares none (DRE-8463)")
+    node.add_argument("--surface", required=True)
+
     sub.add_parser("render", help="rewrite docs/release-train.md")
 
     owners = sub.add_parser(
@@ -2933,6 +3039,7 @@ def main(argv=None) -> int:
         "schema": _cmd_schema,
         "plan": _cmd_plan,
         "release": _cmd_release,
+        "node-dir": _cmd_node_dir,
         "render": _cmd_render,
         "channel": _cmd_channel,
         "wait": _cmd_wait,

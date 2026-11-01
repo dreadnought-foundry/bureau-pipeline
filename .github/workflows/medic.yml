@@ -71,11 +71,15 @@
 # and the medic acts on it in two places: `diagnose` is gated off it (the
 # diagnosis agent would spend a Claude run to report what the log already
 # says), and `retry_declined`'s attempt clause admits the rule so the second
-# kill is said once on the card. The one automatic retry on attempt 1 is
-# deliberately UNCHANGED for a LIGHT runner — 2 GB can be one turn short on
-# one card and ample on the next — while a heavy, GitHub-hosted or
-# unrecognized machine is refused by the retry gate itself (medic_retry.py):
-# the same work on the same size of machine dies the same way.
+# kill is said once on the card. Since DRE-8239 the run's FIRST kill keeps the
+# medic's one retry on ANY runner, and only its second is refused: on 10-27
+# and 10-28 the gate refused kills on 4 GB heavy runners that a plain re-run
+# of the failed jobs then passed on the same class of machine, every time.
+# "First" is counted per run — on attempt 2 the gate step reads attempt 1's
+# failed log, and a kill that follows a cancellation keeps its retry, which
+# the `retry` job admits on attempt 2 off `rule == out-of-memory-first-kill`.
+# Nothing retries attempt 3 or later. The receipt names the machine off the
+# Jobs API, then the log, then "an unnamed runner".
 #
 # SIXTH EXCEPTION (DRE-6467): A STANDING CARD DEFECT. The Reconcile sweep goes
 # red on purpose when a card defect it reported is still standing (its
@@ -314,6 +318,27 @@ jobs:
           # a new single point of failure in front of four working ones. With
           # no answer the retry job's `!= 'false'` reads "never asked" and the
           # medic behaves exactly as it did before this card, out loud.
+          # DRE-8239: two reads, made only when this log carries an
+          # out-of-memory kill. The Jobs API's answer for this attempt names
+          # the machine — the log's own `Runner name:` line is missing on some
+          # runners — and on attempt 2 attempt 1's failed log says whether
+          # this is the run's first kill or its second. A read that fails
+          # leaves no file, never a failed step: the gate then names the
+          # machine off the log and keeps the retry, and says so.
+          JOBS_FILE="$RUNNER_TEMP/medic-jobs.json"
+          PRIOR_LOG="$RUNNER_TEMP/medic-log-attempt1.txt"
+          rm -f "$JOBS_FILE" "$PRIOR_LOG"
+          KILL=$(python3 .bureau-pipeline/scripts/out_of_memory.py /tmp/medic-log.txt 2>/dev/null) || KILL=""
+          case "$KILL" in
+            *kills=*)
+              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
+                > "$JOBS_FILE" 2>/dev/null || rm -f "$JOBS_FILE"
+              if [ "$RUN_ATTEMPT" = "2" ]; then
+                gh run view "$RUN_ID" --attempt 1 --log-failed --repo "$GITHUB_REPOSITORY" \
+                  > "$PRIOR_LOG" 2>/dev/null || rm -f "$PRIOR_LOG"
+              fi
+              ;;
+          esac
           OUT=$(python3 .bureau-pipeline/scripts/medic_retry.py decide \
             --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
             --run-started-at "$RUN_STARTED_AT" \
@@ -321,6 +346,7 @@ jobs:
             --workflow "$WORKFLOW_NAME" --failed-step "$FAILED_STEP" \
             --event "$EVENT" --head-sha "$HEAD_SHA" \
             --default-branch "$DEFAULT_BRANCH" --tip-sha "$TIP_SHA" \
+            --jobs "$JOBS_FILE" --prior-log "$PRIOR_LOG" \
             --snapshot "$RUNNER_TEMP/medic-card.json") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
@@ -511,13 +537,23 @@ jobs:
   # decision, so an ABSENT output means the step never ran at all, and that must
   # leave the long-standing behaviour of every watched workflow untouched.
   #
+  # ATTEMPT 1, AND ONE CASE OF ATTEMPT 2 (DRE-8239): a run's first
+  # out-of-memory kill keeps this retry when it comes on attempt 2 — the medic's
+  # retry of attempt 1 was spent on something else, a cancellation on
+  # agent-bureau CI run 40596656325 — and the gate says so as `rule ==
+  # out-of-memory-first-kill`. `run_attempt <= 2` is the ceiling: no condition
+  # here retries attempt 3 or later, and a test walks every combination to
+  # keep it so.
+  #
   # `stall_record` carries a copy of this `if:` as its RETRYING value
   # (DRE-6995), and a test holds the two equal: change one, change both.
   retry:
     needs: classify
     if: >
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
-      github.event.workflow_run.run_attempt == 1 &&
+      github.event.workflow_run.run_attempt <= 2 &&
+      (github.event.workflow_run.run_attempt == 1 ||
+       needs.classify.outputs.rule == 'out-of-memory-first-kill') &&
       needs.classify.outputs.infra_crash != 'true' &&
       needs.classify.outputs.class != 'upstream_5xx' &&
       needs.classify.outputs.class != 'linear_ratelimited' &&
@@ -532,7 +568,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "retrying ${{ github.event.workflow_run.name }} run ${{ github.event.workflow_run.id }} (attempt 1 failed)"
+          echo "retrying ${{ github.event.workflow_run.name }} run ${{ github.event.workflow_run.id }} (attempt ${{ github.event.workflow_run.run_attempt }} failed)"
           gh run rerun ${{ github.event.workflow_run.id }} --failed --repo ${{ github.repository }}
 
   # The refusal, said out loud (DRE-2954). A retry that silently does not
@@ -547,10 +583,9 @@ jobs:
   # email about it. `run_attempt == 1` so it says it once per failed run.
   #
   # …and EXCEPT for an out-of-memory kill (DRE-4847), for the same reason: a
-  # light runner's first kill takes the retry, so its SECOND kill is attempt 2
-  # of the same run and the attempt-1 clause alone would say nothing about it.
-  # A kill on a heavy, GitHub-hosted or unrecognized machine is refused on
-  # attempt 1 and is covered by that clause already.
+  # run's first kill takes the retry on any runner (DRE-8239), so its SECOND
+  # kill is attempt 2 of the same run, and the attempt-1 clause alone would
+  # say nothing about it.
   #
   # …EXCEPT for a repeat stall (DRE-3991), which can only BE on attempt 2. The
   # medic's one retry is `gh run rerun --failed`, which reuses the run id, so
@@ -667,7 +702,9 @@ jobs:
           # retry only when that job is the one running.
           RETRYING: >-
             ${{ (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
-            github.event.workflow_run.run_attempt == 1 &&
+            github.event.workflow_run.run_attempt <= 2 &&
+            (github.event.workflow_run.run_attempt == 1 ||
+             needs.classify.outputs.rule == 'out-of-memory-first-kill') &&
             needs.classify.outputs.infra_crash != 'true' &&
             needs.classify.outputs.class != 'upstream_5xx' &&
             needs.classify.outputs.class != 'linear_ratelimited' &&
@@ -1364,9 +1401,37 @@ jobs:
       # say `false` — the resume step's own condition. `--has-open-pr` only
       # when `card_pr.py find` exits 0 and its state is exactly OPEN: `find`
       # counts MERGED too, and a merged pull request leaves the fix loop
-      # nothing to work on. A lookup that fails warns with its exit code and
-      # passes no flag. `--planning-spent` only for `bad-card`, read off the
-      # card's whole thread in Linear (`dump-comments`, then `planning-spent`)
+      # nothing to work on. A lookup that fails warns with its exit code; on
+      # which heads it passes the flag is DRE-8004's, below. `find` is given
+      # the failed run's head branch, so the exact `--head` lookup runs before
+      # the search index's `head:agent/DRE-N`,
+      # and the step logs what `find` printed (DRE-7925: on 2026-10-24 the
+      # search came back empty for DRE-7910's and DRE-7847's open pull
+      # requests, and both cards were asked of a person). An empty answer on a
+      # `pull_request` run on an `agent/*` head warns and passes the flag: a
+      # pull-request run always has a pull request, so the lookup missed it
+      # and the card is not put in front of a person on that ground. `find`
+      # drops a pull request closed without merging, so the step first asks
+      # the exact head for one: a closed pull request passes no flag. Any other
+      # run's empty answer still means no open pull request.
+      #
+      # A lookup that FAILS is "could not tell", never "none" (DRE-8004). On
+      # 2026-10-25 medic run 40212007014 moved DRE-2657 to Green Light while
+      # its PR #4175 was open: the reads ran on the workflow's own
+      # GITHUB_TOKEN, which holds only what the product repo's medic stub
+      # grants, and no stub grants `pull-requests` read, so `gh pr list
+      # --head` answered "Resource not accessible by integration", `find`
+      # exited 3, and the step decided as if there were no pull request. Its
+      # pull-request reads now run on the bot token this job mints (`steps.app`),
+      # as the `fix-path` receipt's does. And on an `agent/*` or `repair/*`
+      # head, a `find` that exits non-zero, or a closed read that fails,
+      # warns and passes the flag: those branches are the fix loop's, it
+      # already reaches a red agent pull request, and a person is not asked on
+      # a lookup that never answered. Any other head's failed lookup still
+      # warns with its exit code and passes no flag. Pinned by
+      # tests/test_medic_verdict_pr_lookup.py.
+      # `--planning-spent` only for `bad-card`, read off the card's whole
+      # thread in Linear (`dump-comments`, then `planning-spent`)
       # — not the snapshot, which sat in the agent's workspace. `true`,
       # `unknown` or a read that fails all pass it, so an unread thread asks a
       # person rather than sending the card round Planning again.
@@ -1387,7 +1452,7 @@ jobs:
       # on attempt 2, so attempt 3 is as far as it goes: attempt 3's medic
       # finds the re-run spent, and the medic cannot loop. Only when the retry
       # gate did not say `false`, so its refusals (a parked card, turn
-      # exhaustion, an out-of-memory kill on a machine that cannot grow, a
+      # exhaustion, a run's second out-of-memory kill, a
       # repeat stall) still hold; this job's own `if:` keeps every class and
       # rule it skipped before. A rerun that will not start says so and
       # leaves `resumed=false`, and the diagnosis is delivered as before.
@@ -1406,9 +1471,13 @@ jobs:
           TARGET: ${{ steps.target.outputs.target }}
           RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
           RETRY: ${{ needs.classify.outputs.retry }}
-          GH_TOKEN: ${{ github.token }}
+          # The bot, not GITHUB_TOKEN: no medic stub grants `pull-requests` read (DRE-8004).
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # env, not inline (DRE-1996): the branch name is agent-influenced text.
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          TRIGGER_EVENT: ${{ github.event.workflow_run.event }}
         run: |
           S=.bureau-pipeline/scripts
           CLASS=unreadable
@@ -1426,12 +1495,31 @@ jobs:
           fi
           if [ "$KIND" = card ] && [ -n "$TARGET" ]; then
             RC=0
-            FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO") || RC=$?
+            FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO" --branch "$HEAD_BRANCH") || RC=$?
             FIRST=${FOUND%%$'\n'*}
+            echo "card_pr.py find ${TARGET} --branch ${HEAD_BRANCH:-(none)} exited ${RC} and printed: ${FIRST:-(nothing)}"
             if [ "$RC" -ne 0 ]; then
-              echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET}, so the medic decides as if the card has no open pull request."
+              if [[ "$HEAD_BRANCH" == agent/* || "$HEAD_BRANCH" == repair/* ]]; then
+                echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET} on ${HEAD_BRANCH}, so the lookup failed and the medic does not decide that the card has no open pull request."
+                FLAGS+=(--has-open-pr)
+              else
+                echo "::warning title=Pull request not read::card_pr.py find exited ${RC} for ${TARGET}, so the medic decides as if the card has no open pull request."
+              fi
             elif [ "${FIRST%%$'\t'*}" = OPEN ]; then
               FLAGS+=(--has-open-pr)
+            elif [ -z "$FOUND" ] && [ "$TRIGGER_EVENT" = pull_request ] && [[ "$HEAD_BRANCH" == agent/* ]]; then
+              CLOSED=unread
+              if HEAD_PRS=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" --state closed --json state); then
+                CLOSED=$(printf '%s' "$HEAD_PRS" | python3 -c 'import json, sys; print(sum(p.get("state") == "CLOSED" for p in json.load(sys.stdin)))') || CLOSED=unread
+              fi
+              echo "gh pr list --head ${HEAD_BRANCH} --state closed counted ${CLOSED} pull request(s) closed without merging"
+              if [ "$CLOSED" = 0 ]; then
+                echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, but the failed run is a pull_request run on ${HEAD_BRANCH}, and a pull-request run always has a pull request, so the medic does not decide that the card has no open pull request."
+                FLAGS+=(--has-open-pr)
+              elif [ "$CLOSED" = unread ]; then
+                echo "::warning title=Pull request not read::card_pr.py find printed nothing for ${TARGET}, and the read of whether the pull request on ${HEAD_BRANCH} was closed failed, so the medic does not decide that the card has no open pull request."
+                FLAGS+=(--has-open-pr)
+              fi
             fi
             if [ "$CLASS" = bad-card ]; then
               THREAD="${RUNNER_TEMP:-/tmp}/medic-card-thread.json"
@@ -1764,7 +1852,8 @@ jobs:
           steps.waiting.outputs.waiting != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          GH_TOKEN: ${{ github.token }}
+          # The bot, for the `fix-path` pull-request read (DRE-8004).
+          GH_TOKEN: ${{ steps.app.outputs.token }}
           REPO: ${{ github.repository }}
           TARGET: ${{ steps.target.outputs.target }}
           CLASS: ${{ steps.verdict.outputs.class }}

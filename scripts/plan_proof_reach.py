@@ -18,7 +18,7 @@ So every reading is STRUCTURAL, in the seam's shape (`plan_seam.py`,
 appended to the structural file the gate forwards into the result, so the round
 is a `SEND_BACK` naming the criterion whatever the model wrote.
 
-## The three rules, each a fixed sentence
+## The four rules, each a fixed sentence
 
 1. **Reach.** `proof_reach.out_of_reach` names a reading the run cannot make —
    `FINDING_REACH`, once per reading named.
@@ -33,10 +33,17 @@ is a `SEND_BACK` naming the criterion whatever the model wrote.
    `Sandbox press:` step, made as the console proof-reader, and a proof left
    waiting on a person for it waits for nothing (DRE-7711 waited from
    2026-10-19). A sandbox press not on the list (a project's Builders, DRE-6638)
-   and one on a PROOF for a repo that holds no proof-reader stay the person's
-   row. `SANDBOX_PRESSES` copies `standards/card-quality.md`'s list, in order,
-   and lives here because the declaration refuses a reading field it does not
-   know.
+   and one on a PROOF for a repo that holds no proof-reader are not this rule's;
+   on the operator's row they are the next rule's. `SANDBOX_PRESSES` copies
+   `standards/card-quality.md`'s list, in order, and lives here because the
+   declaration refuses a reading field it does not know.
+4. **The operator's press** (DRE-7950). Any other criterion on the operator's
+   row (`PERSON_ROWS[0]`, any case, any repo) — `FINDING_PERSON_PRESS`. A press
+   only a person can make after merge, a machine update or a night-window
+   apply, is its own OPERATOR card the PROOF is blocked by, and the criterion
+   reads that card's result (DRE-7917 for DRE-7919); a proof row left waiting
+   on the press parks the record on the operator. The CEO's row is a business
+   decision of his and is not this rule's.
 
 ## Whose reach a PROOF is read for
 
@@ -120,6 +127,14 @@ FINDING_SANDBOX_PRESS = ("{proof}: criterion “{criterion}” sends a press on 
                          "press:` step the proof run makes as the console "
                          "proof-reader, or drop it.")
 
+#: The operator's-press finding, one per criterion that waits on the
+#: operator's press and is not already a sandbox finding (DRE-7950).
+FINDING_PERSON_PRESS = ("{proof}: criterion “{criterion}” waits on the operator's "
+                        "press, a step only a person can make after merge — file "
+                        "that press as an OPERATOR card this PROOF is blocked by, "
+                        "and write the criterion as the reading of that card's "
+                        "result.")
+
 #: The reading whose `held_for` names the repos whose proof run holds the
 #: console proof-reader.
 SANDBOX_READING = "console-sandbox-press"
@@ -132,8 +147,10 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: The sandbox presses, the copy of `standards/card-quality.md`'s one list
 #: (DRE-7772), in its order: each console operation, and the press in plain
 #: words. The epic's PROOF holds both equal to agent-bureau's
-#: `SANDBOX_PRESS_MUTATIONS`.
+#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the last twenty, the Initiatives
+#: page's writes.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
+_S = r"['’]s"
 SANDBOX_PRESSES = (
     ("createTask", rf"\b(?:make|makes|made|making|create|creates|created|creating)"
                    rf"\s+{_A}task\b(?!['’]s|\s+card)"),
@@ -145,6 +162,26 @@ SANDBOX_PRESSES = (
                                 rf"|\bopen(?:s|ed|ing)?\s+{_A}conversation\b"),
     ("answerDeskPermission", rf"\banswer(?:s|ed|ing)?\s+{_A}desk\s+"
                              rf"(?:allow|deny|permission)\b"),
+    ("startInitiativeDraft", rf"\bstart(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
+    ("saveInitiativeDraft", rf"\bsav(?:e|es|ed|ing)\s+{_A}initiative\s+draft\b"),
+    ("discardInitiativeDraft", rf"\bdiscard(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
+    ("sendToPlanning", rf"\b(?:send|sends|sent|sending)\s+{_A}card\s+to\s+planning\b"),
+    ("setCardRepo", rf"\bset(?:s|ting)?\s+{_A}card{_S}\s+repo\b"),
+    ("buildCardByHand", rf"\b(?:build|builds|built|building)\s+{_A}card\s+by\s+hand\b"),
+    ("cancelCard", rf"\bcancel(?:s|l?ed|l?ing)?\s+{_A}card\b"),
+    ("undoCancel", rf"\b(?:undo|undoes|undid|undone|undoing)\s+{_A}cancel\b"),
+    ("markCardChecked", rf"\bmark(?:s|ed|ing)?\s+{_A}card\s+(?:as\s+)?checked\b"),
+    ("remindCard", rf"\b(?:send|sends|sent|sending)\s+{_A}reminder\s+on\s+{_A}card\b"),
+    ("answerCard", rf"\banswer(?:s|ed|ing)?\s+{_A}card\b"),
+    ("commentOnCard", rf"\bcomment(?:s|ed|ing)?\s+on\s+{_A}card\b"),
+    ("writeEpicCards", rf"\b(?:write|writes|wrote|written|writing)\s+{_A}epic{_S}\s+cards\b"),
+    ("cancelEpic", rf"\bcancel(?:s|l?ed|l?ing)?\s+{_A}epic\b"),
+    ("answerPlanner", rf"\banswer(?:s|ed|ing)?\s+{_A}planner\b"),
+    ("addInitiativeContext", rf"\badd(?:s|ed|ing)?\s+context\s+to\s+{_A}initiative\b"),
+    ("deleteInitiativeContext", rf"\bdelet(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+context\b"),
+    ("addInitiativeFile", rf"\badd(?:s|ed|ing)?\s+{_A}file\s+to\s+{_A}initiative\b"),
+    ("updateInitiativeFile", rf"\bupdat(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
+    ("deleteInitiativeFile", rf"\bdelet(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
 )
 
 #: The rows that send a press to a person.
@@ -274,9 +311,14 @@ def sandbox_presses(criterion: str) -> list[str]:
             or re.search(pattern, criterion, re.IGNORECASE)]
 
 
-def _person_row(criterion: str) -> bool:
+def _person_row(criterion: str, rows=PERSON_ROWS) -> bool:
     text = criterion.replace("’", "'").casefold()
-    return any(row.casefold() in text for row in PERSON_ROWS)
+    return any(row.casefold() in text for row in rows)
+
+
+def waits_on_the_operators_press(criterion: str) -> bool:
+    """The operator's row in `criterion`; the CEO's row is his decision."""
+    return _person_row(criterion, PERSON_ROWS[:1])
 
 
 def sends_sandbox_press_to_a_person(criterion: str) -> bool:
@@ -320,6 +362,13 @@ def _sandbox_lines(proof: dict, criterion: str) -> list[str]:
         proof=proof["identifier"], criterion=proof_record._cut(criterion, CUT)))]
 
 
+def _person_press_lines(proof: dict, criterion: str) -> list[str]:
+    if not waits_on_the_operators_press(criterion):
+        return []
+    return [_one_line(FINDING_PERSON_PRESS.format(
+        proof=proof["identifier"], criterion=proof_record._cut(criterion, CUT)))]
+
+
 def findings(cards, details, operator_cards=(), *, doc=None, repo_map=None,
              caller_slug=None, local=None, acts=None, routing=None) -> Reading:
     """Every finding over the epic's PROOF children, in record order.
@@ -329,8 +378,9 @@ def findings(cards, details, operator_cards=(), *, doc=None, repo_map=None,
     `reach_caller`'s reach: its own `repo:` label, else `caller_slug`. The
     reach keywords go to `proof_reach.out_of_reach` as they are. A caller the
     repo map does not carry cannot be read for reach, so the reach and sandbox
-    rules are skipped for a PROOF read for it and the operator rule still runs
-    — the CLI says so on stderr.
+    rules are skipped for a PROOF read for it and the operator's-press and
+    operator rules still run — the CLI says so on stderr. A criterion the
+    sandbox rule refuses is not refused again as the operator's press.
     """
     records = plan_seam.join(cards, details)
     doc = proof_reach.load() if doc is None else doc
@@ -355,8 +405,8 @@ def findings(cards, details, operator_cards=(), *, doc=None, repo_map=None,
             read += 1
             if caller is not False:
                 lines += _reach_lines(proof, criterion, reach)
-            if sandbox:
-                lines += _sandbox_lines(proof, criterion)
+            pressed = _sandbox_lines(proof, criterion) if sandbox else []
+            lines += pressed or _person_press_lines(proof, criterion)
             lines += _operator_lines(proof, criterion, operators)
     return Reading(lines, read, len(proofs))
 

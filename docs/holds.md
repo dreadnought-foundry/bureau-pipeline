@@ -192,8 +192,12 @@ itself before it moves the card.
 
 The lift is met when the `repo:` label the card wears now names a key of
 `config/repo-map.json`. The stamp's qualifier — `repo:<slug>`, or `repo:none`
-for a card with no `repo:` label — only records what the sweep read when it
-held the card. A person can fix an unroutable card two ways:
+for a card with no `repo:` label — only records what the writer read when it
+held the card. Two writers hold a card `no-route`: the sweep's stranded
+watchdog, and the planning exit, which refuses a card none of whose `repo:`
+labels is a key of `config/repo-map.json` before it stamps any routing verdict
+and parks it in Triage (DRE-8145). A person can fix an unroutable card two
+ways:
 
 1. **Correct the label** — a typo, a wrong slug, or a missing `repo:` label
    added. This is the usual fix.
@@ -303,7 +307,7 @@ nothing resumes, so each also moves it (DRE-6273):
   never the stamp's qualifier, so a label a person corrected lifts the hold
   as much as a slug that joined the rail, and a `repo:none` stamp lifts once
   the card wears an on-rail label. A `no-route` card the sweep parked in
-  Triage (DRE-6177)
+  Triage (DRE-6177), or the planning exit refused there (DRE-8145),
   goes from Triage to Planning. The Triage lane leaves such a card alone
   while the hold stands (DRE-6190), so it is still there to be found. Planning
   and not Queued: a card that has been through Triage since its newest
@@ -462,6 +466,7 @@ without a person before it holds.
 | -- | -- | -- | -- | -- | -- |
 | `scripts/reconcile.py` · `flag_stranded` | `WATCHDOG_TAG` | `stranded-no-run` | `run-started` | sweep, fix-dispatch, medic, limit-recovery | The sweep's one Todo re-send (DRE-5743) |
 | `scripts/reconcile.py` · `flag_stranded` | `WATCHDOG_TAG` | `no-route` | `repo-on-rail` | sweep, fix-dispatch, medic, limit-recovery | The move to the operator's queue (DRE-6177) |
+| `scripts/planning_route.py` · `_refuse_no_repo` | `NO_REPO_TAG` | `no-route` | `repo-on-rail` | sweep, fix-dispatch, medic, limit-recovery | None — the planning exit never guesses a repo from the card's text; the label is a person's to add, and the hold lifts on it (DRE-8145) |
 | `scripts/reconcile.py` · `hand_review_nudge_to_person` | `REVIEW_NUDGE_CAP_KEY` | `review-cap-spent` | `new-head` | sweep, fix-dispatch, medic, limit-recovery | Three review re-triggers on the head, then the Green Light question (DRE-6181) — parked in Green Light for a code pull request, held In Review with the operator's question for a proof record (DRE-6841) |
 | `scripts/reconcile.py` · `hand_dead_run_to_planner` (In Progress or In Review, no PR) | `held-for-human` | `dead-run-cap` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | Two requeues, then one hand-off to the planner on a silent death (DRE-6178, DRE-6186) |
 | `scripts/dead_run.py` · `_cmd_park` | `PARK_STATE` | `dead-run-cap` | `unpark-marker` | sweep, fix-dispatch, medic, limit-recovery | Two requeues, then one hand-off to the planner on a silent death (DRE-6178, DRE-6186) |
@@ -495,7 +500,7 @@ records.
 | Reason | What runs first, with no person | The receipt that records it |
 | -- | -- | -- |
 | `stranded-no-run` | The sweep re-sends a promoted card no run started on, once (DRE-5743), in Todo or In Progress alike (DRE-7108). | `card was promoted and no run started — re-dispatched` |
-| `no-route` | The card moves to the operator's queue under the `card-stranded` act. The move lands with DRE-6177. | `card-stranded` |
+| `no-route` | The card moves to the operator's queue under the `card-stranded` act. The move lands with DRE-6177. The planning exit's refusal tries nothing first: it never guesses a repo (DRE-8145). | `card-stranded` |
 | `review-cap-spent` | Three review re-triggers on the head, then the evidence-built Green Light question. The question lands with DRE-6181. On a proof record the question is the operator's and the card is held In Review, not parked in Green Light (DRE-6841). | `review-nudge-cap` |
 | `dead-run-cap` | Two requeues at the same budget, then — on a silent death, with no pull request and no blocker note — one hand-off to the planner. The Report step's cap has asked `dead_run.decide` since DRE-6178, and the sweep's two no-PR caps ask it through `hand_dead_run_to_planner` since DRE-6186; what the sweep sees at its cap is always the silent death. A credential refusal or an API or model death at the cap holds as today, because neither says anything about the card's size. | `✂️ dead-run-cap → Planning:` (`hold.DEAD_SPLIT_MARK`) |
 | `turn-cap-park` | One requeue at the same budget after a death past implementation green (DRE-4366). | `turn-exhaustion-requeue` |

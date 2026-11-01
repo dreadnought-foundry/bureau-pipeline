@@ -68,8 +68,16 @@ class FakeGitHub:
         # "not posted yet" from "posted and then DELETED" reads them
         # (DRE-3453), so the fake carries them like the REST shape does.
         self._comment_id = 5_600_000_000
+        # Every ref create, reopen, label add and body edit sent to THIS
+        # client, in order — what dependabot_flow's fixture self-heal is
+        # judged on: those writes go out as the scenario's own `ctx.gh`,
+        # never another client (DRE-7957).
+        self.writes = []
         self.on_create_pr = None  # hook(fake, pr) — the test's "pipeline"
         self.on_poll = None  # hook(fake) — fired on get_pr/list_comments polls
+        # hook(fake, pr) — fired on a reopen, which in the sandbox starts a
+        # real review as the reopening bot (DRE-7957)
+        self.on_reopen = None
 
     # -- helpers for tests -------------------------------------------------
     def _new_sha(self):
@@ -107,7 +115,11 @@ class FakeGitHub:
             # date a foreign-namespace leftover without a second call.
             "created_at": created_at,
             "merged": False,
+            # The LIST shape carries no `merged`, only `merged_at`; a closed
+            # PR read off `list_prs` is told merged from closed by it.
+            "merged_at": None,
             "merged_by": None,
+            "labels": [],
             "user": {"login": login},
             "head": {"ref": head, "sha": self.branches.get(head, self._new_sha())},
             "base": {"ref": self._default},
@@ -125,6 +137,7 @@ class FakeGitHub:
         head = pr["head"]["ref"]
         pr["head"]["sha"] = self.branches.get(head, pr["head"]["sha"])
         pr["merged"] = True
+        pr["merged_at"] = "2026-01-01T00:00:00Z"
         pr["state"] = "closed"
         pr["merged_by"] = {"login": login}
         for (branch, path), content in list(self.files.items()):
@@ -172,6 +185,7 @@ class FakeGitHub:
     def create_ref(self, repo, branch, sha):
         if branch in self.branches:
             raise RuntimeError(f"ref exists: {branch}")
+        self.writes.append(("create_ref", branch, sha))
         self.branches[branch] = sha
 
     def delete_ref(self, repo, branch):
@@ -226,6 +240,34 @@ class FakeGitHub:
 
     def close_pr(self, repo, number):
         self.prs[number]["state"] = "closed"
+
+    def list_prs(self, repo, state="all"):
+        prs = sorted(self.prs.values(), key=lambda p: p["number"], reverse=True)
+        return [p for p in prs if state == "all" or p["state"] == state]
+
+    def reopen_pr(self, repo, number):
+        # GitHub's own refusals (422): a merged PR never reopens, and a PR
+        # whose head branch is gone cannot reopen until the branch is back.
+        pr = self.prs[number]
+        if pr["merged"] or pr.get("merged_at"):
+            raise RuntimeError(f"PR #{number} is merged and cannot reopen")
+        if pr["head"]["ref"] not in self.branches:
+            raise RuntimeError(f"PR #{number} head branch is gone")
+        self.writes.append(("reopen_pr", number))
+        pr["state"] = "open"
+        if self.on_reopen:
+            self.on_reopen(self, pr)
+
+    def add_labels(self, repo, number, labels):
+        self.writes.append(("add_labels", number, tuple(labels)))
+        have = self.prs[number].setdefault("labels", [])
+        for name in labels:
+            if name not in [label["name"] for label in have]:
+                have.append({"name": name})
+
+    def update_pr_body(self, repo, number, body):
+        self.writes.append(("update_pr_body", number, body))
+        self.prs[number]["body"] = body
 
     def list_comments(self, repo, number):
         if self.on_poll:

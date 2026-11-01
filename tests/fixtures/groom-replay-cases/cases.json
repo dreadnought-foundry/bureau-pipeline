@@ -1,0 +1,406 @@
+{
+  "schema": "groom-replay-cases/1",
+  "built_at": "2026-10-13T14:25:31.619Z",
+  "cases": [
+    {
+      "case": "42ed15f7527d-DRE-2348",
+      "card": "DRE-2348",
+      "proposal_id": "42ed15f7527d",
+      "standing_card": "DRE-3327",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "atlas is not greenlit right now",
+      "recorded_at": "2026-09-13T04:20:14.721Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "Extend name_implies_undeclared to the modifier catalog",
+      "repo": "atlas",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "42ed15f7527d-DRE-2373",
+      "card": "DRE-2373",
+      "proposal_id": "42ed15f7527d",
+      "standing_card": "DRE-3327",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "atlas is not greenlit right now",
+      "recorded_at": "2026-09-13T04:20:17.915Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "MenuCalc serves soft-deleted ingredients into live recipes",
+      "repo": "atlas",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "42ed15f7527d-DRE-3453",
+      "card": "DRE-3453",
+      "proposal_id": "42ed15f7527d",
+      "standing_card": "DRE-3327",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "already Done since the batch was proposed",
+      "recorded_at": "2026-09-13T04:27:35.146Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "The harness's gate-paths scenario hangs to its 70-minute de…",
+      "repo": "bureau-pipeline",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "42ed15f7527d-DRE-3127",
+      "card": "DRE-3127",
+      "proposal_id": "42ed15f7527d",
+      "standing_card": "DRE-3327",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "a demo card, cancelled 2026-09-12 under the proof-only rule",
+      "recorded_at": "2026-09-13T04:27:37.183Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "DEMO: walk the CEO through PR #407 before and after — the s…",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-4049",
+      "card": "DRE-4049",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "Replaced by DRE-5942 (Done 2026-10-06), which re-runs stranded jobs once under the failover order; agent-bureau and portico are no longer on the mini pool, so the old fail-back gap cannot occur for them. Checked 2026-10-10 by the operator session on the CEO's go.",
+      "recorded_at": "2026-10-10T17:04:28.594Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "The runner fail-back moves the workflows but not the jobs a…",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-4417",
+      "card": "DRE-4417",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "The cause is gone: these builds run on RunsOn now, not the mini's light tier, and Planning already sent this card back as an incident story with nothing to build. The one leftover (the death receipt reads \"the run did not die\" for a killed run) needs its own small pipeline card. Checked 2026-10-10 by the operator session on the CEO's go.",
+      "recorded_at": "2026-10-10T17:04:29.166Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "A build on the mini LIGHT tier was SIGKILLed twice at ~34 m…",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-5656",
+      "card": "DRE-5656",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "The proof record already carries the ship.sh --verify run of 2026-10-02 15:43 PT and criterion 1 reads PASS; the missing piece (the second account's state that day) can no longer be observed. Checked 2026-10-10 by the operator session on the CEO's go.",
+      "recorded_at": "2026-10-10T17:04:29.642Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "portico: DRE-5400's proof record carries the ship.sh --veri…",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-5657",
+      "card": "DRE-5657",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "DRE-5658 (Done 2026-10-07) made the moderator upload an automated check (upload-to-proof-scratch.spec.ts); only a note in a closed 2026-10-02 record remains. Checked 2026-10-10 by the operator session on the CEO's go.",
+      "recorded_at": "2026-10-10T17:04:30.138Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "portico: DRE-5400's proof record carries the step-4 moderat…",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-3602",
+      "card": "DRE-3602",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "Still real, but DRE-3546 started building in the same file (release_row.py) at 09:43 PT on 2026-10-10. Offer it again once that lands.",
+      "recorded_at": "2026-10-10T17:04:30.640Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "The console release row follows the NEWEST train run, so a …",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-4054",
+      "card": "DRE-4054",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "Still real (20 card reads fetch full descriptions) and it helps the speed target, but open DRE-6057 epics DRE-6061 and DRE-6063 are changing store.py. Offer it again once those land.",
+      "recorded_at": "2026-10-10T17:04:31.344Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "Every card read drags 3.3 KB of Linear description per row …",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-3857",
+      "card": "DRE-3857",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "Still real, but the card carries an undecided question (the console would lose its merged-not-live window) and DRE-5997 is repairing the same release script. Offer it again once DRE-5997 lands and the question is answered.",
+      "recorded_at": "2026-10-10T17:04:31.930Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "agent-bureau's console, website and relay write their Linea…",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-4072",
+      "card": "DRE-4072",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "The card describes a header that no longer exists (the tiles are already chips, with three capacity readings beside them) and has three undecided design questions. It needs rewriting before it is planned.",
+      "recorded_at": "2026-10-10T17:04:32.394Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "Capacity folds into the KPI tiles — one header carrying bot…",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-3749",
+      "card": "DRE-3749",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "A child of epic DRE-2284, which is still in Intake; a child should not go to Planning without its epic. It also predates the 2026-10-08 new-company standard. The decision to make is DRE-2284.",
+      "recorded_at": "2026-10-10T17:04:32.869Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "Every new project is born on the release train — its first …",
+      "repo": "agent-bureau",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-3750",
+      "card": "DRE-3750",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "A child of epic DRE-2284, which is still in Intake, and it leans on cards since canceled or archived (DRE-3216, DRE-3608, DRE-3725) and on DRE-3717, still in Backlog. It also predates the 2026-10-08 new-company standard. The decision to make is DRE-2284.",
+      "recorded_at": "2026-10-10T17:04:33.361Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "Every new company gets its Portico share when its first pro…",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-3919",
+      "card": "DRE-3919",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "The epic's plan (flip each portal with the look switch) is moot since DRE-5206 removed the switch. What remains is a small cleanup, and the epic needs rewriting to say so before it is planned.",
+      "recorded_at": "2026-10-10T17:04:33.833Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "[EPIC] portico: Source list rebuild, part 4b — the viewer, …",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-4206",
+      "card": "DRE-4206",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "The split is already built (the document route loads on demand in router.tsx). What is left is a drawing that needs the CEO's yes, which is a design task, not a build.",
+      "recorded_at": "2026-10-10T17:04:34.301Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "portico: the document route loads on demand — draw what a r…",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-4204",
+      "card": "DRE-4204",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "One of its items is already gone (DRE-5206 removed the second look) and the rest is not urgent: the bundle is under its limit. It needs trimming before it is planned.",
+      "recorded_at": "2026-10-10T17:04:34.916Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "portico: the initial download — measure what is actually se…",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "a4f198411b02-DRE-3701",
+      "card": "DRE-3701",
+      "proposal_id": "a4f198411b02",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "hold",
+      "reason": null,
+      "reason_label": "The trigger was the Mac mini's shared temp folder; RunsOn and GitHub machines start clean, so it can only recur on mini failover. The workflow gap is still there, at low priority.",
+      "recorded_at": "2026-10-10T17:04:35.399Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "qa-review posts a STALE verdict with no @sha when Resolve P…",
+      "repo": "bureau-pipeline",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "3381b8d562a8-DRE-2503",
+      "card": "DRE-2503",
+      "proposal_id": "3381b8d562a8",
+      "standing_card": "DRE-4541",
+      "list": "planning",
+      "decision": "not-doing",
+      "reason": null,
+      "reason_label": "Not ready: waits on other work",
+      "recorded_at": "2026-10-13T14:25:31.619Z",
+      "source": "fallback",
+      "expect": "off-planning",
+      "title": "Flip the portal CSP from Report-Only to enforcing — author …",
+      "repo": "portico",
+      "main": {
+        "ended": null,
+        "at": null,
+        "passes": null
+      }
+    },
+    {
+      "case": "seed-DRE-7239",
+      "card": "DRE-7239",
+      "proposal_id": null,
+      "standing_card": null,
+      "list": "planning",
+      "decision": null,
+      "reason": null,
+      "reason_label": "seed: known-good — the card's work is merged, so the verify step takes it off the Planning list",
+      "recorded_at": "2026-10-25T00:00:00Z",
+      "source": "seed",
+      "expect": "off-planning",
+      "title": "bureau-pipeline: groom_replay.py turns a stored groom proposal into a run's input and reports where each card ended",
+      "repo": "bureau-pipeline",
+      "main": {
+        "ended": "cancel",
+        "at": "2026-11-01T10:14:53Z",
+        "passes": true
+      }
+    }
+  ]
+}

@@ -57,7 +57,7 @@ DRE-4149; the harness now proves `main` once — see `docs/self-hosting.md`,
 | --- | --- | --- |
 | `agent_task_parses` | yes | a real `agent-execute` `repository_dispatch` produces a run with `jobs > 0`, whose `referenced_workflows` names this repo's `agent-task.yml` with a resolved commit |
 | `bot_pr_flow` | yes | the happy path: worker-bot authorship → sha-bound critic verdict → qa-bot merge (author ≠ merger) |
-| `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds |
+| `dependabot_flow` | yes | the real Dependabot PR self-skips clean, the reconcile dispatch route produces a bound verdict, and the receipt lifecycle holds. Its fixture PR is labeled `harness-fixture` and reopens itself when closed, so closing it as a stale major is harmless (DRE-7957) |
 | `gate_paths` | yes | merge-gate semantics: a behind-base merge at the reviewed head, condition D's waiting-for-human state, and a stale-verdict race |
 | `lane_contract` | yes | `config/lane-contract.json`'s conformance rules over the live board, the console's state lists and this checkout's own vocabulary |
 | `proof_task_parses` | yes | a real `proof-execute` `repository_dispatch` produces a run with `jobs > 0`, whose `referenced_workflows` names this repo's `proof-task.yml` with a resolved commit — `agent_task_parses`, copied, for the proof run (DRE-6045) |
@@ -149,7 +149,8 @@ keeps the value it started with (`docs/model-choice-levers.md`, the
 `DRE-7187` row).
 
 **The known limit.** `dependabot_flow` reviews a pull request Dependabot itself
-opens, so no fixture writes its description and the switch cannot reach it.
+opens. The scenario adds only its do-not-close banner to that description
+(DRE-7957), never a builder line, so the switch cannot reach it.
 That review stays on the unknown-builder walk, on Opus 5.5 — about one probe
 review in five.
 

@@ -956,3 +956,347 @@ class TestTheSweepWritesThroughQueueLane:
         source = RECONCILE_SOURCE.read_text(encoding="utf-8")
         assert 'f"🧹 Auto-promoted {QUEUE_LANE} → {destination}: {reason}"' in source
         assert 'f"🧹 Auto-advanced {QUEUE_LANE} → Planning: {because}' in source
+
+
+# --------------------------------------------------------------------------
+# DRE-3539: a loop across the two gates is named, and nothing else changes.
+#
+# 2026-09-08 about 5:40 PM PT to 2026-09-10 6:41 AM PT. Epic DRE-3421 was
+# `blockedBy` epic DRE-3420; DRE-3420's lead child DRE-3433 was `blockedBy`
+# DRE-3428, a DRE-3421 child. The epic gate held DRE-3428 behind DRE-3420, the
+# card gate held DRE-3433 behind DRE-3428, and each printed a correct "held by"
+# line on every pass for 38 hours. Here the REAL epic gate runs — nothing in
+# `reconcile` is stubbed but its Linear seams, every one of them recorded — so
+# the "held by" lines below are the ones the sweep printed that night.
+# --------------------------------------------------------------------------
+from datetime import UTC, datetime, timedelta  # noqa: E402
+
+#: The night of the hold: 2026-09-09 21:00 PT is 2026-09-10 04:00 UTC.
+NIGHT = datetime(2026, 9, 10, 4, 0, tzinfo=UTC)
+CYCLE_EDGE = "DRE-3420 blocks DRE-3421"
+#: What the cycle's line and its comments open with. Spelled, not imported:
+#: this file has to load — and print the two "held by" lines — on the code
+#: before the walk existed.
+CYCLE_TAG = "dependency-cycle:"
+
+
+class _NightClock(datetime):
+    """`reconcile.datetime`, with `now()` pinned to the pass's fixture time."""
+
+    frozen = NIGHT
+
+    @classmethod
+    def now(cls, tz=None):
+        return cls.frozen
+
+
+def _blocks(*blockers: tuple[str, str]) -> dict:
+    return {
+        "nodes": [{"type": "blocks",
+                   "issue": {"identifier": ident, "state": {"name": state}}}
+                  for ident, state in blockers],
+        "pageInfo": {"hasNextPage": False, "endCursor": None},
+    }
+
+
+def _queued_child(identifier: str, epic: str, *blockers: tuple[str, str]) -> dict:
+    """A FLEET child of `epic`, waiting in Queued, as `backlog_children` hands it."""
+    return {
+        "id": f"uuid-{identifier}",
+        "identifier": identifier,
+        "title": f"build piece {identifier}",
+        "description": "Add it.\n\n## Acceptance criteria\n\n- [ ] it renders\n",
+        "createdAt": CREATED,
+        "parent": {"identifier": epic, "state": {"name": "In Progress"}},
+        "labels": {"nodes": [{"name": "repo:bureau-pipeline"},
+                             {"name": "agent:engineer"}]},
+        "comments": {"nodes": [{"body": FLEET_VERDICT}]},
+        "inverseRelations": _blocks(*blockers),
+    }
+
+
+def _epic_record(identifier: str, children: list[str], *blockers) -> dict:
+    """The epic as the pass's batched epic read (`EPIC_RECORD_GQL`) returns it."""
+    return {
+        "id": f"uuid-{identifier}",
+        "identifier": identifier,
+        "description": "",
+        "state": {"name": "In Progress"},
+        "children": {"nodes": [
+            {"identifier": c, "createdAt": CREATED, "state": {"name": "Queued"}}
+            for c in children]},
+        "history": {"nodes": []},
+        "inverseRelations": _blocks(*blockers),
+        "comments": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+    }
+
+
+def _blocker_epic_record(identifier: str, children: list[str]) -> dict:
+    """The blocker epic as the gate's own read (`epic_cap.IN_MOTION_NODE`)."""
+    return {
+        "identifier": identifier,
+        "title": f"[EPIC] {identifier}",
+        "state": {"name": "In Progress"},
+        "children": {"nodes": [
+            {"identifier": c, "title": f"build piece {c}",
+             "state": {"name": "Queued"},
+             "labels": {"nodes": [], "pageInfo": {"hasNextPage": False}},
+             "children": {"nodes": []}}
+            for c in children], "pageInfo": {"hasNextPage": False}},
+    }
+
+
+def _the_night(*, crossing: bool = True) -> tuple[list, dict]:
+    """The board that night — `crossing=False` is the same two epics in an
+    ordinary serial dependency, with no card edge back."""
+    lead = (("DRE-3428", "Queued"),) if crossing else ()
+    cards = [
+        _queued_child("DRE-3428", "DRE-3421"),
+        _queued_child("DRE-3433", "DRE-3420", *lead),
+    ]
+    epics = {
+        "DRE-3420": _epic_record("DRE-3420", ["DRE-3433"]),
+        "DRE-3421": _epic_record("DRE-3421", ["DRE-3428"],
+                                 ("DRE-3420", "In Progress")),
+    }
+    return cards, epics
+
+
+class _NightBoard:
+    """`reconcile.promote_ready` with the epic gate LIVE: every Linear seam it
+    reaches is answered off the fixture and recorded in `calls`, so a pass's
+    Linear traffic can be compared call for call.
+
+    Posted comments are kept across passes (`count_comments` reads them back,
+    as the board would); every other cache is the pass's own, dropped at the
+    top of each pass the way `main` drops it."""
+
+    def __init__(self, cards, epics):
+        self.cards = cards
+        self.epics = epics
+        self.calls: list[tuple] = []
+        self.posted: list[tuple[str, str]] = []
+        self.advanced: list[tuple[str, str]] = []
+
+    def _gql_paged(self, query, variables=None, **kw):
+        self.calls.append(("gql_paged", tuple(variables.get("numbers") or ())))
+        wanted = {f"DRE-{int(n)}" for n in variables.get("numbers") or ()}
+        return [record for ident, record in self.epics.items() if ident in wanted]
+
+    def _gql(self, query, variables=None, **kw):
+        ident = (variables or {}).get("id")
+        self.calls.append(("gql", ident))
+        if query == reconcile._BLOCKER_EPIC_QUERY and ident in self.epics:
+            children = [c["identifier"] for c in self.cards
+                        if c["parent"]["identifier"] == ident]
+            return {"issue": _blocker_epic_record(ident, children)}
+        raise reconcile.linear_ops.LinearError(f"no fixture answers this read of {ident}")
+
+    def _count(self, ident, needle, **kw):
+        self.calls.append(("count_comments", ident, needle))
+        return sum(1 for i, b in self.posted if i == ident and needle in b)
+
+    def _post(self, ident, body):
+        self.calls.append(("cmd_comment", ident, body.splitlines()[0]))
+        self.posted.append((ident, body))
+
+    def _advance(self, ident, to_state, from_states, *a, **kw):
+        self.calls.append(("cmd_advance", ident, to_state))
+        self.advanced.append((ident, to_state))
+
+    def _record(self, name, answer=None):
+        def seam(*args, **kw):
+            self.calls.append((name, *[a for a in args if isinstance(a, str)]))
+            return answer
+        return seam
+
+    def promote(self, *, full: bool = True, at: datetime = NIGHT,
+                walk: bool = True) -> int:
+        """One pass: the full sweep's (`close_epics=True` with its two
+        companions) or the promote-only one. `walk=False` is the code before
+        this card — the walk answers nothing."""
+        reconcile.reset_sweep_cards()
+        reconcile._write_failures.clear()
+        reconcile._stale_defects.clear()
+        _NightClock.frozen = at
+        no_walk = (patch("dependency_cycle.find_cycles", return_value=[])
+                   if not walk else patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"))
+        ops = reconcile.linear_ops
+        with no_walk, patch.object(reconcile, "REPO_SLUG", "bureau-pipeline"), \
+                patch.object(reconcile, "datetime", _NightClock), \
+                patch.object(reconcile, "backlog_children",
+                             return_value=[dict(c) for c in self.cards]), \
+                patch.object(reconcile.mid_epic, "last_green_light",
+                             return_value=GREEN_LIGHT), \
+                patch.object(ops, "gql_paged", side_effect=self._gql_paged), \
+                patch.object(ops, "gql", side_effect=self._gql), \
+                patch.object(ops, "comment_records",
+                             side_effect=self._record("comment_records", [])), \
+                patch.object(ops, "first_comment_at",
+                             side_effect=self._record("first_comment_at")), \
+                patch.object(ops, "add_label", side_effect=self._record("add_label")), \
+                patch.object(ops, "cmd_advance", side_effect=self._advance), \
+                patch.object(ops, "cmd_comment", side_effect=self._post), \
+                patch.object(ops, "count_comments", side_effect=self._count):
+            if full:
+                return reconcile.promote_ready(active_count=1, close_epics=True,
+                                               resolve_blockers=True, ask_cap=True)
+            return reconcile.promote_ready(active_count=1)
+
+    def comments_on(self, identifier: str) -> list[str]:
+        return [b for i, b in self.posted if i == identifier]
+
+    def cycle_comments(self) -> list[tuple[str, str]]:
+        return [(i, b) for i, b in self.posted
+                if b.startswith(CYCLE_TAG)]
+
+
+def _relation_writes(calls) -> list:
+    """Every recorded call that could delete or edit a relation: none of the
+    seams the sweep has may touch one, and no gql mutation may be sent."""
+    return [c for c in calls
+            if "relation" in c[0].lower()
+            or (c[0] == "gql" and isinstance(c[1], str) and "mutation" in c[1])]
+
+
+class TestTheNightOfTheHoldIsReproduced:
+    """PROOF: the 2026-09-08/09 hold, from the fixture. On the code before this
+    card both "held by" lines print and nothing names the loop — this class is
+    committed red on exactly that."""
+
+    def test_both_gates_print_their_held_by_line(self, capsys):
+        board = _NightBoard(*_the_night())
+        assert board.promote() == 0
+        out = capsys.readouterr().out
+        assert ("epic-gate: DRE-3421 is held by a formal blockedBy relation on "
+                "DRE-3420 (In Progress)") in out, out
+        assert "promotion: DRE-3433 is held by DRE-3428 (Queued)" in out, out
+        assert board.advanced == []
+
+    def test_the_sweep_names_the_loop_and_the_edge_to_remove(self, capsys):
+        board = _NightBoard(*_the_night())
+        board.promote()
+        out = capsys.readouterr().out
+        lines = [l for l in out.splitlines() if l.startswith("dependency-cycle:")]
+        assert len(lines) == 1, out
+        for said in ("DRE-3420 waits for its open child DRE-3433",
+                     "DRE-3433 is blockedBy DRE-3428",
+                     "DRE-3428 (child of DRE-3421) waits for DRE-3420",
+                     f"remove `{CYCLE_EDGE}`"):
+            assert said in lines[0], lines[0]
+        # And both "held by" lines are still there beside it.
+        assert "epic-gate: DRE-3421 is held by" in out
+        assert "promotion: DRE-3433 is held by DRE-3428" in out
+
+    def test_the_promote_only_pass_names_it_too_and_posts_nothing(self, capsys):
+        board = _NightBoard(*_the_night())
+        board.promote(full=False)
+        assert "dependency-cycle: " in capsys.readouterr().out
+        assert board.cycle_comments() == []
+
+
+class TestTheEpicsAreToldOncePerPacificDay:
+    def test_the_full_sweep_comments_on_both_epics_once(self):
+        board = _NightBoard(*_the_night())
+        board.promote()
+        posted = board.cycle_comments()
+        assert sorted(i for i, _ in posted) == ["DRE-3420", "DRE-3421"]
+        for _, body in posted:
+            # 2026-09-10 04:00 UTC is the evening of 2026-09-09 in PT.
+            assert body.startswith("dependency-cycle: 2026-09-09"), body
+            assert CYCLE_EDGE in body
+
+    def test_a_second_sweep_the_same_pt_day_posts_nothing(self):
+        board = _NightBoard(*_the_night())
+        board.promote()
+        board.promote(at=NIGHT + timedelta(hours=2))  # 23:00 PT, still the 9th
+        assert len(board.cycle_comments()) == 2
+
+    def test_the_next_pt_day_posts_again(self):
+        board = _NightBoard(*_the_night())
+        board.promote()
+        board.promote(at=NIGHT + timedelta(hours=4))  # 01:00 PT on the 10th
+        posted = board.cycle_comments()
+        assert len(posted) == 4, posted
+        assert sorted(b.splitlines()[0][:len("dependency-cycle: 2026-09-10")]
+                      for _, b in posted[2:]) == ["dependency-cycle: 2026-09-10"] * 2
+
+
+class TestASerialDependencyIsLeftAlone:
+    def test_no_cycle_line_and_no_comment(self, capsys):
+        board = _NightBoard(*_the_night(crossing=False))
+        board.promote()
+        out = capsys.readouterr().out
+        assert "epic-gate: DRE-3421 is held by" in out  # the ordinary wait
+        assert "dependency-cycle:" not in out
+        assert board.cycle_comments() == []
+
+
+class TestTheCycleCount:
+    """`main` prints `cycles: <n>` just before `sweep complete:` on every full
+    sweep, off the count the pass left."""
+
+    def test_the_count_reads_one_on_the_night(self):
+        _NightBoard(*_the_night()).promote()
+        assert reconcile.cycles_line() == "cycles: 1"
+
+    def test_the_count_reads_zero_on_the_serial_board(self):
+        _NightBoard(*_the_night(crossing=False)).promote()
+        assert reconcile.cycles_line() == "cycles: 0"
+
+    def test_a_new_sweep_starts_at_zero(self):
+        _NightBoard(*_the_night()).promote()
+        reconcile.reset_sweep_cards()
+        assert reconcile.cycles_line() == "cycles: 0"
+
+    def test_main_prints_it_just_before_sweep_complete(self):
+        """Read off `main`'s own statements: the line before the summary."""
+        main = next(node for node in ast.parse(
+            RECONCILE_SOURCE.read_text(encoding="utf-8")).body
+            if isinstance(node, ast.FunctionDef) and node.name == "main")
+        body = [ast.unparse(stmt) for stmt in main.body]
+        done = next(i for i, s in enumerate(body) if "sweep complete:" in s)
+        assert body[done - 1] == "print(cycles_line())", body[done - 1]
+
+
+class TestTheWalkSpendsNoLinearRead:
+    def test_a_pass_with_no_cycle_makes_exactly_the_calls_it_made_before(self):
+        before = _NightBoard(*_the_night(crossing=False))
+        before.promote(walk=False)
+        after = _NightBoard(*_the_night(crossing=False))
+        after.promote()
+        assert after.calls == before.calls
+
+    def test_a_pass_with_a_cycle_adds_only_the_check_and_post_on_each_epic(self):
+        before = _NightBoard(*_the_night())
+        before.promote(walk=False)
+        after = _NightBoard(*_the_night())
+        after.promote()
+        assert after.calls[:len(before.calls)] == before.calls
+        added = after.calls[len(before.calls):]
+        tag = "dependency-cycle: 2026-09-09"
+        assert [c[:3] if c[0] == "count_comments" else c[:2] for c in added] == [
+            ("count_comments", "DRE-3420", tag), ("cmd_comment", "DRE-3420"),
+            ("count_comments", "DRE-3421", tag), ("cmd_comment", "DRE-3421"),
+        ]
+
+    def test_a_second_pass_the_same_day_adds_only_the_checks(self):
+        board = _NightBoard(*_the_night())
+        board.promote()
+        board.calls.clear()
+        board.promote(at=NIGHT + timedelta(minutes=15))
+        assert [c for c in board.calls if c[0] == "cmd_comment"] == []
+        assert [c[1] for c in board.calls if c[0] == "count_comments"
+                and c[2].startswith("dependency-cycle:")] == ["DRE-3420", "DRE-3421"]
+
+
+class TestNoRelationIsTouched:
+    @pytest.mark.parametrize("crossing", [True, False])
+    def test_no_relation_is_deleted_or_edited(self, crossing):
+        board = _NightBoard(*_the_night(crossing=crossing))
+        board.promote()
+        board.promote(full=False)
+        assert _relation_writes(board.calls) == []
+        # The relations the board started with are the ones it ends with.
+        assert board.cards == _the_night(crossing=crossing)[0]
+        assert board.epics == _the_night(crossing=crossing)[1]

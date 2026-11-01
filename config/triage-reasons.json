@@ -15,6 +15,12 @@
       "note": "A park note says nothing has read the card, why its classification could not be read, and that the way back is a move to Planning."
     },
     {
+      "unit": "planning_escalation.py#escalate",
+      "reason_at": "planning_escalation.py#escalate",
+      "anchor": "housekeeping_note(",
+      "note": "A park note says the planner's question is housekeeping, not a decision, names the screen's rule it broke, quotes the reason and says the way back is a move to Planning (DRE-7961)."
+    },
+    {
       "unit": "reconcile.py#escalate_out_of_planning",
       "reason_at": "reconcile.py#escalate_out_of_planning",
       "anchor": "stall_park_note(ident, reason)",
@@ -31,6 +37,12 @@
       "reason_at": "reconcile.py#flag_stranded",
       "anchor": "isn't on the dispatch",
       "note": "The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug."
+    },
+    {
+      "unit": "planning_route.py#_refuse_no_repo",
+      "reason_at": "planning_route.py#_refuse_no_repo",
+      "anchor": "no_repo_note(identifier, unknown)",
+      "note": "The planning exit's refusal says the card carries no repo: label, or one naming no repo in config/repo-map.json, that it was not routed, and the fix — add the label for the repo its files live in — beside a no-route hold stamp (DRE-8145)."
     },
     {
       "unit": "rereview_watch.py#_fire",

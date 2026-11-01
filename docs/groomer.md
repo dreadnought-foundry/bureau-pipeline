@@ -44,18 +44,22 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    to place.
    `--no-judgement` makes no call at all and is exactly the groomer that ran
    before DRE-3150.
-7. **Proposes**, in plain English, as **two lists drawn from the same
-   twenty** (DRE-4727): the **Planning** list and its order with the **why** on
-   every row, and the **Cancel** list — the cards in that twenty that no
-   longer apply — with a one-line **reason** on every row. Then what is
-   deferred and what brings each one back, what could not be ranked at all,
-   and which repos are waiting and roughly how long.
-8. **Checks before it posts** (DRE-4966). Every card on both lists, and up to
-   ten behind them, is read against its own comments, merged pull requests and
-   other cards that name it. A card already done or superseded moves to the
-   Cancel list with that evidence as the reason, and a Cancel whose
-   replacement is not real goes back to the Planning list. No model call. The
-   id is computed after, so the approval covers the checked lists. Below.
+7. **Proposes**, in plain English, as **two lists** (DRE-4727): the
+   **Planning** list and its order with the **why** on every row, and the
+   **Cancel** list — the cards on offer that no longer apply, wherever they
+   stand — with a one-line **reason** and its proof on every row. Since
+   DRE-7973 (epic DRE-6648) the Cancel list is drawn from the whole lane and
+   holds no Planning slot, so the Planning list is up to twenty cards on its
+   own; DRE-4727 drew both lists from the same twenty. Then what is deferred
+   and what brings each one back, what could not be ranked at all, and which
+   repos are waiting and roughly how long.
+8. **Checks before it posts** (DRE-4966). Every card on both lists, up to ten
+   behind them and — swept since DRE-7973 — every other card on offer, is
+   read against its own comments, merged pull requests and other cards that
+   name it. A card already done or superseded moves to the Cancel list with
+   that evidence as the reason, and a Cancel whose replacement is not real
+   goes back to the Planning list. No model call. The id is computed after,
+   so the approval covers the checked lists. Below.
 9. **Posts, in its own job** (DRE-4971, wired by DRE-4972). The run is
    compute, verify, then post — three jobs in `groomer.yml`, with the
    lookups between the first two since DRE-5429:
@@ -91,7 +95,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      leg does not stop `verify`.
    - **`verify`** is that matrix: one read-only agent per card, reading the
      card's repo on its default branch under `target/` with a token that can
-     only read that one repo, and holding no Linear key at all. Each agent
+     only read that one repo, and holding no Linear key at all. When the
+     card's repo is not bureau-pipeline, the leg also checks out
+     bureau-pipeline at `main` under `pipeline/` with the job's own read
+     token (DRE-8028), since the code behind a card about the pipeline's own
+     scripts lives there; a code item naming a line in it carries
+     `"repo": "bureau-pipeline"`, counts as a line under `target/` does, and
+     reads `bureau-pipeline:<file>:<line> — <quote>` on the page. A failed
+     second checkout leaves the agent on `target/` alone. Each agent
      asks whether the card's problem can still be seen in that code — not
      whether the card's own fix merged — and answers `still-needed`,
      `partly-solved`, `done-elsewhere`, `obsolete`, `not-worth-it` or
@@ -105,7 +116,13 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
      proof. A Cancel of a card with children, in any state,
      counts only a Done card not under it or a routing fact, never a
      `file:line` quote, else it is `unverified` with `proof belongs to a
-     child`; a Cancel counting a pull request that did part of the card,
+     child`; after that, a Cancel of a card labeled `no-code` counts only a
+     Done `no-code` card with its merged pull request — a merged pull
+     request from any other card, a routing fact and a `file:line` quote
+     show the code landed, not that the operator work was done — else it is
+     `unverified` with `a no-code card needs a Done no-code card`
+     (DRE-7485), and the matched card's line in the agent's input ends
+     `no-code` when it carries the label; a Cancel counting a pull request that did part of the card,
      even beside other proof, is recorded `partly-solved` with `adjusted:
      partial pull request`; and
      each verdict carries `rested_on`, what it rested on.
@@ -140,7 +157,37 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    writes no model-attempt receipt: it prints the page to the log and the
    step summary, then `groom_replay.py report`'s one `groom-replay:` line per
    card. A `drain` with `replay` set refuses before any write. The scheduled
-   morning never sets it. The page carries a
+   morning never sets it. A replay's `groom` and `post` jobs queue in
+   concurrency groups of their own run, so a replay never displaces the
+   morning's run in `groomer` or `groomer-post`, nor the morning a replay
+   (DRE-7974).
+
+   **The replay gate** (DRE-7974), `.github/workflows/groom-replay-gate.yml`,
+   runs on every pull request. Its `reach` job runs `groom_replay_gate.py
+   reach` over the pull request's base and head. When the change touches the
+   verify step and `gate-set.json` holds cards, `replay` calls this repo's
+   own `groomer.yml` with `replay` set to the gate set and `pipeline_ref` the
+   pull request's merge ref, and `judge` runs `groom_replay_gate.py judge`
+   over the verified proposal. A case that passes on `main` and fails on the
+   change turns `judge` red, so the merge gate holds the pull request. Every
+   other pull request gets a green `reach` and two skipped jobs. The read door
+   refuses a pull request's token, so the gate's problem search is Linear's,
+   and each `judge` line says `search=linear`.
+
+   **The replay cases** (DRE-7971) are the stored proposals a replay is
+   meant for. `scripts/groom_replay_cases.py build` reads every decision a
+   person recorded about a card on a proposal — the console's record and the
+   markers on every standing card's thread, uncollapsed
+   (`groom_memory.all_decisions`) — and keeps one case per proposal and card
+   a person removed with a reason in
+   `tests/fixtures/groom-replay-cases/cases.json`: a Planning card taken off
+   is `off-planning`, a Cancel card kept is `off-cancel`. It writes
+   `replay-set.json` beside it, every case card, and `gate-set.json`, only
+   the cards of cases that pass on `main`, at most 50. A case is never
+   dropped, and its `main` block is written only by the replay gate. One
+   seed case, DRE-7239, ships so the set is never empty.
+
+   The page carries a
    `## Verified against main` section after the Cancel list, and its
    `Verify step:` line is the verify total — cards, dollars and wall clock —
    so the verify total is on the proposal page, never in a separate comment.
@@ -465,22 +512,33 @@ line per card, before anything moves.
 | -- | -- | -- |
 | `now` | **In the approved batch**. It carries a cycle and a position in it, and it is the only outcome that moves a card. | a **reason** — the read's own line, or the rule that placed it ("Urgent", "newest first") — and, on a judged run, the five **labelled reasons** below. |
 | `not-now` | **Wanted, and deliberately not this batch** — the batch is full, and it names the cycle it is reconsidered in. This is "later", and it is not "no". | a **trigger** — what brings it back. Cards sharing one are grouped under it, with the count. |
-| `dead` (the read calls it `likely-done`) | **Proposed for cancellation, on the Cancel list beside the batch**. It is one of the morning's twenty, and the drain cancels it once the CEO agrees, with the reason on the card. Two readers propose one: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | a one-line **reason** — `superseded by DRE-N` off the card's own line, or the **evidence** the read named: the superseding card, merged PR or decision. A recommendation nobody can check is one nobody should act on. |
+| `dead` (the read calls it `likely-done`) | **Proposed for cancellation, on the Cancel list beside the batch**. It may stand anywhere in the order and holds no Planning slot (DRE-7973), and the drain cancels it once the CEO agrees, with the reason on the card. Two readers propose one: a `Superseded by:` line a person wrote on the card, or the ranked read's judgement. | a one-line **reason** — `superseded by DRE-N` off the card's own line, or the **evidence** the read named: the superseding card, merged PR or decision. A recommendation nobody can check is one nobody should act on. |
 | `could not rank` | **The read could not place it**, so it is **out of the batch** — whatever the rules did with it (DRE-3544). It carries no cycle and no trigger: what is owed is a person, not a fortnight. | **itself** — its own section in the proposal, never folded into "not now". |
 | `not-ready` | **A readiness rule holds it** (DRE-6665), so it takes no slot and carries no cycle — whatever the order or the read said. It is in `outcomes["not-ready"]` and no other list. | the **rule**, a plain-English **reason** and the **condition** that brings it back, under `## Not ready — and what would make it ready`. |
 
-**The morning's twenty are Planning plus Cancel together** (DRE-4727, the
-CEO's decision on DRE-4669). `propose` walks the rules' order and places each
-card on one of the two lists until `capacity` cards are placed, epics never
-split: a card whose description carries a `Superseded by:` line, or that the
-read called `likely-done`, goes on the Cancel list; every other card goes on
-the Planning list. A card the read left unranked takes no slot, as before. A
-card outside the twenty is `not-now` with its cycle whatever its description
-or the read says — it waits its turn, and it is neither cancelled early nor
-shown as dead. Each list is numbered from 1, and the proposal id digests both
-lists' cards and positions (never a reason), so an approval binds to the
-cancellations as well as to the batch. A proposal is empty only when both lists
-are.
+**The Cancel list is drawn from the whole lane, and holds no Planning slot**
+(DRE-7973, epic DRE-6648). It replaces DRE-4727's rule, the CEO's decision on
+DRE-4669 as first built: the morning's twenty were Planning plus Cancel
+together, and a card outside them waited its turn whatever its description or
+the read said. That threw the read's `likely-done` calls away for every card
+past the twenty — the read already judges every card on offer — and 82 dead
+Intake cards were closed by hand over thirteen mornings (DRE-6643). Now
+`propose` puts a card whose description carries a `Superseded by:` line, or
+that the read called `likely-done`, on the Cancel list wherever it stands in
+the order, and takes it out before the cycles are filled; the Planning list
+is the first `capacity` cards left, epics never split. A card the read left
+unranked takes no slot, as before. Each list is numbered from 1 in the rules'
+order, and the proposal id digests both lists' cards and positions (never a
+reason), so an approval binds to the cancellations as well as to the batch. A
+proposal is empty only when both lists are.
+
+Every row still carries its proof, under the same refusals as before, asked of
+every row wherever it stands: `cancel_refusal` (an epic with an open child)
+and `cancel_proof_refusal` (no proof, or an epic's Cancel from a writer that
+cannot say whose work it points at). A refused card keeps the place the order
+gave it — on the Planning list inside the batch, `not-now` outside it — and is
+said under `## Cancels refused`. The verify step's `partly-solved` rule is
+unchanged.
 
 **No proposal cancels an epic with an open child (DRE-5309).** On 2026-09-29
 DRE-4633, a live epic whose children were still being built, was put on the
@@ -513,7 +571,7 @@ keeps its place and is listed under `## Cancels refused` like any other. The
 Cancel table's Reason cell ends with each proof line (`proof_reason`); the
 verdict line and a Rewrite first row's "What remains" add `rested on: <words>`
 when the verdict carries `rested_on`, and an `adjusted` verdict says `(a pull
-request did part of it)`. Each refusal in the morning's set is listed in `cancels_refused` and on the page under
+request did part of it)`. Each refusal, wherever its card stands (DRE-7973), is listed in `cancels_refused` and on the page under
 `## Cancels refused`, after the Cancel list, naming who proposed the Cancel;
 the section is absent on a morning with none. The lane is read 50 cards a page
 (`POPULATION_PAGE`) because the `children` selection makes each page heavier.
@@ -658,8 +716,18 @@ direction that is hard to undo.
 **What moves.** A card with evidence goes to the Cancel list with the first
 piece of it as the reason (comments first, then merged PRs, then other cards),
 and the next card in order takes its slot. The check walks the slots in order,
-so a spare with evidence that no slot reaches is recorded and **not** cancelled
-early — a card outside the morning's set waits its turn (DRE-4727).
+so a spare with evidence that no slot reaches is recorded and not cancelled by
+the walk.
+
+**The sweep (DRE-7969, on since DRE-7973).** `verify_proposal` calls
+`groom_verify.check(…, sweep=True)`, which also reads every other card on
+offer — the `not-now`, `not-ready` and `rewrite` lists less the Planning list,
+the spares and the Cancel list (`sweep_window`) — the same three ways, after
+the spares. A swept card holds no slot: one with evidence goes to the Cancel
+list wherever it stands and leaves the list it was on, so a card is on one
+list only, its proof the check's own item; one with an unread source is
+`unread` and never moved. A check that fails outright reads every swept card
+as unread on every source, as it does every other card.
 
 **A source it could not read is said, never passed off as clean.** Each card's
 record names the sources that were unread for it; a card with no evidence and
@@ -677,9 +745,18 @@ every card unread on every source.
 **The record.** `proposal["verification"]` carries, per card, `verdict`
 (`cancel`, `clean`, `unread`, `cancel-stands`, `cancel-rejected`,
 `cancel-kept`), `source` and `evidence`, beside `unread`, `moved_to_cancel`,
-`cancels_rejected` and `not_checked` — so the proof and the audit read them
-rather than repeating the reads. The record is not in the id's digest; the
-lists it changed are.
+`cancels_rejected` and `not_checked`, and `swept` and `swept_to_cancel` (both
+`[]` with the sweep off) — so the proof and the audit read them
+rather than repeating the reads. Beside it, `proposal["sweep"]` (DRE-7973) is
+`{"read", "to_cancel", "unread", "outside_batch"}`: how many swept cards were
+read, moved to Cancel and could not be read, and every Cancel row DRE-4727's
+walk would not have put in the batch cycles — a `Superseded by:` or ranked-read
+row past them, a card only the sweep read, and a recorded Move to Cancel. The
+page says the three counts under `## What the check read`, in its opening and
+on one line, `- Swept: <S> more cards in Intake were read for dead-card
+evidence — <C> moved to Cancel, <U> could not be read.`; the Cancel table's
+rows, cells and grammar are unchanged. Neither record is in the id's digest;
+the lists they changed are.
 
 The cost is one Linear request per card read, one per replacement named, and
 one GitHub search per five cards per owner — seconds. `--no-verify` posts
@@ -747,7 +824,8 @@ drain parse both, and they render byte for byte as before. A Planning card
 with no proof is one whose verdict is `unverified`, and its line carries the
 reason instead, one of exactly `agent step failed`, `agent step skipped`,
 `no verdict file`, `no proof`, `unreadable answer`, `no verdict artifact`,
-`proof belongs to a child` or `lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
+`proof belongs to a child`, `a no-code card needs a Done no-code card` or
+`lookup failed: <why>` (`groom_verify_agent.UNVERIFIED_REASONS`); a verdict
 document naming any other reason is read as `unreadable answer`. An
 `excluded` card is never on the Planning list. A cost or clock the step could not read
 says `unknown`, never zero. A record with no `verify` block renders byte for
@@ -1572,8 +1650,8 @@ it never alarms, and appends it to `STANDING_CARDS` — never removing one;
 - **`cancel`** — **Move to Cancel** on the console, `groom-excluded: <id> DRE-N
   — move to Cancel` on a thread. Since DRE-7826 the card goes on the **next
   proposal's Cancel list**, whatever its place in the order and taking no
-  Planning slot — the one Cancel row not drawn from the morning's twenty,
-  because a person already decided it. Its `source` is `console-record`
+  Planning slot — as every Cancel row has since DRE-7973; it never waited its
+  turn, because a person already decided it. Its `source` is `console-record`
   (`groomer.DEAD_FROM_RECORD`), its reason reads `You moved this card to Cancel
   on <Pacific date> (proposal <id>)`, and its one proof item is the console's
   record (`Move to Cancel recorded by <actor> on <Pacific date>, proposal
@@ -1672,7 +1750,7 @@ digests the batch alone, so answering a decline never retires an approval.
 
 ## The cadence, and its stated cost
 
-Three decisions, in order, and the one rule they leave standing: **a clock may
+Four decisions, in order, and the one rule they leave standing: **a clock may
 reach `propose`, and nothing but the CEO's Approve reaches `drain`.**
 
 - **D5 (DRE-2683, approved 2026-08-23):** on demand, until the groomer's
@@ -1692,6 +1770,18 @@ reach `propose`, and nothing but the CEO's Approve reaches `drain`.**
   target, and the verify step its epic adds to the groom puts another four to
   six minutes on the run. The crons moved from a quarter past the hour to the
   hour; the 06:30 briefing target is unchanged.
+- **The weekly replay (DRE-6648, green-lit 2026-10-25, built by DRE-7975):**
+  D5 is widened by exactly one more run — the Sunday job,
+  `.github/workflows/groom-week.yml` ([groom-week.md](groom-week.md)), whose
+  `replay-main` job replays the stored replay set on `main` once a week. It
+  calls the groomer with the literals `mode: propose`, `judgement: "off"`,
+  `pipeline_ref: main` and
+  `replay: tests/fixtures/groom-replay-cases/replay-set.json`, and with no
+  `card`. A replay posts to no card, writes no receipt, moves no card and
+  drains nothing: the `post` job posts to no card whatever `card` says, and a
+  drain with `replay` set refuses before any write (DRE-7239, DRE-7242). The
+  CEO's green light of DRE-6648, the day it entered In Progress, is that
+  decision.
 
 So `.github/workflows/self-groomer.yml` carries three triggers:
 
@@ -1724,7 +1814,9 @@ So `.github/workflows/self-groomer.yml` carries three triggers:
   Every input of the scheduled job is a literal or a repository variable, so
   nothing a person or a payload sets can reach it, and `mode` is the literal
   `propose`. `tests/test_groomer_wiring.py` walks every scheduled workflow in
-  the repo and fails if any other scheduled job calls `groomer.yml`.
+  the repo and fails if any other scheduled job calls `groomer.yml` — but the
+  weekly replay, `groom-week.yml`'s `replay-main`, held to its four literals
+  and to passing no `card`.
 
 The cost D5 stated — on demand means it runs when someone remembers, and
 anything relying on remembering eventually does not happen — no longer applies

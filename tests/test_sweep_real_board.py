@@ -695,6 +695,15 @@ def test_the_pass_ran_to_its_end(replay):
     assert replay.spend_lines[-1].startswith("sweep-spend: total ")
 
 
+def test_the_full_sweep_counts_its_dependency_cycles(replay):
+    """DRE-3539: every full sweep says how many loops across the epic and
+    card gates it found, just before its summary — `cycles: 0` included. The
+    synthetic board holds none."""
+    done = next(i for i, l in enumerate(replay.printed) if l.startswith("sweep complete:"))
+    assert replay.printed[done - 1] == "cycles: 0", replay.printed[done - 3:done + 1]
+    assert not any(l.startswith("dependency-cycle:") for l in replay.printed)
+
+
 def test_the_epic_reads_do_not_follow_the_number_of_epics(replay):
     """DRE-3642's cut, measured where the ceiling is: however many epics are
     active, the epic close and the epic gate's relations are ONE read between

@@ -17,10 +17,11 @@ This page is the version of that file a person reads.
 
 | Switch | Read by | What `true` does |
 | -- | -- | -- |
-| `PROOF_DISPATCH_LIVE` | `reconcile.yml`, `Dispatch proof runs` | The sweep starts a proof run at each PROOF card whose epic's build cards are Done and released. |
+| `PROOF_DISPATCH_LIVE` | `reconcile.yml`, `Dispatch proof runs` | The sweep starts a proof run at each PROOF card whose epic's build cards are Done and released. The sweep's `Close proof records that cannot merge` step reads it too: it closes each open record pull request whose record cannot merge, keeping its branch, instead of printing `would: close #<n>` lines (DRE-8452). |
 | `GREEN_LIGHT_REPLY_LIVE` | `reconcile.yml`, `Reply to the CEO's Green Light comments` | A comment the CEO leaves on an epic waiting in Green Light sends the plan back for a review. |
 | `HYGIENE_LIVE` | `hygiene.yml`, `Decide dry run` | The scheduled hygiene run writes to the board. |
 | `TRIAGE_REPAIR_LIVE` | `triage-repair.yml`, `Decide dry run` | The scheduled Triage Repair run claims parked cards and has the planner repair them. |
+| `NAME_GUARD_LIVE` | `proof-task.yml`, `Install the name guard` | Every push the proof run makes (the agent's, the push rescue's and the shadow push) and the record pull request's body refresh refuse a person's name from the live roster. The proof run's `Push the shadow record` and `Refresh the record pull request's body` steps read it too. `Report proof result to Linear` carries it for the proof run's escalation comment, which nothing guards until its reporter reads the switch (DRE-8170); `qa-review.yml`'s `Post verdict or neutral status` reads it too: the critic's comment goes through the name redaction seam and guard before it posts, and a comment the guard still refuses is held behind a neutral status. |
 
 `config/switches.json` is the source. If this table and the file disagree, the
 file is right.
@@ -47,7 +48,9 @@ that is on while its companion is still set is reported as stale.
 
 `Read the switches` is the last step of the `sweep` job in
 `.github/workflows/reconcile.yml`. It runs on every full pass, which means
-every scheduled Reconcile run, and never on a narrowed one. The caller passes
+every scheduled Reconcile run, and never on a narrowed one. A failed `Sweep`
+or a failed phase before it does not skip it; a gate before `Sweep` that
+stops the job does (DRE-8000). The caller passes
 in each switch and its companion. The step runs `python3
 .bureau-pipeline/scripts/switch_reason.py`, which prints one line per switch in
 the catalog, in the catalog's order, on every pass. A switch with nothing set

@@ -118,13 +118,46 @@ def test_names_the_incident_as_the_reason():
 
 
 def test_states_the_held_repo_is_checked_and_every_other_step_is_guidance():
-    """DRE-7752 checks one hand step — lifting a held repo's hold — and every
-    other one is still guidance, left to DRE-7523."""
+    """DRE-7752 checks one hand step — lifting a held repo's hold — and
+    DRE-7523 checks every child that needs the CEO is named; what stays
+    guidance is named."""
     section = _section()
     assert not _loose("nothing in the pipeline checks it").search(section)
     assert _loose("a held repo's hold is checked").search(section)
-    assert _loose("every other step that needs the CEO is still guidance").search(
+    assert _loose("only the plan's own repo is read").search(section)
+
+
+def test_states_a_child_that_needs_the_ceo_is_checked():
+    """DRE-7523: an open child that is an operator card or carries a person's
+    row is named by its identifier in a `Step that needs the CEO:` paragraph,
+    or the plan is sent back at the first critic.
+
+    DRE-7955: the standard no longer quotes the operator's row. The check
+    still reads it on an older card, through `plan_proof_reach.PERSON_ROWS`,
+    so the section names that list rather than the row."""
+    section = _section()
+    assert "DRE-7523" in section
+    assert not _loose("every other step that needs the CEO is still guidance").search(
         section
     )
-    assert "DRE-7523" in section
-    assert _loose("only the plan's own repo is read").search(section)
+    assert not _loose("a check for those is DRE-7523").search(section)
+    for phrase in (
+        "operator card",
+        "needs the CEO's press:",
+        "plan_proof_reach.PERSON_ROWS",
+        "by its identifier",
+        "Step that needs the CEO:",
+        "sent back at the first critic",
+    ):
+        assert _loose(phrase).search(section), f"the section does not say {phrase!r}"
+    assert not _loose("waiting for the operator's press").search(section), (
+        "the section still quotes the operator's row")
+
+
+def test_names_what_stays_guidance():
+    section = _section()
+    assert _loose("What stays guidance").search(section)
+    assert _loose("neither an operator card nor carries a person's row").search(
+        section
+    )
+    assert _loose("a one-off card's own question").search(section)

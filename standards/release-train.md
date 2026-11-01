@@ -62,7 +62,9 @@ repository checked out at `RELEASE_SHA`. In return:
    labeled `repo:<repo>`, `no-code`, `needs-human` and `agent:ops`. A later
    lap comments on it only when the reason changed, numbers, times and commit
    ids aside, and the surface's next verified tag closes it Done under a
-   `Released as <tag>` comment. A re-arming deferral does none of that. A
+   `Released as <tag>` comment. A tag cut by hand closes it too (DRE-7900):
+   the next lap reads the surface `current`, and the plan closes the card
+   under the same comment when that tag contains the commit the card records. A re-arming deferral does none of that. A
    deferral an open `RELEASE ROLLED BACK:` or `RELEASE BROKEN:` card on the
    same repo speaks for is warned of and files no card. None of it changes the
    decision, its receipt or the job's conclusion, and a card that cannot be

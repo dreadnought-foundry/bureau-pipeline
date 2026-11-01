@@ -499,3 +499,81 @@ def test_the_module_imports_none_of_the_groomer_the_door_or_linear():
             imported.add(node.module.split(".")[0])
     assert imported, "the import walk found nothing — it reads nothing"
     assert not imported & {"groomer", "bureau_read", "linear_ops"}, imported
+
+
+# --- every decision, uncollapsed (DRE-7971) --------------------------------
+
+def every(markers, rows=(), *, reasons=REASONS, door_problem=None):
+    return gm.all_decisions(list(rows), list(markers), reasons=reasons,
+                            door_problem=door_problem)
+
+
+def test_a_card_removed_twice_then_put_back_keeps_all_three_decisions():
+    """`remembered` keeps one of these; the replay cases need every one."""
+    rows = [row("DRE-100", proposal="p1", reason="already-done",
+                at="2026-10-01T00:00:00Z", ident=1),
+            row("DRE-100", "put-back", proposal="p2",
+                at="2026-10-03T00:00:00Z", ident=3)]
+    markers = [marker("DRE-100", "held", "waiting on the console",
+                      proposal="p2", at="2026-10-02T00:00:00Z")]
+    got = every(markers, rows)
+    assert [(d["proposal_id"], d["decision"]) for d in got] == [
+        ("p1", "not-doing"), ("p2", "hold"), ("p2", "put-back")]
+    assert [d["source"] for d in got] == ["record", "thread", "record"]
+    for decision in got:
+        assert set(decision) == KEYS
+    assert one(markers, rows)["DRE-100"] == got[-1]
+
+
+def test_a_row_and_its_mirrored_marker_are_one_decision_with_the_row_reason():
+    rows = [row("DRE-100", reason="already-done", at="2026-10-01T00:00:00Z")]
+    markers = [marker("DRE-100", tail="Already done",
+                      at="2026-10-01T00:00:01Z")]
+    got = every(markers, rows)
+    assert len(got) == 1
+    assert got[0]["source"] == "record"
+    assert got[0]["reason"] == "already-done"
+    assert got[0]["reason_label"] == "Already done"
+
+
+def test_a_marker_before_the_oldest_row_is_history_even_when_a_row_matches():
+    rows = [row("DRE-100", at="2026-10-05T00:00:00Z")]
+    markers = [marker("DRE-100", at="2026-10-01T00:00:00Z")]
+    got = every(markers, rows)
+    assert [d["source"] for d in got] == ["history", "record"]
+
+
+def test_every_marker_is_fallback_when_the_door_was_not_read():
+    rows = [row("DRE-100", at="2026-10-01T00:00:00Z")]
+    markers = [marker("DRE-100", at="2026-10-02T00:00:00Z"),
+               marker("DRE-101", at="2026-10-03T00:00:00Z")]
+    got = every(markers, rows, door_problem="unavailable")
+    assert [(d["card"], d["source"]) for d in got] == [
+        ("DRE-100", "fallback"), ("DRE-101", "fallback")]
+
+
+def test_all_decisions_sort_by_time_then_card_number_then_a_row_after_a_marker():
+    at = "2026-10-02T00:00:00Z"
+    rows = [row("DRE-9", "hold", at=at, proposal="pr"),
+            row("DRE-50", at="2026-10-01T00:00:00Z")]
+    markers = [marker("DRE-11", at=at), marker("DRE-9", at=at),
+               marker("DRE-7", at="2026-10-03T00:00:00Z")]
+    got = every(markers, rows)
+    assert [(d["card"], d["source"]) for d in got] == [
+        ("DRE-50", "record"), ("DRE-9", "thread"), ("DRE-9", "record"),
+        ("DRE-11", "thread"), ("DRE-7", "thread")]
+
+
+def test_remembered_is_the_newest_of_all_decisions_per_card_over_the_threads():
+    """The real 2026-09-22 and later markers: collapsing `all_decisions` per
+    card is exactly what `remembered` returns."""
+    markers = [m for card in gm.STANDING_CARDS
+               for m in THREADS["markers"].get(card, [])]
+    for door_problem in (None, "unavailable"):
+        got = every(markers, door_problem=door_problem)
+        newest = {}
+        for decision in got:
+            newest[decision["card"]] = decision
+        assert one(markers, door_problem=door_problem) == newest
+        assert len(got) == len([m for m in markers
+                                if m["card"] and m["kind"] in gm.MARKER_KINDS])

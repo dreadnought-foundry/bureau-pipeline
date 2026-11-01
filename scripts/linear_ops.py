@@ -2859,6 +2859,24 @@ def merged_not_closed_comment(
 #
 # A refused PROOF card's left-open comment names the ruling's gap rather than
 # the `no-code` sentence, which sent DRE-6353 chasing the wrong cause.
+#
+# The record is read with the critic's verdict (DRE-7949): the same comment
+# `_merge_evidence_gap` found APPROVE at the merged head, whose
+# `🔎 proof-row-accepted:` lines accept a `Not met. wording-only:` row. The
+# close names each such row and links that verdict comment. The line in any
+# comment the qa-bot did not write accepts nothing — the proof run posts as
+# the main bureau App, so it cannot accept its own reading.
+#
+# A record whose every unmet row is a GAP row closes too (DRE-7952): a
+# `Not observed. cause: <word> — …` row naming one of the four cause words, or
+# a `Not met. history: …` row (`proof_record.gap_rows`) — rows a re-run reads
+# the same again. The ruling files their ONE fix card in Intake through
+# `proof_gap.file_fix_card` before it returns the note, and the note names
+# each gap row with its kind and what the gap is. The fix card's
+# `🩹 proof-gap-card:` receipt on the PROOF card is what a second ask reads,
+# so card-done and the reconcile backstop never file twice. A plain
+# `Not met.`, a `Not observed.` with no cause, an unlinked acceptance or a
+# waiting row beside the gaps still holds the card, and files nothing.
 
 #: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
 #: `files` names the record the pull request added (DRE-6141).
@@ -2922,16 +2940,19 @@ def proof_evidence_gap(
     gap = _merge_evidence_gap(identifier, pr)
     if gap is not None:
         return gap
-    gap = _record_gap(record)
+    gap = _record_gap(record, pr)
     if gap is not None:
         return gap
     return _holds_gap(voices, pr.get("mergedAt"))
 
 
-def _record_gap(record) -> str | None:
+def _record_gap(record, pr: dict | None = None) -> str | None:
+    """The record's shortfall, read with the critic verdict `_merge_evidence_gap`
+    found APPROVE at the merged head — its acceptance of a wording-only row
+    counts, and one in any other comment is the reading run's own (DRE-7949)."""
     import proof_record  # lazy: the leaf the merge gate reads too
 
-    why = proof_record.shortfall(record)
+    why = proof_record.shortfall(record, _bound_verdict(pr), _other_comments(pr))
     if why is None:
         return None
     import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
@@ -2993,12 +3014,10 @@ def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
         return f"it merged from '{head_ref}', which is not this card's own branch"
     head = pr.get("headRefOid") or ""
     marker = merge_gate.CRITIC_MARKER
-    latest = None
-    for c in pr.get("comments") or []:
-        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), marker):
-            latest = merge_gate.first_line(c.get("body"))
-    if latest is None:
+    critic = _latest_critic(pr)
+    if critic is None:
         return "the critic left no verdict on it"
+    latest = merge_gate.first_line(critic.get("body"))
     token = merge_gate.verdict_token(latest, marker)
     if token != "APPROVE":
         return f"the critic's latest verdict is {token or 'unreadable'}, not APPROVE"
@@ -3008,9 +3027,37 @@ def _merge_evidence_gap(identifier: str, pr: dict | None) -> str | None:
     return None
 
 
+def _latest_critic(pr: dict | None) -> dict | None:
+    """The latest comment by the qa-bot App whose first line opens with the
+    critic marker — the one `_merge_evidence_gap` reads — or None."""
+    import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+    latest = None
+    for c in (pr or {}).get("comments") or []:
+        if _is_qa_bot(c) and merge_gate.opens_with_marker(c.get("body"), merge_gate.CRITIC_MARKER):
+            latest = c
+    return latest
+
+
+def _bound_verdict(pr: dict | None) -> dict | None:
+    """`_latest_critic` as `proof_record.reading` takes it, `{"body", "url"}`
+    — read only once `_merge_evidence_gap` found it APPROVE at the merged
+    head (DRE-7949)."""
+    critic = _latest_critic(pr)
+    if critic is None:
+        return None
+    return {"body": critic.get("body") or "", "url": critic.get("url")}
+
+
+def _other_comments(pr: dict | None) -> list:
+    """The body of every comment on the pull request the qa-bot did not write:
+    an acceptance line in one is the reading run's own (DRE-7949)."""
+    return [c.get("body") or "" for c in (pr or {}).get("comments") or [] if not _is_qa_bot(c)]
+
+
 def proof_close_note(
     identifier: str, title: str, pr_url: str, pr: dict | None,
-    record=None, voices: list | None = None,
+    record=None, voices: list | None = None, fix: dict | None = None,
 ) -> str | None:
     """The Done comment for a `PROOF:` card whose record merged approved, or
     None when the card is not one or the evidence falls short
@@ -3020,7 +3067,11 @@ def proof_close_note(
     on it still find it; then the PT
     merge time and the sha the critic approved; then what its criterion
     table held — the rows met, and every row the operator accepted by
-    decision, by its criterion (`proof_record.summary`, DRE-6244). It never
+    decision, by its criterion (`proof_record.summary`, DRE-6244), and every
+    row the checker accepted, by its criterion with the verdict comment that
+    accepted it (DRE-7949); then each gap row it closed with — its
+    criterion, its kind and what the gap is — and `fix`, the card
+    `proof_gap.file_fix_card` filed for them (DRE-7952). It never
     wears a verdict marker itself (standards/untrusted-content.md), and the
     criteria it quotes are the record's untrusted text, so neither do they.
     """
@@ -3029,18 +3080,21 @@ def proof_close_note(
     if proof_evidence_gap(identifier, pr, record, voices) is not None:
         return None
     import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+    import proof_gap  # lazy: it imports this module
     import proof_record  # lazy: the leaf the merge gate reads too
 
-    table = merge_gate.without_verdict_markers(
-        proof_record.summary(proof_record.reading(record.text)))
+    read = proof_record.reading(record.text, _bound_verdict(pr), _other_comments(pr))
+    table = merge_gate.without_verdict_markers(proof_record.summary(read))
+    gaps = proof_gap.gaps_of(read)
     merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
-    return (
+    note = (
         f"✅ Merged: {pr_url}\n\n"
         f"This proof record merged {dead_run.pacific(merged)} with the critic's "
         f"APPROVE at the merged head `{pr['headRefOid']}`. Its criterion table: "
         f"{table}. A PROOF card's deliverable is its merged record, so the card "
         "closes itself (DRE-5919)."
     )
+    return f"{note}\n\n{proof_gap.close_lines(gaps, fix)}" if gaps else note
 
 
 def merge_close_ruling(
@@ -3059,6 +3113,14 @@ def merge_close_ruling(
     on its evidence. `(None, None)`: close it with the caller's ordinary
     receipt. GitHub is asked only for a `PROOF:` card the guard refused, and
     never for an epic.
+
+    A PROOF record that closes with gap rows (`proof_record.gap_rows`) has its
+    ONE fix card filed here, before `note` is returned and so before either
+    caller moves the card (DRE-7952): a filing Linear refuses is a
+    `(reason, None)` naming the failure, never a raise, and the card stays
+    open for the backstop to ask again. Both callers ask this
+    ruling, and `proof_gap.file_fix_card` reads its own receipt off the
+    thread first, so a second ask files nothing.
     """
     reason = auto_done_skip_reason(title, labels, has_children)
     if (
@@ -3074,7 +3136,7 @@ def merge_close_ruling(
     record = voices = None
     if gap is None:
         record = read_proof_record(pr_url, pr)
-        gap = _record_gap(record)
+        gap = _record_gap(record, pr)
     if gap is None:
         voices = read_card_voices(identifier)
     note = proof_close_note(identifier, title, pr_url, pr, record, voices)
@@ -3084,6 +3146,26 @@ def merge_close_ruling(
         print(f"PROOF card {identifier} stays open: {gap}.")
         # The hold and the branch name are untrusted text, posted on the card.
         return merge_gate.without_verdict_markers(gap), None
+    import proof_gap  # lazy: it imports this module
+    import proof_record  # lazy: the leaf the merge gate reads too
+
+    gaps = proof_gap.gaps_of(
+        proof_record.reading(record.text, _bound_verdict(pr), _other_comments(pr)))
+    if gaps:
+        try:
+            fix = proof_gap.file_fix_card(
+                identifier, proof_gap.epic_of(identifier), pr_url, gaps,
+                repo_slug=proof_gap.repo_slug_of(labels, pr_url))
+        except Exception as exc:  # noqa: BLE001 — a failed filing is a refusal, never a crash
+            # The reconcile backstop asks this ruling inside its sweep, so a
+            # raise here would end the pass for every other card.
+            import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+            gap = (f"its record closes with {len(gaps)} gap row(s), and their fix card "
+                   f"could not be filed: {' '.join(str(exc).split())[:300]}")
+            print(f"PROOF card {identifier} stays open: {gap}.")
+            return merge_gate.without_verdict_markers(gap), None
+        note = proof_close_note(identifier, title, pr_url, pr, record, voices, fix=fix)
     return None, note
 
 
@@ -3127,7 +3209,9 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
     the job log. A `PROOF:` card is the one `no-code` card a merge may close
     (DRE-5919): → Done when its record merged on its own branch with the
     critic's APPROVE at the merged head, every judged row of the record met
-    and no `🔬 proof-waiting` hold standing (`merge_close_ruling`, DRE-6141).
+    — or every unmet row a gap row, filed as one fix card in Intake
+    (DRE-7952) — and no `🔬 proof-waiting` hold standing
+    (`merge_close_ruling`, DRE-6141).
 
     Break-glass cards (DRE-2737) are a class of their own: the fix has shipped, so
     the debt comes due — the card returns to Planning for the classification

@@ -1,25 +1,25 @@
 """DRE-7195 — every lever `docs/model-choice-levers.md` names, pulled once.
 
-The doc says where a model choice takes effect today and which one step back
-each sibling epic of DRE-7184 pulls when it switches a job off Opus. This file
+The doc says where a model choice takes effect and which one step back each
+sibling epic of DRE-7184 pulls when it switches a job off Opus. This file
 pulls each of those levers against the REAL selector and a temporary copy of
-the real config, and checks the selection note moves the way the doc says:
+today's scripts and config, and checks the selection note moves the way the
+doc says. It pulls two levers (DRE-8024):
 
-  * a project exception added through `config/models.yaml` plus a regenerated
-    literal, with no home set, and rolled back by restoring the file;
-  * the same exception in a home file (`BUREAU_MODEL_HOME_FILE`) winning over
-    a literal that lacks it, and the home rolled back by
-    `python3 scripts/model_home.py render-defaults`;
-  * the regime the doc finds in force today — the home named and unreadable,
-    the run on the defaults in the code;
-  * `config/model-choices.json` read by nothing on the dispatch path;
-  * each row of the doc's sibling table, as a before/after pair on its roles.
-    A row naming a lever this file does not exercise fails here.
+  * the home — a project exception or an agent's group written in a home file
+    (`BUREAU_MODEL_HOME_FILE`), and rolled back by writing the earlier
+    document, `python3 scripts/model_home.py render-defaults`, back;
+  * the `model-attempt:` line — a reviewer's build posting it, and then not.
+
+It also holds the regime the doc found in force on 2026-10-12, the home named
+and unreadable, the run on the defaults in the code; and each row of the doc's
+sibling table, as a before/after pair on its roles. A row naming a lever this
+file does not exercise fails here.
 
 Every model id and slug a check expects is read off the copy the test builds —
-its ladders, its repo map — never typed, and no committed model file is
-compared with a literal, so a save from the console turns nothing here red
-(DRE-6853). Each selection runs the selector's CLI the way the workflows do,
+its defaults in the code written as a home document, its repo map — never
+typed, and no committed model file is compared with a literal, so a save from
+the console turns nothing here red (DRE-6853). Each selection runs the selector's CLI the way the workflows do,
 with every model up (`BUREAU_FAKE_AVAILABLE`) and no network call.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_model_choice_levers.py -q
@@ -37,21 +37,19 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
-import model_fallback as mf  # noqa: E402 — the marker's one definition
+import model_fallback as mf  # noqa: E402 — the marker's and session agents' one definition
 
 DOC = ROOT / "docs" / "model-choice-levers.md"
 
 HOME_NAMES = ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")
 
-# The config files a tree carries beside its scripts. `model-choices.json` is
-# one of the generator's three targets, so it is copied for the generator to
-# rewrite, and `repo-map.json` is the routing fact a project slug is read from.
-CONFIG_FILES = ("models.yaml", "model-prices.yaml", "repo-map.json", "model-choices.json")
+# The config files a tree carries beside its scripts. `repo-map.json` is the
+# routing fact a project slug is read from.
+CONFIG_FILES = ("models.yaml", "model-prices.yaml", "repo-map.json")
 
 SIBLINGS = ("DRE-7185", "DRE-7187", "DRE-7188", "DRE-7189")
 
@@ -65,24 +63,10 @@ SOURCE_FUNCTIONS = ("select_with_reasons", "use_home", "code_defaults")
 # A temporary copy of the real config, and the selector run inside it          #
 # --------------------------------------------------------------------------- #
 
-def real_raw() -> dict:
-    """The committed `config/models.yaml`, parsed — the copy's starting point."""
-    return yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
-
-
-def ladder_ids(raw: dict, kind: str) -> list[str]:
-    """The model ids `kind` walks in a raw config."""
-    spec = raw["kinds"][kind]
-    name = spec["ladder"] if isinstance(spec, dict) else spec
-    return [r["model"] if isinstance(r, dict) else r for r in raw["ladders"][name]]
-
-
-def build_tree(dest: Path, edit: Callable[[dict], None] | None = None) -> Path:
-    """Today's scripts and a copy of the real config at `dest`, the copy's
-    `models.yaml` edited by `edit` (left byte for byte as committed without
-    one — what a revert restores), and the generated mirrors regenerated
-    from it by the real generator. An agent the edit adds that the registry
-    lacks gets a registry entry, as the generator requires of every agent."""
+def build_tree(dest: Path) -> Path:
+    """Today's scripts, the config files and `agents.yaml` at `dest`, as
+    committed. Nothing is regenerated: every choice a test moves, it moves
+    in a home document."""
     dest = Path(dest)
     (dest / "scripts").mkdir(parents=True, exist_ok=True)
     (dest / "config").mkdir(parents=True, exist_ok=True)
@@ -91,37 +75,7 @@ def build_tree(dest: Path, edit: Callable[[dict], None] | None = None) -> Path:
     for name in CONFIG_FILES:
         shutil.copy2(ROOT / "config" / name, dest / "config" / name)
     shutil.copy2(ROOT / "agents.yaml", dest / "agents.yaml")
-    if edit is not None:
-        raw = yaml.safe_load((dest / "config" / "models.yaml").read_text())
-        edit(raw)
-        (dest / "config" / "models.yaml").write_text(yaml.safe_dump(raw, sort_keys=False))
-        register(dest / "agents.yaml", raw)
-    proc = subprocess.run(
-        [sys.executable, str(dest / "scripts" / "sync_model_config.py")],
-        cwd=dest, capture_output=True, text=True, timeout=120)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
     return dest
-
-
-def register(registry: Path, raw: dict) -> None:
-    """An entry in `registry` for each pipeline agent of `raw` it does not
-    name, with the generated model region the generator fills. A session
-    agent has none, and needs none."""
-    text = registry.read_text()
-    names = set(re.findall(r"^\s*- name:\s*(\S+)", text, re.M))
-    names |= set(raw.get("session_agents") or ())
-    for name in raw["agents"]:
-        if name not in names:
-            text = text.rstrip("\n") + (
-                f"\n\n  - name: {name}\n    role: {name}\n"
-                "    # BEGIN generated model — canonical: config/models.yaml "
-                "(regenerate: scripts/sync_model_config.py)\n"
-                "    # END generated model\n")
-    registry.write_text(text)
-
-
-def tree_raw(tree: Path) -> dict:
-    return yaml.safe_load((tree / "config" / "models.yaml").read_text())
 
 
 def child_env(**names: str) -> dict:
@@ -192,124 +146,58 @@ LIVE = {"BUREAU_MODEL_HOME_TOKEN": ""}
 # What the copy says                                                           #
 # --------------------------------------------------------------------------- #
 
-def free_slug(tree: Path) -> str:
-    """The first project slug of the copy's repo map with no exception in the
-    copy's `models.yaml`."""
-    projects = tree_raw(tree).get("projects") or {}
+def ladder(doc: dict, group: str) -> list[str]:
+    """The model ids `group` walks in a home document."""
+    return doc["groups"][group]["models"]
+
+
+def free_slug(tree: Path, doc: dict) -> str:
+    """The first project slug of the copy's repo map with no exception in
+    the home document `doc`."""
+    projects = doc.get("projects") or {}
     repo_map = json.loads((tree / "config" / "repo-map.json").read_text())
     return next(slug for slug in repo_map if slug not in projects)
 
 
-def builder(raw: dict) -> str:
-    """The copy's first pipeline agent in the Builders — the role a Builders
-    exception moves. Read off the copy, so a save that moves an agent out
-    of the Builders moves this choice with it."""
-    session = set(raw.get("session_agents") or ())
-    return next(name for name, group in raw["agents"].items()
-                if group == "workhorse" and name not in session)
+def builder(doc: dict) -> str:
+    """The first pipeline agent a home document places in the Builders — the
+    role a Builders exception moves. Read off the document, so a save that
+    moves an agent out of the Builders moves this choice with it."""
+    return next(name for name, group in doc["agents"].items()
+                if group == "workhorse" and name not in mf.SESSION_AGENTS)
 
 
-BUILDER = builder(real_raw())
+BUILDER = builder(render_defaults(ROOT))
 
 
-def exception_model(raw: dict) -> str:
-    """A model the copy prices and runs that is not its Builders' first rung —
-    what a project exception for the Builders puts first."""
-    top = ladder_ids(raw, "workhorse")[0]
-    return next(m for m in [*ladder_ids(raw, "advisory"), *ladder_ids(raw, "workhorse")]
+def exception_model(doc: dict) -> str:
+    """A model the document runs that is not its Builders' first rung — what
+    a project exception for the Builders puts first."""
+    top = ladder(doc, "workhorse")[0]
+    return next(m for m in [*ladder(doc, "advisory"), *ladder(doc, "workhorse")]
                 if m != top)
-
-
-def add_exception(slug: str, model: str) -> Callable[[dict], None]:
-    def edit(raw: dict) -> None:
-        raw.setdefault("projects", {})
-        if raw["projects"] is None:
-            raw["projects"] = {}
-        raw["projects"].setdefault(slug, {})["workhorse"] = model
-    return edit
 
 
 @pytest.fixture(scope="module")
 def base(tmp_path_factory) -> Path:
-    """The copy as committed: what a revert of any of the edits below restores."""
+    """The copy as committed."""
     return build_tree(tmp_path_factory.mktemp("base"))
 
 
-@pytest.fixture(scope="module")
-def excepted(tmp_path_factory, base) -> tuple[Path, str, str]:
-    """The copy with one project's Builders exception added, regenerated."""
-    slug, model = free_slug(base), exception_model(tree_raw(base))
-    tree = build_tree(tmp_path_factory.mktemp("excepted"), add_exception(slug, model))
-    return tree, slug, model
-
-
 # --------------------------------------------------------------------------- #
-# The defaults in the code: config/models.yaml plus the regenerated literal    #
+# The regime the doc read: the home named and unreadable                       #
 # --------------------------------------------------------------------------- #
 
-def test_an_exception_written_in_models_yaml_takes_effect_through_the_literal(base, excepted):
-    tree, slug, model = excepted
-    top = ladder_ids(tree_raw(base), "workhorse")[0]
-
-    before, before_note = select(base, BUILDER, "--repo", slug)
-    after, after_note = select(tree, BUILDER, "--repo", slug)
-
-    assert before == top
-    assert f"project {slug}: no exception, fleet ladder" in before_note
-    assert after == model
-    assert f"project {slug}: exception {model} leads the" in after_note
-    assert "model-home" not in after_note
-
-
-def test_reverting_models_yaml_and_its_literal_rolls_the_exception_back(tmp_path, excepted):
-    _, slug, model = excepted
-    reverted = build_tree(tmp_path / "reverted")
-    chosen, note = select(reverted, BUILDER, "--repo", slug)
-    assert chosen != model
-    assert f"project {slug}: no exception, fleet ladder" in note
-
-
-def test_the_literal_alone_carries_the_choice_and_models_yaml_choices_are_not_read(
-        tmp_path, excepted):
-    """The exception's literal under a `models.yaml` that lost it again: the
-    selector still runs the exception, because it reads the choices from the
-    literal and never from the file."""
-    tree, slug, model = excepted
-    stale = tmp_path / "stale"
-    shutil.copytree(tree, stale)
-    shutil.copy2(ROOT / "config" / "models.yaml", stale / "config" / "models.yaml")
-    chosen, note = select(stale, BUILDER, "--repo", slug)
-    assert chosen == model
-    assert f"exception {model} leads the" in note
-
-
-def test_today_s_regime_an_unreadable_home_runs_on_the_literal(base, excepted):
+def test_today_s_regime_an_unreadable_home_runs_on_the_defaults_in_the_code(base):
     """The token step refused, an empty token handed over: the note opens
-    DEGRADED, ends with the unreadable clause, and the literal's exception is
-    in force."""
-    tree, slug, model = excepted
-    chosen, note = select(tree, BUILDER, "--repo", slug, **LIVE)
-    assert chosen == model
+    DEGRADED, ends with the unreadable clause, and the run is on the first
+    Builders model of the defaults in the code."""
+    chosen, note = select(base, BUILDER, **LIVE)
+    assert chosen == ladder(render_defaults(base), "workhorse")[0]
     assert note.startswith("DEGRADED ")
     assert note.endswith("· model-home: unreadable (the token mint was refused: "
                          "BUREAU_MODEL_HOME_TOKEN is set and empty), running on the "
                          "defaults in the code")
-    plain, plain_note = select(base, BUILDER, "--repo", slug, **LIVE)
-    assert plain != model
-    assert "no exception, fleet ladder · model-home: unreadable" in plain_note
-
-
-def test_model_choices_json_is_not_read_on_the_dispatch_path(tmp_path, excepted):
-    tree, slug, _ = excepted
-    _, note = select(tree, BUILDER, "--repo", slug)
-    garbled = tmp_path / "garbled"
-    shutil.copytree(tree, garbled)
-    (garbled / "config" / "model-choices.json").write_text("not json {")
-    _, garbled_note = select(garbled, BUILDER, "--repo", slug)
-    (garbled / "config" / "model-choices.json").unlink()
-    _, missing_note = select(garbled, BUILDER, "--repo", slug)
-    assert garbled_note == note
-    assert missing_note == note
 
 
 # --------------------------------------------------------------------------- #
@@ -317,8 +205,8 @@ def test_model_choices_json_is_not_read_on_the_dispatch_path(tmp_path, excepted)
 # --------------------------------------------------------------------------- #
 
 def test_an_exception_in_the_home_wins_over_a_literal_that_lacks_it(base):
-    slug, model = free_slug(base), exception_model(tree_raw(base))
     doc = render_defaults(base)
+    slug, model = free_slug(base, doc), exception_model(doc)
     doc["projects"].setdefault(slug, {})["workhorse"] = model
     home = write_home(base, doc)
 
@@ -329,26 +217,14 @@ def test_an_exception_in_the_home_wins_over_a_literal_that_lacks_it(base):
 
 
 def test_render_defaults_rolls_the_home_back_to_the_literal(base):
-    slug, model = free_slug(base), exception_model(tree_raw(base))
     doc = render_defaults(base)
+    slug, model = free_slug(base, doc), exception_model(doc)
     doc["projects"].setdefault(slug, {})["workhorse"] = model
     home = write_home(base, doc)
     assert select(base, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)[0] == model
 
     home = write_home(base, render_defaults(base))
     chosen, note = select(base, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
-    assert chosen != model
-    assert f"project {slug}: no exception, fleet ladder · model-home: read" in note
-
-
-def test_the_home_wins_over_a_literal_that_carries_another_choice(excepted):
-    """With the home in force, the literal's exception is not consulted: a
-    home rendered without it runs the fleet ladder for that project."""
-    tree, slug, model = excepted
-    doc = render_defaults(tree)
-    doc["projects"].pop(slug, None)
-    home = write_home(tree, doc)
-    chosen, note = select(tree, BUILDER, "--repo", slug, BUREAU_MODEL_HOME_FILE=home)
     assert chosen != model
     assert f"project {slug}: no exception, fleet ladder · model-home: read" in note
 
@@ -383,31 +259,6 @@ def lever_of(row: dict[str, str]) -> str:
     return found[0] if found else ""
 
 
-def _group_edit(role: str, group: str, lead: str) -> Callable[[dict], None]:
-    """`role` in `group` in a raw config; a group the config lacks is added
-    as a build group led by `lead`, the Builders' rungs after it."""
-    def edit(raw: dict) -> None:
-        if group not in raw["kinds"]:
-            raw["kinds"][group] = {"ladder": group, "label": group.title(),
-                                   "purpose": f"Run the {role} jobs."}
-            rest = [m for m in ladder_ids(raw, "workhorse") if m != lead]
-            raw["ladders"][group] = [lead, *rest]
-        raw["agents"][role] = group
-    return edit
-
-
-def _defaults_pair(tmp: Path, role: str, switched: str, back: str) -> tuple[str, str]:
-    """Before and after notes for an agent's group moved through
-    `config/models.yaml` and its regenerated literal, in today's regime. The
-    switched group, when the config lacks it, is led by the Reviewers' first
-    model — the Sonnet 5.5 each sibling switches to, read off the copy."""
-    lead = ladder_ids(real_raw(), "advisory")[0]
-    on = build_tree(tmp / "switched", _group_edit(role, switched, lead))
-    off = build_tree(tmp / "back", lambda raw: (_group_edit(role, switched, lead)(raw),
-                                                _group_edit(role, back, lead)(raw)))
-    return select(on, role, **LIVE)[1], select(off, role, **LIVE)[1]
-
-
 def _home_pair(tmp: Path, role: str, switched: str, back: str) -> tuple[str, str]:
     """The same pair with the agent's group written in a home file."""
     tree = build_tree(tmp / "home")
@@ -430,7 +281,7 @@ def _line_pair(tmp: Path, role: str, switched: str, back: str) -> tuple[str, str
     """Before and after notes for a reviewer whose build posted its
     `model-attempt:` line, and then did not — the line is the lever."""
     tree = build_tree(tmp / "line")
-    built = ladder_ids(tree_raw(tree), "workhorse")[0]
+    built = ladder(render_defaults(tree), "workhorse")[0]
     line = f"🧠 {mf.attempt_marker(built)} — engineer agent starting"
     on = review(tree, role, ["⏳ 1/5 plan", line], **LIVE)[1]
     off = review(tree, role, ["⏳ 1/5 plan"], **LIVE)[1]
@@ -439,7 +290,6 @@ def _line_pair(tmp: Path, role: str, switched: str, back: str) -> tuple[str, str
 
 # Every lever the doc's table may name, and how this file pulls it.
 EXERCISED: dict[str, Callable[[Path, str, str, str], tuple[str, str]]] = {
-    "defaults in the code": _defaults_pair,
     "the home": _home_pair,
     "model-attempt line": _line_pair,
 }
@@ -477,6 +327,15 @@ def test_a_row_naming_a_lever_nobody_pulls_is_caught():
     text = (f"{TABLE_HEADING}\n\n| Epic | Lever |\n| -- | -- |\n"
             "| DRE-1 | `an environment variable` |\n| DRE-2 | `the home` |\n")
     assert unexercised(table_rows(text)) == ["DRE-1: an environment variable"]
+
+
+def test_a_row_naming_the_defaults_in_the_code_is_caught():
+    """The defaults in the code are hand-written once DRE-6981 lands, so they
+    are no lever, and a row naming them names a step back nobody can take."""
+    assert set(EXERCISED) == {"the home", "model-attempt line"}
+    text = (f"{TABLE_HEADING}\n\n| Epic | Lever |\n| -- | -- |\n"
+            "| DRE-1 | `defaults in the code` |\n| DRE-2 | `the home` |\n")
+    assert unexercised(table_rows(text)) == ["DRE-1: defaults in the code"]
 
 
 def _sibling_rows() -> list[dict[str, str]]:
@@ -517,13 +376,8 @@ def test_the_three_sources_are_named_with_the_functions_that_read_them():
     assert set(SOURCE_FUNCTIONS) <= named, named
     for name, path, _ in refs:
         assert re.search(rf"^def {name}\(", (ROOT / path).read_text(), re.M), (name, path)
-    for source in ("BUREAU_MODEL_CHOICES", "_FALLBACK_MODEL_CONFIG", "config/models.yaml"):
+    for source in ("BUREAU_MODEL_CHOICES", "config/models.yaml"):
         assert source in text
-
-
-def test_the_doc_says_model_choices_json_is_off_the_dispatch_path():
-    text = doc_text()
-    assert re.search(r"`config/model-choices\.json`[^.]*never on the dispatch path", text)
 
 
 def test_the_doc_quotes_a_model_home_line_from_each_selecting_workflow():

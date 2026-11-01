@@ -24,13 +24,18 @@ incidents:
 
 HONEST COVERAGE LIMITS — what this scenario can and cannot synthesize:
 
-  * A Dependabot PR cannot be conjured by API. If none is open, setup
-    fails with the regeneration command named (`@dependabot recreate` on
-    the newest closed Dependabot PR, or Dependabot's own schedule). The
-    steady state keeps one open: the sandbox pin is chosen so the gate
-    parks it as waiting-for-human, and an unmerged PR persists — so
-    repeated back-to-back runs assert the SETTLED state cheaply instead
-    of burning a critic run each time.
+  * A Dependabot PR cannot be conjured by API, but a closed one can be
+    brought back (DRE-7957). setup() labels the PR it consumes
+    `harness-fixture` and tops its body with a do-not-close banner; when
+    none is open it restores the labeled fixture's branch at its last
+    head sha and reopens it as the harness's own identity, so closing it
+    as a stale major is harmless. Only when no labeled fixture exists, or
+    it was merged, does setup fail with the regeneration command named
+    (`@dependabot recreate` on the newest closed Dependabot PR, or
+    Dependabot's own schedule). The steady state keeps one open: the
+    sandbox pin is chosen so the gate parks it as waiting-for-human, and
+    an unmerged PR persists — so repeated back-to-back runs assert the
+    SETTLED state cheaply instead of burning a critic run each time.
   * The crashed-review retry itself cannot be forced (we cannot crash
     the sandbox critic on demand). That path is unit-pinned in
     tests/test_dependabot_receipt_retry.py; live, it is observed only
@@ -86,6 +91,43 @@ NO_PR_GUIDANCE = (
     "pin makes Dependabot re-file), then re-run the harness."
 )
 
+# The sandbox's standing Dependabot PR is a semver-major bump nobody means
+# to merge, so it reads as stale debt and gets closed (2026-09-24 and
+# 2026-10-24, the second turning main red for four hours — DRE-7957). The
+# label is how setup() knows a closed one is its own to reopen; the banner
+# is for the person about to close it.
+FIXTURE_LABEL = "harness-fixture"
+FIXTURE_BANNER = (
+    "HARNESS FIXTURE — the integration harness needs this PR open. "
+    "Do not close or merge."
+)
+
+
+def _labels(pr) -> list[str]:
+    return [(label or {}).get("name") or "" for label in pr.get("labels") or []]
+
+
+def find_closed_fixture(prs):
+    """The closed genuine Dependabot PR carrying FIXTURE_LABEL that setup()
+    may reopen, from REST list shapes — newest first, an unmerged one over a
+    merged one (a merged PR never reopens). None when no labeled fixture is
+    closed. "Genuine" is find_real_dependabot_pr's own test."""
+    labeled = [
+        pr
+        for pr in prs
+        if pr.get("state") == "closed"
+        and FIXTURE_LABEL in _labels(pr)
+        and framework.find_real_dependabot_pr([pr]) is not None
+    ]
+    labeled.sort(
+        key=lambda pr: (
+            not (pr.get("merged_at") or pr.get("merged")),
+            pr.get("number", 0),
+        ),
+        reverse=True,
+    )
+    return labeled[0] if labeled else None
+
 
 def rebase_command() -> str:
     return "@dependabot rebase"
@@ -137,10 +179,12 @@ class DependabotFlow(framework.Scenario):
     # ── setup: a clean sandbox + the vendor's PR located ─────────────────
     def setup(self, ctx):
         ctx.state["swept"] = sweep_leftovers(ctx.gh, ctx.repo, ctx.namespace, ctx.log)
+        ctx.state["reopened"] = False
         pr = find_real_dependabot_pr(ctx.gh.list_open_prs(ctx.repo))
         if pr is None:
-            raise ScenarioFailure(NO_PR_GUIDANCE)
+            pr = self._reopen_fixture(ctx)
         detail = ctx.gh.get_pr(ctx.repo, pr["number"])
+        self._mark_fixture(ctx, detail)
         ctx.state["number"] = detail["number"]
         ctx.state["head"] = detail["head"]["sha"]
         ctx.state["dirty"] = detail.get("mergeable_state") == "dirty"
@@ -149,6 +193,55 @@ class DependabotFlow(framework.Scenario):
             f"({detail['head']['ref']}@{ctx.state['head']}"
             f"{', DIRTY' if ctx.state['dirty'] else ''})"
         )
+
+    def _reopen_fixture(self, ctx) -> dict:
+        """No open Dependabot PR: bring the labeled fixture back (DRE-7957).
+
+        Restores its head branch at the last head sha the closed PR records
+        (Dependabot deletes the branch seconds after a close) and reopens
+        it, never needing Dependabot to re-file. Every write goes out as
+        `ctx.gh`, the harness's own identity — the sandbox is public, so a
+        person's name must never appear on it. Raises NO_PR_GUIDANCE when no
+        labeled fixture exists, and names the merge when it was merged.
+
+        The reopen is itself a `pull_request` event (the sandbox stub lists
+        `reopened`) whose actor is the worker bot, not dependabot[bot], so
+        the reusable reviews it for real. `ctx.state["reopened"]` is how
+        verify() knows to wait that review out and to accept the verdict it
+        posts with no dispatch receipt before it.
+        """
+        fixture = find_closed_fixture(ctx.gh.list_prs(ctx.repo, state="closed"))
+        if fixture is None:
+            raise ScenarioFailure(NO_PR_GUIDANCE)
+        number = fixture["number"]
+        if fixture.get("merged_at") or fixture.get("merged"):
+            raise ScenarioFailure(
+                f"the harness fixture #{number} was merged, and a merged PR "
+                f"cannot be reopened — {NO_PR_GUIDANCE}"
+            )
+        ref, sha = fixture["head"]["ref"], fixture["head"]["sha"]
+        if ref not in ctx.gh.matching_refs(ctx.repo, ref):
+            ctx.gh.create_ref(ctx.repo, ref, sha)
+        ctx.gh.reopen_pr(ctx.repo, number)
+        ctx.state["reopened"] = True
+        # Re-applied although the fixture was found by it: the reopen is the
+        # moment it was just closed as debt, so it is marked again then.
+        ctx.gh.add_labels(ctx.repo, number, [FIXTURE_LABEL])
+        ctx.log(f"[{self.name}] reopened fixture #{number}")
+        return fixture
+
+    def _mark_fixture(self, ctx, pr) -> None:
+        """Label and banner the PR this run consumes, each only when it is
+        missing, so a marked fixture costs no write at all."""
+        number = pr["number"]
+        if FIXTURE_LABEL not in _labels(pr):
+            ctx.gh.add_labels(ctx.repo, number, [FIXTURE_LABEL])
+        body = pr.get("body") or ""
+        if not body.startswith(FIXTURE_BANNER):
+            ctx.gh.update_pr_body(
+                ctx.repo, number,
+                f"{FIXTURE_BANNER}\n\n{body}" if body else FIXTURE_BANNER,
+            )
 
     # ── exercise: only a DIRTY PR needs vendor help ──────────────────────
     def exercise(self, ctx):
@@ -183,8 +276,19 @@ class DependabotFlow(framework.Scenario):
     # ── verify: self-skip clean → receipted route → bounded receipts ─────
     def verify(self, ctx):
         number = ctx.state["number"]
+        reopened = ctx.state.get("reopened", False)
         qa_gh = ctx.gh_qa or ctx.gh
         tracker = {"head": ctx.state["head"], "state": "none", "detail": ""}
+        checks_timeout = CHECKS_TIMEOUT
+        if reopened:
+            # The reopen started a real review as the worker bot (see
+            # _reopen_fixture): one of the runs below takes a critic's time,
+            # not a self-skip's seconds.
+            checks_timeout += ctx.verdict_timeout
+            ctx.log(
+                f"[{self.name}] fixture reopened this run — waiting out the "
+                "review the reopen started (worker-bot actor, normal secrets)"
+            )
 
         # 1. SELF-SKIP: the dependabot-actor pull_request review run on
         # this head must have concluded — skipped, never red.
@@ -198,7 +302,7 @@ class DependabotFlow(framework.Scenario):
             review_runs = ctx.wait(
                 f"the review check runs on {tracker['head']} to conclude",
                 poll_review_runs,
-                timeout=CHECKS_TIMEOUT,
+                timeout=checks_timeout,
             )
         except framework.HarnessTimeout as e:
             raise ScenarioFailure(
@@ -295,6 +399,13 @@ class DependabotFlow(framework.Scenario):
                     "head — expected: its verdict came from the qa-actor "
                     "synchronize review (DRE-2037 path), not the dispatch "
                     "route"
+                )
+            elif reopened:
+                ctx.log(
+                    f"[{self.name}] no dispatch receipt on the reopened "
+                    "fixture's head — expected: its verdict came from the "
+                    "review the harness's own reopen started, not the "
+                    "dispatch route (DRE-7957)"
                 )
             else:
                 raise ScenarioFailure(

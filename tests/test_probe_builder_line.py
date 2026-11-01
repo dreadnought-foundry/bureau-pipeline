@@ -457,8 +457,11 @@ def _ids(entries) -> set[str]:
 
 class HaikuStaysExcludedTest(unittest.TestCase):
     def test_it_is_excluded_on_no_ladder_and_in_no_project(self):
-        cfg = yaml.safe_load(MODELS.read_text(encoding="utf-8"))
-        self.assertIn(HAIKU, _ids(cfg["excluded"]))
+        # Excluded in the file; on no ladder and in no project of the
+        # defaults in the code, where the choices are with no home (DRE-6983).
+        side = yaml.safe_load(MODELS.read_text(encoding="utf-8"))
+        self.assertIn(HAIKU, _ids(side["excluded"]))
+        cfg = model_fallback.code_defaults()
         for name, rungs in cfg["ladders"].items():
             with self.subTest(ladder=name):
                 self.assertNotIn(HAIKU, _ids(rungs))
@@ -466,8 +469,9 @@ class HaikuStaysExcludedTest(unittest.TestCase):
         self.assertNotIn(HAIKU, named_in_a_project)
 
     def test_no_role_in_any_repo_selects_it(self):
-        cfg = yaml.safe_load(MODELS.read_text(encoding="utf-8"))
-        roles = list(cfg["agents"]) + list(cfg.get("session_agents") or {})
+        side = yaml.safe_load(MODELS.read_text(encoding="utf-8"))
+        roles = (list(model_fallback.code_defaults()["agents"])
+                 + list(side.get("session_agents") or {}))
         repos = [SANDBOX, *json.loads(REPO_MAP.read_text(encoding="utf-8")).values()]
         with mock.patch.dict(os.environ, {}, clear=False):
             for name in HOME_NAMES:

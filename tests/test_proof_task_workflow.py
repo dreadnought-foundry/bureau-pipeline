@@ -66,6 +66,12 @@ APP_TOKEN_PIN = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
 #: The version comment the pin above carries on every mint.
 APP_TOKEN_VERSION = "v3.2.0"
 
+#: agent-task.yml's secrets the proof run does not take (DRE-7513): the plant
+#: probe is a throwaway handed to the BUILD agent alone, so a planted echo
+#: proves the build log scrub's by-value pass. The proof run's agent never
+#: reads it and its workflow never declares it.
+BUILD_ONLY_SECRETS = {"BUREAU_PLANT_PROBE"}
+
 AWS_NONE = "proof identity: aws — none, PROOF_ROLE_ARN not provided"
 AWS_ASSUMED = "proof identity: aws — role assumed as proof-"
 AWS_REFUSED = ("proof identity: aws — none, PROOF_ROLE_ARN provided but the "
@@ -155,6 +161,8 @@ class ProofTaskContractTest(unittest.TestCase):
     def test_secrets_are_agent_tasks_plus_an_optional_proof_role(self):
         mine = _on(_doc())["workflow_call"].get("secrets") or {}
         theirs = _on(yaml.safe_load(AGENT_TASK.read_text()))["workflow_call"]["secrets"]
+        self.assertLessEqual(BUILD_ONLY_SECRETS, set(theirs))
+        theirs = {k: v for k, v in theirs.items() if k not in BUILD_ONLY_SECRETS}
         self.assertEqual(set(theirs) | {"PROOF_ROLE_ARN"}, set(mine))
         for name, spec in theirs.items():
             self.assertEqual(spec, mine[name], f"{name} is declared differently")
@@ -923,26 +931,25 @@ class ResultStepTest(_StepHarness):
 
     # --- the escalation sorted by what it names (DRE-6840) -----------------
 
-    def _park_argv(self) -> list:
-        return ["proof_cause_park", "park", "DRE-77", "--escalation-file",
-                str(self.escalation), "--run-url", RUN_URL]
-
     def _summary(self) -> str:
         return self.summary.read_text() if self.summary.exists() else ""
 
-    def test_cause_rows_with_an_open_record_go_to_the_one_writer(self):
+    def test_cause_rows_with_an_open_record_ask_nobody(self):
+        """DRE-7953: a gap record merges on its approval (DRE-7952), so cause
+        rows go to nobody — no writer, no hold, no question, no Green Light
+        move — and their lines are printed to the log."""
         self._install_cause_park()
         posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
                            escalation=CAUSE_FILE, description=NO_PRESS)
-        self.assertEqual([self._park_argv()], self.parks)
-        # The pull request's report and its In Review move, and nothing else:
-        # no hold, no question and no Green Light move of the step's own.
+        self.assertEqual([], self.parks)
         self.assertEqual(["comment", "advance"], [c[1] for c in posted])
         self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
         self.assertFalse(any(c.startswith("🙋") for c in self._comments(posted)))
-        # The writer's own result line closes the run's log, never a lane assumed.
-        self.assertIn("proof result: record pull request, then left DRE-77 in "
-                      "In Review for the operator\n", self.stdout)
+        for line in CAUSE_FILE.splitlines():
+            if line.startswith("cause:"):
+                self.assertIn(line, self.stdout)
+        self.assertIn("proof result: record pull request\n", self.stdout)
+        self.assertIn("left to the gate, nothing asked", self._summary())
         self.assertNotIn("only the CEO can make", self._summary())
         self.assertNotIn("only the CEO can make", self.stdout)
 
@@ -959,30 +966,15 @@ class ResultStepTest(_StepHarness):
         self.assertIn("proof park: decision", self._summary())
         self.assertNotIn("proof park: press", self._summary())
 
-    def test_a_writer_that_finds_no_cause_row_sends_the_file_to_the_decision(self):
+    def test_a_writer_that_would_refuse_is_never_reached(self):
         self._install_cause_park()
-        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=2)
-        self.assertEqual([self._park_argv()], self.parks)
-        self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
-                         [c[1] for c in posted])
-        self.assertTrue(posted[3][3].startswith(DECISION_RECEIPT), posted[3][3])
-        self.assertEqual([("In Review", "Hand-work"), ("Green Light", "Hand-work,In Review")],
-                         self._moves(posted))
-
-    def test_a_writer_that_refuses_leaves_a_warning_and_moves_nothing(self):
-        self._install_cause_park()
-        posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
-                           escalation=CAUSE_FILE, description=NO_PRESS, park_exit=1)
-        self.assertEqual([self._park_argv()], self.parks)
-        # Never the press or decision fallback: that would put the operator's
-        # question in the CEO's queue.
-        self.assertEqual(["comment", "advance"], [c[1] for c in posted])
-        self.assertEqual([("In Review", "Hand-work")], self._moves(posted))
-        self.assertIn("::warning::", self.stdout)
-        self.assertIn("proof park: the cause park could not be completed for DRE-77 — the "
-                      "dispatcher's next pass parks the record off its rows", self._summary())
-        self.assertNotIn("only the CEO can make", self._summary())
+        for code in (1, 2):
+            posted = self._run(pr="OPEN\thttps://github.example/acme/widgets/pull/9",
+                               escalation=CAUSE_FILE, description=NO_PRESS, park_exit=code)
+            self.assertEqual([], self.parks)
+            self.assertEqual(["comment", "advance"], [c[1] for c in posted])
+            self.assertNotIn("::warning::", self.stdout)
+            self.calls.unlink()
 
 
 class ReturnStepTest(_StepHarness):
@@ -1536,6 +1528,499 @@ class LocalRunStepExecutedTest(unittest.TestCase):
         done = self._run("local_stop")
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertFalse(Path(path).exists(), "the login file outlived the run")
+
+
+GUARD_STEP = "Install the name guard"
+#: The repository switch, `name_redact.SWITCH` (DRE-8166), read from `vars`.
+GUARD_SWITCH = "${{ vars.NAME_GUARD_LIVE }}"
+#: The guard step's env, whole: everything the hook bakes arrives here.
+GUARD_ENV = {
+    # A proof run's worker token; a shadow's agent can read the hook, so a
+    # shadow bakes none (tests/test_proof_task_shadow.py).
+    "GH_TOKEN": "${{ !inputs.shadow && steps.worker.outputs.token || '' }}",
+    "LINEAR_API_KEY": "${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}",
+    "LINEAR_API_KEY_FALLBACK": "${{ secrets.LINEAR_API_KEY }}",
+    "NAME_GUARD_LIVE": GUARD_SWITCH,
+    "GUARD_OWNER": "${{ github.repository_owner }}",
+    "GUARD_DEFAULT_BRANCH": "${{ github.event.repository.default_branch }}",
+    "GUARD_ROOT": "${{ github.workspace }}",
+}
+#: The steps after the agent whose scripts read the same switch.
+GUARD_SWITCH_STEPS = ("Push the shadow record", "Refresh the record pull request's body",
+                      RESULT_STEP)
+
+
+class NameGuardHookTest(unittest.TestCase):
+    """DRE-8168: the record branch cannot be pushed while it carries a roster
+    form. The agent pushes inside its own step, so the guard stands at git's
+    seam — a pre-push hook written after the checkout and before the agent,
+    agent-fix.yml's `Refuse a push onto a merged pull request` shape."""
+
+    def test_it_follows_the_identity_step_and_precedes_every_agent_attempt(self):
+        at = _index(GUARD_STEP)
+        self.assertEqual(_index(IDENTITY_STEP) + 1, at)
+        for i, step in _agent_steps():
+            self.assertLess(at, i, step.get("name"))
+        self.assertNotIn("if", _step(GUARD_STEP), "every run installs it")
+
+    def test_its_env_is_the_contracts_and_its_script_holds_no_expression(self):
+        step = _step(GUARD_STEP)
+        self.assertEqual(GUARD_ENV, step["env"])
+        self.assertNotIn("${{", step["run"])
+
+    def test_the_hook_runs_the_guard_on_the_pre_push_seam(self):
+        run = _step(GUARD_STEP)["run"]
+        self.assertIn("git rev-parse --git-path hooks", run)
+        self.assertIn('"$HOOKS/pre-push"', run)
+        self.assertIn("chmod +x", run)
+        self.assertIn("/.bureau-pipeline/scripts/name_redact.py", run)
+        self.assertIn("guard --pre-push --default-ref", run)
+
+    def test_the_switch_reaches_the_steps_whose_scripts_read_it(self):
+        for name in GUARD_SWITCH_STEPS:
+            with self.subTest(step=name):
+                self.assertEqual(GUARD_SWITCH, (_step(name).get("env") or {}).get("NAME_GUARD_LIVE"))
+
+    def test_the_catalog_names_the_guard_step_as_the_switchs_reader(self):
+        import name_redact
+        import switch_reason
+        rows = {r["name"]: r for r in switch_reason.load()["switches"]}
+        self.assertIn(name_redact.SWITCH, rows)
+        row = rows[name_redact.SWITCH]
+        self.assertEqual(".github/workflows/proof-task.yml", row["reader"])
+        self.assertEqual(GUARD_STEP, row["step"])
+        self.assertTrue(row["means"].strip().endswith("."))
+        self.assertEqual([], switch_reason.problems())
+
+
+#: What the stub guard records of each call, and how it answers.
+_STUB_GUARD = '''\
+import json, os, sys
+seen = {"argv": sys.argv[1:], "stdin": sys.stdin.read(),
+        "env": {k: os.environ.get(k) for k in (
+            "GH_TOKEN", "LINEAR_API_KEY", "LINEAR_API_KEY_FALLBACK",
+            "NAME_GUARD_LIVE", "GITHUB_ACTOR", "GITHUB_TRIGGERING_ACTOR")}}
+with open(os.path.join(os.path.dirname(__file__), "seen.json"), "w") as f:
+    json.dump(seen, f)
+exit_file = os.path.join(os.path.dirname(__file__), "exit")
+sys.exit(int(open(exit_file).read()) if os.path.exists(exit_file) else 0)
+'''
+
+#: The values the step is handed, as the runner would render GUARD_ENV.
+_BAKED = {
+    "GH_TOKEN": "ghs_worker_token",
+    "LINEAR_API_KEY": "lin_api_primary",
+    "LINEAR_API_KEY_FALLBACK": "lin_api_fleet",
+    "NAME_GUARD_LIVE": "true",
+    "GITHUB_ACTOR": "octo-actor",
+    "GITHUB_TRIGGERING_ACTOR": "octo-trigger",
+}
+
+
+class NameGuardHookExecutedTest(unittest.TestCase):
+    """The step's own script, run as written in a clone of a real repository,
+    then a real `git push` through the hook it wrote — against a stub guard
+    that records what it was handed, so the test reads the hook's behavior
+    rather than its text. The push runs in an environment that holds none of
+    the step's values, as a later step's would: whatever reaches the guard
+    was baked."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
+        home = self.tmp / "home"
+        home.mkdir()
+        self.base = {"PATH": os.environ["PATH"], "HOME": str(home),
+                     "GIT_CONFIG_NOSYSTEM": "1",
+                     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+                     "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+        self.remote = self.tmp / "remote.git"
+        self._git(self.tmp, "init", "-q", "--bare", "-b", "main", str(self.remote))
+        self.work = self.tmp / "work"
+        self._git(self.tmp, "clone", "-q", str(self.remote), str(self.work))
+        self._git(self.work, "checkout", "-q", "-b", "main")
+        (self.work / "README.md").write_text("product\n")
+        self._git(self.work, "add", "-A")
+        self._git(self.work, "commit", "-q", "-m", "seed")
+        self._git(self.work, "push", "-q", "origin", "main")
+        self.root = self.tmp / "workspace"
+        scripts = self.root / ".bureau-pipeline" / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts / "name_redact.py").write_text(_STUB_GUARD)
+        self.scripts = scripts
+
+    def _git(self, cwd: Path, *args: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        done = subprocess.run(["git", *args], cwd=cwd, env=env or self.base,
+                              capture_output=True, text=True, timeout=60)
+        if env is None:
+            self.assertEqual(0, done.returncode, done.stderr)
+        return done
+
+    def _install(self, **over: str) -> subprocess.CompletedProcess:
+        env = dict(self.base, **_BAKED, GUARD_OWNER="octo-org",
+                   GUARD_DEFAULT_BRANCH="main", GUARD_ROOT=str(self.root))
+        env.update(over)
+        return subprocess.run(["bash", "-e", "-c", _step(GUARD_STEP)["run"]],
+                              cwd=self.work, env=env, capture_output=True, text=True,
+                              timeout=60)
+
+    def _push(self, refuse: bool = False, **env: str) -> tuple[subprocess.CompletedProcess, dict]:
+        if refuse:
+            (self.scripts / "exit").write_text("1")
+        with (self.work / "record.md").open("a") as f:
+            f.write("record\n")
+        self._git(self.work, "checkout", "-q", "-B", "agent/DRE-1-proof-record")
+        self._git(self.work, "add", "-A")
+        self._git(self.work, "commit", "-q", "-m", "record")
+        done = self._git(self.work, "push", "origin", "agent/DRE-1-proof-record",
+                         env=dict(self.base, GITHUB_ACTOR="someone-else", **env))
+        seen = self.scripts / "seen.json"
+        return done, json.loads(seen.read_text()) if seen.exists() else {}
+
+    def test_the_step_prints_one_line_and_no_credential(self):
+        for value, live in (("true", "true"), ("", "false"), ("TRUE", "false"),
+                            ("false", "false")):
+            with self.subTest(NAME_GUARD_LIVE=value):
+                done = self._install(NAME_GUARD_LIVE=value)
+                self.assertEqual(0, done.returncode, done.stderr)
+                self.assertEqual(f"name-guard: installed — live={live}\n", done.stdout)
+                self.assertEqual("", done.stderr)
+                for secret in ("ghs_worker_token", "lin_api_primary", "lin_api_fleet"):
+                    self.assertNotIn(secret, done.stdout + done.stderr)
+
+    def test_a_push_runs_the_guard_with_every_value_baked(self):
+        self.assertEqual(0, self._install().returncode)
+        hook = self.work / ".git" / "hooks" / "pre-push"
+        self.assertTrue(os.access(hook, os.X_OK), "the hook is not executable")
+        done, seen = self._push()
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual(
+            ["guard", "--pre-push", "--default-ref", "origin/main", "--owner", "octo-org",
+             "--actor", "octo-actor", "--actor", "octo-trigger"], seen["argv"])
+        self.assertEqual(_BAKED, seen["env"])
+        # git's own pre-push stdin: the pushed ref and the sha it carries.
+        head = self._git(self.work, "rev-parse", "HEAD").stdout.strip()
+        self.assertIn(f"refs/heads/agent/DRE-1-proof-record {head} "
+                      f"refs/heads/agent/DRE-1-proof-record", seen["stdin"])
+
+    def test_a_refusal_stops_the_push(self):
+        self.assertEqual(0, self._install().returncode)
+        done, seen = self._push(refuse=True)
+        self.assertNotEqual(0, done.returncode)
+        self.assertTrue(seen, "the guard never ran")
+        branches = self._git(self.remote, "for-each-ref", "--format=%(refname:short)",
+                             "refs/heads/").stdout.split()
+        self.assertEqual(["main"], branches)
+
+    def test_a_later_push_step_hands_the_hook_its_fresh_token(self):
+        # The push rescue and the shadow push hold PUSH_TOKEN, minted after
+        # the agent; the worker token baked at install time is an hour old by
+        # then (DRE-3043), and a roster read on a dead token is a refusal.
+        self.assertEqual(0, self._install().returncode)
+        done, seen = self._push(PUSH_TOKEN="ghs_fresh_token")
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual("ghs_fresh_token", seen["env"]["GH_TOKEN"])
+
+    def test_a_shadows_hook_holds_no_token(self):
+        self.assertEqual(0, self._install(GH_TOKEN="").returncode)
+        hook = (self.work / ".git" / "hooks" / "pre-push").read_text()
+        self.assertNotIn("ghs_", hook)
+        done, seen = self._push(GH_TOKEN="ghs_agents_own")
+        self.assertEqual(0, done.returncode, done.stderr)
+        self.assertEqual("", seen["env"]["GH_TOKEN"])
+        _done, seen = self._push(PUSH_TOKEN="ghs_fresh_token")
+        self.assertEqual("ghs_fresh_token", seen["env"]["GH_TOKEN"])
+
+
+
+# --- the record as the run found it, and a run that left it unchanged ------
+# (DRE-8259)
+
+BASELINE_STEP = "Read the record as the run found it"
+BASELINE_ID = "record_baseline"
+UNCHANGED = "🤖 proof run ended with its record unchanged"
+PR_LINE = "OPEN\thttps://github.example/acme/widgets/pull/9"
+BLOB_PATH = "docs/proofs/desk-reply-ends-said.md"
+#: DRE-8162: the record as the previous run left it, at 3d9a79e …
+BASELINE = (BLOB_PATH, "b" * 40, "3d9a79e" + "0" * 33)
+#: … and the run's one commit, 456b245, a merge of main: the head moved and
+#: the blob did not.
+MERGE_ONLY = f"{BLOB_PATH}\t{'b' * 40}\t456b245{'0' * 33}"
+AMENDED = f"{BLOB_PATH}\t{'a' * 40}\t456b245{'0' * 33}"
+
+#: `proof_record.py blob`, stubbed: it records its argv and prints FAKE_BLOB.
+_PROOF_RECORD_STUB = """\
+import json, os, sys
+open(os.environ["CALLS"], "a").write(json.dumps(["proof_record"] + sys.argv[1:]) + "\\n")
+answer = os.environ.get("FAKE_BLOB", "")
+if answer:
+    print(answer)
+"""
+
+
+class RecordBaselineStepTest(_StepHarness):
+    """The baseline is the record FILE's blob on the record branch, read before
+    the first agent step: a resumed run always moves the head with its merge
+    of main, so a head comparison would pass DRE-8162's run."""
+
+    STEP = BASELINE_STEP
+    _HARNESS = _StepHarness._HARNESS + ("FAKE_BLOB", "GITHUB_OUTPUT")
+
+    def setUp(self):
+        super().setUp()
+        (self.tmp / ".bureau-pipeline" / "scripts" / "proof_record.py").write_text(
+            _PROOF_RECORD_STUB)
+        self.output = self.tmp / "output.txt"
+
+    def _outputs(self, blob: str) -> dict:
+        done, calls, _ = self._exec({
+            "FAKE_BLOB": blob, "GITHUB_OUTPUT": str(self.output),
+            "CARD": "DRE-77", "REPO": "acme/widgets", "CARD_DESCRIPTION": DESCRIPTION,
+            "GH_TOKEN": "ghs_worker"})
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([["proof_record", "blob", "--repo", "acme/widgets",
+                           "--card", "DRE-77"]], calls)
+        return dict(l.split("=", 1) for l in self.output.read_text().splitlines())
+
+    def test_it_comes_before_every_agent_attempt(self):
+        at = _index(BASELINE_STEP)
+        self.assertEqual(at + 1, _index("Implement proof card"))
+        self.assertTrue(all(at < i for i, _ in _agent_steps()))
+
+    def test_it_never_stops_the_run_and_never_runs_in_a_shadow(self):
+        step = _step(BASELINE_STEP)
+        self.assertEqual(BASELINE_ID, step["id"])
+        self.assertIs(True, step.get("continue-on-error"))
+        self.assertIn("!inputs.shadow", step["if"])
+
+    def test_the_blob_path_and_commit_are_outputs(self):
+        self.assertEqual({"path": BASELINE[0], "sha": BASELINE[1], "commit": BASELINE[2]},
+                         self._outputs("\t".join(BASELINE)))
+
+    def test_no_branch_or_no_file_is_an_empty_baseline(self):
+        self.assertEqual({"path": "", "sha": "", "commit": ""}, self._outputs(""))
+
+    def test_the_result_step_receives_it_through_env(self):
+        env = _step(RESULT_STEP)["env"]
+        for name, output in (("RECORD_BASELINE_PATH", "path"),
+                             ("RECORD_BASELINE_SHA", "sha"),
+                             ("RECORD_BASELINE_COMMIT", "commit")):
+            self.assertEqual(f"${{{{ steps.{BASELINE_ID}.outputs.{output} }}}}", env[name])
+
+
+class RecordUnchangedResultTest(_StepHarness):
+    """A run that left its record file byte for byte as it found it is a failed
+    run, never `record pull request` (DRE-8259). The escalation branches, a
+    first run and a changed record behave exactly as before."""
+
+    STEP = RESULT_STEP
+    _HARNESS = _StepHarness._HARNESS + ("FAKE_BLOB",)
+
+    def setUp(self):
+        super().setUp()
+        (self.tmp / ".bureau-pipeline" / "scripts" / "proof_record.py").write_text(
+            _PROOF_RECORD_STUB)
+
+    def _run(self, *, now: str, baseline=BASELINE, escalation: str | None = None,
+             description: str = DESCRIPTION):
+        if escalation is not None:
+            self.escalation.write_text(escalation)
+        env = {
+            "FAKE_PR": PR_LINE, "FAKE_BLOB": now,
+            "CARD": "DRE-77", "CARD_DESCRIPTION": description,
+            "RECORD_BRANCH": "agent/DRE-77-proof-record",
+            "ESCALATION_FILE": str(self.escalation),
+            "BUREAU_SERVER_URL": "https://github.example",
+            "BUREAU_REPOSITORY": "acme/widgets", "BUREAU_RUN_ID": "42",
+            "CLAUDE_EXECUTION_FILE": "",
+            "RECORD_BASELINE_PATH": baseline[0], "RECORD_BASELINE_SHA": baseline[1],
+            "RECORD_BASELINE_COMMIT": baseline[2],
+        }
+        done, posted, _ = self._exec(env)
+        self.reads = [c for c in posted if c[0] == "proof_record"]
+        self.posted = [c for c in posted if c[0] == "linear_ops"]
+        self.summary_text = self.summary.read_text() if self.summary.exists() else ""
+        return done
+
+    def _comments(self) -> list:
+        return [c[3] for c in self.posted if c[1] == "comment"]
+
+    def _moves(self) -> list:
+        return [tuple(c[3:]) for c in self.posted if c[1] == "advance"]
+
+    def test_a_head_moved_only_by_a_merge_of_main_reads_record_unchanged(self):
+        done = self._run(now=MERGE_ONLY)
+        self.assertNotEqual(0, done.returncode, "the run reads red, never success")
+        self.assertEqual([["proof_record", "blob", "--repo", "acme/widgets",
+                           "--card", "DRE-77"]], self.reads)
+        self.assertFalse(any(c.startswith("🤖 PR opened") for c in self._comments()))
+        self.assertEqual([], self._moves(), "no In Review move")
+        self.assertEqual(
+            [f"{UNCHANGED} ({BLOB_PATH} as at 3d9a79e) — the dispatcher reads this run "
+             f"off the card and decides whether to dispatch again. Run: {RUN_URL}"],
+            self._comments())
+        self.assertIn("proof result: record unchanged\n", self.summary_text)
+        self.assertNotIn("proof result: record pull request", self.summary_text)
+        self.assertNotIn("no record", self.summary_text)
+
+    def test_a_changed_record_blob_reads_record_pull_request_as_today(self):
+        done = self._run(now=AMENDED)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(
+            [f"🤖 PR opened: https://github.example/acme/widgets/pull/9 — CI + critic "
+             f"review running. Run: {RUN_URL}"], self._comments())
+        self.assertEqual([("In Review", "Hand-work")], self._moves())
+        self.assertIn("proof result: record pull request\n", self.summary_text)
+
+    def test_a_first_run_has_no_baseline_and_reads_record_pull_request_as_today(self):
+        done = self._run(now=MERGE_ONLY, baseline=("", "", ""))
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([], self.reads, "no baseline, nothing to compare")
+        self.assertTrue(self._comments()[0].startswith("🤖 PR opened:"))
+        self.assertEqual([("In Review", "Hand-work")], self._moves())
+        self.assertIn("proof result: record pull request\n", self.summary_text)
+
+    def test_a_head_that_could_not_be_read_is_never_called_unchanged(self):
+        done = self._run(now="")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertTrue(self._comments()[0].startswith("🤖 PR opened:"))
+        self.assertIn("proof result: record pull request\n", self.summary_text)
+
+    def test_an_escalation_still_parks_exactly_as_today_whether_or_not_the_record_changed(self):
+        for now in (MERGE_ONLY, AMENDED):
+            done = self._run(now=now, escalation="Approve the release in the console?\n")
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertEqual(["comment", "advance", "proof-waiting", "comment", "advance"],
+                             [c[1] for c in self.posted], now)
+            self.assertTrue(self._comments()[0].startswith("🤖 PR opened:"))
+            self.assertTrue(self._comments()[1].startswith(PARK_RECEIPT))
+            self.assertFalse(any(c.startswith(UNCHANGED) for c in self._comments()))
+            self.assertIn("proof result: record pull request, then the park in Green Light",
+                          self.summary_text)
+            self.calls.unlink()
+            self.summary.unlink()
+
+    def test_cause_rows_still_go_to_the_gate_whether_or_not_the_record_changed(self):
+        scripts = self.tmp / ".bureau-pipeline" / "scripts"
+        (scripts / "proof_cause_park.py").write_text(_PROOF_CAUSE_PARK_STUB)
+        shutil.copy(ROOT / "scripts" / "console_escalation.py", scripts)
+        for now in (MERGE_ONLY, AMENDED):
+            done = self._run(now=now, escalation=CAUSE_FILE, description=NO_PRESS)
+            self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+            self.assertEqual(["comment", "advance"], [c[1] for c in self.posted], now)
+            self.assertIn("left to the gate, nothing asked", self.summary_text)
+            self.assertIn("proof result: record pull request\n", self.summary_text)
+            self.calls.unlink()
+            self.summary.unlink()
+
+
+# ---- the record pull request, decided by the workflow (DRE-8441) ----------
+
+DECIDE_STEP = "Open the record pull request only when it can merge"
+
+#: `proof_record_pr.py`, stubbed: it records its argv and writes the decision
+#: word `FAKE_DECISION` names to $GITHUB_OUTPUT, as the real `decide` does, or
+#: exits 1 — a read or write it needed was refused — when `FAKE_DECIDE_EXIT`
+#: says so.
+_PROOF_RECORD_PR_STUB = """\
+import json, os, sys
+open(os.environ["CALLS"], "a").write(json.dumps(["proof_record_pr"] + sys.argv[1:]) + "\\n")
+if os.environ.get("FAKE_DECIDE_EXIT"):
+    print("proof-record-pr: ERROR refused")
+    sys.exit(int(os.environ["FAKE_DECIDE_EXIT"]))
+with open(os.environ["GITHUB_OUTPUT"], "a") as fh:
+    fh.write("decision=" + os.environ.get("FAKE_DECISION", "held") + "\\n")
+"""
+
+
+class RecordPrStepTest(_StepHarness):
+    """The step that opens the record's pull request only when the record can
+    merge: after the push rescue, before the body refresh, never in a shadow,
+    with `--no-hold` exactly when the run escalated a CEO press."""
+
+    STEP = DECIDE_STEP
+    _HARNESS = _StepHarness._HARNESS + ("GITHUB_OUTPUT", "FAKE_DECISION", "FAKE_DECIDE_EXIT")
+
+    def setUp(self):
+        super().setUp()
+        scripts = self.tmp / ".bureau-pipeline" / "scripts"
+        (scripts / "proof_record_pr.py").write_text(_PROOF_RECORD_PR_STUB)
+        self.output = self.tmp / "github-output"
+        self.output.write_text("")
+
+    def _run(self, *, escalation: str | None = None, decision: str = "held",
+             exit_code: int | None = None):
+        if escalation is not None:
+            self.escalation.write_text(escalation)
+        env = {
+            "GITHUB_OUTPUT": str(self.output),
+            "FAKE_DECISION": decision,
+            "REPO": "acme/widgets",
+            "CARD": "DRE-77",
+            "CARD_URL": "https://linear.app/acme/issue/DRE-77",
+            "CARD_TITLE": "PROOF: the release names v3",
+            "CARD_DESCRIPTION": DESCRIPTION,
+            "ESCALATION_FILE": str(self.escalation),
+        }
+        if exit_code is not None:
+            env["FAKE_DECIDE_EXIT"] = str(exit_code)
+        done, posted, _lines = self._exec(env)
+        return done, [c for c in posted if c[0] == "proof_record_pr"]
+
+    def test_it_has_its_id_and_never_runs_in_a_shadow(self):
+        step = _step(DECIDE_STEP)
+        self.assertEqual("record_pr", step.get("id"))
+        self.assertEqual("always() && !inputs.shadow", step.get("if"))
+
+    def test_it_runs_after_the_push_rescue_and_before_the_body_refresh(self):
+        at = _index(DECIDE_STEP)
+        self.assertGreater(at, _index("Push rescue"))
+        self.assertGreater(at, _index("Upload rescued work"))
+        self.assertLess(at, _index("Refresh the record pull request's body"))
+        self.assertLess(at, _index(RESULT_STEP))
+        self.assertGreater(at, max(i for i, _ in _agent_steps()))
+
+    def test_it_holds_the_fresh_token_and_the_linear_key(self):
+        env = _step(DECIDE_STEP)["env"]
+        self.assertEqual("${{ steps.pushtoken.outputs.token || steps.worker.outputs.token }}",
+                         env["GH_TOKEN"])
+        self.assertEqual(_step(RESULT_STEP)["env"]["LINEAR_API_KEY"], env["LINEAR_API_KEY"])
+        self.assertEqual("${{ steps.card.outputs.title }}", env["CARD_TITLE"])
+        self.assertEqual("${{ steps.card.outputs.description }}", env["CARD_DESCRIPTION"])
+        self.assertEqual("/tmp/agent-escalation.txt", env["ESCALATION_FILE"])
+        self.assertNotIn("continue-on-error", _step(DECIDE_STEP))
+
+    def test_with_no_escalation_it_decides_and_may_hold(self):
+        done, calls = self._run(decision="closed-and-held")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([["proof_record_pr", "decide", "--repo", "acme/widgets",
+                           "--card", "DRE-77", "--card-url",
+                           "https://linear.app/acme/issue/DRE-77",
+                           "--title", "PROOF: the release names v3"]], calls)
+        self.assertIn("decision=closed-and-held", self.output.read_text())
+
+    def test_an_escalation_passes_no_hold(self):
+        done, calls = self._run(escalation="Approve the release in the console?\n",
+                                decision="held")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(1, len(calls))
+        self.assertEqual("--no-hold", calls[0][-1])
+        self.assertEqual(1, calls[0].count("--no-hold"))
+
+    def test_an_empty_escalation_file_is_no_escalation_and_holds(self):
+        # The result step reads an empty file as no escalation, so nothing
+        # parks and nothing else posts the card's hold.
+        done, calls = self._run(escalation="")
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertNotIn("--no-hold", calls[0])
+
+    def test_a_refused_decision_turns_the_run_red(self):
+        done, _calls = self._run(exit_code=1)
+        self.assertNotEqual(0, done.returncode)
+
+    def test_the_result_step_reads_the_decision(self):
+        self.assertEqual("${{ steps.record_pr.outputs.decision }}",
+                         _step(RESULT_STEP)["env"]["RECORD_PR_DECISION"])
 
 
 if __name__ == "__main__":

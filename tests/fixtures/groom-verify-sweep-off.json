@@ -1,0 +1,357 @@
+{
+  "_note": "What groom_verify.check answered, and every read it spent, over each scenario in tests/test_groom_verify_sweep.py's _scenarios(), written by the check as it stood on main at 4f675fbf, before DRE-7969 added the sweep. With the sweep off, the check must answer exactly this. Regenerate only for a change that means to alter the check's answer.",
+  "answers": {
+    "cancel-done": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"cancel\", \"verdict\": \"cancel-stands\", \"source\": \"replacement\", \"evidence\": [{\"source\": \"replacement\", \"target\": \"DRE-900\", \"text\": \"DRE-900 is Done\"}], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\", \"DRE-102\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113",
+        "DRE-900"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" OR \"DRE-106\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" OR \"DRE-111\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "cancel-intake": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"cancel\", \"verdict\": \"cancel-rejected\", \"source\": \"replacement\", \"evidence\": [{\"source\": \"replacement\", \"target\": \"DRE-900\", \"text\": \"DRE-900 is in Intake and has not been approved\"}], \"unread\": [], \"acted\": true}], \"cancel\": {}, \"keep\": {\"DRE-102\": \"kept on the Planning list — the Cancel said superseded by DRE-900, and DRE-900 is in Intake and has not been approved\"}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\", \"DRE-102\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113",
+        "DRE-900"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" OR \"DRE-106\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" OR \"DRE-111\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "cancel-unread": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"cancel\", \"verdict\": \"cancel-rejected\", \"source\": \"replacement\", \"evidence\": [{\"source\": \"replacement\", \"target\": \"DRE-900\", \"text\": \"DRE-900 could not be read this run\"}], \"unread\": [], \"acted\": true}], \"cancel\": {}, \"keep\": {\"DRE-102\": \"kept on the Planning list — the Cancel said superseded by DRE-900, and DRE-900 could not be read this run\"}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\", \"DRE-102\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113",
+        "DRE-900"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" OR \"DRE-106\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" OR \"DRE-111\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "clean": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "comment-on-planning": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {\"DRE-102\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "comment-on-unreached-spare": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "every-card-fails": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"comments\", \"evidence\": [{\"source\": \"comments\", \"quote\": \"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\", \"at\": \"2026-09-05T23:48:45.000Z\", \"text\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}], \"unread\": [], \"acted\": true}], \"cancel\": {\"DRE-101\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-102\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-103\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-104\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-105\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-106\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-107\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-108\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-109\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-110\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-111\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-112\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\", \"DRE-113\": \"a comment on the card (2026-09-05) says: \\\"Superseded, 2026-09-05. The CEO decided this on another card, and that card now carries the work. Do not build from this card.\\\"\"}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "linear-failed": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"comments\", \"other_cards\"], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {\"comments\": {\"cards\": [\"DRE-101\"], \"why\": \"Linear did not answer: linear answered 500 for DRE-101\"}, \"other_cards\": {\"cards\": [\"DRE-101\"], \"why\": \"Linear did not answer: linear answered 500 for DRE-101\"}}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "merged-pr-by-branch": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"merged_prs\", \"evidence\": [{\"source\": \"merged_prs\", \"url\": \"https://github.com/dreadnought-foundry/portico/pull/88\", \"title\": \"a change\", \"text\": \"already done — the merged pull request https://github.com/dreadnought-foundry/portico/pull/88 is for this card\"}], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": [
+        "https://github.com/dreadnought-foundry/portico/pull/88"
+      ]
+    },
+    "merged-pr-closes": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"cancel\", \"source\": \"merged_prs\", \"evidence\": [{\"source\": \"merged_prs\", \"url\": \"https://github.com/dreadnought-foundry/portico/pull/431\", \"title\": \"a change\", \"text\": \"already done — the merged pull request https://github.com/dreadnought-foundry/portico/pull/431 is for this card\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {\"DRE-103\": \"already done — the merged pull request https://github.com/dreadnought-foundry/portico/pull/431 is for this card\"}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": [
+        "https://github.com/dreadnought-foundry/portico/pull/431"
+      ]
+    },
+    "other-card-covers": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"cancel\", \"source\": \"other_cards\", \"evidence\": [{\"source\": \"other_cards\", \"card\": \"DRE-300\", \"quote\": \"Supersedes DRE-105.\", \"text\": \"DRE-300 (Done) says: \\\"Supersedes DRE-105.\\\"\"}], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "pull-unread": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {\"merged_prs\": {\"cards\": [\"DRE-104\"], \"why\": \"the branch of https://github.com/dreadnought-foundry/portico/pull/88 could not be read: gh api api repos/dreadnought-foundry/portico/pulls/88 failed rc=1: HTTP 502\"}}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": [
+        "https://github.com/dreadnought-foundry/portico/pull/88"
+      ]
+    },
+    "search-failed": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-101\", \"list\": \"planning\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-102\", \"list\": \"planning\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-103\", \"list\": \"planning\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-104\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-105\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-106\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-107\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-108\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-109\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-110\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-111\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-112\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}, {\"identifier\": \"DRE-113\", \"list\": \"spare\", \"verdict\": \"unread\", \"source\": null, \"evidence\": [], \"unread\": [\"merged_prs\"], \"acted\": false}], \"cancel\": {}, \"keep\": {}, \"unread\": {\"merged_prs\": {\"cards\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"why\": \"the search of dreadnought-foundry failed: gh api search/issues failed rc=1: HTTP 403 rate limited\"}}, \"checked\": [\"DRE-101\", \"DRE-102\", \"DRE-103\", \"DRE-104\", \"DRE-105\", \"DRE-106\", \"DRE-107\", \"DRE-108\", \"DRE-109\", \"DRE-110\", \"DRE-111\", \"DRE-112\", \"DRE-113\"], \"spare\": 10, \"merged_prs_searched\": []}",
+      "asked": [
+        "DRE-101",
+        "DRE-102",
+        "DRE-103",
+        "DRE-104",
+        "DRE-105",
+        "DRE-106",
+        "DRE-107",
+        "DRE-108",
+        "DRE-109",
+        "DRE-110",
+        "DRE-111",
+        "DRE-112",
+        "DRE-113"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-101\" OR \"DRE-102\" OR \"DRE-103\" OR \"DRE-104\" OR \"DRE-105\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-106\" OR \"DRE-107\" OR \"DRE-108\" OR \"DRE-109\" OR \"DRE-110\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-111\" OR \"DRE-112\" OR \"DRE-113\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": []
+    },
+    "stored-3381b8d562a8": {
+      "result": "{\"cards\": [{\"identifier\": \"DRE-7165\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-7228\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-7050\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-3449\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2963\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2663\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2558\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2503\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2498\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2497\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-2397\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-5726\", \"list\": \"planning\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-5199\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-4206\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-4204\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-3919\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-3701\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-3602\", \"list\": \"spare\", \"verdict\": \"clean\", \"source\": null, \"evidence\": [], \"unread\": [], \"acted\": false}, {\"identifier\": \"DRE-3333\", \"list\": \"cancel\", \"verdict\": \"cancel-rejected\", \"source\": \"replacement\", \"evidence\": [{\"source\": \"replacement\", \"target\": \"https://github.com/dreadnought-foundry/agent-bureau/pull/2383\", \"text\": \"the pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is not merged\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-7060\", \"list\": \"cancel\", \"verdict\": \"cancel-rejected\", \"source\": \"replacement\", \"evidence\": [{\"source\": \"replacement\", \"target\": \"DRE-7067\", \"text\": \"DRE-7067 could not be read this run\"}], \"unread\": [], \"acted\": true}, {\"identifier\": \"DRE-4054\", \"list\": \"cancel\", \"verdict\": \"cancel-rejected\", \"source\": \"replacement\", \"evidence\": [{\"source\": \"replacement\", \"target\": \"DRE-6928\", \"text\": \"DRE-6928 could not be read this run\"}], \"unread\": [], \"acted\": true}], \"cancel\": {}, \"keep\": {\"DRE-3333\": \"kept on the Planning list — the Cancel said superseded by https://github.com/dreadnought-foundry/agent-bureau/pull/2383, and the pull request https://github.com/dreadnought-foundry/agent-bureau/pull/2383 is not merged\", \"DRE-7060\": \"kept on the Planning list — the Cancel said superseded by DRE-7067, and DRE-7067 could not be read this run\", \"DRE-4054\": \"kept on the Planning list — the Cancel said superseded by DRE-6928, and DRE-6928 could not be read this run\"}, \"unread\": {}, \"checked\": [\"DRE-7165\", \"DRE-7228\", \"DRE-7050\", \"DRE-3449\", \"DRE-2963\", \"DRE-2663\", \"DRE-2558\", \"DRE-2503\", \"DRE-2498\", \"DRE-2497\", \"DRE-2397\", \"DRE-5726\", \"DRE-5199\", \"DRE-4206\", \"DRE-4204\", \"DRE-3919\", \"DRE-3701\", \"DRE-3602\", \"DRE-3333\", \"DRE-7060\", \"DRE-4054\"], \"spare\": 10, \"merged_prs_searched\": [\"dreadnought-foundry\"]}",
+      "asked": [
+        "DRE-7165",
+        "DRE-7228",
+        "DRE-7050",
+        "DRE-3449",
+        "DRE-2963",
+        "DRE-2663",
+        "DRE-2558",
+        "DRE-2503",
+        "DRE-2498",
+        "DRE-2497",
+        "DRE-2397",
+        "DRE-5726",
+        "DRE-5199",
+        "DRE-4206",
+        "DRE-4204",
+        "DRE-3919",
+        "DRE-3701",
+        "DRE-3602",
+        "DRE-7067",
+        "DRE-6928"
+      ],
+      "queries": [
+        "api -X GET search/issues -f q=\"DRE-7165\" OR \"DRE-7228\" OR \"DRE-7050\" OR \"DRE-3449\" OR \"DRE-2963\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-2663\" OR \"DRE-2558\" OR \"DRE-2503\" OR \"DRE-2498\" OR \"DRE-2497\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-2397\" OR \"DRE-5726\" OR \"DRE-5199\" OR \"DRE-4206\" OR \"DRE-4204\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1",
+        "api -X GET search/issues -f q=\"DRE-3919\" OR \"DRE-3701\" OR \"DRE-3602\" is:pr is:merged user:dreadnought-foundry -f per_page=100 -f page=1"
+      ],
+      "pulls": [
+        "https://github.com/dreadnought-foundry/agent-bureau/pull/2383"
+      ]
+    }
+  }
+}

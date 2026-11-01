@@ -280,7 +280,8 @@ def test_a_hold_with_no_condition_still_ranks_last(monkeypatch):
 
 def test_a_proposal_with_no_stored_decision_renders_as_before(monkeypatch):
     """`groom_no_decision_render.md` is this page as `main` rendered it before
-    this card — written by that groomer, not this one. The one difference is
+    this card — written by that groomer, not this one, and re-written by
+    DRE-7973, whose Cancel row holds no Planning slot. The one difference is
     the sentence this card adds to the `To say more than yes` paragraph, named
     the console's controls."""
     lane = LANE + [card("DRE-130", days=2, description="Superseded by: DRE-90",
@@ -503,8 +504,10 @@ def test_the_doc_carries_the_memory_section():
         assert needle in body, f"the memory section never says {needle!r}"
 
 
-def test_the_module_says_the_recorded_cancel_is_not_drawn_from_the_twenty():
+def test_the_module_says_the_recorded_cancel_is_placed_wherever_it_stands():
+    """Since DRE-7973 every Cancel row is; the recorded one was first."""
     doc = groomer.__doc__
-    para = doc.split("Two lists drawn from the same twenty", 1)[1]
+    para = doc.split("**Proposes.**", 1)[1]
     para = para.split("\n\n", 1)[0]
     assert "Move to Cancel" in para, para
+    assert "wherever it" in para, para

@@ -16,6 +16,23 @@ one ref. A branch name that is not `proof-shadow/DRE-<n>-<digits>` is refused
 before anything is written, so it can never push under `agent/` or to the
 default branch.
 
+`push` is the branch's only writer, so it is where the redaction seam
+(`name_redact`, DRE-8166) runs for it (DRE-8169). Live — `NAME_GUARD_LIVE` is
+`true` — it reads the roster once (`name_roster.read`, owner
+`GITHUB_REPOSITORY_OWNER`, the run's actors as extra logins) and rewrites each
+added record — its path as well as its text, so the sidecar's `record_path`
+names the file it pushed — the sidecar's values and the commit message through
+`name_redact.redact` before it commits. A roster it cannot read, or two records
+whose paths redact to one, refuses the push before `git checkout -b`, having
+written nothing:
+
+    ::error::proof shadow push: name-guard: refused — roster unreadable: <reason>
+    ::error::proof shadow push: name-guard: refused — <n> records redact to one path
+
+Not live, it reads no roster, pushes what the agent wrote and prints one
+`name-guard: dry — …` line. No line it prints carries a name. The workflow's
+pre-push hook still guards the push; this is the redaction that happens first.
+
 `compare` reads every `proof-shadow/` branch of a repository back, filtered
 by the sidecar's `card` and `dispatched_at`, and pairs each shadow with the
 real record: the file at the FIRST commit on the card's
@@ -56,6 +73,7 @@ from __future__ import annotations
 import argparse
 import binascii
 import json
+import os
 import re
 import subprocess  # nosec B404 — fixed argv, `git`, no shell
 import sys
@@ -66,6 +84,8 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import linear_ops  # noqa: E402
 import merge_gate  # noqa: E402 — `flatten_pages`, the one reading of `--slurp`
+import name_redact  # noqa: E402 — the one redaction seam (DRE-8166)
+import name_roster  # noqa: E402 — the live roster the seam reads (DRE-8165)
 import proof_record  # noqa: E402 — the criterion-table reader and the record finder
 
 #: The tag every compare line opens with.
@@ -182,19 +202,59 @@ def sidecar(card: str, model: str, run_url: str, dispatched_at: str, records) ->
             "record_path": records[0] if len(records) == 1 else None}
 
 
+def _roster(env, reader):
+    """The live roster, read once, as the workflow's run names it."""
+    actors = (env.get("GITHUB_ACTOR", ""), env.get("GITHUB_TRIGGERING_ACTOR", ""))
+    return reader(owner=env.get("GITHUB_REPOSITORY_OWNER", ""), extra_logins=actors)
+
+
 def push(card: str, run_id: str, *, model: str, run_url: str, dispatched_at: str,
-         remote: str = "origin", cwd=".") -> int:
+         remote: str = "origin", cwd=".", roster=None, reader=None, env=None) -> int:
     """Commit the shadow's new records and the sidecar on its branch off
     `HEAD`, and push that one ref. 0 on a push; 1, having pushed nothing,
-    on a refused name or a git failure."""
+    on a refused name, an unreadable roster while live, or a git failure."""
     branch = branch_name(card, run_id)
     if branch is None:
         print(f"::error::proof shadow push: {PREFIX}{card}-{run_id} is not a "
               f"{PREFIX}DRE-<n>-<digits> branch — nothing is pushed")
         return 1
+    env = os.environ if env is None else env
+    tag = name_redact.TAG
+    if not name_redact.live(env):
+        roster = None
+    elif roster is None:
+        try:
+            roster = _roster(env, reader or name_roster.read)
+        except name_roster.RosterUnreadable as exc:
+            print(f"::error::proof shadow push: {tag} refused — roster unreadable: {exc}")
+            return 1
+
+    def seam(text: str) -> str:
+        return text if roster is None else name_redact.redact(text, roster)
+
     try:
         records = added_records(cwd)
-        doc = sidecar(card, model, run_url, dispatched_at, records)
+        if roster is not None:
+            renamed = {path: seam(path) for path in records}
+            if len(set(renamed.values())) != len(renamed):
+                print(f"::error::proof shadow push: {tag} refused — "
+                      f"{len(records)} records redact to one path")
+                return 1
+            if any(new != old and (Path(cwd) / new).exists() for old, new in renamed.items()):
+                print(f"::error::proof shadow push: {tag} refused — "
+                      f"a record redacts to a path that already exists")
+                return 1
+            texts = {path: (Path(cwd) / path).read_text(encoding="utf-8") for path in records}
+            for old, new in renamed.items():
+                if new != old:
+                    _git(cwd, "rm", "-q", "--cached", "--ignore-unmatch", "--", old)
+                    (Path(cwd) / new).parent.mkdir(parents=True, exist_ok=True)
+                    (Path(cwd) / old).unlink()
+                if new != old or seam(texts[old]) != texts[old]:
+                    (Path(cwd) / new).write_text(seam(texts[old]), encoding="utf-8")
+            records = sorted(renamed.values())
+        doc = {k: seam(v) if isinstance(v, str) else v
+               for k, v in sidecar(card, model, run_url, dispatched_at, records).items()}
         _git(cwd, "checkout", "-q", "-b", branch)
         (Path(cwd) / SIDECAR).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         paths = [*records, SIDECAR]
@@ -204,11 +264,16 @@ def push(card: str, run_id: str, *, model: str, run_url: str, dispatched_at: str
             identity = ["-c", "user.name=proof-shadow",
                         "-c", "user.email=proof-shadow@users.noreply.github.com"]
         _git(cwd, *identity, "commit", "-q", "-m",
-             f"proof shadow: {card} on {model}\n\nRun: {run_url}", "--", *paths)
+             seam(f"proof shadow: {card} on {model}\n\nRun: {run_url}"), "--", *paths)
         _git(cwd, "push", "-q", remote, f"refs/heads/{branch}:refs/heads/{branch}")
-    except (OSError, RuntimeError) as exc:
-        print(f"::error::proof shadow push: {exc}")
+    except (OSError, RuntimeError, UnicodeDecodeError) as exc:
+        print(f"::error::proof shadow push: {seam(str(exc))}")
         return 1
+    if roster is None:
+        print(f"{tag} dry — not live, {len(records)} record(s) pushed as the agent wrote them")
+    else:
+        print(f"{tag} ok — {len(records)} record(s), the sidecar and the commit message "
+              f"pushed through the redaction seam")
     print(f"proof shadow push: {branch} — record_path={doc['record_path'] or 'null'}")
     return 0
 

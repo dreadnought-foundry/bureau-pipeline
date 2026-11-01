@@ -1,11 +1,13 @@
 """The frozen model files, and a throwaway tree built from them (DRE-6859).
 
-The console rewrites `config/models.yaml` on every save — which model leads a
-group, which group an agent is in, which agents exist, which projects have a
-model of their own — so a rule test that read the committed file went red on a
-legitimate save. A RULE of the policy or of selection is proved against the
-frozen copy in `tests/fixtures/model-config-frozen/` instead (its README holds
-the two rules, and the refresh rule for when today's code stops accepting it).
+The console used to rewrite `config/models.yaml` on every save — which model
+leads a group, which group an agent is in, which agents exist, which projects
+have a model of their own — so a rule test that read the committed file went
+red on a legitimate save. A RULE of the policy or of selection is proved
+against the frozen copy in `tests/fixtures/model-config-frozen/` instead (its
+README holds the two rules, and the refresh rule for when today's code stops
+accepting it). Since DRE-6983 the frozen `models.yaml` and `agents.yaml` carry
+no choice at all: the frozen choices are `home.json`'s alone.
 
 This is a plain module, not a pytest fixture: the policy and selector tests are
 `unittest.TestCase` classes. Every test reaches the fixture through it, and
@@ -16,20 +18,19 @@ Since the selector selects on the home or the defaults in the code (DRE-6939),
 a scenario is a home document rather than an edit of a tree's `models.yaml`:
 `fixture_home()` is the frozen choices as one, `lead_with`, `move_agent` and
 `with_project` edit a copy, and `home_env` or `fixture_module(..., doc=...)`
-hands it to a tree (DRE-6972). Such a tree is built with
-`fixture_tree(dest, regenerate=False)`, which runs no generator; the default
-still regenerates the literal for the old route's tests and the generator's
-own (DRE-6990).
+hands it to a tree (DRE-6972). A tree is copied and never regenerated: the
+generator is gone (DRE-6982), so `fixture_tree` runs nothing, and the
+defaults in the code are the tree's own hand-written `CODE_DEFAULTS`.
 """
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib.util
 import json
 import os
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -43,31 +44,16 @@ from unit_test_parts import discover  # noqa: E402
 FIXTURE_NAME = "model-config-frozen"
 FIXTURE_DIR = ROOT / "tests" / "fixtures" / FIXTURE_NAME
 
-# What every rule test says when the fixture stops regenerating, so the whole
-# suite fails with one sentence that names the remedy, not a traceback inside
-# the generator.
-STALE = (
-    "the frozen model fixture no longer regenerates under today's code — "
-    "re-freeze it in this pull request "
-    f"({(FIXTURE_DIR / 'README.md').relative_to(ROOT).as_posix()}, the refresh rule)"
-)
-
-# A test file that names any of these can read the model files: the three files
-# themselves, and the selector, the generator and the console's change script
-# that read them. A test that names a rung id is in the set too
-# (`model_reading_tests`), because it reaches the selector some other way.
-MODEL_FILE_NAMES = (
-    "models.yaml", "agents.yaml", "model-choices.json",
-    "model_fallback", "sync_model_config", "model_config_change",
-)
-
-
-class FixtureStale(Exception):
-    """The generator refused the frozen files under today's code."""
+# A test file that names any of these can read the model files: the two files
+# themselves, and the selector that reads them. A test that names a rung id is
+# in the set too (`model_reading_tests`), because it reaches the selector some
+# other way.
+MODEL_FILE_NAMES = ("models.yaml", "agents.yaml", "model_fallback")
 
 
 def fixture_config() -> dict:
-    """The frozen `models.yaml`, parsed."""
+    """The frozen `models.yaml`, parsed: code-side facts only, no choice
+    (DRE-6983) — a choice is read off `fixture_home()`."""
     return yaml.safe_load(fixture_text())
 
 
@@ -90,12 +76,10 @@ def _rung_ids(rungs) -> list[str]:
     return [r["model"] if isinstance(r, dict) else r for r in rungs or []]
 
 
-def ladder(cfg_or_doc: dict, kind: str) -> list[str]:
-    """The rung ids `kind` walks: `groups.<kind>.models` of a home document,
-    or the ladder `kind` names in a raw config of the old shape."""
-    if "ladders" not in cfg_or_doc:
-        return _rung_ids(cfg_or_doc["groups"][kind]["models"])
-    return _rung_ids(cfg_or_doc["ladders"][cfg_or_doc["kinds"][kind]["ladder"]])
+def ladder(doc: dict, kind: str) -> list[str]:
+    """The rung ids `kind` walks: `groups.<kind>.models` of a home document.
+    The frozen `models.yaml` carries no choice to read one off (DRE-6983)."""
+    return _rung_ids(doc["groups"][kind]["models"])
 
 
 # --------------------------------------------------------------------------- #
@@ -157,27 +141,19 @@ def _copy_into(dest: Path) -> None:
     shutil.copy2(ROOT / "config" / "repo-map.json", dest / "config" / "repo-map.json")
 
 
-def fixture_tree(dest: Path, regenerate: bool = True) -> Path:
+def fixture_tree(dest: Path, regenerate: bool = False) -> Path:
     """A throwaway tree at `dest` running today's code on the frozen files.
 
-    With `regenerate` (the default) its generated regions are regenerated from
-    the frozen files, and `FixtureStale` is raised when the generator refuses
-    them: the old route's tests and the generator's own still build on that
-    literal. With `regenerate=False` the tree is copied and nothing runs — a
-    tree whose selector answers from a home document (`home_env`,
-    `fixture_module(..., doc=...)`) has no use for a regenerated literal
-    (DRE-6990)."""
+    The tree is copied and nothing runs. `regenerate` stays a keyword so the
+    callers that pass `regenerate=False` (DRE-6990, DRE-8018) are untouched;
+    `regenerate=True` raises `ValueError`, because the generator that rewrote
+    a tree's literal is gone (DRE-6982)."""
+    if regenerate:
+        raise ValueError(
+            "fixture_tree(regenerate=True): the generator is gone (DRE-6982) — "
+            "a tree is copied and never regenerated")
     dest = Path(dest)
     _copy_into(dest)
-    if not regenerate:
-        return dest
-    proc = subprocess.run(
-        [sys.executable, str(dest / "scripts" / "sync_model_config.py")],
-        cwd=dest, capture_output=True, text=True)
-    if proc.returncode != 0:
-        tail = "\n".join((proc.stdout + proc.stderr).strip().splitlines()[-15:])
-        raise FixtureStale(
-            f"{STALE}\n`sync_model_config.py` exited {proc.returncode}:\n{tail}")
     return dest
 
 
@@ -241,9 +217,26 @@ def _read_home(module, tree: Path, doc: dict) -> None:
             os.environ[HOME_FILE_ENV] = before
 
 
+def _default_rung_ids(tree: Path) -> set[str]:
+    """The rung ids of `tree`'s defaults in the code — `CODE_DEFAULTS` in its
+    `scripts/model_fallback.py`, read as a literal, never imported. None when
+    the tree carries no such literal."""
+    path = Path(tree) / "scripts" / "model_fallback.py"
+    if not path.exists():
+        return set()
+    for node in ast.parse(path.read_text()).body:
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "CODE_DEFAULTS" for t in node.targets):
+            defaults = ast.literal_eval(node.value)
+            return {m for rungs in (defaults.get("ladders") or {}).values()
+                    for m in _rung_ids(rungs)}
+    return set()
+
+
 def model_reading_tests(tree: Path) -> list[Path]:
     """The test files under `tree` that can read the model files: those naming
-    one of `MODEL_FILE_NAMES`, or a rung id of `tree/config/models.yaml`.
+    one of `MODEL_FILE_NAMES`, or a rung id of `tree`'s defaults in the code
+    (the file carries none since DRE-6983).
 
     The one derivation of that set: the harness (DRE-6865) runs exactly these
     inside each changed copy, and the guard (DRE-6866) scans exactly these for
@@ -251,9 +244,7 @@ def model_reading_tests(tree: Path) -> list[Path]:
     asserts a model id is in it whether or not it names a model file.
     """
     tree = Path(tree)
-    cfg = yaml.safe_load((tree / "config" / "models.yaml").read_text()) or {}
-    rungs = {m for rungs in (cfg.get("ladders") or {}).values() for m in _rung_ids(rungs)}
-    tokens = (*MODEL_FILE_NAMES, *sorted(rungs))
+    tokens = (*MODEL_FILE_NAMES, *sorted(_default_rung_ids(tree)))
     # The files `pytest tests` collects — the directories it skips are skipped
     # here by the same walk — narrowed to `test_*.py`.
     files = [tree / rel for rel in discover(tree) if Path(rel).name.startswith("test_")]

@@ -1,6 +1,18 @@
 #!/usr/bin/env python3
 """One writer holds a proof card on its cause rows for the operator (DRE-6612, DRE-6837).
 
+**`park` is retired (DRE-7953).** Since DRE-7952 a record whose every unmet
+row is a gap — a cause row or a history row — merges on its approved record
+and closes its PROOF card with one fix card (`proof_gap`), so nothing asks
+the operator about those rows any more: the proof dispatcher leaves such a
+record to the gate, and the proof run's result step
+(`scripts/report_proof_result.sh`) prints its cause lines to the log. The
+subcommand and `park` below are kept, unchanged and with no caller; what this
+docstring says of the two readers is how they used it. The cause line's
+grammar (`cause_line`, `rows_from_lines`), `QUESTION`, which the result step
+still sorts an escalation file by, and `CAUSE_HOLD_OPENING` and
+`is_cause_hold`, which still read the holds posted before, stay in use.
+
 A record's cause rows — DRE-6607's `Not observed. cause: <cause-word> — <what
 the run saw instead>` — are met by two readers: the proof run that wrote them,
 at the end of its own run, and the proof dispatcher, when it reads the record
@@ -274,7 +286,10 @@ def _asked(body) -> bool:
 def park(identifier: str, rows, *, voices: list[spoken_thread.Voice], lane: str,
          live: bool = True, recommendation=None, run_url=None) -> str:
     """The hold and the question for cause rows, and the lane the card was
-    read in. It writes no lane. See the module docstring."""
+    read in. It writes no lane. See the module docstring.
+
+    Retired (DRE-7953): nothing in the pipeline calls it — a gap record is
+    the gate's since DRE-7952. Kept, unchanged, for its CLI."""
     if not rows:
         return "nothing to do — the record carries no cause row"
     if not lane:

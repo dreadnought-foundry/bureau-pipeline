@@ -55,17 +55,20 @@ class EveryArmsItem4Test(unittest.TestCase):
                 self.assertIn("console proof-reader bullet under Identities in "
                               "briefs/proof.md says, `Not observed. cause: out-of-reach — …`",
                               item)
-                self.assertIn("A press the live console refuses is written as the "
-                              "operator's row with the console's reason, as briefs/proof.md's "
+                self.assertIn("A press the live console refuses is the same cause row "
+                              "with the console's reason, as briefs/proof.md's "
                               "\"When the console is not ready\" says", item)
 
-    def test_the_operators_row_stays_for_every_other_press(self):
+    def test_every_other_press_waits_on_no_person(self):
+        """DRE-7954: a press outside the sandbox is an OPERATOR card the proof
+        is blocked by, and an older card's person's press is a cause row."""
         for i, prompt in enumerate(_prompts()):
             item = _between(prompt, ITEM_4, ITEM_5)
             with self.subTest(arm=i):
                 self.assertIn("a sandbox press not on the standard's list", item)
-                self.assertIn("`Not observed. waiting for the operator's press: <the press>`",
-                              item)
+                self.assertIn("`Not observed. cause: operator-step-unblocked — <what you saw "
+                              "instead>`", item)
+                self.assertNotIn("waiting for the operator's press", item)
 
 
 class EveryArmsStep2Test(unittest.TestCase):

@@ -301,7 +301,11 @@ jobs:
           PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
 
+      # `id: sweep` is what the phases below read (DRE-8000). This step keeps
+      # its own status — no `continue-on-error`, `exit "$STATUS"` at the end —
+      # so the idle-board alarm still turns the job red.
       - name: Sweep
+        id: sweep
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           # The read door (Stage 2 #5/#6a). The mode is the CALLER's variable,
@@ -418,6 +422,17 @@ jobs:
       # the `fix_workflow()` naming family. A repo with no stub prints one line
       # and reads nothing, every pass, until its stub lands.
       #
+      # WHENEVER THE SWEEP RAN, pass or fail (DRE-8000). A step `if:` with no
+      # status function is read as `success() && …`, so on 2026-10-25 the
+      # idle-board alarm that failed `Sweep` skipped this step, the Green Light
+      # reply and the switch read in all 14 agent-bureau runs from 12:32 PM PT
+      # to 3:46 PM PT. `!cancelled()` lifts the implied `success()`, and the
+      # Sweep step's own outcome keeps every gate BEFORE it in charge: a
+      # refused `pipeline_ref` or an unminted token leaves `Sweep` `skipped`,
+      # and these three skip with it. Each phase below carries the same
+      # condition, so a failed dispatch does not skip the next two either
+      # (tests/test_reconcile_workflow_phase_independence.py).
+      #
       # `PROOF_DISPATCH_LIVE` is the caller's variable. Anything but `true` is
       # the dry run: `would:` lines, no dispatch, no receipt, no hold.
       #
@@ -425,7 +440,7 @@ jobs:
       # the `proof-release:` lines — the release reading of the card a pass
       # dispatches, the line its proof record quotes (DRE-6516).
       - name: Dispatch proof runs
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
@@ -471,12 +486,53 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$STATUS"
+      # DRE-8452: a proof's record pull request stays open only while its
+      # record can merge (DRE-8437). The sweep closes each open one whose
+      # record cannot, keeping its branch, with the hold on its card. Under
+      # the proof dispatcher's gate, stub check and switch: dry (`would:`
+      # lines, nothing written) until PROOF_DISPATCH_LIVE is `true`.
+      - name: Close proof records that cannot merge
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # The close and its comment go out as the bot token, as the
+          # dispatch's writes do.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+        run: |
+          if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
+            echo "proof-record-sweep: no proof-run stub in this repository — nothing read, nothing closed"
+            exit 0
+          fi
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO" 2>&1 | tee proof-record-sweep.log || STATUS=$?
+          SUMMARY=$(grep -E '^(proof-record-sweep:|would:)' proof-record-sweep.log || true)
+          {
+            echo "### Proof record sweep"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then
+              printf '%s\n' "$SUMMARY"
+            else
+              echo "no proof-record-sweep: line — the sweep exited before it"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
       # DRE-6138: a comment the CEO leaves on an epic waiting in Green Light
       # sends the plan back for a review, once per comment, with one receipt.
       # Its own process and its own trailer, in the proof step's shape; dry
       # (`would:` lines, nothing written) until GREEN_LIGHT_REPLY_LIVE is `true`.
       - name: Reply to the CEO's Green Light comments
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
@@ -521,7 +577,7 @@ jobs:
       # variables, and a catalog row with no plumbing here fails
       # tests/test_switch_reason.py by name (docs/switches.md).
       - name: Read the switches
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
@@ -539,6 +595,8 @@ jobs:
           HYGIENE_LIVE_OFF_UNTIL: ${{ vars.HYGIENE_LIVE_OFF_UNTIL }}
           TRIAGE_REPAIR_LIVE: ${{ vars.TRIAGE_REPAIR_LIVE }}
           TRIAGE_REPAIR_LIVE_OFF_UNTIL: ${{ vars.TRIAGE_REPAIR_LIVE_OFF_UNTIL }}
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
+          NAME_GUARD_LIVE_OFF_UNTIL: ${{ vars.NAME_GUARD_LIVE_OFF_UNTIL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG

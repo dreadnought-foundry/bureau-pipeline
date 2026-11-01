@@ -109,17 +109,18 @@ class TestTheRealTree:
         )
         assert out.returncode == 0, out.stdout + out.stderr
 
-    def test_nineteen_writer_sites_each_match_exactly_one_row(self):
+    def test_twenty_writer_sites_each_match_exactly_one_row(self):
         # Fifteen until DRE-6186 folded main()'s two dead-run caps into
         # `hand_dead_run_to_planner`, whose one `hold.apply` serves both;
         # fifteen again since the create seam files an operator step held
         # (DRE-6428); sixteen with the operator-backlog pass (DRE-6429);
         # seventeen with the one-off critic's bound park (DRE-6456);
         # eighteen with the deferred-release card filed held (DRE-5235);
-        # nineteen with the held repo's waiting children (DRE-7754).
+        # nineteen with the held repo's waiting children (DRE-7754);
+        # twenty with the planning exit's no-repo refusal (DRE-8145).
         doc = _real_doc()
         sites = hold.discover()
-        assert len(sites) == 19, [s.where for s in sites]
+        assert len(sites) == 20, [s.where for s in sites]
         for site in sites:
             hits = [r for r in doc["sites"] if hold.row_matches(r, site)]
             assert len(hits) == 1, f"{site.where} ({site.scope}) matches {len(hits)} rows"
@@ -127,11 +128,12 @@ class TestTheRealTree:
             hits = [s for s in sites if hold.row_matches(row, s)]
             assert len(hits) == 1, f"row {row['anchor']!r} matches {len(hits)} sites"
 
-    def test_the_ten_files_the_cards_name_are_the_files_discovered(self):
+    def test_the_eleven_files_the_cards_name_are_the_files_discovered(self):
         # Six from DRE-6173; `scripts/linear_ops.py` since DRE-6428;
         # `scripts/hand_work_migration.py` since DRE-6429;
         # `scripts/release_deferral.py` since DRE-5235;
-        # `scripts/repo_held_epics.py` since DRE-7754.
+        # `scripts/repo_held_epics.py` since DRE-7754;
+        # `scripts/planning_route.py` since DRE-8145.
         files = {s.file for s in hold.discover()}
         assert files == {
             "scripts/reconcile.py", "scripts/dead_run.py",
@@ -139,7 +141,7 @@ class TestTheRealTree:
             ".github/workflows/agent-fix.yml",
             "scripts/model_adoption_actions.py", "scripts/linear_ops.py",
             "scripts/hand_work_migration.py", "scripts/release_deferral.py",
-            "scripts/repo_held_epics.py",
+            "scripts/repo_held_epics.py", "scripts/planning_route.py",
         }
 
     def test_every_row_carries_reasons_lifts_readers_and_tried_first(self):
@@ -201,8 +203,9 @@ class TestSwappingTheWriteKeepsTheRow:
         }
         calls = [s for s in real if s.file.endswith(".py") and s.kind == "call"]
         # 6 before DRE-6186, 5 after it, 6 again with DRE-6428's create seam,
-        # 7 with DRE-6429's operator-backlog pass, 8 with DRE-7754's held repo.
-        assert len(calls) == 8, [s.where for s in calls]
+        # 7 with DRE-6429's operator-backlog pass, 8 with DRE-7754's held repo,
+        # 9 with DRE-8145's planning exit.
+        assert len(calls) == 9, [s.where for s in calls]
         by_file: dict = {}
         for site in calls:
             by_file.setdefault(site.file, []).append(site)
@@ -219,7 +222,7 @@ class TestSwappingTheWriteKeepsTheRow:
             (tmp_path / path).write_bytes(raw)
         assert hold.problems(doc, root=str(tmp_path)) == []
         swapped = hold.discover(root=str(tmp_path))
-        assert sum(1 for s in swapped if "hold.apply(" in s.source) == 8
+        assert sum(1 for s in swapped if "hold.apply(" in s.source) == 9
         for row in doc["sites"]:
             hits = [s for s in swapped if hold.row_matches(row, s)]
             assert len(hits) == 1

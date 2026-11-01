@@ -35,7 +35,9 @@
 # runners each repo's jobs actually landed on, on a token holding
 # `actions: read` alone, and the verify legs fold it after the lookups. The
 # same run also takes a `replay` input that re-checks a stored proposal and
-# posts nothing.
+# posts nothing. Since DRE-7974 `groom-replay-gate.yml` calls this file
+# locally with `replay` set, on a pull request that touches the verify step;
+# a replay's `groom` and `post` jobs queue in groups of their own run.
 #
 # Reusable workflow: permissions live in the calling stub (contents: read, and
 # id-token: write for the read door since DRE-7242).
@@ -188,8 +190,13 @@ jobs:
     # search-speed refusal, up to `groom_lookups.SEARCH_WAIT_BUDGET_SECONDS`
     # (600 s) — 1,660 + 300 + 600 = 2,560 s, and the test reads all three.
     timeout-minutes: 45
+    # A REPLAY NEVER QUEUES WITH THE MORNING (DRE-7974). GitHub keeps one
+    # running and one pending run per group, and a newer pending run replaces
+    # the older one — so a replay gate's run waiting in `groomer` could
+    # displace the 06:00 PT proposal, or the morning a gate. A replay gets a
+    # group of its own run; every other run keeps `groomer` exactly.
     concurrency:
-      group: groomer
+      group: ${{ inputs.replay != '' && format('groomer-replay-{0}', github.run_id) || 'groomer' }}
       cancel-in-progress: false
     # The verify matrix's rows (DRE-4972): `[{"card": "DRE-N", "repository":
     # "<owner/repo>" | ""}, …]`, compacted onto one line. Empty on a drain.
@@ -805,6 +812,30 @@ jobs:
           path: target
           persist-credentials: false
 
+      # BUREAU-PIPELINE BESIDE IT, READ-ONLY (DRE-8028). Every repo runs the
+      # pipeline through thin stubs, so the code behind a card about a build,
+      # a review, the medic or a death receipt is often here, not in
+      # `target/`. At `main` — the ref `target/` is read at — and never
+      # `.bureau-pipeline/`, which is at `pipeline_ref` (the pull request's
+      # own head on the replay gate) and holds the scripts that judge the
+      # answer — the one checkout here `scripts/check_pipeline_ref.py` lets
+      # skip `pipeline_ref` (`READ_AT_MAIN`). No `token:`: the job's own `github.token` is bureau-pipeline's,
+      # since every caller of this workflow is a workflow here granting
+      # `contents: read`, so no token is minted for it. Only once the card's
+      # repo checked out, and never for a bureau-pipeline card, which already
+      # has it under `target/`. `continue-on-error`, and the agent's `if`
+      # does not read it: a failed checkout leaves the leg on `target/` alone.
+      - name: Check out bureau-pipeline beside it
+        id: pipeline
+        if: ${{ matrix.repository != '' && matrix.repository != 'dreadnought-foundry/bureau-pipeline' && steps.target.outcome == 'success' }}
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: main
+          path: pipeline
+          persist-credentials: false
+
       - uses: ./.bureau-pipeline/.github/actions/install-claude-code
         id: install_claude
         if: ${{ matrix.repository != '' && steps.target.outcome == 'success' }}
@@ -894,11 +925,13 @@ jobs:
             --allowedTools "Read,Glob,Grep,Write"
           prompt: |
             Read the file verify-input.md at the workspace root and do what it
-            says. The repository to check is checked out under target/.
+            says. The repository to check is checked out under target/. When
+            that repository is not bureau-pipeline, bureau-pipeline is checked
+            out at main under pipeline/ beside it; pipeline/ may be absent.
 
             Write only the one answer file verify-input.md names. Change
-            nothing under target/, run no commands, and do not commit, push or
-            open a pull request.
+            nothing under target/ or pipeline/, run no commands, and do not
+            commit, push or open a pull request.
 
       # ALWAYS, and it never trusts the step above: on an unmapped repo the
       # agent step reads `skipped` and `--targets` forces `unverified` naming
@@ -984,8 +1017,10 @@ jobs:
     if: ${{ always() && inputs.mode != 'drain' && needs.groom.result == 'success' }}
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # The groom job's rule (DRE-7974): a replay posts nothing, so it never
+    # waits in `groomer-post` behind, or in front of, the morning's post.
     concurrency:
-      group: groomer-post
+      group: ${{ inputs.replay != '' && format('groomer-post-replay-{0}', github.run_id) || 'groomer-post' }}
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

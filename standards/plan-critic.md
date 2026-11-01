@@ -82,13 +82,22 @@ sentence each:
     {proof}: criterion “{criterion}” asks for a reading the proof run cannot make — {what} ({why}); write it as what the run can observe, or drop it.
     {proof}: criterion “{criterion}” reads the result of operator step {operator} (“{title}”) and is not blocked by it — add the blockedBy relation, or reword the criterion.
     {proof}: criterion “{criterion}” sends a press on the sandbox project to a person — write it as a `Sandbox press:` step the proof run makes as the console proof-reader, or drop it.
+    {proof}: criterion “{criterion}” waits on the operator's press, a step only a person can make after merge — file that press as an OPERATOR card this PROOF is blocked by, and write the criterion as the reading of that card's result.
 
 The re-plan answers the first by rewriting the criterion as what the run can
 observe, and the second with the formal `blockedBy` relation. The third
 (DRE-7779) is a `waiting for the operator's press:` or `needs the CEO's press:`
 row for a press on the sandbox list in `standards/card-quality.md`, on a PROOF
 whose repo holds the console proof-reader: since DRE-7772 that press is the
-proof run's own `Sandbox press:` step, so the re-plan writes it as one. Each
+proof run's own `Sandbox press:` step, so the re-plan writes it as one. The
+fourth (DRE-7950) is every other `waiting for the operator's press:` row, on a
+PROOF for any repo. A press only a person can make after merge — a machine
+update, a night-window apply — is its own OPERATOR card the PROOF is blocked
+by, and the criterion reads that card's result (DRE-7917 is that card for
+DRE-7919); a proof row waiting on the press is how proof records came to park
+on the operator. A criterion the third refuses is not refused again by the
+fourth, and a `needs the CEO's press:` row — a business decision of his — is
+not the fourth's. Each
 PROOF is read for the reach of its own `repo:` label when it carries exactly
 one the repo map holds, and otherwise for the plan's caller, because a proof
 run runs in the repo its card is labeled for. On the review route the same

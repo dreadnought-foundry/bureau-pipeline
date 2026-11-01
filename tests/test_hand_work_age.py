@@ -1076,13 +1076,14 @@ def test_the_config_readme_names_the_in_review_kind():
 # (an operator reading the critic's findings…)`.
 
 #: Every hold the dispatcher writes when a budget is spent: the first run's
-#: two dispatches, each trigger's two re-runs, and the two timed re-runs
-#: (DRE-7316).
+#: two dispatches, each trigger's two re-runs, the two timed re-runs
+#: (DRE-7316), and the re-checks (DRE-7951).
 BUDGET_SPENT = [
     (proof_dispatch.EXHAUSTED_OBSERVED, proof_dispatch.EXHAUSTED_NEEDS),
     (proof_dispatch.RERUN_EXHAUSTED_OBSERVED, proof_dispatch.RERUN_EXHAUSTED_NEEDS),
     (proof_dispatch.GATE_EXHAUSTED_OBSERVED, proof_dispatch.GATE_EXHAUSTED_NEEDS),
     (proof_dispatch.TIMED_EXHAUSTED_OBSERVED, proof_dispatch.TIMED_EXHAUSTED_NEEDS),
+    (proof_dispatch.RECHECK_EXHAUSTED_OBSERVED, proof_dispatch.RECHECK_EXHAUSTED_NEEDS),
 ]
 #: ...and the two it writes when a re-run finished and read nothing new.
 UNANSWERED = [
@@ -1095,11 +1096,10 @@ RERUN_2 = ("🔬 proof-run: dispatched a proof run at 10:00 PT — re-run after 
 
 def _defined_needs() -> dict:
     """Every hold-need wording the dispatcher defines, by its name: each
-    module string named `*_NEEDS`, and the press a waiting row names."""
-    found = {name: value for name, value in vars(proof_dispatch).items()
-             if name.endswith("_NEEDS") and isinstance(value, str)}
-    found["OPERATOR_PRESS"] = proof_dispatch.OPERATOR_PRESS
-    return found
+    module string named `*_NEEDS`. The press a waiting row names is no longer
+    one (DRE-7951): its hold waits for a time and nothing else."""
+    return {name: value for name, value in vars(proof_dispatch).items()
+            if name.endswith("_NEEDS") and isinstance(value, str)}
 
 
 class TestABudgetSpentHold:
@@ -1160,8 +1160,8 @@ class TestEveryWordingIsClassified:
             "are in neither OPERATOR_NEEDS nor EVENT_NEEDS — say who each waits on")
 
     def test_the_read_finds_the_wordings_it_must(self):
-        """Not vacuous: the seven operator's readings and the press are found."""
-        assert len(_defined_needs()) >= 8
+        """Not vacuous: the seven operator's readings are found."""
+        assert len(_defined_needs()) >= 7
 
     def test_no_wording_is_both(self):
         both = set(proof_dispatch.OPERATOR_NEEDS) & set(proof_dispatch.EVENT_NEEDS)

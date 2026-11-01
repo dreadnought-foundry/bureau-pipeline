@@ -25,6 +25,16 @@ once the decision is final, beside the decision record. Two decisions reach it:
     card by the same prefix, comments `Released as <tag>` and moves it to
     Done, whatever lane it sits in by then.
 
+`report_current` is the plan's call (DRE-7900), once per surface the lap reads
+`current`. A tag cut by hand — the tool the deferred line names, such as
+`make deploy-console` — leaves the next lap nothing to release, so no
+`Release <surface>` job runs and `report` is never reached. The plan therefore
+closes the open card itself, through `close_deferral`, when the surface's
+newest tag contains the newest `Commit:` the card records: on its description,
+or on a later "The reason changed" comment. A commit, not the tag the deferred
+line names, because not every surface's line names one. A tag that does not
+contain it leaves the card open, and says so in one line.
+
 A deferral that names its minute (DRE-6005, ` — re-arm in <N> minutes`) is the
 train's own to re-arm, owed to nobody, and gets none of this. Neither does a
 window or spacing no-op, which `decide()` emits itself.
@@ -81,7 +91,8 @@ SUMMARY_HEADING = "Deferred"
 #: (the `deferred-release` kind, DRE-7234). A module constant so the lane
 #: writers' discovery reads the destination (`ready_lane_writers.writes()`).
 DEFERRAL_LANE = "Green Light"
-#: Where the next verified tag closes it.
+#: Where the next verified tag — or a `current` lap at a tag containing the
+#: deferred commit (DRE-7900) — closes it.
 CLOSED_LANE = "Done"
 #: The labels after `repo:<repo>`: a person finishes it, nothing builds it.
 CARD_LABELS = (linear_ops.NO_CODE_LABEL, "needs-human", "agent:ops")
@@ -109,6 +120,13 @@ LINE_MARK = "Deferred line: "
 DEFERRAL_PREFIX = "deferred:"
 DEFERRED_CODE = "deferred"
 RELEASE_ACT = "release"
+
+#: The no-op code of a lap that reads the surface current — the train's
+#: (`release_train.decide`), bound by `tests/test_release_deferral.py`.
+CURRENT_CODE = "current"
+
+#: The line the card's commit is recorded on, in `_facts`.
+COMMIT_MARK = "Commit: "
 
 REPO_MAP = Path(__file__).resolve().parent.parent / "config" / "repo-map.json"
 
@@ -179,7 +197,7 @@ def title(repo: str, surface: str, reason: str) -> str:
 
 
 def _facts(line: str, sha: str, url: str) -> str:
-    return f"{LINE_MARK}{line}\nCommit: {sha}\nRun: {url}"
+    return f"{LINE_MARK}{line}\n{COMMIT_MARK}{sha}\nRun: {url}"
 
 
 def body(line: str, sha: str, url: str) -> str:
@@ -188,21 +206,36 @@ def body(line: str, sha: str, url: str) -> str:
     return (
         f"{_facts(line, sha, url)}\n\n"
         "Read the reason, run the tool it names, and the next lap releases.\n\n"
-        "The release train closes this card itself on the next verified tag."
+        "The release train closes this card itself on the next verified tag, "
+        "and a tag cut by hand closes it too: the next lap that reads the "
+        "surface current at a tag containing this commit closes it."
     )
 
 
-def last_line(card: dict) -> str | None:
-    """The newest deferred line the card records, read off its description
-    and its comments (oldest to newest) in the one form this module writes."""
+def _last(card: dict, mark: str) -> str | None:
     found = None
     texts = [card.get("description") or ""]
     texts += [n.get("body") or "" for n in linear_ops.window_nodes(card.get("comments"))]
     for text in texts:
         for row in text.splitlines():
-            if row.startswith(LINE_MARK):
-                found = row[len(LINE_MARK):]
+            if row.startswith(mark):
+                found = row[len(mark):]
     return found
+
+
+def last_line(card: dict) -> str | None:
+    """The newest deferred line the card records, read off its description
+    and its comments (oldest to newest) in the one form this module writes."""
+    return _last(card, LINE_MARK)
+
+
+def last_commit(card: dict) -> str | None:
+    """The newest commit the card records, read the same way: the one the
+    deferral was last made at."""
+    found = _last(card, COMMIT_MARK)
+    if found is None:
+        return None
+    return found.strip() or None
 
 
 def surface_card(repo: str) -> dict | None:
@@ -264,13 +297,24 @@ def file_deferral(*, repo: str, surface: str, line: str, sha: str, url: str,
         f'title "{named}" — labels {", ".join(labels)}')
 
 
-def close_deferral(*, repo: str, surface: str, tag: str, out=print) -> None:
+def close_deferral(*, repo: str, surface: str, tag: str, out=print,
+                   released=None) -> None:
     """The surface cut a verified tag: close the open card, wherever it sits.
-    With none open, nothing is written — the read is made all the same."""
+    With none open, nothing is written — the read is made all the same.
+
+    `released(commit)` is a `current` lap's (DRE-7900): given, the card is
+    closed only when it answers true for the newest commit the card records,
+    and otherwise left open with one line saying so."""
     found = _open_cards(repo, surface, out)
     if found is None:
         return
     ident = found["identifier"]
+    if released is not None:
+        commit = last_commit(found)
+        if commit is None or not released(commit):
+            out(f"{TAG}: card {ident} left open — {tag} does not contain "
+                f"{commit[:7] if commit else 'a recorded commit'}")
+            return
     failed = linear_ops.cmd_comment(ident, f"Released as {tag}")
     if failed:
         raise linear_ops.LinearError(f"{ident} took no comment: {failed}")
@@ -327,13 +371,32 @@ def _deferred(decision, *, repo, surface, sha, warning, step_summary, out, env):
         out(f"{TAG}: card not filed — {why}")
 
 
-def _released(decision, *, repo, surface, warning, out):
+def report_current(decision, *, repo: str, surface: str, tag, released,
+                   warning, out=print) -> None:
+    """The plan's one call for a surface it decided (DRE-7900). Never raises.
+
+    Only a `current` lap with a tag reads anything: one `find_open_prefix`,
+    the read `close_deferral` makes, and no write unless a card is open and
+    `released(commit)` — the surface's newest `tag` contains the newest
+    commit the card records — is true. Every other decision returns at once."""
+    try:
+        if decision.code == CURRENT_CODE and tag:
+            _released(decision, repo=repo, surface=surface, warning=warning,
+                      out=out, tag=tag, released=released)
+    except Exception as error:  # noqa: BLE001 — a notice never fails a run
+        out(f"{TAG}: [{surface}] WARNING the deferral notice failed "
+            f"({_why(error)}) — the decision itself is unaffected")
+
+
+def _released(decision, *, repo, surface, warning, out, tag=None,
+              released=None):
     key = repo_key(repo)
     if key is None:
         # No card can exist for a repository the map does not name.
         return
     try:
-        close_deferral(repo=key, surface=surface, tag=decision.tag, out=out)
+        close_deferral(repo=key, surface=surface, tag=tag or decision.tag,
+                       out=out, released=released)
     except Exception as error:  # noqa: BLE001 — the surface is already live
         why = _why(error)
         warning(f"{WARNING_TITLE} card not closed", why, out=out)

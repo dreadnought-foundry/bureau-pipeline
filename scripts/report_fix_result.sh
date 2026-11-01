@@ -57,8 +57,11 @@ set -e
 #    - Refutation: the agent answered the finding with evidence. The
 #      first one on this head posts `fix-finding-refuted`, then
 #      dispatches the critic once more on DISPATCH_TOKEN (pr-review.yml
-#      in this repo, qa-review.yml elsewhere). If the dispatch fails, the
-#      card is parked. A second one on the same head posts
+#      in this repo, qa-review.yml elsewhere). If the dispatch fails, it
+#      posts `fix-attempt-disputed` naming `actions: write` and the stub
+#      that grants it, deletes the `fix-finding-refuted` comment by the id
+#      its post printed (a refused delete is a warning), and parks the
+#      card. A second one on the same head, the hold's included, posts
 #      `fix-attempt-disputed` with both quoted and parks the card.
 #    - Blocker: the agent stopped and pushed nothing. `fix_exit.py cause`
 #      reads the thread and the head's check runs for the one cause, and
@@ -202,6 +205,13 @@ set -e
 #   workflow's own token, because the App token holds no Actions
 #   permission (DRE-1254). A stub without `actions: write` 403s, and the
 #   card is parked rather than promised a re-review that will not run.
+#   Since DRE-3576 (2026-10-25) the PR is not left promising it either:
+#   on agent-bureau PR #2433 (2026-09-10) the receipt still said
+#   `state: dispatched` after the 403, and the console read it as a
+#   recovery in flight. A refused dispatch posts `fix-attempt-disputed`
+#   first and then deletes the receipt, so the thread is never without
+#   one. The hold keeps `refuted-finding @<sha8>`, so the review a person
+#   starts is the commit's one re-review and reads the evidence.
 # 2026-09-15, DRE-3951, DRE-3484. The handoff is keyed to (repo, PR,
 #   head). The agent used to write fixed paths under /tmp, which any
 #   earlier run could leave behind. What cannot be proved to be this
@@ -553,7 +563,8 @@ A person decides which reading is right.
 
 $FORMAT"
   fi
-  REFUTED_BODY="🛑 Fix attempt $ATTEMPT refuted the finding: $REFUTATION
+  REFUTED_OPENING="🛑 Fix attempt $ATTEMPT refuted the finding: $REFUTATION"
+  REFUTED_BODY="$REFUTED_OPENING
 
 $REFUTED_TAIL
 
@@ -565,10 +576,18 @@ $REFUTE_KEY"
     # Posted before the dispatch: the re-review reads it off the thread.
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted.md
     gh pr comment "$PR" --repo $REPO \
-      --body-file /tmp/act-fix-refuted.md
+      --body-file /tmp/act-fix-refuted.md > /tmp/act-fix-refuted.url
+    REFUTED_URL=$(cat /tmp/act-fix-refuted.url)
+    printf '%s\n' "$REFUTED_URL"
+    # Its id, so a refused dispatch can take the promise back (DRE-3576).
+    REFUTED_ID=$(printf '%s\n' "$REFUTED_URL" | sed -n 's/.*#issuecomment-\([0-9][0-9]*\).*/\1/p' | tail -1)
     # pr-review.yml in this repo, where qa-review.yml cannot be dispatched (DRE-2056).
     REVIEW_WF=qa-review.yml
-    [ "$REPO" = "dreadnought-foundry/bureau-pipeline" ] && REVIEW_WF=pr-review.yml
+    FIX_STUB=.github/workflows/agent-fix.yml
+    if [ "$REPO" = "dreadnought-foundry/bureau-pipeline" ]; then
+      REVIEW_WF=pr-review.yml
+      FIX_STUB=.github/workflows/self-agent-fix.yml
+    fi
     # The workflow's own token: the App token holds no Actions permission (DRE-1254).
     if GH_TOKEN="$DISPATCH_TOKEN" gh workflow run "$REVIEW_WF" \
          --repo "$REPO" \
@@ -579,6 +598,31 @@ $REFUTE_KEY"
       fi
     else
       echo "::warning::could not dispatch $REVIEW_WF for PR #$PR — this repo's agent-fix stub needs \`actions: write\`; parking for a human instead of promising a re-review that will not run"
+      # The receipt above promised a second look nobody will take. A hold
+      # replaces it: the hold first, so the thread is never without a
+      # receipt, then the delete (DRE-3576). The hold keeps the per-commit
+      # key, so the review a person starts is this commit's one re-review.
+      HOLD_BODY="$REFUTED_OPENING
+
+Nothing was pushed. The pipeline could not start the reviewer's second look at this commit, because GitHub refused the dispatch of the review workflow ($REVIEW_WF). That dispatch rides the workflow's own token, which needs the \`actions: write\` permission granted by $FIX_STUB in this repo.
+
+A person decides which reading is right.
+
+$FORMAT
+
+$REFUTE_KEY"
+      python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+        --body "$HOLD_BODY" --out /tmp/act-fix-refuted-hold.md \
+        || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refuted-hold.md
+      printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-hold.md
+      gh pr comment "$PR" --repo $REPO \
+        --body-file /tmp/act-fix-refuted-hold.md
+      # The same delete scripts/gate_note.py makes.
+      if [ -z "$REFUTED_ID" ]; then
+        echo "::warning::could not read the id of the fix-finding-refuted comment on PR #$PR ($REFUTED_URL) — it stays on the thread, under the hold"
+      elif ! gh api --method DELETE "repos/$REPO/issues/comments/$REFUTED_ID"; then
+        echo "::warning::could not delete the fix-finding-refuted comment $REFUTED_ID on PR #$PR — it stays on the thread, under the hold"
+      fi
       if [ -n "$CARD" ]; then
         python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
           "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look by itself. This needs your look. Details on PR #$PR. Move it to **$START_LANE** to retry or to **$QUEUE_LANE** to drop it." || true

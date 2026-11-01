@@ -45,8 +45,7 @@ RULE = (
     "AWS session lives `PROOF_SESSION_SECONDS` seconds.",
     "Make every GitHub read, and the one refused write, before anything that "
     "waits; a push made after the first hour is refused, so commit the record "
-    "on the branch and leave the push and the pull request to the workflow's "
-    "push-rescue step.",
+    "on the branch and leave the push to the workflow's push-rescue step.",
     "Before a hold or any other wait, add up the wait, the window the card "
     "reads after it and the reads themselves; if that ends after the AWS "
     "session does, make the hold anyway, write each window's start and end in "

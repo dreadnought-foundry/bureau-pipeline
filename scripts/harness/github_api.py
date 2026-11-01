@@ -901,6 +901,24 @@ class GitHub:
     def close_pr(self, repo, number: int) -> None:
         self.request("PATCH", f"/repos/{repo}/pulls/{number}", {"state": "closed"})
 
+    def reopen_pr(self, repo, number: int) -> None:
+        """Reopen a closed PR (DRE-7957). GitHub refuses (422) a merged PR,
+        and one whose head branch is gone until the branch is back."""
+        self.request("PATCH", f"/repos/{repo}/pulls/{number}", {"state": "open"})
+
+    def update_pr_body(self, repo, number: int, body: str) -> None:
+        self.request("PATCH", f"/repos/{repo}/pulls/{number}", {"body": body})
+
+    def add_labels(self, repo, number: int, labels: list[str]) -> None:
+        """Add labels to a PR (the issues endpoint — a PR is an issue).
+        Additive: labels already on it stay, and a label the repo does not
+        have yet is created."""
+        self.request(
+            "POST",
+            f"/repos/{repo}/issues/{number}/labels",
+            {"labels": list(labels)},
+        )
+
     def list_pr_commits(self, repo, number: int) -> list[dict]:
         """The PR's commit list — carries Dependabot's machine-readable
         update-type trailer (the semver signal merge_gate condition D reads)."""

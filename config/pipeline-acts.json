@@ -242,7 +242,7 @@
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: nothing is dispatched at a branch with no pull request, and scripts/reconcile.py declares no bound on when somebody opens one.",
+      "cadence_why": "Null: scripts/reconcile.py raises this watchdog, and the bound on when somebody opens the pull request for work with none is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
       "why": "CI, the critic, the merge gate and the Linear sync all key off a pull request; a branch on its own passes through no gate at all and closes no card. Keyed on the branch rather than the card, so a second branch that strands the same way still speaks.",
       "emits": {
         "file": "scripts/reconcile.py",
@@ -586,7 +586,7 @@
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the hold waits on an observation only a person can make, and scripts/linear_ops.py declares no bound on when they are able to make it.",
+      "cadence_why": "Null: scripts/linear_ops.py writes the hold, and the bound on it — when the proof dispatcher chases it once and when it is late — is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
       "why": "DRE-3275. A proof answers 'did it work', observed against real state (standards/card-quality.md), and some proofs cannot start: DRE-3135 needed a failing agent pull request in a console repo to EXIST before anyone could watch the pipeline handle it. That hold was typed by hand on 2026-09-06 as ordinary prose, so nothing read it — the card looked silent, and a silent card is what every backstop here is built to notice. With the row, `linear_ops.py proof-waiting` composes the line through the one receipt writer and the console's receipts.py renders `Waiting for proof — <reason>`. It discharges NOTHING: a hold is the start of an obligation, not the end of one. What ends it is `🔬 proof-observed: <what was observed>` — a plain comment, deliberately NOT a row of its own, the way a critic verdict ends a re-dispatch without being an act. Giving the discharge a row would put this act's live key on the comment that discharges it, and the next reader would find a fresh hold where the observation is; it is declared in `unconverted` as the record it is. The subscriber is the sweep, which is what reads a hold on a card and leaves it alone; the reader that renders it is the console, and resolving subscribers against real workflows is DRE-2827. The two halves are refused when they carry `budget exhausted` or `holding for a human`, because the console's enrich.HOLD_MARKERS reads either phrase as a fix-budget hold and would render this card as the wrong kind of stuck.",
       "emits": {
         "file": "scripts/linear_ops.py",
@@ -1054,8 +1054,8 @@
       "discharges": null,
       "subscriber": "plan.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the wait ends when every formal blocker of the epic is terminal, and scripts/reconcile.py declares no bound on when that happens — a blocker is built and proved at its own pace — so there is no bound on the wait to read as stuck.",
-      "why": "DRE-6651. DRE-6589 reached Planning blocked by DRE-6587, In Progress, and the planner could only ask the CEO \"wait, or plan now?\" — a question the board already answered. `planning_route.py decide` reads an epic's formal `blocks` relations, its children and its lane history, and writes `wait=true` when a blocker is not in `prose_blockers.TERMINAL`, it has no children and its history never moves it to In Progress (its green light); any read that fails writes `wait=false`. `plan.yml`'s `Epic waits on its blocker — Queued, no planner` step posts this receipt, `⏸️ epic-waits: …`, then moves the epic to Queued, and `Route — plan or activate` is skipped on `wait`, so no planner, no attempt boundary, no heartbeat and no critic follow. A HOLD: the auto-advance in `reconcile.py` returns the epic to Planning once every blocker is terminal (DRE-6653). The console learned the tag first (DRE-6672). It discharges nothing.",
+      "cadence_why": "Null: the wait ends when no formal blocker of the epic still holds under the sweep's strict rule — each is Done, an In Progress epic that is built out, or the proof of an epic that is Done or built out — and scripts/reconcile.py declares no bound on when that happens — a blocker is built and proved at its own pace — so there is no bound on the wait to read as stuck.",
+      "why": "DRE-6651. DRE-6589 reached Planning blocked by DRE-6587, In Progress, and the planner could only ask the CEO \"wait, or plan now?\" — a question the board already answered. `planning_route.py decide` reads an epic's formal `blocks` relations, its children and its lane history, and writes `wait=true` when it has no children, its history never moves it to In Progress (its green light) and a blocker still holds under the sweep's strict rule, `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`, asked of the helpers it is built from (DRE-7962): a blocker that is Done, an In Progress epic that is built out, or the proof of an epic that is Done or built out does not hold. A failed read of the epic's relations, children or history writes `wait=false`; a failed built-out check or title-and-parent read of a blocker holds that blocker, as the sweep does. `plan.yml`'s `Epic waits on its blocker — Queued, no planner` step posts this receipt, `⏸️ epic-waits: …`, then moves the epic to Queued, and `Route — plan or activate` is skipped on `wait`, so no planner, no attempt boundary, no heartbeat and no critic follow. A HOLD: the auto-advance in `reconcile.py` returns the epic to Planning once no blocker holds under that same rule (DRE-6653, DRE-7831), so the epic it returns is planned, not parked again. The console learned the tag first (DRE-6672). It discharges nothing.",
       "emits": {
         "file": ".github/workflows/plan.yml",
         "anchor": "\"$EPIC\" \"$WAITS\" --act=epic-waits-on-blocker"
@@ -1145,7 +1145,7 @@
       "subscriber": "reconcile.yml",
       "cadence_s": 7200,
       "cadence_why": "The dispatched proof run's own bound: .github/workflows/proof-task.yml gives its proof job timeout-minutes: 120.",
-      "why": "DRE-5926. A PROOF card routes OPERATOR and waits in Hand-work, which the sweep's nudge loop never reads, so on 2026-10-05 thirteen of the seventeen epics counted against the epic cap were waiting on a person to start a proof. The sweep's `Dispatch proof runs` step (scripts/proof_dispatch.py, its own process after the Sweep step, full passes only, and only in a repo carrying a proof-run stub) fires `plan_run.PROOF_EVENT` and posts this receipt ONLY on a confirmed dispatch: `🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)`. The tag is a live key: `proof_run_state.reading` (DRE-5922) anchors on the newest receipt to say whether the run is running, never started, dead or finished, and counts the first-run budget off the receipts whose reason opens `first proof run` or `second dispatch` — two at most. The count phrases are `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through this same composer), `timed re-run <n> of 2` (DRE-7316: a re-run the dispatcher's own lift of a time-only hold started, on a budget of its own), `after the CEO's answer` and `re-armed` (DRE-7740): two re-runs per record pull request, then one more per re-arm event — a card the record names by `fix:` shipped, or a new `🔬 proof-observed` — and never another without one. `re-armed` does not open `re-run`, so it spends none of that budget. Nothing is discharged: the run it starts reports through its own heartbeats and the record's pull request. Until the repository variable PROOF_DISPATCH_LIVE is exactly `true` the phase prints `would:` lines and posts none of these.",
+      "why": "DRE-5926. A PROOF card routes OPERATOR and waits in Hand-work, which the sweep's nudge loop never reads, so on 2026-10-05 thirteen of the seventeen epics counted against the epic cap were waiting on a person to start a proof. The sweep's `Dispatch proof runs` step (scripts/proof_dispatch.py, its own process after the Sweep step, full passes only, and only in a repo carrying a proof-run stub) fires `plan_run.PROOF_EVENT` and posts this receipt ONLY on a confirmed dispatch: `🔬 proof-run: dispatched a proof run at <PT time> — <reason> (<count>)`. The tag is a live key: `proof_run_state.reading` (DRE-5922) anchors on the newest receipt to say whether the run is running, never started, dead or finished, and counts the first-run budget off the receipts whose reason opens `first proof run` or `second dispatch` — two at most. The count phrases are `dispatch <n> of 2`, `re-run <n> of 2` (DRE-5931, through this same composer), `timed re-run <n> of 2` (DRE-7316: a re-run the dispatcher's own lift of a time-only hold started, on a budget of its own), `after the CEO's answer`, `re-armed` (DRE-7740): two re-runs per record pull request, then one more per re-arm event — a card the record names by `fix:` shipped, or a new `🔬 proof-observed` — and never another without one. `re-armed` does not open `re-run`, so it spends none of that budget. And `re-check` (DRE-7951): the run the dispatcher's lift of a waiting hold starts when the record's waiting rows were not all stamped, one per record head, spending neither budget, three per record pull request and then one hold for the operator. Nothing is discharged: the run it starts reports through its own heartbeats and the record's pull request. Until the repository variable PROOF_DISPATCH_LIVE is exactly `true` the phase prints `would:` lines and posts none of these.",
       "emits": {
         "file": "scripts/proof_dispatch.py",
         "anchor": "pipeline_act.receipt(\"proof-run-dispatched\""
@@ -1185,6 +1185,24 @@
       "emits": {
         "file": "scripts/repo_held_epics.py",
         "anchor": "builds nothing — its WIP cap is 0."
+      }
+    },
+    {
+      "name": "proof-gap-filed",
+      "tag": "proof-gap-card",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A PROOF card whose approved, merged record has every unmet row a gap — a `Not observed. cause: <word> — …` row naming one of the four cause words, or a `Not met. history: …` row — closed, and its gaps were filed as ONE fix card in Intake: parentless, labeled `repo:<the PROOF's repo>`, one line per row with its criterion, its kind, the record's cell and the kind of fix. The same filer files the fix card for a spent re-run budget on a build that fails its rows, worded as a defect in the build.",
+      "state": "unchanged",
+      "next_actor": "groomer.py",
+      "discharges": null,
+      "subscriber": "groomer.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the fix card waits in Intake for scripts/groomer.py to propose it in a batch and the CEO to approve that batch in Green Light, and nothing declares a bound on when that happens — the same null every act that hands work to a person's approval carries.",
+      "why": "DRE-7952 (epic DRE-7944). A record whose unmet rows all carried a cause word or read history never closed: `proof_record.shortfall` held the merge gate (condition P) and the PROOF close on rows a re-run reads the same again, and the dispatcher put them to the operator once, whose only useful answer was to reword the row on a new card. `proof_record.all_unmet_gaps` now passes such a record, and the PROOF close (`linear_ops.merge_close_ruling`, asked by card-done and the reconcile backstop) calls `proof_gap.file_fix_card` before the card moves. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🩹 proof-gap-card:` on the PROOF card names the card's one fix card, so a second close reads it and files nothing; a comment of that shape from anyone else counts for nothing. A receipt that failed to post after the create is caught by the title: an open card with exactly that title is reused and receipted. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/proof_gap.py",
+        "anchor": "pipeline_act.receipt(ACT,"
       }
     },
     {
@@ -1240,7 +1258,7 @@
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the alarm names a card a person must pick up, and scripts/reconcile.py declares no bound on how long the operator takes — the same null work-never-landed, the sweep's other alarm on a person's card, carries.",
+      "cadence_why": "Null: scripts/reconcile.py raises this alarm as the chase of a person's card waiting in Hand-work, and the bound after which that card is late is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
       "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes.",
       "emits": {
         "file": "scripts/reconcile.py",
@@ -1593,6 +1611,13 @@
       "why": "Nothing moved and nothing was recovered, so there is no state change for a trailer to announce. The batch is exactly as the CEO left it and the reason sits in the thread beside the approval it refused, which is where the person who wrote that approval reads it. One writer at the one place every refusal passes through, so a refusal cannot arrive in a shape the console does not read."
     },
     {
+      "file": "scripts/groom_scorecard.py",
+      "anchor": "lops.cmd_comment(card, body)",
+      "kind": "not-an-act",
+      "means": "The groomer's week counted, on the standing groom card in one comment: the cards the week's answered proposals put in front of a person, the ones that person removed by reason, and what became of every Cancel row, with a fenced JSON block a reader parses (DRE-7970).",
+      "why": "A scorecard is a count of decisions people already made, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `📊 groom-scorecard: <start>..<end>`, which no decision reader matches. One call site, once per week."
+    },
+    {
       "file": "scripts/linear_ops.py",
       "anchor": "agent_marker.actor_line(role)",
       "kind": "not-an-act",
@@ -1810,6 +1835,13 @@
       "why": "Act-shaped, and the registry has no row for it — the same debt as `reconcile.stall_park_note` above, whose note and tag it shares: it opens with `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry. Giving either park a row is a REGISTRY change and its own card; converting this one alone would split two notes that read the same key into two shapes."
     },
     {
+      "file": "scripts/planning_escalation.py",
+      "anchor": "housekeeping_note(",
+      "kind": "undeclared-act",
+      "means": "A planner question that failed the screen — it named no decision, offered other than two or three options, or said it was not a decision — is parked in Triage for the operator, the note landing first and naming the rule broken and the way back, never in the CEO's Green Light (DRE-7961).",
+      "why": "Act-shaped, and the registry has no row for it — the same debt as `unread_park_note` above, whose tag and lane it shares: it opens with `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry. Giving the parks a row is a REGISTRY change and its own card; converting this one alone would split notes that read the same key into two shapes."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "🏁 Epic complete",
       "kind": "undeclared-act",
@@ -2006,8 +2038,8 @@
       "anchor": "🙋 The fix agent answered the reviewer's finding with evidence, but the pipeline could not start the second look",
       "step": "Report",
       "kind": "undeclared-act",
-      "means": "The re-review dispatch was refused (the repo's agent-fix stub lacks `actions: write`), so the refutation parks for a human instead of promising a look nobody will take.",
-      "why": "The degrade path of `fix-finding-refuted`, and deliberately NOT that act: the act's state is `dispatched` and here nothing was. Giving the failure its own row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber — not an emission change. Named here so the debt is countable, and it is expected to be empty in practice: it fires only in a repo whose stub has not been updated, which the README's 'The agent-fix stub's actions: write' section exists to prevent."
+      "means": "The card-side half of `fix-attempt-disputed` on a refused re-review dispatch: GitHub refused the second look (a stub without `actions: write`, a network error, a disabled workflow), so the PR's dispatched receipt is replaced by that hold and the card goes to a person (DRE-3576).",
+      "why": "The CARD-SIDE half of `fix-attempt-disputed`, which this branch composes on the PR side just above it and keeps the `refuted-finding @<sha8>` key in — the registry pins ONE `emits` site per act and that act's card half is already named here for the ordinary dispute. Reusing the act asks the console for nothing new; a row of its own would need a tag of its own, which agent-bureau's console would have to learn first. Two card wordings for one act is a wording question, not a registry one; admitting either as a second `emits` surface is the registry change this row defers."
     },
     {
       "file": ".github/workflows/agent-fix.yml",
@@ -2239,6 +2271,22 @@
       "kind": "not-an-act",
       "means": "The proof run produced no record and asked nothing; the dispatcher reads the run off the card and decides whether to dispatch again (DRE-5924, DRE-5926).",
       "why": "A REPORT about the run, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the card stays in Hand-work, and the dispatcher's second-dispatch rule (DRE-5926) is the only thing that acts on a dead proof run. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
+    },
+    {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "🤖 proof run ended with its record unchanged",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof run's record pull request is open but the run left its record file byte for byte as it found it, so it took no reading; the dispatcher reads the run off the card and decides whether to dispatch again, and the run is red (DRE-8259).",
+      "why": "A REPORT about the run, the no-record receipt's sibling, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane — the In Review move a record makes is the one thing it withholds. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
+    },
+    {
+      "file": ".github/workflows/proof-task.yml",
+      "anchor": "$RECORD_HELD_RECEIPT Run:",
+      "step": "Report proof result to Linear",
+      "kind": "not-an-act",
+      "means": "The proof run left its record on its branch with no pull request, because `proof_record_pr.decide` held it (RECORD_PR_DECISION `held` or `closed-and-held`); the card keeps its lane, and its 🔬 proof-waiting hold says what it waits on (DRE-8461).",
+      "why": "A REPORT about the run, the no-record receipt's sibling, not something the pipeline did on its own. It requeues nothing, parks nothing and moves no lane; the hold that creates the obligation is the 🔬 proof-waiting comment `decide` already posted, which has its own row. The three questions a trailer answers all read 'not applicable'. It is deliberately never tagged as the dispatcher's own receipt, because DRE-5922 counts those as dispatches."
     },
     {
       "file": ".github/workflows/groomer.yml",
@@ -3040,6 +3088,13 @@
       "why": "A notice, not an act: it changes nothing — the note still discharges nothing, the hold still holds, and no lane or label is written — and hands the work to nobody new; it tells the person who wrote the note, on the card where they wrote it, that it was not read. It must NOT compose: the only trailer that would fit is the hold's, and `proof-waiting` is a live key the console reads, so stamping it here would show a fresh hold where a reply is. It is found again by its whole first line, so a later pass never posts it twice."
     },
     {
+      "file": "scripts/proof_dispatch.py",
+      "anchor": "linear_ops.cmd_comment(ident, told)",
+      "kind": "not-an-act",
+      "means": "A Hand-work PROOF card the proof dispatcher cannot time is told so once in plain words (DRE-8439): its `Observe after:` line does not parse (`MALFORMED_COMMENT`, quoting the line, then the five forms), or the merge time of a build card the line's time is worked out from cannot be read (`RELEASE_UNREAD_COMMENT`, naming those cards). The card is refused on every pass until it reads. The same call tells a PROOF card whose record pull request was closed that its record branch gives no record (DRE-8440): `BRANCH_GONE_COMMENT`, naming the branch and whether it is gone or its head carries no record file, then that the hold still stands and the held-proof alarm reports it.",
+      "why": "A notice, not an act: it changes nothing — no lane, no label, no hold, and no run is started — and hands the work to nobody new; it tells whoever reads the card why its proof has not started. It must NOT compose `proof-waiting`, the live key the console reads: there is nothing a pass can lift, so a hold there would show a wait that never ends by itself. It is found again by its whole first line, so it is posted once per malformed text, set of unreadable cards, or branch state — a branch lost again at a new head is told once more."
+    },
+    {
       "file": "scripts/release_deferral.py",
       "anchor": "The reason changed.",
       "kind": "not-an-act",
@@ -3050,7 +3105,7 @@
       "file": "scripts/release_deferral.py",
       "anchor": "f\"Released as {tag}\"",
       "kind": "not-an-act",
-      "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235).",
+      "means": "The surface cut a verified tag, so the open deferred-release card is closed Done under `Released as <tag>` (DRE-5235) — or a plan lap read the surface current at a newest tag containing the commit the card records, a tag cut by hand, and closes it under the same comment (DRE-7900).",
       "why": "Part of the deferral card's own record, not an act: the release it names already has its own receipt, the train's decision line and record. The comment says why the notice card left Green Light, for the person it was filed for; nothing downstream reads it, and its wording is the card's acceptance criterion, pinned by tests/test_release_deferral.py."
     },
     {

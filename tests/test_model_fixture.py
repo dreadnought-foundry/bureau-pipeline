@@ -35,7 +35,6 @@ import model_fixture  # noqa: E402
 from model_fixture import (  # noqa: E402
     FIXTURE_DIR,
     FIXTURE_NAME,
-    FixtureStale,
     fixture_config,
     fixture_home,
     fixture_module,
@@ -51,11 +50,6 @@ from model_fixture import (  # noqa: E402
 )
 
 README = FIXTURE_DIR / "README.md"
-STALE_SENTENCE = (
-    "the frozen model fixture no longer regenerates under today's code — "
-    "re-freeze it in this pull request "
-    "(tests/fixtures/model-config-frozen/README.md, the refresh rule)"
-)
 
 
 def _ids(rungs) -> list[str]:
@@ -95,9 +89,9 @@ def test_the_readme_carries_both_rules():
     assert "tested against this frozen copy" in text
     assert "never from a literal" in text
     assert "No test asserts a choice the console can change" in text
-    # Rule 2: the refresh rule, in the words a stale fixture says.
+    # Rule 2: the refresh rule.
     assert "the refresh rule" in text
-    assert "re-freeze it in this pull request" in README.read_text()
+    assert "re-freezes the fixture in the same pull request" in text
     assert "needs no re-freeze" in text
 
 
@@ -107,53 +101,80 @@ def test_the_readme_carries_the_rule_for_documents():
     assert ("proved against the frozen document or a document built in the test"
             in text)
     assert "never compared with what `render-defaults` prints now" in text
-    # The refresh rule for the document: re-rendered inside a fixture tree.
+    # The refresh rule for the document: rewritten from the frozen files.
     assert "when `render-defaults` changes shape" in text
-    assert "inside a tree `fixture_tree` builds" in text
+    assert "rewritten by hand from the frozen files" in text
 
 
-def test_the_readme_says_how_a_tree_is_built_and_whom_the_default_serves():
+def test_the_readme_says_a_tree_is_copied_and_never_regenerated():
     text = " ".join(README.read_text().split())
     # The rule for documents, and the rule for the committed files.
-    assert "proved on a document, in a tree built with `regenerate=False`" in text
+    assert "proved on a document, in a tree `fixture_tree` copies" in text
     assert "checks only what must hold for any saved state" in text
-    # What the default still does, for which tests, and until when.
-    assert "`fixture_tree`'s default still regenerates the literal" in text
-    for name in ("tests/test_model_config_change.py", "tests/console_change_walk.py",
-                 "tests/test_console_*_keeps_the_suite_green.py",
-                 "tests/test_model_config.py", "tests/test_model_choices.py",
-                 "tests/test_model_caution.py"):
-        assert name in text, name
-    assert "until part 3 removes both" in text
+    # No generator is left to serve: a tree is copied, never regenerated.
+    assert "A tree is copied and never regenerated" in text
+    assert "`regenerate=True` raises `ValueError`" in text
+    assert "until part 3 removes both" not in text
 
 
 def test_the_frozen_config_is_after_session_agents_landed():
     assert "session_agents" in fixture_config()
 
 
+# The keys that left `config/models.yaml` (DRE-6983).
+CHOICE_KEYS = ("kinds", "ladders", "default_ladder", "agents", "ungrouped", "projects")
+
+
+def test_the_frozen_files_carry_no_choice_and_no_generated_region():
+    cfg = fixture_config()
+    for key in CHOICE_KEYS:
+        assert key not in cfg, key
+    for line in (FIXTURE_DIR / "agents.yaml").read_text().splitlines():
+        assert "BEGIN generated" not in line, line
+        if not line.lstrip().startswith("#"):
+            assert not re.match(r"^\s*(?:-\s+)?(model|kind)\s*:", line), line
+    assert "BEGIN generated" not in fixture_text()
+
+
+def test_the_readme_names_the_refreeze_and_the_documents_own_date():
+    """`models.yaml` and `agents.yaml` were re-frozen with no choice
+    (DRE-6983); `home.json` keeps the choices frozen on 2026-10-11."""
+    text = README.read_text()
+    commit = re.search(r"^- commit: `([0-9a-f]{40})`", text, re.M).group(1)
+    date = re.search(r"^- date: (\d{4}-\d{2}-\d{2})", text, re.M).group(1)
+    choices = re.search(r"^- choices commit: `([0-9a-f]{40})`", text, re.M).group(1)
+    choices_date = re.search(r"^- choices date: (\d{4}-\d{2}-\d{2})", text, re.M).group(1)
+    assert choices == "1652714673c14b5af0ffcaf85abe390ef6664abe"
+    assert choices_date == "2026-10-11"
+    assert commit != choices
+    assert date > choices_date
+
+
 # --------------------------------------------------------------------------- #
 # 1b. The frozen home document                                                 #
 # --------------------------------------------------------------------------- #
 
-def test_the_frozen_document_is_the_frozen_files_written_as_a_home():
-    """Compared with the frozen files alone, `written_at` and `written_by` set
-    aside: neither the live config nor the live defaults in the code enters
-    it, so a legitimate save cannot turn it red."""
+def test_the_frozen_document_holds_the_frozen_choices_and_the_files_none():
+    """The frozen choices are `home.json`'s alone (DRE-6983): the three groups,
+    each with its label, purpose and models, the agents and the projects —
+    and the frozen `models.yaml` carries none of them to disagree with. No
+    live config and no live default enters either, so a legitimate save
+    cannot turn this red."""
     doc, cfg = fixture_home(), fixture_config()
     for kind in ("workhorse", "advisory", "judgement"):
         group = doc["groups"][kind]
-        assert group["models"] == ladder(cfg, kind), kind
-        assert group["label"] == cfg["kinds"][kind]["label"], kind
-        assert group["purpose"] == cfg["kinds"][kind]["purpose"], kind
-    assert doc["agents"] == cfg["agents"]
-    assert doc["projects"] == cfg["projects"]
+        assert ladder(doc, kind), kind
+        assert group["label"] and group["purpose"], kind
+    assert doc["agents"] and isinstance(doc["projects"], dict)
     assert doc["added_agents"] == {}
+    for key in CHOICE_KEYS:
+        assert key not in cfg, key
 
 
-def test_the_frozen_document_is_written_by_the_operator_on_the_freeze_date():
+def test_the_frozen_document_is_written_by_the_operator_on_the_choices_date():
     doc = fixture_home()
     assert doc["written_by"] == "operator"
-    date = re.search(r"- date: (\d{4}-\d{2}-\d{2})", README.read_text()).group(1)
+    date = re.search(r"- choices date: (\d{4}-\d{2}-\d{2})", README.read_text()).group(1)
     assert doc["written_at"].startswith(date)
 
 
@@ -186,15 +207,16 @@ def test_the_readers_read_the_fixture_not_the_repo():
     assert fixture_prices() == prices["prices"]
 
 
-def test_ladder_is_the_rung_ids_of_a_kinds_ladder():
+def test_ladder_reads_only_a_document():
+    """The old file's shape — a kind naming a ladder of rungs — is not read:
+    the choices left `models.yaml` (DRE-6983), so there is nothing of that
+    shape left to read."""
     cfg = {
         "kinds": {"builders": {"ladder": "build"}},
         "ladders": {"build": [{"model": "m-1", "reason": "x"}, "m-2"]},
     }
-    assert ladder(cfg, "builders") == ["m-1", "m-2"]
-    cfg = fixture_config()
-    for kind, spec in cfg["kinds"].items():
-        assert ladder(cfg, kind) == _ids(cfg["ladders"][spec["ladder"]])
+    with pytest.raises(KeyError):
+        ladder(cfg, "builders")
 
 
 def test_ladder_answers_a_document_from_its_groups():
@@ -203,10 +225,10 @@ def test_ladder_answers_a_document_from_its_groups():
     assert ladder(doc, "workhorse") == ["m-1", "m-2"]
 
 
-def test_ladder_answers_the_same_list_for_the_frozen_document_and_config():
-    doc, cfg = fixture_home(), fixture_config()
-    for kind in cfg["kinds"]:
-        assert ladder(doc, kind) == ladder(cfg, kind), kind
+def test_ladder_answers_each_group_of_the_frozen_document():
+    doc = fixture_home()
+    for kind, group in doc["groups"].items():
+        assert ladder(doc, kind) == group["models"], kind
     # Not the same list everywhere: the document's own models are answered.
     assert ladder(doc, "workhorse") != ladder(doc, "advisory")
 
@@ -277,14 +299,8 @@ def test_the_tree_holds_todays_code_and_the_frozen_files(tree):
         assert (tree / "config" / name).read_bytes() == (FIXTURE_DIR / name).read_bytes()
     assert (tree / "config" / "repo-map.json").read_bytes() == (
         ROOT / "config" / "repo-map.json").read_bytes()
-    assert (tree / "config" / "model-choices.json").is_file()
-
-
-def test_the_tree_is_in_sync(tree):
-    proc = subprocess.run(
-        [sys.executable, "scripts/sync_model_config.py", "--check"],
-        cwd=tree, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
+    # No generator is left to write anything into it (DRE-6982).
+    assert not (tree / "scripts" / f"{OLD_ROUTE[0]}.py").exists()
 
 
 def test_the_tree_passes_the_policy(tree):
@@ -300,9 +316,10 @@ def test_the_module_runs_on_the_fixture_and_leaves_the_repo_module_alone(tree):
     mf = fixture_module(tree)
     assert Path(mf.__file__).resolve().parent == (tree / "scripts").resolve()
     assert mf is not repo_mf
-    cfg = fixture_config()
-    assert mf.CONFIG["ladders"] == {
-        name: _ids(rungs) for name, rungs in cfg["ladders"].items()}
+    # With no home read, its choices are the tree's own defaults in the code,
+    # and its code-side facts are the frozen file's.
+    assert mf.CONFIG["ladders"] == mf.code_defaults()["ladders"]
+    assert mf.CONFIG["excluded"] == mf._normalize_config(fixture_config())["excluded"]
     assert sys.modules["model_fallback"] is before
     assert Path(repo_mf.__file__).resolve() == ROOT / "scripts" / "model_fallback.py"
 
@@ -317,10 +334,11 @@ def test_a_module_from_one_tree_is_not_a_module_from_another(tmp_path, tree):
 # --------------------------------------------------------------------------- #
 
 def _demoted_rung(tree: Path) -> str:
-    """A Builders rung of the tree's own config that is not its top, so a
-    document leading with it cannot be confused with the defaults."""
-    rungs = ladder(yaml.safe_load((tree / "config" / "models.yaml").read_text()),
-                   "workhorse")
+    """A Builders rung of the tree's own defaults in the code that is not
+    their top, so a document leading with it cannot be confused with the
+    defaults."""
+    defaults = fixture_module(tree).code_defaults()
+    rungs = defaults["ladders"][defaults["kinds"]["workhorse"]]
     assert len(rungs) > 1
     return rungs[-1]
 
@@ -378,8 +396,8 @@ def test_fixture_module_without_a_document_reads_nothing_and_runs_on_the_tree(tr
     defaults in the code, with no `model-home` clause and no `DEGRADED`."""
     mf = fixture_module(tree)
     assert mf.HOME_STATUS == ""
-    top = ladder(yaml.safe_load((tree / "config" / "models.yaml").read_text()),
-                 "workhorse")[0]
+    defaults = mf.code_defaults()
+    top = defaults["ladders"][defaults["kinds"]["workhorse"]][0]
     decision = mf.select_with_reasons("engineer", probe=lambda model: True,
                                       clock=lambda: 0.0)
     assert decision["model"] == top
@@ -411,7 +429,7 @@ def test_fixture_module_with_a_document_hands_it_to_the_selector_the_module_impo
 
 
 # --------------------------------------------------------------------------- #
-# 3c. A tree built without the generator (DRE-6990)                            #
+# 3c. A tree is copied and never regenerated (DRE-6990, DRE-6982)              #
 # --------------------------------------------------------------------------- #
 
 def _record_subprocesses(monkeypatch) -> list:
@@ -423,29 +441,17 @@ def _record_subprocesses(monkeypatch) -> list:
         calls.append(([str(a) for a in args[0]], kwargs.get("cwd")))
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(model_fixture.subprocess, "run", run)
+    monkeypatch.setattr(subprocess, "run", run)
     return calls
 
 
-def _stub_a_refusing_generator(monkeypatch) -> None:
-    copy = model_fixture._copy_into
-
-    def copy_then_stub(dest: Path) -> None:
-        copy(dest)
-        (dest / "scripts" / "sync_model_config.py").write_text(
-            "import sys\n"
-            "print('stub generator: refusing the frozen config', file=sys.stderr)\n"
-            "sys.exit(1)\n")
-
-    monkeypatch.setattr(model_fixture, "_copy_into", copy_then_stub)
-
-
-def test_regenerate_false_copies_the_tree_and_runs_no_subprocess(tmp_path, monkeypatch):
+@pytest.mark.parametrize("kwargs", [{}, {"regenerate": False}])
+def test_a_tree_is_copied_and_runs_no_subprocess(tmp_path, monkeypatch, kwargs):
     calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree", regenerate=False)
+    dest = fixture_tree(tmp_path / "tree", **kwargs)
     assert calls == []
     assert dest == tmp_path / "tree"
-    # Today's scripts as committed: no generated region was rewritten.
+    # Today's scripts as committed: nothing was rewritten.
     for path in sorted((ROOT / "scripts").glob("*.py")):
         assert (dest / "scripts" / path.name).read_bytes() == path.read_bytes(), path.name
     for name in ("models.yaml", "model-prices.yaml"):
@@ -453,71 +459,23 @@ def test_regenerate_false_copies_the_tree_and_runs_no_subprocess(tmp_path, monke
     assert (dest / "agents.yaml").read_bytes() == (FIXTURE_DIR / "agents.yaml").read_bytes()
     assert (dest / "config" / "repo-map.json").read_bytes() == (
         ROOT / "config" / "repo-map.json").read_bytes()
-    # The generator writes the console's choices file; nothing wrote it here.
-    assert not (dest / "config" / "model-choices.json").exists()
 
 
-def test_regenerate_false_never_meets_a_refusing_generator(tmp_path, monkeypatch):
-    _stub_a_refusing_generator(monkeypatch)
-    calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree", regenerate=False)
-    assert calls == []
-    assert (dest / "scripts" / "sync_model_config.py").is_file()
-
-
-def test_the_default_runs_the_generator_in_the_tree_exactly_once(tmp_path, monkeypatch):
-    calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree")
-    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-    assert (dest / "config" / "model-choices.json").is_file()
-
-
-def test_regenerate_true_is_the_default(tmp_path, monkeypatch):
-    calls = _record_subprocesses(monkeypatch)
-    dest = fixture_tree(tmp_path / "tree", regenerate=True)
-    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-
-
-# --------------------------------------------------------------------------- #
-# 4. Independent of today's choices                                            #
-# --------------------------------------------------------------------------- #
-
-def test_the_tree_selects_what_its_own_config_says(tmp_path):
-    dest = fixture_tree(tmp_path / "tree")
-    path = dest / "config" / "models.yaml"
-    raw = yaml.safe_load(path.read_text())
-    workhorse = raw["kinds"][raw["agents"]["engineer"]]["ladder"]
-    rungs = raw["ladders"][workhorse]
-    second = _ids(rungs)[1]
-    rungs[0], rungs[1] = rungs[1], rungs[0]
-    path.write_text(yaml.safe_dump(raw, sort_keys=False))
-    proc = subprocess.run([sys.executable, "scripts/sync_model_config.py"],
-                          cwd=dest, capture_output=True, text=True)
-    assert proc.returncode == 0, proc.stdout + proc.stderr
-    # The selector runs on the regenerated literal, never on the YAML's
-    # choices (DRE-6939). Its old bytecode goes with it: swapping two rungs
-    # keeps the file's size, so a same-second rewrite would load the old one.
-    shutil.rmtree(dest / "scripts" / "__pycache__", ignore_errors=True)
-
-    mf = fixture_module(dest)
-    assert mf.select("engineer", probe=lambda m: True, clock=lambda: 0.0) == second
-
-
-# --------------------------------------------------------------------------- #
-# 5. The refresh rule is what a stale fixture says                             #
-# --------------------------------------------------------------------------- #
-
-def test_a_generator_that_fails_raises_fixture_stale(tmp_path, monkeypatch):
-    _stub_a_refusing_generator(monkeypatch)
+def test_regenerate_true_raises_because_the_generator_is_gone(tmp_path, monkeypatch):
     calls = _record_subprocesses(monkeypatch)
     dest = tmp_path / "tree"
-    with pytest.raises(FixtureStale) as caught:
-        fixture_tree(dest)
-    assert calls == [([sys.executable, str(dest / "scripts" / "sync_model_config.py")], dest)]
-    message = str(caught.value)
-    assert STALE_SENTENCE in message
-    assert "tests/fixtures/model-config-frozen/README.md" in message
-    assert "stub generator: refusing the frozen config" in message
+    with pytest.raises(ValueError) as caught:
+        fixture_tree(dest, regenerate=True)
+    assert "the generator is gone" in str(caught.value)
+    assert calls == []
+    assert not dest.exists()
+
+
+def test_the_fixture_module_keeps_no_trace_of_the_generator():
+    assert model_fixture.MODEL_FILE_NAMES == ("models.yaml", "agents.yaml", "model_fallback")
+    for name in OLD_ROUTE:
+        assert not hasattr(model_fixture, name), name
+    assert not hasattr(model_fixture, "STALE")
 
 
 # --------------------------------------------------------------------------- #
@@ -532,26 +490,25 @@ def _plant(root: Path, rel: str, text: str) -> Path:
 
 
 def test_model_reading_tests_on_a_planted_tree(tmp_path):
-    _plant(tmp_path, "config/models.yaml", yaml.safe_dump({
-        "ladders": {"solo": [{"model": "vendor-model-9", "reason": "x"}]}}))
+    # A rung id is one of the tree's defaults in the code — the file carries
+    # none (DRE-6983).
+    _plant(tmp_path, "scripts/model_fallback.py",
+           'CODE_DEFAULTS = {"ladders": {"solo": ["vendor-model-9"]}}\n')
     rung = _plant(tmp_path, "tests/test_rung.py", 'MODEL = "vendor-model-9"\n')
     selector = _plant(tmp_path, "tests/nested/test_selector.py", "import model_fallback\n")
-    generator = _plant(tmp_path, "tests/test_generator.py",
-                       'CMD = ["python3", "scripts/sync_model_config.py"]\n')
+    roster = _plant(tmp_path, "tests/test_roster.py", 'PATH = "agents.yaml"\n')
     _plant(tmp_path, "tests/test_unrelated.py", "def test_nothing():\n    pass\n")
     _plant(tmp_path, "tests/node_modules/test_skipped.py", "import model_fallback\n")
     _plant(tmp_path, "tests/.hidden/test_hidden.py", 'MODEL = "vendor-model-9"\n')
     _plant(tmp_path, "tests/helper.py", "import model_fallback\n")
 
-    assert model_reading_tests(tmp_path) == sorted([rung, selector, generator])
+    assert model_reading_tests(tmp_path) == sorted([rung, selector, roster])
 
 
-@pytest.mark.parametrize("token", [
-    "models.yaml", "agents.yaml", "model-choices.json",
-    "model_fallback", "sync_model_config", "model_config_change",
-])
+@pytest.mark.parametrize("token", ["models.yaml", "agents.yaml", "model_fallback"])
 def test_each_named_file_puts_a_test_in_the_set(tmp_path, token):
-    _plant(tmp_path, "config/models.yaml", yaml.safe_dump({"ladders": {"solo": ["m-1"]}}))
+    _plant(tmp_path, "scripts/model_fallback.py",
+           'CODE_DEFAULTS = {"ladders": {"solo": ["m-1"]}}\n')
     named = _plant(tmp_path, "tests/test_named.py", f"# reads {token}\n")
     assert model_reading_tests(tmp_path) == [named]
 
@@ -659,3 +616,230 @@ def test_the_id_scan_reads_strings_and_docstrings_and_skips_comments():
             f"# {model} in a comment is history\n"
             f"MODEL = '{model}'\n")
     assert bare_ids(text) == [(3, model), (5, model)]
+
+
+# --------------------------------------------------------------------------- #
+# 8. The rest of the model tests prove theirs on documents too (DRE-8018)      #
+# --------------------------------------------------------------------------- #
+
+# The eleven model tests that built their trees with the generator and were not
+# the old route's or the generator's own. The generator is gone (DRE-6982) and
+# nothing here broke: each builds its trees with `regenerate=False` and reads
+# every choice off a home document or the tree's own `code_defaults()`.
+HOME_DOCUMENT_TREES = (
+    "tests/test_model_policy.py",
+    "tests/test_review_separation.py",
+    "tests/test_model_fallback.py",
+    "tests/test_model_adoption_actions.py",
+    "tests/test_model_home.py",
+    "tests/test_model_projects_schema.py",
+    "tests/test_model_rules_and_markers.py",
+    "tests/test_review_separation_every_builder.py",
+    "tests/test_project_model_exceptions.py",
+    "tests/test_model_choice_policy.py",
+    "tests/test_proof_group.py",
+)
+# The keys of the frozen `models.yaml` that are choices: DRE-6983 re-freezes
+# that file with none of them, so a test reads them off `fixture_home()`.
+CHOICE_KEYS = ("ladders", "default_ladder", "agents", "ungrouped", "projects", "kinds")
+FROZEN_READERS = ("fixture_config", "fixture_text")
+LITERAL = "CODE_DEFAULTS"
+
+
+def _called(node, names) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+    return name in names
+
+
+def _bindings(body) -> list[tuple[str, ast.AST]]:
+    """`(name, value)` for each plain name assigned in `body`, not descending
+    into a nested function or class."""
+    found = []
+    stack = list(body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                             ast.Lambda)):
+            continue
+        if isinstance(node, ast.Assign):
+            found += [(t.id, node.value) for t in node.targets if isinstance(t, ast.Name)]
+        elif isinstance(node, (ast.AnnAssign, ast.NamedExpr)) and node.value is not None:
+            if isinstance(node.target, ast.Name):
+                found.append((node.target.id, node.value))
+        stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def frozen_choice_reads(text: str) -> list[tuple[int, str]]:
+    """`(line, what)` for every choice `text` reads off the frozen `models.yaml`:
+    a `ladder(...)` whose first argument is frozen, and a subscript (or `.get`)
+    of a frozen value by one of `CHOICE_KEYS`.
+
+    Frozen is a call of `fixture_config()`/`fixture_text()` or of a function
+    of this file that returns a frozen value, and a name bound to a frozen
+    value — looked up in the function it is used in, then in the module. A
+    value is frozen when it is one of those, a subscript of one, or a call of
+    a function this file does not define (`yaml.safe_load`, `copy.deepcopy`)
+    with one inside its first argument or the value it is called on. A helper of this file that takes the frozen
+    file and returns something else (one that swaps in a document's choices)
+    is judged by what it returns, and only a read counts: writing a key is no
+    read of the choice the file holds."""
+    tree = ast.parse(text)
+    functions = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    local = {fn.name for fn in functions}
+    readers = set(FROZEN_READERS)
+    scopes = {None: tree.body, **{fn: fn.body for fn in functions}}
+    frozen: dict = {scope: set() for scope in scopes}
+    bound = {scope: {name for name, _ in _bindings(body)} for scope, body in scopes.items()}
+
+    def head(node, scope) -> bool:
+        """`node` itself is frozen: a reader's call or a frozen name."""
+        if _called(node, readers):
+            return True
+        if isinstance(node, ast.Name):
+            if scope is not None and node.id in bound[scope]:
+                return node.id in frozen[scope]
+            return node.id in frozen[None]
+        return False
+
+    def derived(node, scope) -> bool:
+        if head(node, scope):
+            return True
+        if isinstance(node, ast.Subscript):
+            return derived(node.value, scope)
+        if isinstance(node, ast.Call) and not _called(node, local):
+            # What the call is made on: its first argument, or the value a
+            # method is called on. A frozen id handed to an editor of a
+            # document further along makes no frozen document.
+            args = node.args[:1]
+            if isinstance(node.func, ast.Attribute):
+                args.append(node.func.value)
+            return any(head(sub, scope) for arg in args for sub in ast.walk(arg))
+        return False
+
+    changed = True
+    while changed:
+        changed = False
+        for fn in functions:
+            if fn.name not in readers and any(
+                    isinstance(r, ast.Return) and r.value is not None
+                    and derived(r.value, fn) for r in ast.walk(fn)):
+                readers.add(fn.name)
+                changed = True
+        for scope, body in scopes.items():
+            for name, value in _bindings(body):
+                if name not in frozen[scope] and derived(value, scope):
+                    frozen[scope].add(name)
+                    changed = True
+
+    def scope_of(target):
+        inner = None
+        for fn in functions:
+            if fn.lineno <= target.lineno <= (fn.end_lineno or fn.lineno):
+                if inner is None or fn.lineno >= inner.lineno:
+                    inner = fn
+        return inner
+
+    found = []
+    for node in ast.walk(tree):
+        scope = scope_of(node) if hasattr(node, "lineno") else None
+        if _called(node, {"ladder"}) and node.args and derived(node.args[0], scope):
+            found.append((node.lineno, "ladder"))
+        elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
+              and isinstance(node.slice, ast.Constant)
+              and node.slice.value in CHOICE_KEYS and derived(node.value, scope)):
+            found.append((node.lineno, node.slice.value))
+        elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+              and node.func.attr == "get" and node.args
+              and isinstance(node.args[0], ast.Constant)
+              and node.args[0].value in CHOICE_KEYS and derived(node.func.value, scope)):
+            found.append((node.lineno, node.args[0].value))
+    return sorted(found)
+
+
+def literal_mentions(text: str) -> list[int]:
+    """The lines of `text` naming the defaults literal."""
+    return [n for n, line in enumerate(text.splitlines(), 1) if LITERAL in line]
+
+
+def test_the_eleven_are_the_files_the_card_names_and_each_exists():
+    assert len(HOME_DOCUMENT_TREES) == len(set(HOME_DOCUMENT_TREES)) == 11
+    assert not set(HOME_DOCUMENT_TREES) & set(PLANNER_PATH)
+    for rel in HOME_DOCUMENT_TREES:
+        assert (ROOT / rel).is_file(), rel
+
+
+def test_every_one_of_the_eleven_builds_its_trees_without_the_generator():
+    calls = {rel: fixture_tree_calls(_source(rel)) for rel in HOME_DOCUMENT_TREES}
+    # Each of the eleven builds a tree: a file with no call proves nothing here.
+    assert all(calls.values()), {rel: c for rel, c in calls.items() if not c}
+    regenerating = {rel: [line for line, off in c if not off] for rel, c in calls.items()}
+    assert not any(regenerating.values()), regenerating
+
+
+def test_none_of_the_eleven_names_the_generator_or_its_refusal():
+    found = {rel: old_route_mentions(_source(rel)) for rel in HOME_DOCUMENT_TREES}
+    assert not any(found.values()), found
+
+
+def test_none_of_the_eleven_reads_a_choice_off_the_frozen_config():
+    found = {rel: frozen_choice_reads(_source(rel)) for rel in HOME_DOCUMENT_TREES}
+    assert not any(found.values()), found
+
+
+def test_only_the_selectors_own_tests_name_the_defaults_literal():
+    """Renaming the literal to `CODE_DEFAULTS` (DRE-6982) touched no test of
+    these but tests/test_model_fallback.py: its assertion that
+    `code_defaults()` is the normalized literal, and the tests that hold the
+    literal to the file's code-side facts. Every other one reads the defaults
+    through `code_defaults()`."""
+    named = {rel: literal_mentions(_source(rel))
+             for rel in (*HOME_DOCUMENT_TREES, "tests/test_model_effort.py")}
+    pin = named.pop("tests/test_model_fallback.py")
+    assert not any(named.values()), named
+    lines = _source("tests/test_model_fallback.py").splitlines()
+    assert any("code_defaults()" in lines[n - 1] and "_normalize_config" in lines[n - 1]
+               for n in pin), pin
+
+
+def test_the_choice_scan_finds_each_way_a_choice_is_read_off_the_frozen_file():
+    text = (
+        "FROZEN = model_fixture.fixture_config()\n"                  # 1
+        "A = model_fixture.ladder(FROZEN, 'workhorse')\n"            # 2
+        "B = ladder(fixture_config(), 'judgement')\n"                # 3
+        "C = FROZEN['agents']\n"                                     # 4
+        "D = FROZEN['effort']\n"                                     # 5
+        "raw = yaml.safe_load(fixture_text())\n"                     # 6
+        "E = raw['ladders']\n"                                       # 7
+        "def _canonical():\n"                                        # 8
+        "    return model_fixture.fixture_config()\n"                # 9
+        "F = _canonical()['kinds']\n"                                # 10
+        "G = _canonical().get('projects')\n"                         # 11
+        "H = ladder(fixture_home(), 'workhorse')\n"                  # 12
+        "def scoped(tree):\n"                                        # 13
+        "    raw = yaml.safe_load(tree.read_text())\n"               # 14
+        "    return raw['agents']\n"                                 # 15
+        "def inherited():\n"                                         # 16
+        "    return raw['default_ladder']\n"                         # 17
+        "I = FROZEN['review_separation']['rules']\n"                 # 18
+        "J = _canonical()['ungrouped']\n"                            # 19
+        "def _swapped(cfg):\n"                                       # 20
+        "    return {**cfg, 'agents': fixture_home()['agents']}\n"   # 21
+        "K = _swapped(FROZEN)['agents']\n"                           # 22
+        "FROZEN['agents'] = {}\n"                                    # 23
+        "L = copy.deepcopy(FROZEN)['projects']\n"                    # 24
+        "M = with_project(fixture_home(), 'x', 'workhorse', A[0])\n" # 25
+        "N = M['projects']\n"                                        # 26
+    )
+    assert frozen_choice_reads(text) == [
+        (2, "ladder"), (3, "ladder"), (4, "agents"), (7, "ladders"), (10, "kinds"),
+        (11, "projects"), (17, "default_ladder"), (19, "ungrouped"), (24, "projects")]
+
+
+def test_the_literal_scan_finds_the_name():
+    text = f"x = 1\nmirror = mf.{LITERAL}['effort']\n"
+    assert literal_mentions(text) == [2]

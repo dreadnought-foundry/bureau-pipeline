@@ -26,8 +26,6 @@ selector of a tree built with `regenerate=False` answers from the frozen home
 document (DRE-6990), every expected id is read off that document's groups, and
 every level off the frozen `effort:` block, a code-side fact. What still reads
 the committed file is what must hold for any saved state.
-`tests/test_model_config.py` is the sibling that pins the canonical file and
-its generated mirrors.
 """
 
 import copy
@@ -108,17 +106,19 @@ class LadderTest(unittest.TestCase):
         # The degrade path is the whole point of the mirror: a checkout whose
         # YAML will not parse still runs the ladders — and must still ask for
         # the level, or the fall-back-to-literal path silently drops to medium.
-        self.assertEqual(mf._FALLBACK_MODEL_CONFIG["effort"], _canonical()["effort"])
+        # The literal is read through its one accessor, never by its name.
+        self.assertEqual(mf.code_defaults()["effort"], _canonical()["effort"])
 
-    def test_every_rung_names_a_reason(self):
-        # The file's own style: a rung is a decision, and the decision carries
-        # its justification beside it.
+    def test_every_retired_and_excluded_id_names_a_reason(self):
+        # The file's own style: keeping an id out is a decision, and the
+        # decision carries its justification beside it. The file carries no
+        # ladder since DRE-6983; these two lists are what it still names.
         cfg = _canonical()
-        for name, rungs in cfg["ladders"].items():
-            for rung in rungs:
+        for name in ("retired", "excluded"):
+            for entry in cfg[name]:
                 self.assertTrue(
-                    str(rung.get("reason") or "").strip(),
-                    f"ladders.{name}: {rung.get('model')} has no reason",
+                    str(entry.get("reason") or "").strip(),
+                    f"{name}: {entry.get('model')} has no reason",
                 )
 
 
@@ -356,7 +356,7 @@ class WorkflowWiringTest(unittest.TestCase):
                 )
 
     def test_no_workflow_hardcodes_an_effort_level(self):
-        # Same rule as the model id (test_model_config.py:
+        # Same rule as the model id (test_workflow_model_pins.py:
         # test_no_workflow_hardcodes_a_model_id): the level is config, read
         # through the selector, never a literal a file can drift on.
         literal = re.compile(r"--effort\s+(?!\$)")
