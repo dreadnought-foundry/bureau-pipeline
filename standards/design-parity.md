@@ -41,11 +41,14 @@ the cards row by row against the mockup's committed inventory.
   one — the surface rule above covers those.
 - **The `**Inventory:**` line.** The plan artifact names each committed
   inventory on a line opening `**Inventory:**`, as a repo-relative path —
-  several comma-separated, or one line each. The inventory is read from the
+  several comma-separated, or one line each, and nothing else on the line: a
+  path ends at its first space. The inventory is read from the
   plan run's own checkout, never another repo; one that is absent, unreadable
   or holds no table rows is a send-back that names it, never a pass. A row is
   every body row of every markdown table in the file, header and separator
-  rows excluded, and its key is its cells, trimmed, joined with ` | `.
+  rows excluded, and its key is its cells, trimmed, empty cells at either end
+  dropped, joined with ` | ` — the key the mechanical note prints is the one
+  to quote.
 - **The `inventory-coverage` block.** `## The cards` carries a fenced block
   with that info-string: a JSON list with one record per row, each naming its
   `inventory`, its `row` key, and either a `card` and that card's `criterion`
@@ -53,8 +56,9 @@ the cards row by row against the mockup's committed inventory.
 - **What covers a row.** A record naming the row's key and either an open
   child of the epic with one of its `- [ ]` criteria, word for word with
   whitespace collapsed, or a non-empty `deferred` reason — the `deferred:
-  <surface> — <reason>` rule above at row level. A screen-level match never
-  covers a row.
+  <surface> — <reason>` rule above at row level. A deferral reason covers the
+  row on its own; a `card` beside it that is not an open child is said on the
+  mechanical note, not sent back. A screen-level match never covers a row.
 
 `scripts/plan_inventory.py` enforces it: each defect is an `inventory:` line
 in the structural file the seam gate forwards into the first critic's result,

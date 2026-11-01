@@ -369,7 +369,7 @@ class TheRows(unittest.TestCase):
     def test_every_key_is_its_own_key(self):
         """A planner copies a key from the note or a finding; it must match."""
         found = plan_inventory.rows(self.EMPTY_CELLS + TABLE)
-        self.assertEqual(6, len(found))
+        self.assertEqual(5, len(found))
         for row in found:
             with self.subTest(row=row):
                 self.assertEqual(row, plan_inventory.key(row))

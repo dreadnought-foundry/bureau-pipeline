@@ -26,9 +26,9 @@ screen PNG is not one: `design_parity.py` keeps covering those.
 
 The plan names each inventory on a line opening `**Inventory:**`, as a
 repo-relative path read from the plan run's own checkout — the working
-directory. A row is every body row of every markdown table in the file, and
-its key is its cells, trimmed with inner whitespace collapsed, joined with
-` | `.
+directory, nothing after it on the line. A row is every body row of every
+markdown table in the file, and its key is its cells, trimmed with inner
+whitespace collapsed, empty cells at either end dropped, joined with ` | `.
 
 ## What covers a row
 
@@ -127,14 +127,17 @@ def named_mockups(epic_text: str | None, artifact_text: str | None, records) -> 
 # --- The inventory -----------------------------------------------------------
 
 def inventory_paths(artifact_text: str | None) -> list[str]:
-    """Every path the plan names on an `**Inventory:**` line, in order."""
+    """Every path the plan names on an `**Inventory:**` line, in order.
+
+    A path ends at its first whitespace, so prose after it is not part of it."""
     out: list[str] = []
     for line in (artifact_text or "").splitlines():
         m = _OPENER_LINE.match(line)
         if not m:
             continue
         for part in m.group("rest").split(","):
-            path = part.strip().strip("`").strip()
+            words = part.split()
+            path = words[0].strip("`") if words else ""
             if path and path not in out:
                 out.append(path)
     return out
@@ -144,11 +147,21 @@ def _cells(line: str) -> list[str]:
     inner = line.strip()
     inner = inner[1:] if inner.startswith("|") else inner
     inner = inner[:-1] if inner.endswith("|") and not inner.endswith("\\|") else inner
-    return [_collapse(c) for c in _CELL_SPLIT.split(inner)]
+    cells = [_collapse(c) for c in _CELL_SPLIT.split(inner)]
+    # Empty cells at either end are dropped: a key quoted back, with its edge
+    # space collapsed away, reads its own `|` as the table's edge.
+    while cells and not cells[-1]:
+        cells.pop()
+    while cells and not cells[0]:
+        cells.pop(0)
+    return cells
 
 
 def key(row: str) -> str:
-    """A row's key: its cells, trimmed and collapsed, joined with ` | `."""
+    """A row's key: its cells, trimmed and collapsed, joined with ` | `.
+
+    Empty cells at either end are not part of it, so `key(key(row))` is
+    `key(row)` and a key copied from the note matches its row."""
     return " | ".join(_cells(row))
 
 
@@ -196,12 +209,18 @@ def read_inventory(path: str, root: str) -> tuple[list[str] | None, str]:
 
 
 def inventories_beside(mockup: str, root: str) -> list[str]:
-    """The `*-inventory.md` files in a checked-out mockup's folder."""
-    if os.path.isabs(mockup) or not os.path.isfile(os.path.join(root, mockup)):
+    """The `*-inventory.md` files in a checked-out mockup's folder.
+
+    The path is card text, so a folder outside the checkout lists nothing."""
+    if os.path.isabs(mockup):
         return []
-    folder = os.path.dirname(mockup)
-    found = glob.glob(os.path.join(root, folder, "*" + INVENTORY_SUFFIX))
-    return sorted(os.path.relpath(p, root) for p in found)
+    base = os.path.realpath(root)
+    full = os.path.realpath(os.path.join(base, mockup))
+    if os.path.commonpath([base, full]) != base or not os.path.isfile(full):
+        return []
+    found = glob.glob(os.path.join(glob.escape(os.path.dirname(full)),
+                                   "*" + INVENTORY_SUFFIX))
+    return sorted(os.path.relpath(p, base) for p in found)
 
 
 # --- The coverage block ------------------------------------------------------
@@ -232,7 +251,11 @@ def open_children(records) -> dict[str, list[str]]:
 
 def _covers(record: dict, children: dict[str, list[str]]) -> tuple[str | None, str]:
     """`(how, "")` when the record covers its row — `→ <card> “<criterion>”`
-    or `→ deferred — <reason>` — or `(None, reason)` when it does not."""
+    or `→ deferred — <reason>` — or `(None, reason)` when it does not.
+
+    A deferral reason covers the row on its own: a card beside it that does
+    not deliver the row is said on the note for the first critic, never sent
+    back."""
     card = _collapse(record.get("card") or "")
     criterion = _collapse(record.get("criterion") or "")
     reason = _collapse(record.get("deferred") or "")
@@ -245,7 +268,7 @@ def _covers(record: dict, children: dict[str, list[str]]) -> tuple[str | None, s
         else:
             return f"→ {card} “{criterion}”", ""
     if reason:
-        return f"→ deferred — {reason}", ""
+        return f"→ deferred — {reason}" + (f" ({why})" if why else ""), ""
     return None, why or "it names no card and no deferral reason"
 
 
