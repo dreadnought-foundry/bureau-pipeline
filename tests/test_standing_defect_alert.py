@@ -224,6 +224,32 @@ def test_an_alert_that_is_not_this_repos_standing_defect_is_left_alone(door, kin
     assert fake.resolved == []
 
 
+def test_a_ledger_not_evaluated_resolves_nothing_and_says_so(door, monkeypatch):
+    """An empty ledger from a pass that never ran its gates is absence, not
+    green: the raise half still runs, the resolve half does not, and the
+    open alerts are not even read."""
+    fake = door(open_alerts=OPEN_TWO)
+    reads: list = []
+    monkeypatch.setattr(bureau_read, "open_alerts",
+                        lambda: reads.append(1) or fake.open_alerts())
+    lines = standing_defect_alert.settle(
+        [], REPO, unread=["promote_ready (linear-hold)"])
+    assert fake.resolved == []
+    assert reads == []
+    said = [line for line in lines if "not evaluated" in line]
+    assert said == ["standing-defect-alert: ledger not evaluated — "
+                    "promote_ready (linear-hold); nothing resolved this pass"]
+    assert "standing-defect-alert: none standing" in lines
+
+
+def test_a_ledger_not_evaluated_still_raises_what_it_did_find(door):
+    fake = door(open_alerts=OPEN_TWO + [
+        alert("pipeline_notice:standing-defect:bureau-pipeline:DRE-41")])
+    standing_defect_alert.settle([DRE_7305], REPO, unread=["recover_limit_deaths"])
+    assert [r["notice"] for r in fake.raised] == ["standing-defect:bureau-pipeline:DRE-7305"]
+    assert fake.resolved == []
+
+
 def test_unreadable_open_alerts_resolve_nothing_and_say_so(door):
     fake = door(open_alerts=OPEN_TWO,
                 unreadable=bureau_read.ReadUnknown("closed", "HTTP 503 db down"))
@@ -370,13 +396,14 @@ def test_the_full_sweep_raises_the_epics_alert_and_exits_red_as_before(
 def test_the_full_sweep_hands_settle_the_ledger_once(board, notice_door, monkeypatch):
     seen: list = []
     monkeypatch.setattr(standing_defect_alert, "settle",
-                        lambda entries, repo: seen.append((list(entries), repo)) or [])
+                        lambda entries, repo, **kw: seen.append((list(entries), repo, kw)) or [])
     _exit_of()
     assert len(seen) == 1
-    entries, repo = seen[0]
+    entries, repo, kw = seen[0]
     assert repo == REPO
     assert entries == list(reconcile._stale_defects)
     assert len(entries) == 1 and entries[0].startswith(f"{EPIC}: a prose blocker")
+    assert list(kw["unread"]) == []
 
 
 def test_a_promote_only_run_makes_no_notice_call(board, notice_door, monkeypatch):
@@ -419,3 +446,113 @@ def test_a_green_full_sweep_resolves_the_alert_it_raised(board, notice_door, mon
     assert [(p["action"], p["notice"]) for p in notice_door
             if p["notice"].startswith("standing-defect:")] == [
         ("resolve", f"standing-defect:{REPO}:{EPIC}")]
+
+
+# ── a pass that never evaluated the ledger resolves nothing ─────────────────
+
+
+OPEN_EPIC = {"schema": "bureau-read/1", "read_at": "2026-11-01T16:00:00Z",
+             "alerts": [alert(f"pipeline_notice:standing-defect:{REPO}:{EPIC}")]}
+
+
+def _standing_sends(notice_door) -> list[tuple[str, str]]:
+    return [(p["action"], p["notice"]) for p in notice_door
+            if p["notice"].startswith("standing-defect:")]
+
+
+def test_a_held_board_resolves_no_open_alert(board, notice_door, monkeypatch, capsys):
+    """The read door says Linear is held: the promotion phase is skipped, the
+    ledger is empty because nothing was asked, and the alert still open for
+    the epic — whose defect still stands — is left open."""
+    monkeypatch.setattr(reconcile, "backlog_children", mock.MagicMock(
+        side_effect=reconcile.BoardHeld("linear-hold")))
+    monkeypatch.setattr(bureau_read, "open_alerts", lambda: OPEN_EPIC)
+    _exit_of()
+    assert reconcile._stale_defects == []
+    assert _standing_sends(notice_door) == []
+    out = capsys.readouterr().out.splitlines()
+    assert ("standing-defect-alert: ledger not evaluated — promote_ready "
+            "(linear-hold); nothing resolved this pass") in out
+
+
+def test_a_held_board_read_resolves_no_open_alert(board, notice_door, monkeypatch, capsys):
+    """The hold found before promotion (`_door_hold`), not inside it."""
+    def held(*a, **kw):
+        reconcile._door_hold.append("linear-hold")
+        raise reconcile.BoardHeld("linear-hold")
+    monkeypatch.setattr(reconcile, "active_cards", mock.MagicMock(side_effect=held))
+    monkeypatch.setattr(bureau_read, "open_alerts", lambda: OPEN_EPIC)
+    _exit_of()
+    assert _standing_sends(notice_door) == []
+    out = capsys.readouterr().out
+    assert "standing-defect-alert: ledger not evaluated — promote_ready" in out
+
+
+def test_an_unreadable_defect_age_resolves_no_open_alert(board, notice_door, monkeypatch,
+                                                         capsys):
+    """The epic's prose defect is found but how long it has stood cannot be
+    read: unknown is not fixed, so its alert stays open."""
+    monkeypatch.setattr(reconcile.linear_ops, "first_comment_at", mock.MagicMock(
+        side_effect=reconcile.linear_ops.LinearError("HTTP 502")))
+    monkeypatch.setattr(bureau_read, "open_alerts", lambda: OPEN_EPIC)
+    _exit_of()
+    assert reconcile._stale_defects == []
+    assert _standing_sends(notice_door) == []
+    out = capsys.readouterr().out
+    assert f"standing-defect-alert: ledger not evaluated — {EPIC}'s prose defect age" in out
+
+
+def test_an_idle_pass_resolves_the_open_alert(board, notice_door, monkeypatch):
+    """The decision: an idle pass skips promotion because nothing of this
+    repo's is in motion or waiting to be promoted, so no gate of its can be
+    standing — the empty ledger is the true one, and the alert resolves."""
+    monkeypatch.setattr(reconcile, "sweep_idle", mock.MagicMock(
+        return_value="no card of this repo is in motion or waiting to be promoted"))
+    monkeypatch.setattr(bureau_read, "open_alerts", lambda: OPEN_EPIC)
+    _exit_of()
+    assert _standing_sends(notice_door) == [("resolve", f"standing-defect:{REPO}:{EPIC}")]
+
+
+def test_a_green_full_sweep_hands_settle_no_unread_phase(board, notice_door, monkeypatch):
+    monkeypatch.setattr(reconcile, "_fetch_epic_relations", mock.MagicMock(
+        return_value={"identifier": EPIC, "description": "fixed",
+                      "inverseRelations": {"nodes": []}}))
+    seen: list = []
+    monkeypatch.setattr(standing_defect_alert, "settle",
+                        lambda entries, repo, **kw: seen.append(list(kw["unread"])) or [])
+    _exit_of()
+    assert seen == [[]]
+
+
+@pytest.fixture
+def limit_pass(monkeypatch):
+    reconcile._ledger_unread.clear()
+    reconcile._stale_defects.clear()
+    reconcile._write_failures.clear()
+    yield
+    reconcile._ledger_unread.clear()
+    reconcile._stale_defects.clear()
+    reconcile._write_failures.clear()
+
+
+def test_limit_recovery_held_is_recorded_unread(limit_pass, monkeypatch):
+    monkeypatch.setattr(reconcile, "active_cards", mock.MagicMock(
+        side_effect=reconcile.BoardHeld("linear-hold")))
+    with pytest.raises(reconcile.BoardHeld):
+        reconcile.recover_limit_deaths()
+    assert reconcile._ledger_unread == ["recover_limit_deaths (linear-hold)"]
+
+
+def test_limit_recovery_that_fails_partway_is_recorded_unread(limit_pass, monkeypatch):
+    monkeypatch.setattr(reconcile, "active_cards", mock.MagicMock(return_value=[]))
+    monkeypatch.setattr(reconcile.limit_recovery, "recover", mock.MagicMock(
+        side_effect=RuntimeError("boom")))
+    reconcile.recover_limit_deaths()
+    assert reconcile._ledger_unread == ["recover_limit_deaths (RuntimeError)"]
+
+
+def test_limit_recovery_that_runs_to_the_end_records_nothing(limit_pass, monkeypatch):
+    monkeypatch.setattr(reconcile, "active_cards", mock.MagicMock(return_value=[]))
+    monkeypatch.setattr(reconcile.limit_recovery, "recover", mock.MagicMock(return_value=[]))
+    reconcile.recover_limit_deaths()
+    assert reconcile._ledger_unread == []
