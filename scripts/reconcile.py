@@ -285,6 +285,7 @@ import reviewer_down  # noqa: E402
 # strings.
 import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
+import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -16648,6 +16649,15 @@ def main(
     print(cycles_line())
     print(f"sweep complete: {nudges} nudge(s)")
     _report_degraded()
+    # Each card on the standing-defect ledger is a console alert, and an alert
+    # whose card has left it is resolved (DRE-8632). The full sweep's alone:
+    # the `--promote-only` gate returned above, so it cannot flap the alert.
+    # Nothing it raises moves the exit below.
+    try:
+        standing_defect_alert.settle(_stale_defects, REPO_SLUG)
+    except Exception as e:  # noqa: BLE001 — an alert never decides the exit
+        print(f"{standing_defect_alert.TAG} not settled this pass — "
+              f"{type(e).__name__}: {e}")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
         # when a write we claimed to make didn't happen (DRE-1254 lesson), when
