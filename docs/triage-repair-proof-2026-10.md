@@ -29,7 +29,7 @@ DRE-8570 is the park "Which park closes it" names. It is the first in-scope park
 
   GitHub's answer: `{"message":"Resource not accessible by integration","documentation_url":"https://docs.github.com/rest/git/refs#create-a-reference","status":"403"}` — `gh: Resource not accessible by integration (HTTP 403)`. No ref was created.
 - **GitHub, written: `GH_TOKEN`.** Used only to push this branch.
-- **Linear: `LINEAR_API_KEY`, the fleet key.** Used to read this card's thread, DRE-8570's thread and DRE-8570's lane history, and for this card's heartbeats and actor marker. Nothing else was written, and no card was moved. linear requests: 17 of 40, counting the heartbeats and the actor marker posted after the push.
+- **Linear: `LINEAR_API_KEY`, the fleet key.** Used to read this card's thread, DRE-8570's thread and DRE-8570's lane history, and for this card's heartbeats and actor marker. Nothing else was written, and no card was moved. linear requests: 19 of 40, counting the pre-push name guard's reads, the heartbeats and the actor marker posted after the push.
 - **AWS:** `proof identity: aws — none, PROOF_ROLE_ARN not provided`. This card needs none of the product's identities, and the run made no hosted sign-in.
 
 ## Parks after the switch
