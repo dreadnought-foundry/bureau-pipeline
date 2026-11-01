@@ -67,6 +67,30 @@ comment exactly as before — that comment is the chase — and each now hands
   always skipped it — it is already in a person's queue — so it is never
   listed here and never makes the pass incomplete.
 
+### A `proof-waiting` hold that lifts itself
+
+The proof dispatcher (`scripts/proof_dispatch.py`, condition 4) judges two
+kinds of `proof-waiting` hold as met, and lifts them with one
+`🔬 proof-observed` of its own:
+
+- **A time-only hold** — `— needs not-before=<T>` and nothing else — once
+  `<T>` has passed (DRE-7228).
+- **A card hold** — one whose needs half (the text after its last `— needs`)
+  opens with one or more card ids, `DRE-<n>` joined by `, ` or `and` —
+  once every card it names is Done (DRE-8593). Only the ids the needs half
+  opens with are read; anything written after them is the writer's
+  explanation and is not judged. A card Canceled or Duplicate closed without
+  delivering, so it holds, and so does a card that cannot be read. A hold
+  that names the CEO's press, a cause or history hold, the record's own hold,
+  one of the dispatcher's own wordings, or `<DRE-n> shipped` (the re-arm's)
+  is not a card hold.
+
+A lift waits until every open hold on the card is one or the other, because
+one note lifts them all. Every other hold stays with a person: a free-text
+event hold keeps its one chase at `chase_after_hours`, and every hold that
+stands keeps this row's late alert at `due_hours`. A card hold is not an
+event hold, so it is never chased — it lifts itself instead.
+
 A standing card in `config/hand-work-age.json` and a `hand-built` card are
 listed by neither. An idle pass, a held board read and `promote_only` call
 `settle` from neither.
