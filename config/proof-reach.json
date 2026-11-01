@@ -197,6 +197,18 @@
       "printed_by": "scripts/proof_record_pr.py",
       "constant": "SWEEP_TAG",
       "when": "every `sweep` run since DRE-8437, one line on stdout: the open record pull requests read, those closed (or that would be, not live), kept and unread"
+    },
+    {
+      "tag": "hung-job:",
+      "printed_by": "scripts/hung_job.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hung-jobs job's log and step summary"
+    },
+    {
+      "tag": "channel-hold:",
+      "printed_by": "scripts/channel_hold.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hold job's log"
     }
   ],
   "causes": [

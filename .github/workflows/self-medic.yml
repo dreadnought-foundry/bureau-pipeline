@@ -75,11 +75,17 @@
 # never posts a week's scorecard twice, the replay posts to no card, and the
 # pull request step reuses the week's branch and updates its open pull request
 # rather than opening another.
+#
+# Channel Watch (DRE-8655) is the 10-minute watch on `stable`, watched on the
+# same terms. Retrying it is safe because neither pass keeps state: the
+# hung-job pass reads "once" off the run's own `run_attempt` and never re-runs
+# attempt 2, and the hold check's alert key is a constant, so a repeated raise
+# is answered `repeat` and a repeated resolve `not-open`.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Triage Repair, Groom Replay Gate, Groom Week]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Triage Repair, Groom Replay Gate, Groom Week, Channel Watch]
     types: [completed]
 
 permissions:
