@@ -1,0 +1,3862 @@
+{
+ "about": "Pipeline Tests run 40502923604 on bureau-pipeline main (head 69b518ceb, a push), read once from GitHub's Actions API on 2026-11-01 for DRE-8652. Attempt 1's job 'scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)' printed its last line at 12:20:53Z (5:20:53 AM PT) and was stopped by its own 20-minute limit at 12:40:43Z; a bot re-ran the failed jobs at 17:47Z and attempt 2 passed. `history` is the `status=success` listing of the workflow's runs on main created before the run (30 per page) and the jobs of the ten newest; `logs` is an excerpt of the canceled job's log, from its test step to a few lines past the cancel line. Fields are trimmed to the ones the module reads.",
+ "repo": "dreadnought-foundry/bureau-pipeline",
+ "run": {
+  "id": 40502923604,
+  "name": "Pipeline Tests",
+  "path": ".github/workflows/tests.yml",
+  "event": "push",
+  "head_branch": "main",
+  "head_sha": "69b518ceb0872bb5a962c598f0f30884401d1327",
+  "status": "completed",
+  "conclusion": "success",
+  "run_attempt": 2,
+  "created_at": "2026-10-27T12:20:01Z",
+  "run_started_at": "2026-10-27T17:47:48Z",
+  "updated_at": "2026-10-27T17:54:27Z",
+  "workflow_id": 294736769
+ },
+ "attempts": {
+  "1": {
+   "id": 40502923604,
+   "name": "Pipeline Tests",
+   "path": ".github/workflows/tests.yml",
+   "event": "push",
+   "head_branch": "main",
+   "head_sha": "69b518ceb0872bb5a962c598f0f30884401d1327",
+   "status": "completed",
+   "conclusion": "cancelled",
+   "run_attempt": 1,
+   "created_at": "2026-10-27T12:20:01Z",
+   "run_started_at": "2026-10-27T12:20:01Z",
+   "updated_at": "2026-10-27T13:26:58Z",
+   "workflow_id": 294736769
+  },
+  "2": {
+   "id": 40502923604,
+   "name": "Pipeline Tests",
+   "path": ".github/workflows/tests.yml",
+   "event": "push",
+   "head_branch": "main",
+   "head_sha": "69b518ceb0872bb5a962c598f0f30884401d1327",
+   "status": "completed",
+   "conclusion": "success",
+   "run_attempt": 2,
+   "created_at": "2026-10-27T17:47:49Z",
+   "run_started_at": "2026-10-27T17:47:48Z",
+   "updated_at": "2026-10-27T17:54:27Z",
+   "workflow_id": 294736769
+  }
+ },
+ "jobs": {
+  "1": [
+   {
+    "id": 122184869842,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "act registry consumers",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:20:11Z"
+   },
+   {
+    "id": 122184870096,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "console change keeps the suite green (part 3)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:58:43Z"
+   },
+   {
+    "id": 122184870103,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (part 1)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:08Z",
+    "completed_at": "2026-10-27T12:40:24Z"
+   },
+   {
+    "id": 122184870105,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (part 5)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:41:46Z"
+   },
+   {
+    "id": 122184870155,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk list)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:20:18Z"
+   },
+   {
+    "id": 122184870157,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "console change keeps the suite green (part 1)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:04Z",
+    "completed_at": "2026-10-27T13:12:22Z"
+   },
+   {
+    "id": 122184870205,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (part 2)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:40:23Z"
+   },
+   {
+    "id": 122184870223,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (part 4)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:35:26Z"
+   },
+   {
+    "id": 122184870281,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (part 3)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:34:18Z"
+   },
+   {
+    "id": 122184870286,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "console change keeps the suite green (part 4)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:04Z",
+    "completed_at": "2026-10-27T12:51:21Z"
+   },
+   {
+    "id": 122184870418,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "console change keeps the suite green (part 2)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:04Z",
+    "completed_at": "2026-10-27T13:26:44Z"
+   },
+   {
+    "id": 122184871729,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "TDD commit discipline",
+    "status": "completed",
+    "conclusion": "skipped",
+    "started_at": "2026-10-27T12:20:02Z",
+    "completed_at": "2026-10-27T12:20:01Z"
+   },
+   {
+    "id": 122184991357,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:05Z"
+   },
+   {
+    "id": 122184991363,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:38Z"
+   },
+   {
+    "id": 122184991383,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:26Z"
+   },
+   {
+    "id": 122184991399,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:20:32Z"
+   },
+   {
+    "id": 122184991401,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:31Z"
+   },
+   {
+    "id": 122184991419,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:34Z"
+   },
+   {
+    "id": 122184991449,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:52Z"
+   },
+   {
+    "id": 122184991459,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:24:02Z"
+   },
+   {
+    "id": 122184991465,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:32Z"
+   },
+   {
+    "id": 122184991564,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:34Z"
+   },
+   {
+    "id": 122184991577,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:38Z"
+   },
+   {
+    "id": 122184991581,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:37Z"
+   },
+   {
+    "id": 122184991583,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:24:47Z"
+   },
+   {
+    "id": 122184991586,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:16Z"
+   },
+   {
+    "id": 122184991602,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:09Z"
+   },
+   {
+    "id": 122184991603,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:39Z"
+   },
+   {
+    "id": 122184991619,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:05Z"
+   },
+   {
+    "id": 122184991642,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:24Z"
+   },
+   {
+    "id": 122184991649,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+    "status": "completed",
+    "conclusion": "cancelled",
+    "started_at": "2026-10-27T12:20:22Z",
+    "completed_at": "2026-10-27T12:40:43Z",
+    "steps": [
+     {
+      "number": 1,
+      "name": "Set up job",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:20:25Z",
+      "completed_at": "2026-10-27T12:20:27Z"
+     },
+     {
+      "number": 2,
+      "name": "Can this change reach the walks?",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:20:27Z",
+      "completed_at": "2026-10-27T12:20:27Z"
+     },
+     {
+      "number": 3,
+      "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:20:27Z",
+      "completed_at": "2026-10-27T12:20:40Z"
+     },
+     {
+      "number": 4,
+      "name": "Install test tooling (cached)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:20:40Z",
+      "completed_at": "2026-10-27T12:20:47Z"
+     },
+     {
+      "number": 5,
+      "name": "Console-change walk",
+      "status": "completed",
+      "conclusion": "cancelled",
+      "started_at": "2026-10-27T12:20:47Z",
+      "completed_at": "2026-10-27T12:40:36Z"
+     },
+     {
+      "number": 9,
+      "name": "Post Install test tooling (cached)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:40:36Z",
+      "completed_at": "2026-10-27T12:40:37Z"
+     },
+     {
+      "number": 10,
+      "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:40:37Z",
+      "completed_at": "2026-10-27T12:40:40Z"
+     },
+     {
+      "number": 11,
+      "name": "Complete job",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-10-27T12:40:40Z",
+      "completed_at": "2026-10-27T12:40:41Z"
+     }
+    ]
+   },
+   {
+    "id": 122184991657,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:23Z"
+   },
+   {
+    "id": 122184991664,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:24:45Z"
+   },
+   {
+    "id": 122184991670,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:33Z"
+   },
+   {
+    "id": 122184991693,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:33Z"
+   },
+   {
+    "id": 122184991701,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:12Z"
+   },
+   {
+    "id": 122184991734,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:55Z"
+   },
+   {
+    "id": 122194652860,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "scripts unit tests",
+    "status": "completed",
+    "conclusion": "failure",
+    "started_at": "2026-10-27T12:41:49Z",
+    "completed_at": "2026-10-27T12:42:29Z"
+   },
+   {
+    "id": 122194654481,
+    "run_id": 40502923604,
+    "run_attempt": 1,
+    "name": "unit test durations refresh",
+    "status": "completed",
+    "conclusion": "skipped",
+    "started_at": "2026-10-27T12:41:47Z",
+    "completed_at": "2026-10-27T12:41:46Z"
+   }
+  ],
+  "2": [
+   {
+    "id": 122364830230,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk list)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:20:18Z"
+   },
+   {
+    "id": 122364830602,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (part 2)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:40:23Z"
+   },
+   {
+    "id": 122364831517,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:26Z"
+   },
+   {
+    "id": 122364831634,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "console change keeps the suite green (part 3)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:58:43Z"
+   },
+   {
+    "id": 122364831781,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:05Z"
+   },
+   {
+    "id": 122364831961,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:34Z"
+   },
+   {
+    "id": 122364832063,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:31Z"
+   },
+   {
+    "id": 122364832128,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (part 3)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:34:18Z"
+   },
+   {
+    "id": 122364832334,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (part 5)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:41:46Z"
+   },
+   {
+    "id": 122364832529,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:24:02Z"
+   },
+   {
+    "id": 122364832594,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:38Z"
+   },
+   {
+    "id": 122364832686,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:24:47Z"
+   },
+   {
+    "id": 122364833701,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "unit test durations refresh",
+    "status": "completed",
+    "conclusion": "skipped",
+    "started_at": "2026-10-27T17:47:51Z",
+    "completed_at": "2026-10-27T12:41:46Z"
+   },
+   {
+    "id": 122364834312,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:20:32Z"
+   },
+   {
+    "id": 122364834314,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:33Z"
+   },
+   {
+    "id": 122364834388,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:32Z"
+   },
+   {
+    "id": 122364834453,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:37Z"
+   },
+   {
+    "id": 122364834776,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:52Z"
+   },
+   {
+    "id": 122364834801,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:39Z"
+   },
+   {
+    "id": 122364835060,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:33Z"
+   },
+   {
+    "id": 122364835093,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:27:34Z"
+   },
+   {
+    "id": 122364835191,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T17:47:53Z",
+    "completed_at": "2026-10-27T17:53:47Z"
+   },
+   {
+    "id": 122364835339,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:38Z"
+   },
+   {
+    "id": 122364835809,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:24:45Z"
+   },
+   {
+    "id": 122364835830,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:12Z"
+   },
+   {
+    "id": 122364836513,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:55Z"
+   },
+   {
+    "id": 122364836686,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:16Z"
+   },
+   {
+    "id": 122364837118,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:24Z"
+   },
+   {
+    "id": 122364837519,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:23Z"
+   },
+   {
+    "id": 122364838359,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:25:05Z"
+   },
+   {
+    "id": 122364839887,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:20Z",
+    "completed_at": "2026-10-27T12:26:09Z"
+   },
+   {
+    "id": 122364880661,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "TDD commit discipline",
+    "status": "completed",
+    "conclusion": "skipped",
+    "started_at": "2026-10-27T17:47:56Z",
+    "completed_at": "2026-10-27T12:20:01Z"
+   },
+   {
+    "id": 122364893149,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "console change keeps the suite green (part 1)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:04Z",
+    "completed_at": "2026-10-27T13:12:22Z"
+   },
+   {
+    "id": 122364907694,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "console change keeps the suite green (part 2)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:04Z",
+    "completed_at": "2026-10-27T13:26:44Z"
+   },
+   {
+    "id": 122364908519,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (part 1)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:08Z",
+    "completed_at": "2026-10-27T12:40:24Z"
+   },
+   {
+    "id": 122364910924,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests (part 4)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:35:26Z"
+   },
+   {
+    "id": 122364915821,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "act registry consumers",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:03Z",
+    "completed_at": "2026-10-27T12:20:11Z"
+   },
+   {
+    "id": 122364918465,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "console change keeps the suite green (part 4)",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T12:20:04Z",
+    "completed_at": "2026-10-27T12:51:21Z"
+   },
+   {
+    "id": 122368066746,
+    "run_id": 40502923604,
+    "run_attempt": 2,
+    "name": "scripts unit tests",
+    "status": "completed",
+    "conclusion": "success",
+    "started_at": "2026-10-27T17:53:50Z",
+    "completed_at": "2026-10-27T17:54:26Z"
+   }
+  ]
+ },
+ "annotations": {
+  "122184991649": [
+   {
+    "annotation_level": "failure",
+    "message": "The job has exceeded the maximum execution time of 20m0s"
+   },
+   {
+    "annotation_level": "failure",
+    "message": "The operation was canceled."
+   },
+   {
+    "annotation_level": "notice",
+    "message": "\"The ubuntu-latest label will migrate to Ubuntu 26 beginning October 19, 2026. For more information, see https://github.com/actions/runner-images/issues/14748\""
+   }
+  ]
+ },
+ "logs": {
+  "122184991649": "2026-10-27T12:20:47.6407331Z ##[group]Run python3 scripts/unit_test_parts.py run-walks --only \"$WALK\"\n2026-10-27T12:20:47.6409335Z \u001b[36;1mpython3 scripts/unit_test_parts.py run-walks --only \"$WALK\"\u001b[0m\n2026-10-27T12:20:47.6733899Z shell: /usr/bin/bash -e {0}\n2026-10-27T12:20:47.6735350Z env:\n2026-10-27T12:20:47.6736430Z   pythonLocation: /opt/hostedtoolcache/Python/3.12.15/x64\n2026-10-27T12:20:47.6738147Z   PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib/pkgconfig\n2026-10-27T12:20:47.6739850Z   Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64\n2026-10-27T12:20:47.6741367Z   Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64\n2026-10-27T12:20:47.6742830Z   Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.12.15/x64\n2026-10-27T12:20:47.6745097Z   LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.12.15/x64/lib\n2026-10-27T12:20:47.6746828Z   VIRTUAL_ENV: /home/runner/work/bureau-pipeline/bureau-pipeline/.venv\n2026-10-27T12:20:47.6748276Z   LINEAR_API_KEY: test-key\n2026-10-27T12:20:47.6749392Z   REPO: test/test\n2026-10-27T12:20:47.6750208Z   GH_TOKEN: test\n2026-10-27T12:20:47.6751039Z   REPO_SLUG: agent-bureau\n2026-10-27T12:20:47.6751988Z   BUREAU_REQUIRE_GIT_HISTORY: 1\n2026-10-27T12:20:47.6753309Z   WALK: tests/test_console_project_model_keeps_the_suite_green.py\n2026-10-27T12:20:47.6755037Z   BUREAU_WALK_SHARD: 5\n2026-10-27T12:20:47.6755912Z   BUREAU_WALK_SHARDS: 8\n2026-10-27T12:20:47.6756782Z ##[endgroup]\n2026-10-27T12:20:48.3917570Z running walk tests/test_console_project_model_keeps_the_suite_green.py\n2026-10-27T12:20:49.6780470Z shard 5 of 8 of walk tests/test_console_project_model_keeps_the_suite_green.py: 4 case(s) selected of 31\n2026-10-27T12:20:51.4548792Z ============================= test session starts ==============================\n2026-10-27T12:20:51.4553078Z platform linux -- Python 3.12.15, pytest-9.1.1, pluggy-1.6.0 -- /home/runner/work/bureau-pipeline/bureau-pipeline/.venv/bin/python3\n2026-10-27T12:20:51.4557773Z rootdir: /home/runner/work/bureau-pipeline/bureau-pipeline\n2026-10-27T12:20:51.4560106Z plugins: asyncio-1.4.0, cov-7.1.0\n2026-10-27T12:20:51.4563586Z asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function\n2026-10-27T12:20:52.5973886Z collecting ... collected 12 items\n2026-10-27T12:20:52.5975943Z \n2026-10-27T12:20:52.6262619Z tests/test_console_project_model_keeps_the_suite_green.py::test_the_suite_covers_the_six_files_and_every_model_test PASSED [  8%]\n2026-10-27T12:20:52.7378093Z tests/test_console_project_model_keeps_the_suite_green.py::test_the_walk_covers_every_project_and_every_group PASSED [ 16%]\n2026-10-27T12:20:52.9845768Z tests/test_console_project_model_keeps_the_suite_green.py::test_every_accepted_rung_of_every_group_is_saved_by_some_project PASSED [ 25%]\n2026-10-27T12:20:53.2169436Z tests/test_console_project_model_keeps_the_suite_green.py::test_the_grid_reads_a_project_added_to_the_repo_map PASSED [ 33%]\n2026-10-27T12:40:36.9014838Z ##[error]The operation was canceled.\n2026-10-27T12:40:37.1673010Z Post job cleanup.\n2026-10-27T12:40:37.1698602Z ##[start-action display=Set up Python;id=__4f628d80-98aa-4725-9db2-4d5ade5155ba.__actions_setup-python]\n2026-10-27T12:40:37.1736600Z ##[end-action id=__4f628d80-98aa-4725-9db2-4d5ade5155ba.__actions_setup-python;outcome=skipped;conclusion=skipped;duration_ms=0]\n2026-10-27T12:40:37.2629286Z Post job cleanup.\n"
+ },
+ "history": {
+  "runs": [
+   {
+    "id": 40491497458,
+    "event": "schedule",
+    "head_sha": "1b5ecc91ef3806e5e671ceb1b4568afbcd4c7b24",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-27T10:49:51Z"
+   },
+   {
+    "id": 40442613312,
+    "event": "push",
+    "head_sha": "1b5ecc91ef3806e5e671ceb1b4568afbcd4c7b24",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-27T03:09:48Z"
+   },
+   {
+    "id": 40436878183,
+    "event": "push",
+    "head_sha": "1275d736c739e14f014131db8fc09097710c21a4",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-27T02:10:22Z"
+   },
+   {
+    "id": 40265301227,
+    "event": "push",
+    "head_sha": "6f66363b58a748a9599c054c42ec7df74ac73568",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-26T03:41:22Z"
+   },
+   {
+    "id": 40259374320,
+    "event": "push",
+    "head_sha": "0ec017c02302d5ce05ffd9acba6f36b9ab05d579",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-26T02:29:53Z"
+   },
+   {
+    "id": 40256453029,
+    "event": "push",
+    "head_sha": "4930dfb2e5c08a8d8e77e8701bc2c77148c3ad3f",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-26T01:54:14Z"
+   },
+   {
+    "id": 40254856147,
+    "event": "push",
+    "head_sha": "ad55fe8065e01f1ee4c96e38e2312450d7c06408",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-26T01:34:15Z"
+   },
+   {
+    "id": 40250368916,
+    "event": "push",
+    "head_sha": "8cd493d2f97f3c32e48f0cb702232fc949f9c82c",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-26T00:38:51Z"
+   },
+   {
+    "id": 40236344226,
+    "event": "push",
+    "head_sha": "290742d9b1c83b6d9d95d38bfab84cb9bcef09d7",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T21:37:19Z"
+   },
+   {
+    "id": 40233979846,
+    "event": "push",
+    "head_sha": "acf9da21704e4a42104a11465795ce5867d4808f",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T21:07:18Z"
+   },
+   {
+    "id": 40228410620,
+    "event": "push",
+    "head_sha": "2dee257461cac762f3cd66f3fbeb09c38bfd7349",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T19:56:37Z"
+   },
+   {
+    "id": 40227427219,
+    "event": "push",
+    "head_sha": "ec41bfe4a41c2120734a90398264287cf928532f",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T19:44:09Z"
+   },
+   {
+    "id": 40227089707,
+    "event": "push",
+    "head_sha": "065731b3348d44afe39f7266eb1e455095a7d465",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T19:39:50Z"
+   },
+   {
+    "id": 40218109580,
+    "event": "push",
+    "head_sha": "4f675fbf59c2bbbf75dcc9029601e862142f1a1a",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T17:46:52Z"
+   },
+   {
+    "id": 40217800081,
+    "event": "push",
+    "head_sha": "5f9ecdd834e08564f9aac9e96aa70ff9da277691",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T17:43:01Z"
+   },
+   {
+    "id": 40215867964,
+    "event": "push",
+    "head_sha": "08660cf4f9865601a7083deccdfd90d4edfe1f7f",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T17:19:00Z"
+   },
+   {
+    "id": 40214593579,
+    "event": "push",
+    "head_sha": "c104b42f95ac7849667f8be0ce5e82afe2f2ec8f",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T17:03:12Z"
+   },
+   {
+    "id": 40209595707,
+    "event": "push",
+    "head_sha": "d593e38efc097e03691843517429cec7e05bfa5d",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T16:00:22Z"
+   },
+   {
+    "id": 40206983881,
+    "event": "push",
+    "head_sha": "cab9d061a765c4769cb2158459cc2143db8f00d8",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T15:27:01Z"
+   },
+   {
+    "id": 40186051091,
+    "event": "schedule",
+    "head_sha": "154c1789dd6efee3d6c940d042be86d6866b1e7c",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T10:45:05Z"
+   },
+   {
+    "id": 40172191069,
+    "event": "push",
+    "head_sha": "154c1789dd6efee3d6c940d042be86d6866b1e7c",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T07:17:05Z"
+   },
+   {
+    "id": 40167590706,
+    "event": "push",
+    "head_sha": "5720a1268508e7c46cac3b09669fd64990f6f580",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T06:01:00Z"
+   },
+   {
+    "id": 40159891848,
+    "event": "push",
+    "head_sha": "7b21032efe7a79edd02ebfd16b3435426e44af71",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T03:53:49Z"
+   },
+   {
+    "id": 40159816120,
+    "event": "push",
+    "head_sha": "1ded82b754c1ff4b33f4e1e4afe8c60df6b01778",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T03:52:33Z"
+   },
+   {
+    "id": 40155300138,
+    "event": "push",
+    "head_sha": "18274a8719e5036c8d50fb052c19c2e638c16bde",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T02:39:47Z"
+   },
+   {
+    "id": 40154255074,
+    "event": "push",
+    "head_sha": "7138904cab523a6648ab887fc48db83210d64898",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-25T02:23:24Z"
+   },
+   {
+    "id": 40144854916,
+    "event": "push",
+    "head_sha": "dda9371143951fdf188973670812d3ab66c7dde0",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-24T23:58:27Z"
+   },
+   {
+    "id": 40142820886,
+    "event": "push",
+    "head_sha": "4cd26c53a274b979517802e802c2a8631a74e8de",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-24T23:27:36Z"
+   },
+   {
+    "id": 40139728560,
+    "event": "push",
+    "head_sha": "02102a6235dee1320438fa6a36e6396c07ff5ab7",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-24T22:42:48Z"
+   },
+   {
+    "id": 40133214810,
+    "event": "push",
+    "head_sha": "50b3f61dd4f10709244ca99f4c8ee690157e5e26",
+    "conclusion": "success",
+    "run_attempt": 1,
+    "created_at": "2026-10-24T21:12:49Z"
+   }
+  ],
+  "jobs": {
+   "40491497458": [
+    {
+     "id": 122146283449,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T10:50:07Z"
+    },
+    {
+     "id": 122146283738,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T10:50:05Z"
+    },
+    {
+     "id": 122146283752,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:06:29Z"
+    },
+    {
+     "id": 122146283815,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:55:58Z"
+    },
+    {
+     "id": 122146283827,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:54Z",
+     "completed_at": "2026-10-27T11:33:03Z"
+    },
+    {
+     "id": 122146283900,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:54Z",
+     "completed_at": "2026-10-27T11:57:24Z"
+    },
+    {
+     "id": 122146283909,
+     "name": "scripts unit tests (part 5)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:12:54Z"
+    },
+    {
+     "id": 122146283921,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:09:07Z"
+    },
+    {
+     "id": 122146284019,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:28:20Z"
+    },
+    {
+     "id": 122146284064,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:03:53Z"
+    },
+    {
+     "id": 122146284074,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:49:53Z",
+     "completed_at": "2026-10-27T11:09:59Z"
+    },
+    {
+     "id": 122146286131,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-27T10:49:52Z",
+     "completed_at": "2026-10-27T10:49:51Z"
+    },
+    {
+     "id": 122146380136,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:55:54Z"
+    },
+    {
+     "id": 122146380151,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:53:32Z"
+    },
+    {
+     "id": 122146380152,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:57:17Z"
+    },
+    {
+     "id": 122146380161,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:54:13Z"
+    },
+    {
+     "id": 122146380180,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:56:00Z"
+    },
+    {
+     "id": 122146380189,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:57:15Z"
+    },
+    {
+     "id": 122146380221,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:57:29Z"
+    },
+    {
+     "id": 122146380250,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:55:29Z"
+    },
+    {
+     "id": 122146380252,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:57:21Z"
+    },
+    {
+     "id": 122146380258,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:57:14Z"
+    },
+    {
+     "id": 122146380270,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:57:18Z"
+    },
+    {
+     "id": 122146380331,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:50:19Z"
+    },
+    {
+     "id": 122146380350,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:54:13Z"
+    },
+    {
+     "id": 122146380374,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:56:03Z"
+    },
+    {
+     "id": 122146380395,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:54:38Z"
+    },
+    {
+     "id": 122146380406,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:54:35Z"
+    },
+    {
+     "id": 122146380418,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:55:59Z"
+    },
+    {
+     "id": 122146380424,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:54:26Z"
+    },
+    {
+     "id": 122146380436,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:54:14Z"
+    },
+    {
+     "id": 122146380467,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:54:04Z"
+    },
+    {
+     "id": 122146380491,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:56:07Z"
+    },
+    {
+     "id": 122146380546,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:57:15Z"
+    },
+    {
+     "id": 122146380679,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:08Z",
+     "completed_at": "2026-10-27T10:57:22Z"
+    },
+    {
+     "id": 122146380698,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:07Z",
+     "completed_at": "2026-10-27T10:54:27Z"
+    },
+    {
+     "id": 122146380850,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T10:50:09Z",
+     "completed_at": "2026-10-27T10:56:43Z"
+    },
+    {
+     "id": 122156213306,
+     "name": "unit test durations refresh",
+     "conclusion": "success",
+     "started_at": "2026-10-27T11:12:56Z",
+     "completed_at": "2026-10-27T11:13:09Z"
+    },
+    {
+     "id": 122156214379,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-27T11:12:57Z",
+     "completed_at": "2026-10-27T11:13:35Z"
+    }
+   ],
+   "40442613312": [
+    {
+     "id": 121986254994,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:09:57Z"
+    },
+    {
+     "id": 121986254995,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:33:49Z"
+    },
+    {
+     "id": 121986255078,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:51Z",
+     "completed_at": "2026-10-27T03:26:32Z"
+    },
+    {
+     "id": 121986255107,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:51Z",
+     "completed_at": "2026-10-27T04:17:03Z"
+    },
+    {
+     "id": 121986255133,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:25:06Z"
+    },
+    {
+     "id": 121986255151,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:23:25Z"
+    },
+    {
+     "id": 121986255153,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:51Z",
+     "completed_at": "2026-10-27T03:59:54Z"
+    },
+    {
+     "id": 121986255243,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:59:30Z"
+    },
+    {
+     "id": 121986255371,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:26:52Z"
+    },
+    {
+     "id": 121986255376,
+     "name": "scripts unit tests (part 5)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:50Z",
+     "completed_at": "2026-10-27T03:32:13Z"
+    },
+    {
+     "id": 121986256386,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:09:51Z",
+     "completed_at": "2026-10-27T03:10:03Z"
+    },
+    {
+     "id": 121986259880,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-27T03:09:49Z",
+     "completed_at": "2026-10-27T03:09:48Z"
+    },
+    {
+     "id": 121986335091,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:14:11Z"
+    },
+    {
+     "id": 121986335106,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:14:24Z"
+    },
+    {
+     "id": 121986335112,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:14:30Z"
+    },
+    {
+     "id": 121986335119,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:05Z",
+     "completed_at": "2026-10-27T03:15:17Z"
+    },
+    {
+     "id": 121986335188,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:17:26Z"
+    },
+    {
+     "id": 121986335196,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:16Z"
+    },
+    {
+     "id": 121986335211,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:24Z"
+    },
+    {
+     "id": 121986335238,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:17Z"
+    },
+    {
+     "id": 121986335264,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:05Z"
+    },
+    {
+     "id": 121986335271,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:13:50Z"
+    },
+    {
+     "id": 121986335276,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:28Z"
+    },
+    {
+     "id": 121986335322,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:59Z"
+    },
+    {
+     "id": 121986335354,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:14:26Z"
+    },
+    {
+     "id": 121986335396,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:39Z"
+    },
+    {
+     "id": 121986335411,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:13:57Z"
+    },
+    {
+     "id": 121986335415,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:16:03Z"
+    },
+    {
+     "id": 121986335426,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:16:13Z"
+    },
+    {
+     "id": 121986335444,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:14:53Z"
+    },
+    {
+     "id": 121986335445,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:37Z"
+    },
+    {
+     "id": 121986335447,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:13:46Z"
+    },
+    {
+     "id": 121986335456,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:53Z"
+    },
+    {
+     "id": 121986335470,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:21Z"
+    },
+    {
+     "id": 121986335515,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:13:57Z"
+    },
+    {
+     "id": 121986335603,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:10:16Z"
+    },
+    {
+     "id": 121986336053,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:10:06Z",
+     "completed_at": "2026-10-27T03:15:57Z"
+    },
+    {
+     "id": 121993101442,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-27T03:32:15Z",
+     "completed_at": "2026-10-27T03:32:54Z"
+    },
+    {
+     "id": 121993103115,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-27T03:32:13Z",
+     "completed_at": "2026-10-27T03:32:13Z"
+    }
+   ],
+   "40436878183": [
+    {
+     "id": 121967554727,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:10:41Z"
+    },
+    {
+     "id": 121967554906,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:10:32Z"
+    },
+    {
+     "id": 121967554915,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:10:34Z"
+    },
+    {
+     "id": 121967554952,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:31:47Z"
+    },
+    {
+     "id": 121967555004,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:10:33Z"
+    },
+    {
+     "id": 121967555062,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:37:08Z"
+    },
+    {
+     "id": 121967555179,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:10:30Z"
+    },
+    {
+     "id": 121967555181,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:10:30Z"
+    },
+    {
+     "id": 121967555193,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:35:11Z"
+    },
+    {
+     "id": 121967555203,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:24Z",
+     "completed_at": "2026-10-27T02:39:05Z"
+    },
+    {
+     "id": 121967556603,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-27T02:10:22Z",
+     "completed_at": "2026-10-27T02:10:22Z"
+    },
+    {
+     "id": 121967658818,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:43Z",
+     "completed_at": "2026-10-27T02:10:57Z"
+    },
+    {
+     "id": 121967658825,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:43Z",
+     "completed_at": "2026-10-27T02:15:55Z"
+    },
+    {
+     "id": 121967658844,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:46Z",
+     "completed_at": "2026-10-27T02:16:32Z"
+    },
+    {
+     "id": 121967658845,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:43Z",
+     "completed_at": "2026-10-27T02:15:53Z"
+    },
+    {
+     "id": 121967658848,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:43Z",
+     "completed_at": "2026-10-27T02:16:47Z"
+    },
+    {
+     "id": 121967658854,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:11:44Z",
+     "completed_at": "2026-10-27T02:15:49Z"
+    },
+    {
+     "id": 121967658862,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:43Z",
+     "completed_at": "2026-10-27T02:17:51Z"
+    },
+    {
+     "id": 121967658870,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:15:09Z",
+     "completed_at": "2026-10-27T02:22:11Z"
+    },
+    {
+     "id": 121967658871,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:43Z",
+     "completed_at": "2026-10-27T02:14:07Z"
+    },
+    {
+     "id": 121967658877,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:12:10Z",
+     "completed_at": "2026-10-27T02:17:48Z"
+    },
+    {
+     "id": 121967658882,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:14:31Z",
+     "completed_at": "2026-10-27T02:21:34Z"
+    },
+    {
+     "id": 121967658883,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:11:19Z",
+     "completed_at": "2026-10-27T02:16:19Z"
+    },
+    {
+     "id": 121967658891,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:10:59Z",
+     "completed_at": "2026-10-27T02:16:52Z"
+    },
+    {
+     "id": 121967658908,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:11:53Z",
+     "completed_at": "2026-10-27T02:19:16Z"
+    },
+    {
+     "id": 121967658909,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:12:23Z",
+     "completed_at": "2026-10-27T02:19:04Z"
+    },
+    {
+     "id": 121967658910,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:12:29Z",
+     "completed_at": "2026-10-27T02:18:25Z"
+    },
+    {
+     "id": 121967658912,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:15:05Z",
+     "completed_at": "2026-10-27T02:21:03Z"
+    },
+    {
+     "id": 121967658918,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:14:55Z",
+     "completed_at": "2026-10-27T02:21:18Z"
+    },
+    {
+     "id": 121967658921,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:14:07Z",
+     "completed_at": "2026-10-27T02:18:28Z"
+    },
+    {
+     "id": 121967658933,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:13:20Z",
+     "completed_at": "2026-10-27T02:17:44Z"
+    },
+    {
+     "id": 121967658937,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:14:44Z",
+     "completed_at": "2026-10-27T02:21:45Z"
+    },
+    {
+     "id": 121967658940,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:15:14Z",
+     "completed_at": "2026-10-27T02:20:31Z"
+    },
+    {
+     "id": 121967658965,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:14:37Z",
+     "completed_at": "2026-10-27T02:21:47Z"
+    },
+    {
+     "id": 121967658970,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:15:13Z",
+     "completed_at": "2026-10-27T02:21:04Z"
+    },
+    {
+     "id": 121967659003,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:15:19Z",
+     "completed_at": "2026-10-27T02:20:11Z"
+    },
+    {
+     "id": 121976685852,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-27T02:39:07Z",
+     "completed_at": "2026-10-27T02:39:48Z"
+    },
+    {
+     "id": 121976688170,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-27T02:39:05Z",
+     "completed_at": "2026-10-27T02:39:05Z"
+    }
+   ],
+   "40265301227": [
+    {
+     "id": 121386282568,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:24Z",
+     "completed_at": "2026-10-26T03:41:30Z"
+    },
+    {
+     "id": 121386282742,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:24Z",
+     "completed_at": "2026-10-26T03:41:39Z"
+    },
+    {
+     "id": 121386282762,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:24Z",
+     "completed_at": "2026-10-26T03:41:34Z"
+    },
+    {
+     "id": 121386282769,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:25Z",
+     "completed_at": "2026-10-26T04:08:01Z"
+    },
+    {
+     "id": 121386282772,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:25Z",
+     "completed_at": "2026-10-26T04:10:45Z"
+    },
+    {
+     "id": 121386282784,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:24Z",
+     "completed_at": "2026-10-26T04:05:34Z"
+    },
+    {
+     "id": 121386282804,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:25Z",
+     "completed_at": "2026-10-26T03:41:32Z"
+    },
+    {
+     "id": 121386282809,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:24Z",
+     "completed_at": "2026-10-26T03:41:32Z"
+    },
+    {
+     "id": 121386282915,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:24Z",
+     "completed_at": "2026-10-26T03:41:31Z"
+    },
+    {
+     "id": 121386282963,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:25Z",
+     "completed_at": "2026-10-26T04:08:30Z"
+    },
+    {
+     "id": 121386283927,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T03:41:23Z",
+     "completed_at": "2026-10-26T03:41:22Z"
+    },
+    {
+     "id": 121386349004,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:45:55Z"
+    },
+    {
+     "id": 121386349015,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:48:49Z"
+    },
+    {
+     "id": 121386349017,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:47:26Z"
+    },
+    {
+     "id": 121386349026,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:48:42Z"
+    },
+    {
+     "id": 121386349028,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:47:14Z"
+    },
+    {
+     "id": 121386349029,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:45:27Z"
+    },
+    {
+     "id": 121386349033,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:45:58Z"
+    },
+    {
+     "id": 121386349039,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:46:04Z"
+    },
+    {
+     "id": 121386349040,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:48:53Z"
+    },
+    {
+     "id": 121386349050,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:42Z",
+     "completed_at": "2026-10-26T03:49:03Z"
+    },
+    {
+     "id": 121386349058,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:41:53Z"
+    },
+    {
+     "id": 121386349068,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:42Z",
+     "completed_at": "2026-10-26T03:48:53Z"
+    },
+    {
+     "id": 121386349072,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:48:11Z"
+    },
+    {
+     "id": 121386349080,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:42Z",
+     "completed_at": "2026-10-26T03:47:39Z"
+    },
+    {
+     "id": 121386349104,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:42Z",
+     "completed_at": "2026-10-26T03:47:42Z"
+    },
+    {
+     "id": 121386349106,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:46:54Z"
+    },
+    {
+     "id": 121386349109,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:42Z",
+     "completed_at": "2026-10-26T03:47:30Z"
+    },
+    {
+     "id": 121386349112,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:44:13Z"
+    },
+    {
+     "id": 121386349116,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:45:07Z"
+    },
+    {
+     "id": 121386349162,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:42Z",
+     "completed_at": "2026-10-26T03:48:57Z"
+    },
+    {
+     "id": 121386349163,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:47:38Z"
+    },
+    {
+     "id": 121386349167,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:45:59Z"
+    },
+    {
+     "id": 121386349173,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:47:09Z"
+    },
+    {
+     "id": 121386349233,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:46:57Z"
+    },
+    {
+     "id": 121386349245,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T03:41:41Z",
+     "completed_at": "2026-10-26T03:46:07Z"
+    },
+    {
+     "id": 121393620330,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-26T04:10:48Z",
+     "completed_at": "2026-10-26T04:11:28Z"
+    },
+    {
+     "id": 121393622050,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T04:10:45Z",
+     "completed_at": "2026-10-26T04:10:45Z"
+    }
+   ],
+   "40259374320": [
+    {
+     "id": 121368208319,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:55Z",
+     "completed_at": "2026-10-26T02:30:08Z"
+    },
+    {
+     "id": 121368208534,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:55Z",
+     "completed_at": "2026-10-26T02:50:11Z"
+    },
+    {
+     "id": 121368208545,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:55Z",
+     "completed_at": "2026-10-26T02:55:03Z"
+    },
+    {
+     "id": 121368208554,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:56Z",
+     "completed_at": "2026-10-26T03:18:33Z"
+    },
+    {
+     "id": 121368208602,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:56Z",
+     "completed_at": "2026-10-26T02:30:04Z"
+    },
+    {
+     "id": 121368208605,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:56Z",
+     "completed_at": "2026-10-26T02:53:26Z"
+    },
+    {
+     "id": 121368208612,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:56Z",
+     "completed_at": "2026-10-26T02:57:49Z"
+    },
+    {
+     "id": 121368208613,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:55Z",
+     "completed_at": "2026-10-26T03:35:24Z"
+    },
+    {
+     "id": 121368208635,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:55Z",
+     "completed_at": "2026-10-26T03:35:52Z"
+    },
+    {
+     "id": 121368208809,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:29:56Z",
+     "completed_at": "2026-10-26T02:51:16Z"
+    },
+    {
+     "id": 121368209641,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T02:29:54Z",
+     "completed_at": "2026-10-26T02:29:53Z"
+    },
+    {
+     "id": 121368272455,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:35:55Z"
+    },
+    {
+     "id": 121368272456,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:34:20Z"
+    },
+    {
+     "id": 121368272458,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:30:25Z"
+    },
+    {
+     "id": 121368272469,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:35:23Z"
+    },
+    {
+     "id": 121368272477,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:35:56Z"
+    },
+    {
+     "id": 121368272491,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:34:19Z"
+    },
+    {
+     "id": 121368272493,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:35:22Z"
+    },
+    {
+     "id": 121368272510,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:11Z",
+     "completed_at": "2026-10-26T02:37:37Z"
+    },
+    {
+     "id": 121368272512,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:37:17Z"
+    },
+    {
+     "id": 121368272519,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:33:52Z"
+    },
+    {
+     "id": 121368272526,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:35:57Z"
+    },
+    {
+     "id": 121368272528,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:11Z",
+     "completed_at": "2026-10-26T02:34:28Z"
+    },
+    {
+     "id": 121368272544,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:34:27Z"
+    },
+    {
+     "id": 121368272559,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:11Z",
+     "completed_at": "2026-10-26T02:35:28Z"
+    },
+    {
+     "id": 121368272560,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:37:20Z"
+    },
+    {
+     "id": 121368272562,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:35:19Z"
+    },
+    {
+     "id": 121368272573,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:36:08Z"
+    },
+    {
+     "id": 121368272583,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:11Z",
+     "completed_at": "2026-10-26T02:34:58Z"
+    },
+    {
+     "id": 121368272587,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:34:17Z"
+    },
+    {
+     "id": 121368272588,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:36:01Z"
+    },
+    {
+     "id": 121368272589,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:34:26Z"
+    },
+    {
+     "id": 121368272689,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:33:35Z"
+    },
+    {
+     "id": 121368272696,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:10Z",
+     "completed_at": "2026-10-26T02:36:06Z"
+    },
+    {
+     "id": 121368272697,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:11Z",
+     "completed_at": "2026-10-26T02:35:02Z"
+    },
+    {
+     "id": 121368272753,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:30:11Z",
+     "completed_at": "2026-10-26T02:37:19Z"
+    },
+    {
+     "id": 121375214256,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:57:51Z",
+     "completed_at": "2026-10-26T02:58:31Z"
+    },
+    {
+     "id": 121375215648,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T02:57:50Z",
+     "completed_at": "2026-10-26T02:57:49Z"
+    }
+   ],
+   "40256453029": [
+    {
+     "id": 121359242228,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T01:54:25Z"
+    },
+    {
+     "id": 121359242345,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T02:14:37Z"
+    },
+    {
+     "id": 121359242366,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T02:21:17Z"
+    },
+    {
+     "id": 121359242373,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T02:20:58Z"
+    },
+    {
+     "id": 121359242418,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T01:54:23Z"
+    },
+    {
+     "id": 121359242421,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T01:54:22Z"
+    },
+    {
+     "id": 121359242479,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T01:54:23Z"
+    },
+    {
+     "id": 121359242495,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T01:54:33Z"
+    },
+    {
+     "id": 121359242504,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T02:11:20Z"
+    },
+    {
+     "id": 121359242571,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:16Z",
+     "completed_at": "2026-10-26T01:54:23Z"
+    },
+    {
+     "id": 121359243396,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T01:54:14Z",
+     "completed_at": "2026-10-26T01:54:14Z"
+    },
+    {
+     "id": 121359315739,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:01:49Z"
+    },
+    {
+     "id": 121359315749,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:01:09Z"
+    },
+    {
+     "id": 121359315763,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:59:53Z"
+    },
+    {
+     "id": 121359315765,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:01:07Z"
+    },
+    {
+     "id": 121359315768,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:00:23Z"
+    },
+    {
+     "id": 121359315769,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:58:43Z"
+    },
+    {
+     "id": 121359315777,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:01:48Z"
+    },
+    {
+     "id": 121359315780,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:00:51Z"
+    },
+    {
+     "id": 121359315790,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:01:42Z"
+    },
+    {
+     "id": 121359315795,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:00:11Z"
+    },
+    {
+     "id": 121359315796,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:54:46Z"
+    },
+    {
+     "id": 121359315802,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:59:14Z"
+    },
+    {
+     "id": 121359315803,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:01:41Z"
+    },
+    {
+     "id": 121359315805,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:00:42Z"
+    },
+    {
+     "id": 121359315835,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:58:58Z"
+    },
+    {
+     "id": 121359315853,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:01:45Z"
+    },
+    {
+     "id": 121359315857,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:58:06Z"
+    },
+    {
+     "id": 121359315870,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:00:34Z"
+    },
+    {
+     "id": 121359315875,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T01:58:56Z"
+    },
+    {
+     "id": 121359315882,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T01:58:15Z"
+    },
+    {
+     "id": 121359315890,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:35Z",
+     "completed_at": "2026-10-26T02:00:32Z"
+    },
+    {
+     "id": 121359315919,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:00:40Z"
+    },
+    {
+     "id": 121359315923,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T02:00:33Z"
+    },
+    {
+     "id": 121359315956,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T01:58:03Z"
+    },
+    {
+     "id": 121359316014,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:54:36Z",
+     "completed_at": "2026-10-26T01:58:58Z"
+    },
+    {
+     "id": 121366025583,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:21:19Z",
+     "completed_at": "2026-10-26T02:21:53Z"
+    },
+    {
+     "id": 121366027361,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T02:21:17Z",
+     "completed_at": "2026-10-26T02:21:17Z"
+    }
+   ],
+   "40254856147": [
+    {
+     "id": 121354413797,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T01:34:24Z"
+    },
+    {
+     "id": 121354413843,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T02:40:26Z"
+    },
+    {
+     "id": 121354413940,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T02:16:53Z"
+    },
+    {
+     "id": 121354413959,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T02:13:07Z"
+    },
+    {
+     "id": 121354413961,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T01:56:23Z"
+    },
+    {
+     "id": 121354413981,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T02:01:20Z"
+    },
+    {
+     "id": 121354413986,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T01:50:19Z"
+    },
+    {
+     "id": 121354413993,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T02:12:27Z"
+    },
+    {
+     "id": 121354414067,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T01:34:33Z"
+    },
+    {
+     "id": 121354414527,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:17Z",
+     "completed_at": "2026-10-26T01:55:18Z"
+    },
+    {
+     "id": 121354414715,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T01:34:15Z",
+     "completed_at": "2026-10-26T01:34:15Z"
+    },
+    {
+     "id": 121354485000,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:34Z",
+     "completed_at": "2026-10-26T01:34:47Z"
+    },
+    {
+     "id": 121354485007,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:34Z",
+     "completed_at": "2026-10-26T01:41:45Z"
+    },
+    {
+     "id": 121354485009,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:38:43Z"
+    },
+    {
+     "id": 121354485031,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:20Z"
+    },
+    {
+     "id": 121354485033,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:38:01Z"
+    },
+    {
+     "id": 121354485041,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:41:52Z"
+    },
+    {
+     "id": 121354485044,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:39:44Z"
+    },
+    {
+     "id": 121354485055,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:41:43Z"
+    },
+    {
+     "id": 121354485056,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:41:42Z"
+    },
+    {
+     "id": 121354485069,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:41:40Z"
+    },
+    {
+     "id": 121354485085,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:41:43Z"
+    },
+    {
+     "id": 121354485096,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:37:58Z"
+    },
+    {
+     "id": 121354485107,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:39:46Z"
+    },
+    {
+     "id": 121354485183,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:31Z"
+    },
+    {
+     "id": 121354485189,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:38:13Z"
+    },
+    {
+     "id": 121354485202,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:34Z"
+    },
+    {
+     "id": 121354485219,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:37:55Z"
+    },
+    {
+     "id": 121354485220,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:39:00Z"
+    },
+    {
+     "id": 121354485231,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:41:45Z"
+    },
+    {
+     "id": 121354485242,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:39:59Z"
+    },
+    {
+     "id": 121354485243,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:31Z"
+    },
+    {
+     "id": 121354485258,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:39:25Z"
+    },
+    {
+     "id": 121354485267,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:36Z"
+    },
+    {
+     "id": 121354485269,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:26Z"
+    },
+    {
+     "id": 121354485275,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:34:35Z",
+     "completed_at": "2026-10-26T01:40:13Z"
+    },
+    {
+     "id": 121360979850,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-26T02:01:23Z",
+     "completed_at": "2026-10-26T02:02:02Z"
+    },
+    {
+     "id": 121360981058,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T02:01:21Z",
+     "completed_at": "2026-10-26T02:01:20Z"
+    }
+   ],
+   "40250368916": [
+    {
+     "id": 121340717176,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T00:38:59Z"
+    },
+    {
+     "id": 121340717387,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T00:39:01Z"
+    },
+    {
+     "id": 121340717406,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T01:03:06Z"
+    },
+    {
+     "id": 121340717409,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T00:39:00Z"
+    },
+    {
+     "id": 121340717413,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T01:05:13Z"
+    },
+    {
+     "id": 121340717437,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T00:39:16Z"
+    },
+    {
+     "id": 121340717459,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T01:04:24Z"
+    },
+    {
+     "id": 121340717477,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T00:39:01Z"
+    },
+    {
+     "id": 121340717531,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:53Z",
+     "completed_at": "2026-10-26T01:06:09Z"
+    },
+    {
+     "id": 121340718324,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T00:38:51Z",
+     "completed_at": "2026-10-26T00:38:51Z"
+    },
+    {
+     "id": 121340718906,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:38:54Z",
+     "completed_at": "2026-10-26T00:39:05Z"
+    },
+    {
+     "id": 121340815958,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:44:37Z"
+    },
+    {
+     "id": 121340815966,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:45:07Z"
+    },
+    {
+     "id": 121340815977,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:39:33Z"
+    },
+    {
+     "id": 121340815978,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:43:57Z"
+    },
+    {
+     "id": 121340815991,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:46:28Z"
+    },
+    {
+     "id": 121340815995,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:45:11Z"
+    },
+    {
+     "id": 121340816053,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:19Z",
+     "completed_at": "2026-10-26T00:46:25Z"
+    },
+    {
+     "id": 121340816056,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:43:18Z"
+    },
+    {
+     "id": 121340816066,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:46:25Z"
+    },
+    {
+     "id": 121340816083,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:46:26Z"
+    },
+    {
+     "id": 121340816100,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:45:21Z"
+    },
+    {
+     "id": 121340816107,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:43:39Z"
+    },
+    {
+     "id": 121340816109,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:19Z",
+     "completed_at": "2026-10-26T00:46:31Z"
+    },
+    {
+     "id": 121340816119,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:44:32Z"
+    },
+    {
+     "id": 121340816123,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:45:09Z"
+    },
+    {
+     "id": 121340816151,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:44:06Z"
+    },
+    {
+     "id": 121340816154,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:44:57Z"
+    },
+    {
+     "id": 121340816167,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:46:30Z"
+    },
+    {
+     "id": 121340816169,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:19Z",
+     "completed_at": "2026-10-26T00:45:22Z"
+    },
+    {
+     "id": 121340816170,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:45:10Z"
+    },
+    {
+     "id": 121340816204,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:19Z",
+     "completed_at": "2026-10-26T00:45:22Z"
+    },
+    {
+     "id": 121340816208,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:44:27Z"
+    },
+    {
+     "id": 121340816228,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:19Z",
+     "completed_at": "2026-10-26T00:45:16Z"
+    },
+    {
+     "id": 121340816254,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:19Z",
+     "completed_at": "2026-10-26T00:45:10Z"
+    },
+    {
+     "id": 121340816307,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-26T00:39:18Z",
+     "completed_at": "2026-10-26T00:45:13Z"
+    },
+    {
+     "id": 121347349349,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-26T01:06:11Z",
+     "completed_at": "2026-10-26T01:06:48Z"
+    },
+    {
+     "id": 121347351040,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-26T01:06:09Z",
+     "completed_at": "2026-10-26T01:06:09Z"
+    }
+   ],
+   "40236344226": [
+    {
+     "id": 121298642603,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:37:36Z"
+    },
+    {
+     "id": 121298642660,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:37:28Z"
+    },
+    {
+     "id": 121298642713,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:54:23Z"
+    },
+    {
+     "id": 121298642722,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:37:27Z"
+    },
+    {
+     "id": 121298642738,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:37:27Z"
+    },
+    {
+     "id": 121298642755,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:59:02Z"
+    },
+    {
+     "id": 121298642770,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T22:06:09Z"
+    },
+    {
+     "id": 121298642777,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:37:30Z"
+    },
+    {
+     "id": 121298642882,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:37:28Z"
+    },
+    {
+     "id": 121298642918,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:21Z",
+     "completed_at": "2026-10-25T21:58:07Z"
+    },
+    {
+     "id": 121298643665,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-25T21:37:20Z",
+     "completed_at": "2026-10-25T21:37:19Z"
+    },
+    {
+     "id": 121298713223,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:41:28Z"
+    },
+    {
+     "id": 121298713227,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:41:28Z"
+    },
+    {
+     "id": 121298713237,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:44:56Z"
+    },
+    {
+     "id": 121298713238,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:41:42Z"
+    },
+    {
+     "id": 121298713244,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:42:57Z"
+    },
+    {
+     "id": 121298713250,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:41:30Z"
+    },
+    {
+     "id": 121298713254,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:43:22Z"
+    },
+    {
+     "id": 121298713266,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:44:50Z"
+    },
+    {
+     "id": 121298713269,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:37:49Z"
+    },
+    {
+     "id": 121298713270,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:43:25Z"
+    },
+    {
+     "id": 121298713271,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:43:23Z"
+    },
+    {
+     "id": 121298713278,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:41:36Z"
+    },
+    {
+     "id": 121298713287,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:43:27Z"
+    },
+    {
+     "id": 121298713291,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:42:10Z"
+    },
+    {
+     "id": 121298713293,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:42:51Z"
+    },
+    {
+     "id": 121298713331,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:44:42Z"
+    },
+    {
+     "id": 121298713342,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:40:58Z"
+    },
+    {
+     "id": 121298713352,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:43:38Z"
+    },
+    {
+     "id": 121298713356,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:44:47Z"
+    },
+    {
+     "id": 121298713373,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:41:58Z"
+    },
+    {
+     "id": 121298713380,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:44:45Z"
+    },
+    {
+     "id": 121298713386,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:42:06Z"
+    },
+    {
+     "id": 121298713388,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:41:53Z"
+    },
+    {
+     "id": 121298713390,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:38Z",
+     "completed_at": "2026-10-25T21:40:35Z"
+    },
+    {
+     "id": 121298713445,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:37:39Z",
+     "completed_at": "2026-10-25T21:43:30Z"
+    },
+    {
+     "id": 121305356054,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-25T22:06:11Z",
+     "completed_at": "2026-10-25T22:06:47Z"
+    },
+    {
+     "id": 121305357609,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-25T22:06:09Z",
+     "completed_at": "2026-10-25T22:06:09Z"
+    }
+   ],
+   "40233979846": [
+    {
+     "id": 121291483059,
+     "name": "scripts unit tests (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T21:32:23Z"
+    },
+    {
+     "id": 121291483137,
+     "name": "scripts unit tests (walk list)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T21:07:35Z"
+    },
+    {
+     "id": 121291483176,
+     "name": "scripts unit tests (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T21:29:22Z"
+    },
+    {
+     "id": 121291483203,
+     "name": "console change keeps the suite green (part 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:21Z",
+     "completed_at": "2026-10-25T21:57:02Z"
+    },
+    {
+     "id": 121291483252,
+     "name": "act registry consumers",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T21:07:32Z"
+    },
+    {
+     "id": 121291483260,
+     "name": "console change keeps the suite green (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:21Z",
+     "completed_at": "2026-10-25T21:56:55Z"
+    },
+    {
+     "id": 121291483265,
+     "name": "console change keeps the suite green (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T22:02:46Z"
+    },
+    {
+     "id": 121291483297,
+     "name": "scripts unit tests (part 2)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:21Z",
+     "completed_at": "2026-10-25T21:34:04Z"
+    },
+    {
+     "id": 121291483401,
+     "name": "scripts unit tests (part 3)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T21:33:37Z"
+    },
+    {
+     "id": 121291483409,
+     "name": "console change keeps the suite green (part 4)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:20Z",
+     "completed_at": "2026-10-25T21:49:44Z"
+    },
+    {
+     "id": 121291484040,
+     "name": "TDD commit discipline",
+     "conclusion": "skipped",
+     "started_at": "2026-10-25T21:07:19Z",
+     "completed_at": "2026-10-25T21:07:18Z"
+    },
+    {
+     "id": 121291548604,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 5 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:13:22Z"
+    },
+    {
+     "id": 121291548605,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 2 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:45Z"
+    },
+    {
+     "id": 121291548612,
+     "name": "scripts unit tests (walk tests/test_console_change_keeps_the_suite_green.py shard 1 of 1)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:07:49Z"
+    },
+    {
+     "id": 121291548615,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 6 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:10:52Z"
+    },
+    {
+     "id": 121291548619,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 1 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:14:45Z"
+    },
+    {
+     "id": 121291548623,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 2 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:12:44Z"
+    },
+    {
+     "id": 121291548626,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 7 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:13:32Z"
+    },
+    {
+     "id": 121291548660,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 1 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:13:29Z"
+    },
+    {
+     "id": 121291548666,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 3 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:38Z"
+    },
+    {
+     "id": 121291548671,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 4 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:14:45Z"
+    },
+    {
+     "id": 121291548673,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 4 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:12:56Z"
+    },
+    {
+     "id": 121291548674,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 7 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:14:46Z"
+    },
+    {
+     "id": 121291548683,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 4 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:54Z"
+    },
+    {
+     "id": 121291548687,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 8 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:12:37Z"
+    },
+    {
+     "id": 121291548689,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 5 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:09Z"
+    },
+    {
+     "id": 121291548690,
+     "name": "scripts unit tests (walk tests/test_console_agent_move_keeps_the_suite_green.py shard 3 of 7)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:11:57Z"
+    },
+    {
+     "id": 121291548696,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 6 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:14:46Z"
+    },
+    {
+     "id": 121291548699,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 9 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:13:25Z"
+    },
+    {
+     "id": 121291548703,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 6 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:13:29Z"
+    },
+    {
+     "id": 121291548712,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 7 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:54Z"
+    },
+    {
+     "id": 121291548715,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 3 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:14Z"
+    },
+    {
+     "id": 121291548730,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 1 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:11:59Z"
+    },
+    {
+     "id": 121291548737,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 5 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:49Z"
+    },
+    {
+     "id": 121291548747,
+     "name": "scripts unit tests (walk tests/test_console_every_default_keeps_the_suite_green.py shard 8 of 9)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:38Z",
+     "completed_at": "2026-10-25T21:12:59Z"
+    },
+    {
+     "id": 121291548757,
+     "name": "scripts unit tests (walk tests/test_console_project_model_keeps_the_suite_green.py shard 2 of 8)",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:07:37Z",
+     "completed_at": "2026-10-25T21:11:04Z"
+    },
+    {
+     "id": 121297886510,
+     "name": "scripts unit tests",
+     "conclusion": "success",
+     "started_at": "2026-10-25T21:34:06Z",
+     "completed_at": "2026-10-25T21:34:41Z"
+    },
+    {
+     "id": 121297887360,
+     "name": "unit test durations refresh",
+     "conclusion": "skipped",
+     "started_at": "2026-10-25T21:34:04Z",
+     "completed_at": "2026-10-25T21:34:04Z"
+    }
+   ]
+  }
+ }
+}
