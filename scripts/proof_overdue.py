@@ -488,11 +488,14 @@ CARD_QUERY = """query($id: String!) { issue(id: $id) {
              parent { identifier children(first: 100) { nodes {
                identifier title state { name } labels { nodes { name } } } } }
            } }"""
-#: A repo's open PROOF cards, in every open lane.
-PROOFS_QUERY = """query($label: String!) { issues(first: 100, filter: {
-             team: {key: {eq: "DRE"}}, title: {startsWith: "PROOF:"},
+#: A repo's open PROOF cards, in every open lane — paged, because
+#: `linear_ops.gql_paged` refuses a query that cannot be and a repo past 100
+#: would otherwise lose the rest without a word (DRE-2681).
+PROOFS_QUERY = """query($label: String!, $after: String) { issues(first: 100, after: $after,
+             filter: {team: {key: {eq: "DRE"}}, title: {startsWith: "PROOF:"},
              labels: {name: {eqIgnoreCase: $label}},
-             state: {type: {nin: ["completed", "canceled"]}}}) { nodes { identifier } } }"""
+             state: {type: {nin: ["completed", "canceled"]}}}) {
+             pageInfo { hasNextPage endCursor } nodes { identifier } } }"""
 #: What a saved card keeps of its record pull request.
 PR_KEPT = ("number", "state", "createdAt", "headRefName", "headRefOid", "files")
 #: The fields of the record branch's pull requests, closed ones too.
@@ -507,9 +510,8 @@ class LinearReads:
     """The four Linear reads this module makes, and nothing else."""
 
     def proofs(self, slug: str) -> list:
-        data = linear_ops.gql(PROOFS_QUERY, {"label": f"repo:{slug}"}) or {}
-        return [n["identifier"] for n in ((data.get("issues") or {}).get("nodes") or [])
-                if n.get("identifier")]
+        nodes = linear_ops.gql_paged(PROOFS_QUERY, {"label": f"repo:{slug}"})
+        return [n["identifier"] for n in nodes if n.get("identifier")]
 
     def card(self, identifier: str) -> dict:
         issue = (linear_ops.gql(CARD_QUERY, {"id": identifier}) or {}).get("issue")
@@ -521,7 +523,14 @@ class LinearReads:
         return _dispatch().LinearReads().thread(identifier)
 
     def states(self, identifiers: list) -> dict:
-        return _dispatch().LinearReads().states(identifiers)
+        """Every named card's state, a request per `LANE_RELATIONS_CARDS` —
+        the most one `proof_dispatch` read answers, past which a card would
+        be absent and read as not Done."""
+        dispatch = _dispatch()
+        step, got = dispatch.LANE_RELATIONS_CARDS, {}
+        for start in range(0, len(identifiers), step):
+            got.update(dispatch.LinearReads().states(identifiers[start:start + step]))
+        return got
 
 
 def record_path(files) -> str | None:
