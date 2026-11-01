@@ -24,6 +24,7 @@ import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import parse_qs
 
 import pytest
 
@@ -422,9 +423,29 @@ def test_replay_reads_attempt_one_and_history_from_before_the_run(gh, monkeypatc
     assert any(p.startswith(f"repos/{REPO}/actions/runs/{RUN_ID}/attempts/1/jobs")
                for p in paths)
     listing = next(p for p in paths if "status=success" in p)
-    assert "branch=main" in listing
-    assert "2026-10-27T12:20:01Z" in listing.replace("%3A", ":")
+    query = parse_qs(listing.partition("?")[2])
+    assert query["branch"] == ["main"]
+    assert query["created"] == ["<2026-10-27T12:20:01Z"]
     assert any(p == f"repos/{REPO}/actions/jobs/{SHARD_JOB}/logs" for p in paths)
+
+
+def test_replay_of_a_job_that_stopped_before_its_pass_names_the_re_run_pass(
+        gh, monkeypatch, capsys):
+    _replay_state(gh)
+    jobs = copy.deepcopy(gh.fx["jobs"]["1"])
+    # Past its limit, but stopped before the 5:34 AM PT pass reached it. Only
+    # the job's own stop moves, so the step records cannot settle it.
+    shard(jobs)["completed_at"] = "2026-10-27T12:33:50Z"
+    gh.jobs[(RUN_ID, 1)] = jobs
+    code, lines = run_main(monkeypatch, capsys,
+                           ["replay", "--repo", REPO, "--run", str(RUN_ID)],
+                           "2026-11-01T18:00:00Z")
+    assert code == 0
+    line = next(x for x in lines if f'job="{SHARD}"' in x)
+    assert " would-cancel-at=none would-rerun-at=5:34:00 AM PT " in line
+    assert "stopped-at=5:33:50 AM PT" in line
+    assert line.endswith("— re-run once")
+    assert gh.posts() == []
 
 
 def test_replay_without_a_later_attempt_prints_no_attempt_line(gh, monkeypatch, capsys):
@@ -497,6 +518,19 @@ def test_a_run_that_never_finishes_is_not_re_run_this_pass(gh, monkeypatch, caps
     assert gh.posts() == [f"{base}/cancel", f"{base}/force-cancel"]
     assert code == 0
     assert any(x.startswith(f"hung-job: canceled run={RUN_ID} ") for x in lines)
+
+
+def test_an_unread_run_after_its_cancel_is_not_re_run_this_pass(gh, monkeypatch, capsys):
+    run, jobs = running_incident(gh.fx)
+    watch_running(gh, run, jobs)
+    gh.fail.append(rf"/actions/runs/{RUN_ID}$")
+    code, lines = run_main(monkeypatch, capsys,
+                           ["watch", "--repo", REPO, "--apply"], NOW_RUNNING)
+    assert code == 0
+    assert gh.posts() == [f"repos/{REPO}/actions/runs/{RUN_ID}/cancel"]
+    line = next(x for x in lines if x.startswith(f"hung-job: canceled run={RUN_ID} "))
+    assert line.endswith("— no re-run yet: whether the run finished could not be "
+                         "read; the next pass re-runs it")
 
 
 def test_a_hung_job_on_attempt_two_is_canceled_and_never_re_run(gh, monkeypatch, capsys):
@@ -597,9 +631,13 @@ def test_a_finished_run_on_attempt_two_is_never_re_run(gh, monkeypatch, capsys):
     run, jobs = finished_incident(gh.fx)
     run["run_attempt"] = 2
     watch_running(gh, run, jobs)
-    code, _lines = run_main(monkeypatch, capsys,
-                            ["watch", "--repo", REPO, "--apply"], NOW_FINISHED)
+    # Attempt 1's jobs read as hung, as they would on the real API, so only
+    # the attempt itself can keep the run from a second re-run.
+    gh.jobs[(RUN_ID, 1)] = jobs
+    code, lines = run_main(monkeypatch, capsys,
+                           ["watch", "--repo", REPO, "--apply"], NOW_FINISHED)
     assert code == 0 and gh.posts() == []
+    assert not any(x.startswith("hung-job: unknown ") for x in lines)
 
 
 def test_a_finished_run_older_than_six_hours_is_left_alone(gh, monkeypatch, capsys):
