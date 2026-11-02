@@ -934,7 +934,7 @@ def planning_order() -> PlanningOrder:
 
     No freshness header: the order is the console's own record, not a copy of
     Linear's. Nothing here touches the run's counters or prints anything: the
-    caller (`planner_queue.planning_order`) says the one line.
+    caller (`planner_allowance.planning_order`) says the one line.
     """
     if _state["disabled"] is not None:
         raise ReadUnknown("unavailable", f"the door stopped answering earlier this "

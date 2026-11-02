@@ -2,7 +2,7 @@
 """The planner's dispatch — ONE payload and ONE `repository_dispatch` for the
 callers that genuinely make one.
 
-Seven of them remain:
+Six of them remain:
 
   * `reconcile.redispatch` — the sweep re-firing the dispatch of a card in a
     start lane (`lane_contract.START_LANES`) that has not started, with the
@@ -12,10 +12,6 @@ Seven of them remain:
     same-lane write fires no webhook (DRE-7109);
   * `review_rerun.py dispatch` — the ask for the second critic's review, with
     the `trigger_state` and `reason` it is given (DRE-3286, DRE-5277);
-  * `planner_queue.py dispatch` and `reconcile.serve_planner_line` — the
-    planner line serving the card whose turn has come (DRE-5180, DRE-5178).
-    Those two pass `event=PLAN_EVENT`: a card waiting in the planner line is
-    waiting to be planned, whatever its labels (DRE-5366);
   * `proof_dispatch.sweep` — the proof run at an epic's PROOF card, passing
     `event=PROOF_EVENT` and a `reason` (DRE-5926), and, while
     `PROOF_SHADOW_MODEL` is set, its shadow beside each confirmed one:
@@ -158,11 +154,11 @@ def fire(card: dict, repo: str, *, trigger_state: str | None = None,
     `sent_by_run` (DRE-4573) names the planner run sending this, so the run it
     starts does not skip itself as that run's duplicate. See `payload`.
 
-    `event` (DRE-5366) is the caller naming the event outright. The planner
-    line passes `PLAN_EVENT`: the label rule below asks whether the card is an
-    epic, and a one-off sent back to Planning is not one — on 2026-09-30 the
-    line fired `agent-execute` for DRE-5198 and a build ran on a card waiting
-    to be planned. Omit it and the labels decide, as they always have. An
+    `event` (DRE-5366) is the caller naming the event outright. A caller
+    asking for a plan passes `PLAN_EVENT`: the label rule below asks whether
+    the card is an epic, and a one-off sent back to Planning is not one — on
+    2026-09-30 the old planner line fired `agent-execute` for DRE-5198 and a
+    build ran on a card waiting to be planned. Omit it and the labels decide, as they always have. An
     event outside `EVENTS` raises before anything is sent. (DRE-5376) A one-off
     card the planner has just revised carries no `agent:planner`, so
     `review_rerun.py dispatch --route plan` names `agent-plan` the same way.
