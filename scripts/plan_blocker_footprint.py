@@ -325,7 +325,7 @@ class Reading:
         head = (f"{NOTE_PREFIX} {len(self.edges)} edge(s) read — "
                 f"{c[SHARED]} justified by a shared file, {c[TOUCHING]} by touching "
                 f"ledger lines, {c[REASON]} by a stated reason, {c[UNREAD]} allowed "
-                f"on a ledger that could not be read, {c[REFUSED]} refused; skipped: "
+                f"on an unreadable ledger, {c[REFUSED]} refused; skipped: "
                 + ", ".join(f"{c[k]} {k}" for k in SKIPS) + ".")
         globs = self.ledgers.get(self.caller) or []
         if globs:
