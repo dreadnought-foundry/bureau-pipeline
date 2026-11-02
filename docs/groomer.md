@@ -1755,7 +1755,26 @@ So `.github/workflows/self-groomer.yml` carries three triggers:
   `propose`. `tests/test_groomer_wiring.py` walks every scheduled workflow in
   the repo and fails if any other scheduled job calls `groomer.yml` — but the
   weekly replay, `groom-week.yml`'s `replay-main`, held to its four literals
-  and to passing no `card`.
+  and to passing no `card`, and the sandbox groom proposal below,
+  `self-groomer.yml`'s `sandbox`, held to `mode: propose` and
+  `sandbox: "true"`.
+
+**The sandbox groom proposal (DRE-8782)** is the morning's second proposal,
+made for the groomer's memory proofs (DRE-8331, DRE-8333, DRE-8335,
+DRE-8357), whose presses land on sandbox cards and never on real ones. After
+the real proposal, in the same gated 06:00–06:59 PT hour, the `sandbox` job
+calls the groomer with `mode: propose` and `sandbox: "true"`: the run reads
+only the lane's cards labeled `repo:agent-bureau-demo`, judges the proof
+runs' sandbox fixtures rather than leaving them out (the DRE-7783 exclusion
+is the real proposal's rule, and those fixtures are what this one grooms),
+never lists the sandbox groom card itself, and posts on that card,
+DRE-8780. The card is named in committed config,
+`config/groom-sandbox.json`, which the gate reads through
+`scripts/groom_sandbox.py card` — never a repo variable, because a proof run
+cannot read one. A sandbox proposal is never drained: a `drain` with
+`sandbox` set refuses before any write, and `groomer.py drain` refuses the
+sandbox groom card outright. Its failure neither fails nor holds the real
+proposal, and with `sandbox` off a run is exactly what it was.
 
 The cost D5 stated — on demand means it runs when someone remembers, and
 anything relying on remembering eventually does not happen — no longer applies
