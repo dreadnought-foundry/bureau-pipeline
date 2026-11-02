@@ -47,7 +47,7 @@ The failing job is the earliest-completing job that concluded `failure`,
 roll-up job that only sums other jobs (`ROLLUP_JOBS`) is passed over when one
 of its parts failed before it, or with it. With none failed, a job still
 running, or not yet started, is named only once the job itself has run 2
-hours — from its own start, or from its run's creation when it has not
+hours — from its own start, or from its attempt's start when it has not
 started — never from the hold's age: a merge train keeps the hold old while
 each new run is young (DRE-8778). It is named as a stuck job, never a failing
 one.
@@ -239,7 +239,7 @@ class Job:
     started: datetime | None
     completed: datetime | None
     failed_step: str | None
-    created: datetime | None = None   # its run's, for a job not yet started
+    began: datetime | None = None   # its attempt's start, for a job not yet started
 
 
 @dataclass(frozen=True)
@@ -527,7 +527,9 @@ def commit_jobs(reader, repo: str, sha: str, at: datetime | None) -> list:
             created = _when(run.get("created_at"))
             if at is not None and (created is None or created > at):
                 continue
-            n, _record = _attempt_as_of(reader, repo, run, at)
+            n, record = _attempt_as_of(reader, repo, run, at)
+            # A re-run keeps the run's `created_at`; its attempt's start moves.
+            began = _when(record.get("run_started_at")) or created
             url = str(run.get("html_url") or "")
             if n != run.get("run_attempt"):
                 url = f"{url}/attempts/{n}"
@@ -537,7 +539,7 @@ def commit_jobs(reader, repo: str, sha: str, at: datetime | None) -> list:
                              if s.get("conclusion") == FAILURE), None)
                 found.append(Job(str(job.get("name") or ""), url, n, state,
                                  _when(job.get("started_at")), completed,
-                                 step if state == FAILURE else None, created))
+                                 step if state == FAILURE else None, began))
     return found
 
 
@@ -556,10 +558,10 @@ def failing_job(jobs: list) -> Job | None:
 
 
 def going_since(job: Job) -> datetime | None:
-    """When a running job started, or a not-started one's run was created."""
+    """When a running job started, or a not-started one's attempt began."""
     if job.state == RUNNING and job.started is not None:
         return job.started
-    return job.created
+    return job.began
 
 
 def running_job(jobs: list, now: datetime) -> Job | None:
@@ -696,7 +698,7 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
                          f"{job.attempt}, so the code needs a fix before "
                          f"{pc.CHANNEL} can move.")
         if job.state not in FAILING:
-            since = ("it started" if job.state == RUNNING else "its run was created")
+            since = ("it started" if job.state == RUNNING else "its attempt began")
             return RERUN, (f"the job {_doing(job)} on attempt {job.attempt}, "
                            f"{ALERT_AFTER_MINUTES // 60} hours or more after "
                            f"{since}, so it is stuck: cancel the run and "
