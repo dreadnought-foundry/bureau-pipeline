@@ -370,6 +370,7 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
 | `hygiene-triage-alarm` | `hyg-triage-aged` | hold | `operator` |
 | `hygiene-blocker-owner-notice` | `hyg-blocker-owner` | hold | `operator` |
+| `hygiene-hand-step-class` | `hyg-hand-step` | hold | `operator` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
@@ -379,14 +380,14 @@ trailer. A notice that lists what it found — the blocker-owner lane's
 (DRE-8648) — carries those lines behind one blank line after the evidence,
 and they are composed by the same `hygiene.receipt`. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all fifteen through one seam, which is why `tests/test_check_act_receipts.py`
+all sixteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 
 Every row declares a `null` cadence and none is `dispatched`: what follows a
 gate re-dispatch is the gate's own run, timed by its own acts, and every other
 row hands the work to a person, the planner or the sweep. The kinds are copied
-from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
+from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — five holds and
 eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
@@ -407,6 +408,19 @@ two ways on. An owner who is not a person reads `no owner to tell`, and the
 card is a left row in the summary too. The cause is `<card> in <lane> since
 <YYYY-MM-DD>`, so a card is told once per stay. The board read covers `Intake`
 for it, and the guard still never writes a card into that lane.
+
+`hygiene-hand-step-class` (`scripts/hygiene_hand_step.py`, DRE-8650) marks
+an operator step in `Hand-work` as one a machine could do or one a person
+must: the label `hand-step:machine` or `hand-step:person`, and a receipt whose
+cause is `<class>, kind <kind>` and whose evidence is the phrase of the card
+that decided it, or `no machine kind matched`. The class is
+`scripts/operator_step_kind.py` over the card's title and description, by the
+phrases in `config/operator-step-kinds.json`. The description is read whole,
+one read per card the lane classes, because the board read's copy is cut at
+500 characters; a card whose read fails waits for the next pass and is never
+classed from the cut text. It is said once per card — the
+lane skips a card that already wears a class label — and it moves nothing and
+dispatches nothing: the operator still does every step.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
