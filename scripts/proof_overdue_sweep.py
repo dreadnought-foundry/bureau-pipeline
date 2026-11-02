@@ -64,6 +64,11 @@ the main sweep records a throttled read as degraded. No retry: an empty hourly
 bucket does not refill in the minute a retry waits, and the next pass is the
 retry. The note names it as not read, and the previous day's alert stays open.
 
+A repo that is not a key of `config/repo-map.json` is not red either
+(DRE-8709): a new repo runs Reconcile before its routing pull request merges,
+so the pass prints one line saying it is not on the routing rail and reads
+nothing, as the main sweep's off-rail phases do (DRE-3632).
+
 CLI (the step's own call; reads `REPO` and `PROOF_DISPATCH_LIVE`):
 
     python3 scripts/proof_overdue_sweep.py --repo <slug>
@@ -325,6 +330,12 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", required=True, help="a slug of config/repo-map.json")
     args = parser.parse_args(argv)
+    # A new repo runs Reconcile before its routing pull request merges, the
+    # main sweep's off-rail case (DRE-3632): skip it, never red (DRE-8709).
+    if args.repo not in proof_overdue._repo_map():
+        print(f"{TAG} {args.repo!r} is not on the routing rail (config/repo-map.json), "
+              "so there is nothing to read yet — skipped")
+        return 0
     try:
         # `proof_overdue` reaches `reconcile`, which reads `REPO` on import.
         os.environ.setdefault("REPO", proof_overdue._full(args.repo))

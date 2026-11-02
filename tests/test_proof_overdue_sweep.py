@@ -545,6 +545,54 @@ class FailureTest(unittest.TestCase):
 
 
 # --------------------------------------------------------------------------- #
+# a repo off the routing rail (DRE-8709)                                       #
+# --------------------------------------------------------------------------- #
+
+
+class OffRailTest(unittest.TestCase):
+    """A repo gets the Reconcile stub before its slug joins config/repo-map.json;
+    until then this pass skips it, as the main sweep's off-rail phases do."""
+
+    def setUp(self):
+        self._dir = tempfile.TemporaryDirectory()
+        self.repo_map = Path(self._dir.name) / "repo-map.json"
+        self.repo_map.write_text(json.dumps({SLUG: "dreadnought-foundry/bureau-pipeline"}),
+                                 encoding="utf-8")
+        self.swept = []
+        for patch in (mock.patch.object(proof_overdue, "REPO_MAP", self.repo_map),
+                      mock.patch.object(sweep_mod, "sweep",
+                                        lambda slug: self.swept.append(slug) or 0),
+                      mock.patch.dict(os.environ)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def tearDown(self):
+        self._dir.cleanup()
+
+    def _main(self, slug):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), mock.patch.object(sys, "stderr", err):
+            status = sweep_mod.main(["--repo", slug])
+        return status, out.getvalue(), err.getvalue()
+
+    def test_a_repo_off_the_rail_is_skipped_and_the_step_stays_green(self):
+        status, out, err = self._main("not-on-the-rail")
+        self.assertEqual(0, status, out + err)
+        said = [line for line in _lines(out) if line.startswith("proof-overdue:")]
+        self.assertEqual(1, len(said), out)
+        self.assertIn("not-on-the-rail", said[0])
+        self.assertIn("is not on the routing rail", said[0])
+        self.assertNotIn("ERROR:", out + err)
+        self.assertEqual([], self.swept)
+
+    def test_a_repo_on_the_rail_is_swept_as_before(self):
+        status, out, err = self._main(SLUG)
+        self.assertEqual(0, status, out + err)
+        self.assertEqual([SLUG], self.swept)
+        self.assertNotIn("routing rail", out)
+
+
+# --------------------------------------------------------------------------- #
 # the docstring                                                                #
 # --------------------------------------------------------------------------- #
 
