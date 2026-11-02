@@ -714,6 +714,40 @@ def test_receipt_round_trip_business_choice(tmp_path):
     assert operator_decide.decision_from_receipt(card, body).choices == _choices()
 
 
+@pytest.mark.parametrize("char", [" ", " ", "\x85"])
+@pytest.mark.parametrize("field", ["context", "effect", "label"])
+def test_receipt_round_trip_business_choice_with_a_line_separator(tmp_path, field, char):
+    block = _choices()
+    if field == "context":
+        block["context"] = f"Two ways{char}to close."
+    else:
+        block["choices"][0][field] = f"Archive{char}it now"
+    card = _synthetic()
+    path = _write(tmp_path / "DRE-9001.choices.json", block)
+    decision = operator_decide.decide(card, _business_answer("DRE-9001"), _text(card),
+                                      choices_file=path)
+    assert decision.act == operator_decide.BUSINESS_CHOICE
+    body = _assert_round_trip(card, decision)
+    assert char not in body
+    assert operator_decide.decision_from_receipt(card, body).choices == block
+
+
+def test_a_business_choice_receipt_with_no_choices_line_reads_as_none(tmp_path):
+    card, decision = _business_decision(tmp_path)
+    body = "\n".join(line for line in operator_decide.receipt_text(decision, NOW).split("\n")
+                     if not line.startswith("choices: "))
+    assert "act: business-choice" in body.split("\n")
+    assert operator_decide.decision_from_receipt(card, body) is None
+
+
+def test_a_ceo_receipt_with_choices_and_another_act_reads_as_none():
+    card, decision = _ceo_rule_decision()
+    body = (operator_decide.receipt_text(decision, NOW) + "\nchoices: "
+            + json.dumps(_choices()))
+    assert "act: github-org-membership" in body.split("\n")
+    assert operator_decide.decision_from_receipt(card, body) is None
+
+
 def test_receipt_round_trip_done_already():
     card, decision = _done_decision()
     body = _assert_round_trip(card, decision)
