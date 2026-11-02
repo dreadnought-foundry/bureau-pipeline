@@ -377,11 +377,14 @@ jobs:
       # says where it comes from: the console's read door when BUREAU_READ is
       # `on` and the door can give the whole answer, else ONE Linear read.
       #
-      # The door refuses every token minted for a pull_request or
-      # pull_request_target event, so a fork can never mint one (agent-bureau
-      # github_oidc.py check 7, review S7), and the client never asks from one.
-      # A pull_request verify is one Linear read where an in-scope one made two;
-      # only a workflow_dispatch re-verify can be served by the door.
+      # A pull_request verify on an `agent/` or `repair/DRE-<n>-…` branch asks
+      # the door for its own card, the one read the door serves such a run
+      # (agent-bureau DRE-8807, `bureau_read.own_card`, DRE-8812), as a
+      # workflow_dispatch re-verify does. Every other pull_request run, and
+      # every pull_request_target run, is one Linear read where an in-scope
+      # one made two: the door refuses those tokens, so a fork can never mint
+      # one (agent-bureau github_oidc.py check 7, review S7), and the client
+      # does not ask.
       #
       # A read that fails writes no file: the scope gate then has no card
       # signal and Select model fails CLOSED (`--built-on-unknown`), exactly as
