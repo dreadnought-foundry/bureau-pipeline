@@ -251,6 +251,20 @@ class NeverFilesTwiceTest(CleanupCase):
         self.assertEqual([f"parts-cleanup: {SLUG} — 2 copy(ies), 0 filed, 2 already filed"],
                          run.err_lines)
 
+    def test_an_identity_with_every_punctuation_escaped_is_found(self):
+        copy = dict(COPIES[0], copy_path="console/web/src/pages/my_page/[id]/Page_x.tsx")
+        head = f"parts-copy: {SLUG}"
+        rest = identity_of(copy)[len(head):]
+        stored = head + re.sub(r"([^A-Za-z0-9\s])", r"\\\1", rest)
+        self.assertIn("\\_", stored)
+        found = self.board.add(title_of(copy), f"Some words.\n\n{stored}\n")
+        run = self.run_file(self.count_json([copy]))
+        self.assertEqual([], self.board.created)
+        self.assertEqual([f"parts-cleanup: already filed {found['identifier']} — "
+                          f"{title_of(copy)}"], run.out_lines)
+        self.assertEqual([f"parts-cleanup: {SLUG} — 1 copy(ies), 0 filed, 1 already filed"],
+                         run.err_lines)
+
     def test_another_repos_copy_is_not_this_one(self):
         copy = COPIES[0]
         self.board.add("portico's", identity_of(copy).replace(SLUG, "portico") + "\n")
