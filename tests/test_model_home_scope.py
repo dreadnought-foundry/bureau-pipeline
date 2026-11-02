@@ -28,7 +28,7 @@ import check_model_home_scope as scope  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 TOKEN = "${{ steps.model_home.outputs.token }}"
-PINNED = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
+PINNED = "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
 
 # The twenty steps the card names, as (workflow, step name).
 NAMED_STEPS = {
@@ -242,7 +242,7 @@ MINT = {
     "name": "Mint the model-home read token",
     "id": "model_home",
     "continue-on-error": True,
-    "uses": f"{PINNED} # v3.2.0",
+    "uses": f"{PINNED} # v3.3.0",
     "with": {
         "app-id": "${{ secrets.BUREAU_APP_ID }}",
         "private-key": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",

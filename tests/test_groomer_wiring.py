@@ -1152,7 +1152,7 @@ class VerifyJobHoldsNoWriteTokenTest(unittest.TestCase):
     def test_the_app_token_is_read_only_and_scoped_to_the_cards_repo(self):
         mint = _verify_step(self.job, "target_token")
         self.assertTrue(str(mint.get("uses")).startswith(
-            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"))
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"))
         with_ = mint.get("with") or {}
         self.assertEqual(with_.get("permission-contents"), "read")
         self.assertEqual(_expression(with_.get("app-id")), "secrets.BUREAU_APP_ID")
