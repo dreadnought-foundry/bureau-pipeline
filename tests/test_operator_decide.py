@@ -929,19 +929,24 @@ def test_decide_makes_no_linear_or_network_call(tmp_path, monkeypatch):
     def refuse(*args, **kwargs):
         raise AssertionError("a network or process call")
 
-    monkeypatch.setitem(sys.modules, "linear_ops", Refuse("linear_ops"))
-    monkeypatch.setattr(urllib.request, "urlopen", refuse)
-    monkeypatch.setattr(subprocess, "run", refuse)
     as_built = operator_rules.host_limits_text()
     path = _write(tmp_path / "DRE-9001.choices.json", _choices())
-    for record in _records().values():
-        card = operator_rules.fixture_card(record)
-        for outcome in operator_decide.OUTCOMES:
-            operator_decide.decide(card, _answer(card["card"], outcome, "a step",
-                                                 access="production", evidence=["x"],
-                                                 host_cannot=[HOST_QUOTE]),
-                                   _text(card), as_built=as_built)
-    operator_decide.decide(_synthetic(), _business_answer("DRE-9001"), "", choices_file=path)
+    records = list(_records().values())
+    # Undone before the test ends: the suite's own teardown reads linear_ops.
+    with monkeypatch.context() as patch:
+        patch.setitem(sys.modules, "linear_ops", Refuse("linear_ops"))
+        patch.setattr(urllib.request, "urlopen", refuse)
+        patch.setattr(subprocess, "run", refuse)
+        for record in records:
+            card = operator_rules.fixture_card(record)
+            for outcome in operator_decide.OUTCOMES:
+                operator_decide.decide(card, _answer(card["card"], outcome, "a step",
+                                                     access="production", evidence=["x"],
+                                                     host_cannot=[HOST_QUOTE]),
+                                       _text(card), as_built=as_built)
+        decision = operator_decide.decide(_synthetic(), _business_answer("DRE-9001"), "",
+                                          choices_file=path)
+    assert decision.act == "business-choice"
 
 
 def test_nothing_names_a_person_an_email_or_a_sign_in():
