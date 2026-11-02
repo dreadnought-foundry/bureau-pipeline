@@ -500,7 +500,7 @@ def test_limit_recovery_moves_on_door_data_are_conditional(monkeypatch):
     linear = Linear(_c("DRE-501", "In Review"))
     seen = {}
 
-    def recover(lops, now, account, room, *, rerun, move, dispatch, cards):
+    def recover(lops, now, account, room, *, rerun, move, dispatch, cards, wall_down_at=None):
         try:
             move("DRE-501", "Todo")
         except Exception as e:  # noqa: BLE001
@@ -874,7 +874,7 @@ def test_limit_recovery_of_a_fleet_served_planning_card_is_conditional(monkeypat
     linear = Linear(_c("DRE-511", "Triage"))
     seen = {}
 
-    def recover(lops, now, account, room, *, rerun, move, dispatch, cards):
+    def recover(lops, now, account, room, *, rerun, move, dispatch, cards, wall_down_at=None):
         assert "DRE-511" in {c["identifier"] for c in cards}
         try:
             move("DRE-511", "Intake")
