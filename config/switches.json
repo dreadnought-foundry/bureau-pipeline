@@ -29,6 +29,12 @@
       "means": "The scheduled Triage Repair run claims parked cards and has the planner repair them, instead of printing what it would repair."
     },
     {
+      "name": "ALARM_REPAIR_LIVE",
+      "reader": ".github/workflows/alarm-repair.yml",
+      "step": "Decide dry run",
+      "means": "The scheduled Alarm Repair claims console alerts open for 2 hours and has an agent make one repair attempt on each alert's card, instead of printing what it would repair."
+    },
+    {
       "name": "NAME_GUARD_LIVE",
       "reader": ".github/workflows/proof-task.yml",
       "step": "Install the name guard",

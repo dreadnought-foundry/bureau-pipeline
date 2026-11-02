@@ -589,7 +589,8 @@ class TestTheTrustedCopy:
                 if "LINEAR_API_KEY" in (s.get("env") or {})]
 
     def test_the_copy_lies_outside_everything_the_agent_can_write(self):
-        add_dirs = re.findall(r"--add-dir\s+(\S+(?: \}\}\S*)?)", _agent()["with"]["claude_args"])
+        add_dirs = re.findall(r"--add-dir\s+(\$\{\{ runner\.temp \}\}\S*|\S+)",
+                              _agent()["with"]["claude_args"])
         assert add_dirs == ["${{ runner.temp }}/alarm-repair"]
         assert TRUSTED.startswith("${{ runner.temp }}/")
         for granted in add_dirs:
@@ -840,7 +841,7 @@ class TestThePrompt:
             assert f"{OUT_DIR}/{name}" in prompt, name
 
     def test_it_carries_the_contracts_instructions(self):
-        prompt = self._prompt()
+        prompt = " ".join(self._prompt().split())
         for words in ("open for 2 hours or more", "steps.context.outputs.kind",
                       "steps.context.outputs.age", "steps.context.outputs.title",
                       "a hint, not an answer", "exactly one file",
