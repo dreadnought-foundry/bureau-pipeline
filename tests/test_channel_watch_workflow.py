@@ -300,3 +300,12 @@ def test_self_hosting_says_what_the_watch_does():
                    "pipeline_notice:channel_hold:stable",
                    "2 hours", "06:00", "06:29 PT", "re-run once"):
         assert needle in para, needle
+
+
+def test_hung_job_is_handed_the_ci_column_as_github_evaluates_it_at_re_run_time():
+    """DRE-8817: the watch never re-runs a hung job while the `ci` column
+    still names the service it hung on, and reads that column here."""
+    env = _one_step_running("hung-jobs", "scripts/hung_job.py")["env"]
+    assert env["CI_RUNS_ON"] == (
+        "${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]' }}")
+    assert "SHORT_RUNS_ON" not in env and "LONG_RUNS_ON" not in env
