@@ -1779,6 +1779,117 @@ jobs:
           fi
           echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
 
+      # HOLD ON AN INHERITED RED MAIN (DRE-8849). On 2026-11-01 four foundry
+      # cards sat in Triage for four to eight hours with nothing wrong with any
+      # of them: each had an approved pull request that went red because
+      # foundry's own main was broken, the medic's question on it was
+      # housekeeping, and the `ask` step below parked it under a
+      # `planning-stall-park` note nothing lifts. A card parked because main
+      # was red is waiting on main, not on a person.
+      #
+      # So before the medic asks, it makes one read, on an `ask-person` card
+      # with an OPEN pull request (`card_pr.py find`): the one
+      # `agent-fix.yml#Label failures inherited from the merge base` makes, in
+      # the same order — the pull request's base branch, the merge base off
+      # `compare/<base>...<head sha>`, then the check runs of the head and of
+      # the merge base, paged. The head is the failed run's own head sha, the
+      # commit whose checks were read. An unreadable merge-base read stays
+      # EMPTY, never `[]`: "we could not look" is never a green base.
+      # `inherited_red_main.py medic-read` answers `hold` only when every
+      # failing check on the head failed on the merge base too — the fix
+      # loop's own rule, `inherited_failures.inherited` with its strict
+      # merge-base read (DRE-8838) — and `ask` for anything else, on which
+      # this step writes nothing and the `ask` step runs as it always has.
+      #
+      # On `hold`: the hold first, through the registry's writer, stamped at
+      # the head (`config/holds.json`, `inherited-red-main`, lifted by the
+      # sweep on `inherited-checks-green`); then the move to Triage from the
+      # `ask` step's own from-lanes; then `held=true`, `moved` and `lane`,
+      # which keep the `ask` step off this card and which the `receipt` step
+      # reads with `reason`, the sentence `medic-read` wrote. A hold that would
+      # not write leaves `held` unset, so the `ask` step asks as before. The
+      # sweep's `return_inherited_red_main_holds` lifts the hold and returns
+      # the card to In Review once main is green on those checks.
+      #
+      # `always()`, for the reason the `ask` step gives. Never on a waiting
+      # card (step `waiting`). Every read is fail-soft: this step never turns
+      # the medic red.
+      - name: Hold the card on an inherited red main
+        id: redmain
+        if: >
+          always() &&
+          steps.target.outputs.kind == 'card' &&
+          steps.verdict.outputs.step == 'ask-person' &&
+          steps.waiting.outputs.waiting != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The bot, for the pull-request and check-run reads (DRE-8004).
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          TARGET: ${{ steps.target.outputs.target }}
+          # The commit whose checks failed: the failed run's own head.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          S=.bureau-pipeline/scripts
+          FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO") || FOUND=""
+          FIRST=${FOUND%%$'\n'*}
+          if [ "${FIRST%%$'\t'*}" != OPEN ]; then
+            echo "no open pull request read back for ${TARGET} — the medic asks a person as before"
+            exit 0
+          fi
+          PR_URL=${FIRST#*$'\t'}
+          PR=${PR_URL##*/}
+          BASE_REF=$(gh api "repos/$REPO/pulls/$PR" --jq .base.ref 2>/dev/null || true)
+          if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
+            echo "could not read the base branch of pull request #${PR} — the medic asks a person as before"
+            exit 0
+          fi
+          MERGE_BASE=$(gh api "repos/$REPO/compare/$BASE_REF...$HEAD_SHA" \
+            --jq .merge_base_commit.sha 2>/dev/null || true)
+          if [ -z "$MERGE_BASE" ] || [ "$MERGE_BASE" = "null" ]; then
+            echo "could not resolve the merge base of ${HEAD_SHA:0:8} — the medic asks a person as before"
+            exit 0
+          fi
+          HEAD_CHECKS="${RUNNER_TEMP:-/tmp}/redmain-head-checks.json"
+          BASE_CHECKS="${RUNNER_TEMP:-/tmp}/redmain-base-checks.json"
+          REASON_FILE="${RUNNER_TEMP:-/tmp}/redmain-reason.txt"
+          gh api --paginate --slurp "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+            > "$HEAD_CHECKS" 2>/dev/null || : > "$HEAD_CHECKS"
+          gh api --paginate --slurp "repos/$REPO/commits/$MERGE_BASE/check-runs?per_page=100" \
+            > "$BASE_CHECKS" 2>/dev/null || : > "$BASE_CHECKS"
+          DECISION=$(python3 "$S/inherited_red_main.py" medic-read \
+            --checks-file "$HEAD_CHECKS" --base-checks-file "$BASE_CHECKS" \
+            --base-sha "$MERGE_BASE" --repo "$REPO" --reason-out "$REASON_FILE") || DECISION=ask
+          DECISION=${DECISION%%$'\n'*}
+          if [ "$DECISION" != hold ]; then
+            echo "inherited-red-main: ${DECISION:-ask} — the medic asks a person as before"
+            exit 0
+          fi
+          FROM_LANES=$(python3 "$S/medic_next_step.py" from-lanes) || true
+          if [ -z "$FROM_LANES" ]; then
+            echo "::warning title=Card not held::The lanes the medic moves a card out of could not be read, so ${TARGET} was not held on the red main and a person is asked instead. Failed run: ${RUN_URL}"
+            exit 0
+          fi
+          if ! python3 .bureau-pipeline/scripts/hold.py apply "$TARGET" --reason inherited-red-main --at "$HEAD_SHA" --by medic.yml; then
+            echo "::warning title=Card not held::The inherited-red-main hold could not be written on ${TARGET}, so a person is asked instead. Failed run: ${RUN_URL}"
+            exit 0
+          fi
+          MOVED=false
+          if OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Triage" "$FROM_LANES"); then
+            printf '%s\n' "$OUT"
+            if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Triage"; then MOVED=true; fi
+          else
+            echo "::warning title=Card not moved to Triage::${TARGET} is held on the red main, but its move to Triage failed. Failed run: ${RUN_URL}"
+          fi
+          REASON=$(tr '\n' ' ' < "$REASON_FILE" 2>/dev/null || true)
+          {
+            echo "held=true"
+            echo "moved=$MOVED"
+            echo "lane=Triage"
+            echo "reason=${REASON% }"
+          } >> "$GITHUB_OUTPUT"
+
       # ASK-PERSON (DRE-7794): a diagnosis only a person can settle — a
       # `platform-fault`, an `unreadable` one (a diagnosis agent that died or
       # wrote no report reads `unreadable`), or a step whose fallback applies —
@@ -1835,14 +1946,17 @@ jobs:
       #
       # `always()`: a diagnosis agent that died is the card most in need of
       # asking about, and a step with no status function is skipped once an
-      # earlier step failed. Never on a waiting card (step `waiting`).
+      # earlier step failed. Never on a waiting card (step `waiting`), and
+      # never on a card the step above held on an inherited red main
+      # (`redmain`, DRE-8849): the two never both run.
       - name: Ask a person about the diagnosis
         id: ask
         if: >
           always() &&
           steps.target.outputs.kind == 'card' &&
           steps.verdict.outputs.step == 'ask-person' &&
-          steps.waiting.outputs.waiting != 'true'
+          steps.waiting.outputs.waiting != 'true' &&
+          steps.redmain.outputs.held != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           TARGET: ${{ steps.target.outputs.target }}
@@ -1921,7 +2035,11 @@ jobs:
       # names that lane, the `ask` step's `lane`, through `--moved-to`; the
       # first line is unchanged, because agent-bureau's weekly report parses
       # it. A move that did not land (`moved` is not `true`) is ` moved=no`,
-      # and names the lane the card was left in, as for every step. This is the one
+      # and names the lane the card was left in, as for every step. A card the
+      # `redmain` step held on an inherited red main (DRE-8849) takes `moved`
+      # and `lane` from that step instead, and its reason sentence names the
+      # repo, the failed checks and the merge base, and says the sweep returns
+      # the card once main is green on them. This is the one
       # receipt for the park too, never a second write: `pipeline_act.py
       # check` fails the act's anchor found any other number of times.
       # `always()`, for the reason the move above gives. A write that fails
@@ -1948,6 +2066,12 @@ jobs:
           PLANNING_MOVED: ${{ steps.planning.outputs.moved }}
           ASK_MOVED: ${{ steps.ask.outputs.moved }}
           ASK_LANE: ${{ steps.ask.outputs.lane }}
+          # A card held on an inherited red main (DRE-8849): the `redmain`
+          # step's move, its lane and its reason sentence.
+          HELD: ${{ steps.redmain.outputs.held }}
+          HELD_MOVED: ${{ steps.redmain.outputs.moved }}
+          HELD_LANE: ${{ steps.redmain.outputs.lane }}
+          HELD_REASON: ${{ steps.redmain.outputs.reason }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           S=.bureau-pipeline/scripts
@@ -1969,9 +2093,15 @@ jobs:
               fi
               REASON="the card has an open pull request, ${PR_URL:-which the medic could not read back}, and the fix loop already reaches a red agent pull request two ways: the fix agent (agent-fix.yml) is dispatched when the critic asks for changes or the verifier fails the pull request, and the sweep dispatches a fix for a pull request the critic approved whose checks are red (reconcile.fix_approved_but_red)." ;;
             ask-person)
-              if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
-              if [ -n "$ASK_LANE" ]; then MOVED_TO=(--moved-to "$ASK_LANE"); fi
-              REASON="the comment posted just before this receipt asks a person to settle it." ;;
+              if [ "$HELD" = true ]; then
+                if [ "$HELD_MOVED" != true ]; then MOVED=no; fi
+                MOVED_TO=(--moved-to "${HELD_LANE:-Triage}" --held-on-main)
+                REASON="$HELD_REASON"
+              else
+                if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
+                if [ -n "$ASK_LANE" ]; then MOVED_TO=(--moved-to "$ASK_LANE"); fi
+                REASON="the comment posted just before this receipt asks a person to settle it."
+              fi ;;
           esac
           NOT_MOVED=()
           if [ "$MOVED" = no ]; then

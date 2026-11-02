@@ -45,7 +45,8 @@ The sites are DISCOVERED, never listed (`discover`):
     🔒 hold: reason=<code> at=<qualifier or none> lifts=<lift-kind> by=<writer-file>
 
 One line, the first line of its own comment, posted right after the label. The
-qualifier is the full head sha for a `new-head` reason, `repo:<slug>` for
+qualifier is the full head sha for a `new-head` reason and for
+`inherited-red-main`, `repo:<slug>` for
 `no-route` and `none` otherwise; `stamp_line` refuses any other pairing. The
 newest stamp is the card's hold unless it is SPENT: a newer comment opening
 `🔓 hold lifted:`, or carrying `hyg-hold-cleared` or `dead-run-budget-reset`,
@@ -92,10 +93,12 @@ HOLD_LABEL = dead_run.HOLD_LABEL  # "needs-human"
 REASONS = (
     "stranded-no-run", "no-route", "review-cap-spent", "dead-run-cap",
     "turn-cap-park", "epic-rereview-twice", "plan-critic-bound", "fix-dispute",
-    "unfixable-check", "operator-step", "wip-cap-held", "manual",
+    "unfixable-check", "operator-step", "wip-cap-held", "inherited-red-main",
+    "manual",
 )
 LIFT_KINDS = ("run-started", "repo-on-rail", "new-head", "unpark-marker",
-              "blockers-terminal", "cap-restored", "manual")
+              "blockers-terminal", "cap-restored", "inherited-checks-green",
+              "manual")
 READERS = ("sweep", "fix-dispatch", "medic", "limit-recovery")
 
 #: A planner-filed operator step: a person does it once its blockers are
@@ -108,6 +111,13 @@ BLOCKERS_TERMINAL = "blockers-terminal"
 #: `scripts/repo_held_epics.py` writes it and lifts it.
 WIP_CAP_HELD_REASON = "wip-cap-held"
 CAP_RESTORED = "cap-restored"
+
+#: A card whose pull request is red only on checks `main` was red on too,
+#: held by the medic in Triage at the head it read (DRE-8849). Lifted when
+#: every one of those checks is green on `main` again, by the sweep alone:
+#: `reconcile.return_inherited_red_main_holds` reads it and lifts it.
+INHERITED_RED_MAIN_REASON = "inherited-red-main"
+INHERITED_CHECKS_GREEN = "inherited-checks-green"
 
 #: The lift kind of each reason, fixed by the contract. A row that names
 #: another fails `check` by name — the file cannot vote itself a looser lift.
@@ -123,8 +133,13 @@ CONTRACT_LIFTS = {
     "plan-critic-bound": "manual",
     OPERATOR_STEP_REASON: BLOCKERS_TERMINAL,
     WIP_CAP_HELD_REASON: CAP_RESTORED,
+    INHERITED_RED_MAIN_REASON: INHERITED_CHECKS_GREEN,
     "manual": "manual",
 }
+
+#: The reasons stamped with the full head sha their writer read, besides the
+#: `new-head` ones: the medic's hold names the head whose checks it read.
+HEAD_STAMPED = (INHERITED_RED_MAIN_REASON,)
 
 #: A reason whose lift a reader makes itself. That reader is the lifter and
 #: never a reader of it: a row carrying the reason that names it fails
@@ -232,7 +247,7 @@ def stamp_line(reason: str, at: str | None, by: str) -> str:
         raise ValueError(f"reason {reason!r} is not in the hold vocabulary")
     at = at or "none"
     kind = CONTRACT_LIFTS[reason]
-    if kind == "new-head":
+    if kind == "new-head" or reason in HEAD_STAMPED:
         if not _FULL_SHA.fullmatch(at):
             raise ValueError(f"{reason} is stamped with the full head sha, not {at!r}")
     elif reason == "no-route":
@@ -358,7 +373,10 @@ def lift_due(stamp: dict | None, *, lane: str, labels, pr_head: str | None,
     promotion gate is its only lifter, reading the blockedBy relations
     itself and calling `lift` (DRE-6427). It falls through to None. So does
     `cap-restored` (`wip-cap-held`): no caller passes the repo's cap, and the
-    sweep's `repo_held_epics.lift_pass` is its only lifter (DRE-7754)."""
+    sweep's `repo_held_epics.lift_pass` is its only lifter (DRE-7754). And so
+    does `inherited-checks-green` (`inherited-red-main`): no caller passes
+    `main`'s check runs, and the sweep's
+    `reconcile.return_inherited_red_main_holds` is its only lifter (DRE-8849)."""
     if lane in CLOSED_LANES:
         return CARD_CLOSED
     if not stamp:
