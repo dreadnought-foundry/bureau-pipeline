@@ -379,6 +379,36 @@ class UnknownTest(unittest.TestCase):
                 self.assertEqual(out[1:], _catalog_stdout("tree-base"))
                 self.assertTrue(err.startswith("parts-review: UNKNOWN — "), err)
 
+    def test_a_unicode_line_break_inside_a_hunk_line_does_not_split_it(self):
+        # git counts hunk lines by `\n` alone; a form feed in an unrelated
+        # file or a line separator in a string must not cost the review.
+        page = ("interface CtaProps {\n  label: string;\n  onPress: () => void;\n"
+                "  size?: string;\n}\n"
+                "function Cta(p: CtaProps) { return \"a b c\x85d\" }\n")
+        script = "def f():\n    pass\n\x0c\ndef g():\n    pass\n"
+        diff = ""
+        for path, text in (("tools/gen.py", script), ("web/src/Page.tsx", page)):
+            lines = text.split("\n")[:-1]
+            diff += (f"diff --git a/{path} b/{path}\nnew file mode 100644\n"
+                     f"--- /dev/null\n+++ b/{path}\n@@ -0,0 +1,{len(lines)} @@\n"
+                     + "".join(f"+{line}\n" for line in lines))
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.add("ui/molecules/Button.tsx", BUTTON)
+            out, _ = repo.review(diff)
+        found = _findings(out)
+        self.assertEqual([f[0] for f in found], ["look-alike"], out)
+        self.assertIn("(shared props: label, onPress, size)", found[0][2])
+
+    def test_a_crlf_diff_still_parses(self):
+        with TemporaryDirectory() as tmp:
+            repo = _Repo(tmp)
+            repo.add("ui/molecules/Button.tsx", BUTTON)
+            diff = _added("web/src/Page.tsx",
+                          "function Cta({ label, onPress, size }) {}\n")
+            out, _ = repo.review(diff.replace("\n", "\r\n"))
+        self.assertEqual([f[0] for f in _findings(out)], ["look-alike"], out)
+
     def test_a_diff_that_is_not_text_is_unknown(self):
         with TemporaryDirectory() as tmp:
             bad = Path(tmp) / "pr.diff"
@@ -580,6 +610,36 @@ class PropsTest(unittest.TestCase):
         part = "export function Button({ label, onPress, size }) {}\n"
         found = self._look("function Cta({ label, onPress, size, tone }) {}\n", part)
         self.assertEqual(found[0][0], "look-alike")
+
+    # One apostrophe per case: two would close each other as a "string".
+    APOSTROPHE_COMMENTS = {"block": "/** the {0}'s label */", "line": "// the {0}'s label"}
+
+    def test_an_apostrophe_in_a_part_s_props_comment_keeps_its_props(self):
+        for style, comment in self.APOSTROPHE_COMMENTS.items():
+            with self.subTest(style):
+                part = ("export interface ButtonProps {\n  " + comment.format("button")
+                        + "\n  label: string;\n  onPress: () => void;\n  size?: string;\n}\n"
+                        "export function Button(props: ButtonProps) { return null }\n")
+                found = self._look("function Cta({ label, onPress, size, tone }) {}\n", part)
+                self.assertEqual(found[0][0], "look-alike")
+                self.assertIn("(shared props: label, onPress, size)", found[0][2])
+
+    def test_an_apostrophe_in_an_added_component_s_props_comment_keeps_its_props(self):
+        for style, comment in self.APOSTROPHE_COMMENTS.items():
+            with self.subTest(style):
+                found = self._look("interface CtaProps {\n  " + comment.format("cta")
+                                   + "\n  label: string;\n  onPress: () => void;\n"
+                                   "  size?: string;\n}\nfunction Cta(p: CtaProps) {}\n")
+                self.assertEqual(found[0][0], "look-alike")
+                self.assertIn("(shared props: label, onPress, size)", found[0][2])
+
+    def test_an_apostrophe_in_a_destructured_parameter_comment_keeps_its_props(self):
+        for style, comment in self.APOSTROPHE_COMMENTS.items():
+            with self.subTest(style):
+                found = self._look("function Cta({\n  label, " + comment.format("cta")
+                                   + "\n  onPress,\n  size,\n}) {}\n")
+                self.assertEqual(found[0][0], "look-alike")
+                self.assertIn("(shared props: label, onPress, size)", found[0][2])
 
     def test_a_part_file_that_cannot_be_read_gives_it_no_props(self):
         with TemporaryDirectory() as tmp:
