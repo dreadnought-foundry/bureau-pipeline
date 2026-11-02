@@ -123,7 +123,8 @@ def test_a_ui_role_gets_the_repos_parts_with_where_each_ships(tmp_path, role):
     assert "- Notice (molecules) — ships at src/ui/molecules/Notice/index.tsx" in text
     assert "Button.test" not in text
     # After what people said on the card, never before the brief.
-    assert text.index("SPOKEN STATUS:") < text.index("PARTS CATALOG:")
+    head = re.search(r"^PARTS CATALOG:", text, re.M)
+    assert head and text.index("SPOKEN STATUS:") < head.start()
     # The log: the script's own stderr line, and the echoed block head.
     assert "design-parts: 2 part(s) from .github/bureau/design-system.json" in proc.stderr
     assert re.search(r"^PARTS CATALOG: 2 part\(s\)", proc.stdout, re.M), proc.stdout
