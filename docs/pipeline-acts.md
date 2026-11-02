@@ -658,7 +658,7 @@ writes nothing.
 | kind · state · next actor | `hold` · `unchanged` · `operator` |
 | discharges | nothing |
 | cadence | null — the hold ends with a person, and nothing bounds how long one takes |
-| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready` |
+| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready`, and for an epic at the `promotion_stall.epic_notice(` call in `clock_planning_epics` (DRE-8815) |
 
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
@@ -675,15 +675,32 @@ stood `PROMOTION_STALL_MINUTES` (120), the card gets the receipt ONCE:
 
 and a `promotion-stalled <card>: …` entry joins the red-run ledger on every
 sweep it still stands, so the run stays red until a person acts. A PARKED card,
-an epic, a card with an unresolved `blockedBy`, a card sent to Planning and any
-card waiting on the WIP budget are never clocked: each already says what it
-waits for, and that thing is scheduled.
+a card waiting on its epic's approval, a card with an unresolved `blockedBy`, a
+card sent to Planning and any card waiting on the WIP budget are never clocked:
+each already says what it waits for, and that thing is scheduled. The one
+exception is the epic itself when it stands in Planning with its plan run dead
+or never found — clocked once, as the epic's own record, below.
 
 The epic cap's hold, `epic-cap-undecided`, is clocked too (DRE-6618), and its
 receipt and ledger entry add `for its epic <epic>` after the tag, because that
 refusal is lifted on the epic, not the card. The full sweep asks the cap
 itself for an approved epic a blocker epic has released with no decision on
 record; the hold it does not settle that way is the one the clock reports.
+
+An epic in Planning that Queued cards wait on (`epic-not-active`) is clocked as
+ONE record for the epic, never one per child (DRE-8815), and only when its
+newest plan run is dead or none of the plan stub's newest 50 runs names it.
+The record is dated by the later of the children's oldest `🧾 promotion-wait:
+epic-not-active —` receipt and that run's end, and the receipt goes on the
+EPIC, once per newest run, from `clock_planning_epics` on the full sweep:
+
+    🚨 promotion-stalled: <epic> [run <id>|no-run] has stood in Planning with its plan run dead — <n> children wait on it in Queued.
+
+Its `promotion-stalled <epic>: …` ledger entry is what
+`standing_defect_alert.settle` raises one console alert for. Green Light,
+Triage and every other lane are never clocked, nor is an epic carrying
+`needs-human` or `hand-built`, one inside a limit-death wait, or one whose
+`repo:` label names another repo.
 
 The holds (`HELD_TAGS` — the hold label, an open agent-blocker, a stale
 verdict, a refused live re-check) are never clocked per card, but they count

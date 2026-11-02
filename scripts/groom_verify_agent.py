@@ -653,9 +653,14 @@ def board_context(issue: dict, viewer: str, *, card: str, now: datetime,
     }
 
 
-def exclusion(issue: dict, *, now: datetime) -> str | None:
+def exclusion(issue: dict, *, now: datetime,
+              sandbox: bool = False) -> str | None:
     """Why the card sits out the morning's judgement, or None. Decided here,
-    over what Linear said, and never by the model."""
+    over what Linear said, and never by the model.
+
+    `sandbox` is the sandbox groom proposal's (DRE-8782): its fixtures are
+    exactly the cards it grooms, so the DRE-7783 fixture exclusion is not
+    applied there. Every other exclusion is."""
     n = groomer.open_children(issue)
     if n:
         return EXCLUDE_EPIC.format(n=n, children="child" if n == 1
@@ -663,7 +668,8 @@ def exclusion(issue: dict, *, now: datetime) -> str | None:
     labels = {(label.get("name") or "").lower() for label in _nodes(issue, "labels")}
     # A proof run's fixture on the sandbox (DRE-7783): both marks, or the
     # card is judged as any other.
-    if (str(issue.get("title") or "").startswith(SANDBOX_FIXTURE_TITLE_OPENER)
+    if (not sandbox
+            and str(issue.get("title") or "").startswith(SANDBOX_FIXTURE_TITLE_OPENER)
             and SANDBOX_FIXTURE_REPO_LABEL in labels):
         return EXCLUDE_SANDBOX_FIXTURE
     for mark in routing_verdict.hand_marks():
@@ -727,6 +733,8 @@ def targets(proposal: dict, *, lops, repo_map: dict,
     nobody can be told apart from the pipeline, so no card is read and every
     one is excluded as unread — nothing is judged on a guess."""
     rows = {r["identifier"]: r for r in proposal["sequence"]}
+    # The sandbox groom proposal (DRE-8782) judges its own fixtures.
+    sandbox = proposal.get("sandbox") is True
     cards = window(proposal)
     viewer = _viewer(lops) if cards else None
     now = _utcnow()
@@ -765,7 +773,7 @@ def targets(proposal: dict, *, lops, repo_map: dict,
             body_digest=groomer.body_digest(issue.get("description")),
             context=context,
             excluded=(unmapped_reason(target) if repository is None
-                      else exclusion(issue, now=now)))
+                      else exclusion(issue, now=now, sandbox=sandbox)))
     # The newer cards naming each card's files (DRE-5458): one more request
     # per card that names a file and is not excluded, none for any other.
     groom_lookups.cards(out, lops=lops, now=now)
