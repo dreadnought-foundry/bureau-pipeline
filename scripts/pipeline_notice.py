@@ -7,7 +7,8 @@ stall, the fleet reviewer outage and the standards sync — each used to file a
 Linear card to say something went wrong. Each is repointed, by its own card,
 at one console system alert per notice key, raised and resolved through this
 module. It is the one client for that door, so none of them invents its own
-HTTP call. Stdlib only, shaped like `bureau_read.py`: it runs inside every
+HTTP call. The groom stall's writer has since gone with the groom queue it
+watched (DRE-8619). Stdlib only, shaped like `bureau_read.py`: it runs inside every
 reusable workflow.
 
 ## The door
@@ -123,7 +124,7 @@ TOTAL_TIMEOUT = 15.0
 DEFAULT_LANE = "Planning"
 #: The lanes a fallback card may be filed in: the two the repointed writers
 #: filed theirs in — Planning (`linear_ops.py create`'s default) and Triage
-#: (red-main repair, the groom stall, the reviewer outage). A notice card is
+#: (red-main repair, the reviewer outage). A notice card is
 #: never ready work, so any other lane is refused before a request is made.
 FALLBACK_LANES = (DEFAULT_LANE, "Triage")
 #: The flag the CLI's fallback labels arrive under. `label_writers.py` reads

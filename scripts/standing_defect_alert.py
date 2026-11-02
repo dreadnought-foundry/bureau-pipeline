@@ -78,7 +78,7 @@ printed as the client returned it.
 ## The vendor boundary (`standards/vendor-boundaries.md`)
 
 * Q1, the actor: the reconcile reusable already raises notices
-  (`groom_stall`, `reviewer_outage:fleet`), and the console door admits it.
+  (`reviewer_outage:fleet`), and the console door admits it.
 * Q2, the credentials: the sweep job already holds `id-token: write` and
   `BUREAU_READ_URL`, the two the notice client and the read door need.
 * Q3, a retry: a re-run repeats the same raise, and the door answers `repeat`

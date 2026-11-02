@@ -265,7 +265,7 @@ _STOOD_DOWN = (
     "rerun_runner_lost_ci", "resync_desynced_heads", "restart_answered_blockers", "card_dependabot_prs", "review_dependabot_prs",
     "recover_crashed_reviews", "report_fleet_reviewer_outage",
     "check_dependabot_capacity", "settle_repair_cards", "report_intake_depth",
-    "advance_urgent_intake", "repair_frozen_planning_holds", "release_groom_queue",
+    "advance_urgent_intake", "repair_frozen_planning_holds",
     "carry_epics_out_of_todo", "promote_ready", "move_hand_built_to_review",
     "report_break_glass", "report_fix_concurrency", "report_evicted_fix_runs",
 )

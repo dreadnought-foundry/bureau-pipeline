@@ -65,9 +65,9 @@ a minute. Since 2026-10-02 09:37 PT the planners spend their own 5,000-an-hour
 OAuth bucket instead of that key (DRE-5589, the token renewed by the console,
 DRE-5587), so planners no longer starve the sweeps, and the CEO raised the
 file's number to three (DRE-5634). Nobody has yet measured that bucket with
-four planners running, which is why the ceiling is four. The groom drain reads
-this ledger too, and releases no more cards than there are free slots
-(`groomer.free_planner_slots`).
+four planners running, which is why the ceiling is four. The groom drain read
+this ledger too, and released no more cards than there were free slots, until
+DRE-8619 removed that read with the groom queue.
 
 THE RULES, in the order the ledger applies them.
 
