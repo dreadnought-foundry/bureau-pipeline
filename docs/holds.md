@@ -399,7 +399,17 @@ nothing resumes, so each also moves it (DRE-6273):
   while the hold stands (DRE-6190), so it is still there to be found. Planning
   and not Queued: a card that has been through Triage since its newest
   routing verdict is refused `stale-verdict` in Queued (DRE-4962), and
-  Planning's exit routes it afresh.
+  Planning's exit routes it afresh. The Triage lane's own repairs follow the
+  same rule (DRE-8862): when `hygiene_triage.py` makes a card's prose blocker
+  true with a relation — its case (6) — or finds its dependency loop broken
+  by a closed card — case (7) — it returns the card to Queued only when its
+  newest routing verdict was written after its last trip through Triage, and
+  otherwise to Planning, under the same `hyg-triage-returned` receipt with
+  the lane named at the end of the cause. It asks the promotion sweep's own
+  `routing_verdict.stale_verdict_refusal`, so the two can never disagree.
+  Before this, DRE-8709 sat in Queued, refused `stale-verdict` on every pass,
+  from a hygiene return one afternoon until a person re-planned it the next
+  morning.
 
 The move is made only from the lane the hold parked the card in. A card a
 person has already moved anywhere else is lifted and moves nothing.
