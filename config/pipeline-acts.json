@@ -2139,6 +2139,30 @@
     },
     {
       "file": ".github/workflows/agent-fix.yml",
+      "anchor": "which is the CEO's to answer. It is asked on the card, in Green Light.",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "A fix run stopped on the critic's design question, which the CEO answers, and the card is parked in Green Light with the question on it (DRE-8735).",
+      "why": "A report of where the round went, not something the pipeline did on the pull request. The act is on the card — the question, and the move to Green Light the lane contract declares — and the CEO's answer comes back through the card, never through this thread. It creates no obligation on the pull request, hands the work to nobody the card does not already name, and nothing reads it back."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "and the CEO has answered it on the card, so his answer goes back to the reviewer",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "A fix run stopped on the critic's design question the CEO has already answered, so his answer goes back to the critic as one re-review (DRE-8735).",
+      "why": "A report of where the round went, not the act. The hand-back is design_answer.py handback's, which dispatches the re-review and posts its own design-question-answered record on the card (DRE-8722); this line only says so on the pull request, and nothing reads it back."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "--body-file=\"$DQ_FILE\"",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "The critic's design question for the CEO, posted on the card: the block's first line, then the three lines console_escalation.render writes (DRE-8735).",
+      "why": "A question, not an act — the build escalation's reason: the pipeline did nothing precisely because the choice is the CEO's. Its first line is the record design_answer.py reads (QUESTION_MARK), and a trailer on it would give that reader a second grammar to disagree with."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
       "anchor": "🙋 Two fix runs finished this fix and GitHub refused both pushes",
       "step": "Report",
       "kind": "undeclared-act",

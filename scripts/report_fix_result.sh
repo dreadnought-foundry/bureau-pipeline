@@ -468,7 +468,7 @@ $ANSWERS"
       echo "🎨 design-question: \`$DQ_PART\` at \`$DQ_PATH\`"
       printf '%s\n' "$DQ_LINES"
     } > "$DQ_FILE"
-    python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "$DQ_FILE")" || true
+    python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" --body-file="$DQ_FILE" || true
   fi
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "In Review,$START_LANES" || true
 }
