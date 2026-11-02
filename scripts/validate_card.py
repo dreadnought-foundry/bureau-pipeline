@@ -346,6 +346,7 @@ _FALLBACK_REPO_MAP = {
     "onboard-sandbox-5": "dreadnought-foundry/onboard-sandbox-5",
     "archive-sandbox": "dreadnought-foundry/archive-sandbox",
     "delete-sandbox": "dreadnought-foundry/delete-sandbox",
+    "handover-sandbox": "dreadnought-foundry/handover-sandbox",
 }
 # --- END generated repo mirror ---
 
