@@ -22,7 +22,8 @@ files nothing new, whatever became of the first run's cards. The weekly sweep
 
 The line is matched whole, so `<copy_path>.bak` is another copy; and read
 through the escapes a Linear round trip can add — a backslash before
-punctuation, the line set in backticks — so a stored card is still found.
+punctuation, the underscore included, the line set in backticks — so a stored
+card is still found.
 
 ## The owner
 
@@ -82,7 +83,7 @@ LINE_FIELDS = ("part_line", "copy_line")
 
 _OWNER = re.compile(r"^DRE-\d+$")
 _CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-_ESCAPE = re.compile(r"\\([^\w\s])")
+_ESCAPE = re.compile(r"\\([^A-Za-z0-9\s])")
 
 
 class Problem(Exception):
