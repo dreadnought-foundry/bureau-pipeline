@@ -1206,6 +1206,24 @@
       }
     },
     {
+      "name": "operator-agent",
+      "tag": "operator-agent",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The operator agent decided a card waiting on a person and spent its pass: a `studio` card blocked by the studio host's go-live, a `ceo` card moved to Green Light as one question, or a `done-already` card closed. The receipt quotes the step, the fingerprint and the outcome's own lines.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "operator-agent.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, by the registry's rule that only a `dispatched` act carries a run's timeout: the receipt is followed in the same Operator Agent run by its apply, and after it the card is a person's, and no workflow declares how long a person takes. A pass that died between the receipt and its apply is finished by the next hourly pass, which reads the card back as apply-only, so nothing waits on this receipt's silence. The claim and its apply are both scripts/operator_agent_apply.py's.",
+      "why": "DRE-8746 (epic DRE-8738, the Operator Agent). `scripts/operator_agent_apply.py claim` posts `🛠️ operator-agent: <outcome> — <reason> · <HH:MM> PT`, written by `operator_decide.receipt_text`, for a `studio`, `ceo` or `done-already` decision that is not held; `apply` acts only under it, re-reads the card live and makes the one write the outcome names — a `blockedBy` relation to the studio host's go-live, `planning_escalation.escalate` into Green Light, or the close to Done. The receipt is the card's spent pass, which is why the tag is adopted: a pipeline-authored receipt carrying the card's fingerprint makes `claim` exit 3, and `select` reads an `apply-only` card back off it after a pass that died before its write, so the write is tried again under the same receipt. The tag is the bare act name, unlike `triage-repair-receipt`: that suffix exists only because a lift line carries the act's name, and this act lifts no hold. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the moves it makes, into Green Light and Done, are ones the lane contract admits `operator_agent_apply.py` to make, and the receipt is the record of them. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/operator_agent_apply.py",
+        "anchor": "pipeline_act.receipt(\"operator-agent\""
+      }
+    },
+    {
       "name": "proof-run-dispatched",
       "tag": "proof-run",
       "adopted": true,

@@ -592,6 +592,147 @@ def test_split_history_needs_a_since(monkeypatch):
         bureau_read.split_history("")
 
 
+# ── a pull-request run's own card (DRE-8812) ────────────────────────────────
+# The door serves a `pull_request` token exactly one read (agent-bureau
+# DRE-8807): `/cards` for the card its head branch names, at repo scope. The
+# client sends that one read like any other and refuses every other read on a
+# pull-request run before a token is minted, as it always has.
+
+OWN = "DRE-123"
+OWN_WORLD = {
+    OWN: card(OWN, "In Review", comments=("one", "two", "three"),
+              blockers=(("DRE-99", "Done"),)),
+    "DRE-124": card("DRE-124", "Todo"),
+}
+
+
+def _pull_request_run(monkeypatch, door, issuer, *, head_ref="agent/DRE-123-x",
+                      event="pull_request"):
+    _point(monkeypatch, door, issuer)
+    monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+    if head_ref is None:
+        monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_HEAD_REF", head_ref)
+
+
+def test_a_pull_request_runs_review_card_read_is_sent_to_the_door(monkeypatch):
+    """QA Review's and Verify's card read, `card_snapshot._door`, exactly as
+    any other run sends it: one token, `/cards`, the whole query, no scope."""
+    import card_snapshot
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer)
+        read = card_snapshot._door(OWN)
+    assert [n["identifier"] for n in read.nodes] == [OWN]
+    assert len(issuer.requests) == 1 and len(door.requests) == 1
+    sent = door.requests[0]
+    assert sent["path"] == "/api/v1/pipeline/cards"
+    assert sent["query"] == {"ids": OWN, "comments": "all", "relations": "0"}
+    assert sent["headers"]["x-bureau-max-age"] == "120"
+    assert "x-bureau-relations-max-age" not in sent["headers"]
+    assert bureau_read.enabled()
+
+
+def test_a_pull_request_runs_own_card_read_with_relations_is_sent(monkeypatch):
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer)
+        read = bureau_read.cards([OWN], max_age=60, comments=50, relations=True)
+    assert read.nodes[0]["inverseRelations"]["nodes"][0]["issue"]["identifier"] == "DRE-99"
+    assert len(issuer.requests) == 1
+    sent = door.requests[0]
+    assert sent["query"] == {"ids": OWN, "comments": "50", "relations": "1"}
+    assert sent["headers"]["x-bureau-max-age"] == "60"
+    assert sent["headers"]["x-bureau-relations-max-age"] == str(bureau_read.RELATIONS_MAX_AGE)
+
+
+def test_a_repair_branch_names_its_card_too(monkeypatch):
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer, head_ref="repair/DRE-123-bcb36adf6037")
+        bureau_read.cards([OWN], max_age=60, relations=False)
+    assert [r["query"]["ids"] for r in door.requests] == [OWN]
+
+
+_OFF_GATE_READS = {
+    "another card": lambda: bureau_read.cards(["DRE-124"], max_age=60),
+    "two cards": lambda: bureau_read.cards([OWN, "DRE-124"], max_age=60),
+    "the same card twice": lambda: bureau_read.cards([OWN, OWN], max_age=60),
+    "board": lambda: bureau_read.board(["In Review"], max_age=120),
+    "fleet board": lambda: bureau_read.board(["In Review"], scope="fleet", max_age=120),
+    "dependents": lambda: bureau_read.dependents(OWN, max_age=120),
+    "search": lambda: bureau_read.search(OWN),
+    "workflow states": lambda: bureau_read.workflow_states(max_age=3600),
+    "split history": lambda: bureau_read.split_history(SINCE),
+    "planning order": bureau_read.planning_order,
+}
+
+
+@pytest.mark.parametrize("read", list(_OFF_GATE_READS.values()), ids=list(_OFF_GATE_READS))
+def test_every_other_read_on_a_pull_request_run_is_refused_before_a_token(monkeypatch, read):
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            read()
+        assert caught.value.reason == "event-refused" and caught.value.unavailable
+        assert door.requests == [] and issuer.requests == []
+
+
+def test_a_refused_read_leaves_the_own_card_read_to_the_door(monkeypatch):
+    """A refusal by the event is not the door failing: the one read the door
+    serves this run is still sent after another read was refused."""
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer)
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.board(["In Review"], max_age=120)
+        assert caught.value.reason == "event-refused"
+        bureau_read.cards([OWN], max_age=60, relations=False)
+        with pytest.raises(bureau_read.ReadUnknown) as again:
+            bureau_read.search(OWN)
+        assert again.value.reason == "event-refused"
+    assert [r["path"] for r in door.requests] == ["/api/v1/pipeline/cards"]
+
+
+@pytest.mark.parametrize("head_ref", [
+    None, "", "main", "feature/DRE-123-x", "agent/DRE-123", "agent/DRE-123-",
+    "agent/dre-123-x", "agent/DRE-x-y", "bot/standards-sync", "agent/DRE-12345678-x",
+])
+def test_a_pull_request_run_whose_branch_names_no_card_refuses_every_read(monkeypatch,
+                                                                          head_ref):
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer, head_ref=head_ref)
+        for read in (lambda: bureau_read.cards([OWN], max_age=60),
+                     lambda: bureau_read.cards(["DRE-124"], max_age=60),
+                     lambda: bureau_read.board(["Todo"], max_age=120)):
+            with pytest.raises(bureau_read.ReadUnknown):
+                read()
+        assert door.requests == [] and issuer.requests == []
+    assert bureau_read.disabled_reason() == "event-refused"
+
+
+@pytest.mark.parametrize("head_ref", ["agent/DRE-123-x", "repair/DRE-123-abc", None])
+def test_a_pull_request_target_run_refuses_every_read(monkeypatch, head_ref):
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer, head_ref=head_ref,
+                          event="pull_request_target")
+        with pytest.raises(bureau_read.ReadUnknown) as caught:
+            bureau_read.cards([OWN], max_age=60)
+        assert caught.value.reason == "event-refused"
+        for read in _OFF_GATE_READS.values():
+            with pytest.raises(bureau_read.ReadUnknown):
+                read()
+        assert door.requests == [] and issuer.requests == []
+    assert bureau_read.disabled_reason() == "event-refused"
+
+
+def test_the_own_card_is_read_only_on_a_pull_request_run(monkeypatch):
+    """A head ref on any other event names nothing: the event gate is not
+    asked, and every read goes as it always has."""
+    with FakeIssuer() as issuer, FakeDoor(OWN_WORLD) as door:
+        _pull_request_run(monkeypatch, door, issuer, event="workflow_dispatch")
+        bureau_read.cards(["DRE-124"], max_age=60)
+    assert [r["query"]["ids"] for r in door.requests] == ["DRE-124"]
+    assert bureau_read.own_card() is None
+
+
 # ── the shadow comparison ───────────────────────────────────────────────────
 
 

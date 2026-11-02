@@ -271,8 +271,8 @@ class TestTheRepositoryPasses:
                                  BLOCKER_ASK, RELEASED_EPIC, DEFERRAL}
         # The cause park writes no lane since DRE-6837, so it has no record.
         # The Triage repair's question is the eighth caller of the escalation
-        # (DRE-7178).
-        counts = {ESCALATE: 8, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
+        # (DRE-7178), and the operator agent's apply the ninth (DRE-8746).
+        counts = {ESCALATE: 9, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
                   BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))

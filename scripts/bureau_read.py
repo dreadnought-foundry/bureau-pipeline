@@ -41,8 +41,11 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   never a red run.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
   refuses those tokens by design (its check 7, review S7), so the client never
-  mints one or asks (BP-8). Nearly every QA Review, Verify and Linear Sync run
-  is one; they read Linear exactly as before.
+  mints one or asks (BP-8) — with ONE exception (DRE-8812). A `pull_request`
+  run whose head branch (`GITHUB_HEAD_REF`) names a card asks `/cards` for
+  exactly that card, which the door serves it (agent-bureau DRE-8807): QA
+  Review's and Verify's card read. Every other read on those runs, Linear
+  Sync's included, reads Linear exactly as before.
 
 Every read that falls back to Linear in mode `on` is named by the client
 itself, once, on stderr (DRE-8794):
@@ -153,6 +156,7 @@ import functools
 import http.client
 import json
 import os
+import re
 import ssl
 import sys
 import threading
@@ -202,15 +206,24 @@ RELATIONS_MAX_AGE = 1200
 #: long before the pull request it is reviewing.
 REVIEW_CARD_MAX_AGE = 120
 
-#: The events whose OIDC token the door refuses by design (its check 7, review
+#: The events whose runs the door serves one read at most (its check 7, review
 #: S7): a private repo that sends write tokens to fork pull requests would
-#: otherwise hand a fork a door token. Asking from one buys nothing but a
-#: refusal the door counts toward its refused-and-never-served alarm (M2), so
-#: the client never asks: no token is minted, nothing is sent, and the run
-#: reads Linear as it always did. A QA Review, a Verify and a Linear Sync run
-#: on `pull_request` — almost every one of them.
+#: otherwise hand a fork a door token. A `pull_request_target` run is served
+#: nothing. A `pull_request` run is served exactly one read since agent-bureau
+#: DRE-8807: `/cards` for the ONE card its head branch names (`own_card()`,
+#: by `CARD_BRANCH`), at repo scope — QA Review's and Verify's card read,
+#: `card_snapshot._door`. The client sends that read like any other and asks
+#: nothing else on these events: every other read is refused here, before a
+#: token is minted, because asking buys nothing but a refusal the door counts
+#: toward its refused-and-never-served alarm (M2), and the run reads Linear as
+#: it always did (DRE-8812).
 EVENT_ENV = "GITHUB_EVENT_NAME"
-REFUSED_EVENTS = frozenset({"pull_request", "pull_request_target"})
+HEAD_REF_ENV = "GITHUB_HEAD_REF"
+PULL_REQUEST_EVENT = "pull_request"
+REFUSED_EVENTS = frozenset({PULL_REQUEST_EVENT, "pull_request_target"})
+#: The fleet's branch rule, the door's own (`github_oidc._CARD_BRANCH`):
+#: `agent/DRE-<n>-<slug>` or `repair/DRE-<n>-<slug>` names card `DRE-<n>`.
+CARD_BRANCH = re.compile(r"^(?:agent|repair)/(?P<card>DRE-[0-9]{1,7})-[A-Za-z0-9._/-]+$")
 
 #: Timeouts (item 40, review M4): one attempt, connect within a second, the
 #: whole exchange within eight. Module constants so the tests can shrink them.
@@ -619,6 +632,25 @@ def _require_max_age(name: str, value) -> int:
     return value
 
 
+def own_card() -> str | None:
+    """The one card a `pull_request` run's head branch names (`CARD_BRANCH`),
+    or None — on every other event, and on a branch that names no card."""
+    if os.environ.get(EVENT_ENV, "") != PULL_REQUEST_EVENT:
+        return None
+    branch = CARD_BRANCH.match(os.environ.get(HEAD_REF_ENV, ""))
+    return branch.group("card") if branch else None
+
+
+def _reads_own_card(endpoint: str, query: dict) -> bool:
+    """Is this the one read the door serves a `pull_request` run (DRE-8807)?
+    `/cards` with `ids` exactly the run's own card and `scope` absent or
+    `repo`. Only those two are checked: `comments`, `relations` and the
+    max-age headers go out as on every other read."""
+    card = own_card()
+    return (card is not None and endpoint == "/cards" and query.get("ids") == card
+            and query.get("scope", "repo") == "repo")
+
+
 def _get(endpoint: str, query: dict, *, max_age: int,
          relations_max_age: int | None = None, not_found_ok: bool = False,
          refusal_ok: bool = False, any_mode: bool = False) -> dict:
@@ -638,9 +670,11 @@ def _get(endpoint: str, query: dict, *, max_age: int,
         raise ReadUnknown("unavailable", f"the door stopped answering earlier this "
                           f"run ({_state['disabled']})", unavailable=True)
     event = os.environ.get(EVENT_ENV, "")
-    if event in REFUSED_EVENTS:
+    if event in REFUSED_EVENTS and not _reads_own_card(endpoint, query):
         _state["unavailable"] += 1
-        _disable(EVENT_REFUSED, f"a {event} run's token is refused by the door")
+        if own_card() is None:
+            # Nothing on this run is served: the door is not asked again.
+            _disable(EVENT_REFUSED, f"a {event} run's token is refused by the door")
         raise ReadUnknown(EVENT_REFUSED, f"a {event} run's token is refused by the door",
                           unavailable=True)
     started = time.monotonic()
