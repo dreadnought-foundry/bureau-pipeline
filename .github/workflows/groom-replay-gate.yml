@@ -39,9 +39,20 @@
 #   Q4 — one reusable call per run, so the artifact names do not collide; one
 #        verify leg per gate-set card, at most `GATE_MAX_CARDS` (50), below
 #        the 256-leg matrix ceiling.
-#   Q5 — a crashed verify leg leaves its card with no verify record, which
-#        `judge` reads as `not judged`, never a pass; the leg's job is red and
-#        a re-run re-runs it. A replay writes no receipt and posts nothing
+#   Q5 — the gate fails closed (DRE-8741). The agent step is
+#        `continue-on-error`, so a crashed verify leg's job stays green, and
+#        its `Write the verdict` step records the card `unverified` with the
+#        reason — `agent step failed`, `no verdict file`, … — or `apply`
+#        marks a card with no verdict artifact the same way. `judge` reads
+#        an `unverified` or `excluded` record, no record, and a card missing
+#        from the proposal as `not judged`, never a pass. When that case
+#        passes on `main`, it is `UNCHECKED`: `judge` names the case and the
+#        reason and fails the gate. A run where no case was checked fails
+#        too, saying no case was checked. Gate run 41370789518 is the
+#        counterexample: its one leg died on startup, the judge read the
+#        card's `not-verified` as off Planning, and a brief told to answer
+#        `still-needed` for every card passed. Re-running the failed jobs
+#        re-runs the leg. A replay writes no receipt and posts nothing
 #        (DRE-7239, DRE-7242), so nothing blocks the re-run.
 #
 # COST: about $0.36 a gate-set card (docs/groomer-verify-proof-2026-10.md),
@@ -114,11 +125,11 @@ jobs:
       intake_hold: ${{ vars.INTAKE_HOLD }}
     secrets: inherit
 
-  # The verdict. `!cancelled()` beside the same condition: a verify leg that
-  # crashed fails the replay, but the post job still writes the verified
-  # proposal, and its card is judged `not judged` here rather than left
-  # unsaid. Exits as `judge` exits, so a regressed case fails this job and
-  # nothing else does.
+  # The verdict. `!cancelled()` beside the same condition: whatever a verify
+  # leg did, the post job still writes the verified proposal, and this job
+  # judges it. Exits as `judge` exits, so this job fails on a regressed case,
+  # on an unchecked one — a case that passes on `main` whose card the replay
+  # did not judge, its reason named (Q5) — and on a run that checked no case.
   judge:
     needs: [reach, replay]
     if: ${{ !cancelled() && needs.reach.outputs.reached == 'true' && needs.reach.outputs.cases != '0' }}

@@ -402,7 +402,10 @@ LISTS = [groom_replay.PLANNING, groom_replay.CANCEL, groom_replay.REWRITE,
 def test_passes_for_every_expect_and_every_list(expect, ended):
     case = {"expect": expect}
     got = grc.passes(case, ended, judged=True)
-    if ended in (None, groom_replay.EXCLUDED, groom_replay.UNPLACED):
+    # `not-verified` is where a leg nobody could check ends — a crashed agent
+    # step included — so it says nothing about the answer (DRE-8741).
+    if ended in (None, groom_replay.EXCLUDED, groom_replay.UNPLACED,
+                 groom_replay.NOT_VERIFIED):
         assert got is None
     elif expect == "off-planning":
         assert got is (ended != groom_replay.PLANNING)

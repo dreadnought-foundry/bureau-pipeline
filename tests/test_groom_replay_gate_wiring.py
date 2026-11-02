@@ -744,3 +744,291 @@ def test_the_proof_may_read_the_gate_s_line():
         "constant": "TAG",
         "when": ("every run of groom-replay-gate.yml's reach and judge jobs, and of "
                  "groom-week.yml's week job, since this card")}]
+
+
+# --------------------------------------------------------------------------
+# failing closed (DRE-8741) — the run that let a broken verify step through
+# --------------------------------------------------------------------------
+def _groomer_jobs() -> dict:
+    return _load(GROOMER)["jobs"]
+
+
+def _named(job: dict, name: str) -> dict:
+    found = [s for s in job.get("steps") or [] if s.get("name") == name]
+    assert len(found) == 1, f"{len(found)} steps named {name!r}"
+    return found[0]
+
+
+SEED = "DRE-7239"
+
+
+def _seed_cases(tmp_path) -> Path:
+    """The seed passing on `main` beside a case that never ran there — the
+    shape of the shipped file on the day of gate run 41370789518."""
+    seed = dict(grc.SEED_CASES[0], main={"ended": "cancel", "at": "2026-11-01T10:14:53Z",
+                                         "passes": True})
+    other = dict(_case(main_passes=None), case="c-other", card="DRE-109")
+    path = tmp_path / "cases.json"
+    path.write_text(json.dumps({"schema": grc.SCHEMA, "built_at": None,
+                                "cases": [seed, other]}, indent=2) + "\n",
+                    encoding="utf-8")
+    return path
+
+
+def test_a_leg_that_crashed_on_startup_fails_the_gate_naming_the_reason(
+        tmp_path, monkeypatch):
+    """Gate run 41370789518, end to end: the gate set as the cases build it,
+    the morning's `targets`, the verify leg's `prepare` and `Write the
+    verdict` steps as written with the agent step's outcome `failure` and no
+    execution file, the post job's `Apply the verdicts` as written, then
+    `judge` — red, naming the case and `agent step failed`."""
+    from test_groom_verify_agent import CardText
+    monkeypatch.setenv("GH_TOKEN", "app-installation-token")
+    ws = tmp_path / "workspace"
+    ws.mkdir()
+    (ws / ".bureau-pipeline").symlink_to(ROOT)
+    cases_path = _seed_cases(tmp_path)
+    stored = grc.gate_set(grc._load_cases(cases_path)["cases"])
+    (ws / "proposal.json").write_text(json.dumps(groom_replay.base(stored)),
+                                      encoding="utf-8")
+    assert gva.main(["targets", "--proposal", str(ws / "proposal.json"),
+                     "--out", str(ws / "verify-targets.json"),
+                     "--matrix-out", str(ws / "matrix.json")], lops=CardText()) == 0
+    rows = json.loads((ws / "matrix.json").read_text(encoding="utf-8"))
+    assert [r["card"] for r in rows] == [SEED]
+    ctx = {"matrix.card": SEED, "matrix.repository": rows[0]["repository"],
+           "steps.claude.outcome": "failure",
+           "steps.claude.outputs.execution_file": "",
+           "runner.temp": str(tmp_path / "runner-temp")}
+    verify = _groomer_jobs()["verify"]
+    output = tmp_path / "github-output"
+    output.write_text("", encoding="utf-8")
+    for name in ("Prepare the agent's input", "Write the verdict"):
+        done = _run_step(_named(verify, name), ws, ctx, {"GITHUB_OUTPUT": str(output)})
+        assert done.returncode == 0, done.stdout + done.stderr
+    assert not Path(render(_named(verify, "Write the verdict")["env"]["EXECUTION_FILE"],
+                           ctx)).exists()
+    verdict = json.loads((ws / "verdict.json").read_text(encoding="utf-8"))
+    assert (verdict["verdict"], verdict["reason"]) == (gva.UNVERIFIED, gva.STEP_FAILED)
+    leg = ws / "verdicts" / f"groom-verdict-{SEED}"
+    leg.mkdir(parents=True)
+    (ws / "verdict.json").rename(leg / "verdict.json")
+    done = _run_step(_named(_groomer_jobs()["post"], "Apply the verdicts"), ws, {})
+    assert done.returncode == 0, done.stdout + done.stderr
+
+    verified = json.loads((ws / "proposal-verified.json").read_text(encoding="utf-8"))
+    assert groom_replay.ended(verified, SEED) == groom_replay.NOT_VERIFIED
+    done = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "groom_replay_gate.py"), "judge",
+         "--proposal", str(ws / "proposal-verified.json"),
+         "--cases", str(cases_path), "--out", str(tmp_path / "result.json")],
+        capture_output=True, text=True, timeout=120)
+    assert done.returncode != 0, done.stdout
+    assert done.returncode == 1, done.stdout + done.stderr
+    line = next(x for x in done.stdout.splitlines()
+                if x.startswith(f"{gate.TAG} seed-DRE-7239 "))
+    assert line.endswith("not judged — UNCHECKED: unverified (agent step failed)"), line
+    assert " pass" not in line.split(" head=")[1]
+    assert (f"{gate.TAG} failed closed — 1 case passes on main and was not checked: "
+            f"seed-DRE-7239 ({SEED}, unverified (agent step failed))") in done.stdout
+    result = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
+    assert result["unchecked"] == ["seed-DRE-7239"] and result["checked"] == 0
+
+
+@pytest.mark.parametrize("ended,code", [(groom_replay.PLANNING, 1),
+                                        (groom_replay.CANCEL, 0)])
+def test_a_real_answer_reads_as_before(checkout, ended, code):
+    """Failing closed changes nothing for a leg that answered: off Planning
+    passes and exits 0, on Planning is REGRESSED and exits 1."""
+    repo, _, _ = checkout
+    done, result = _judge(repo, ended)
+    assert done.returncode == code, done.stdout + done.stderr
+    assert "failed closed" not in done.stdout
+    assert result["unchecked"] == [] and result["checked"] == 1
+
+
+# --------------------------------------------------------------------------
+# the verify agent runs from a git working directory (DRE-8741)
+# --------------------------------------------------------------------------
+GIT_STEP = "Make the workspace root a git repository"
+
+
+def _verify_steps() -> list[dict]:
+    return _groomer_jobs()["verify"]["steps"]
+
+
+def test_the_workspace_root_is_made_a_repository_after_every_checkout_and_before_the_agent():
+    steps = _verify_steps()
+    names = [s.get("name") for s in steps]
+    at = names.index(GIT_STEP)
+    agent = next(i for i, s in enumerate(steps) if s.get("id") == "claude")
+    checkouts = [i for i, s in enumerate(steps)
+                 if str(s.get("uses") or "").startswith("actions/checkout@")]
+    assert checkouts and max(checkouts) < at < agent
+    step = steps[at]
+    assert "uses" not in step
+    # Never a checkout at the root: that would clean the downloaded proposal
+    # away, and put a second copy of a repository beside `target/`.
+    for s in steps:
+        assert (s.get("with") or {}).get("path") not in (None, "", ".", "./") \
+            or not str(s.get("uses") or "").startswith("actions/checkout@"), s
+    assert step["if"] == steps[agent]["if"]
+    assert step.get("continue-on-error") is True
+
+
+def _git_env(home: Path) -> dict:
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("GIT_", "GITHUB_"))}
+    env.update({"HOME": str(home), "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CEILING_DIRECTORIES": str(home.parent)})
+    return env
+
+
+def _action_startup(ws: Path, origin: str, env: dict) -> list[subprocess.CompletedProcess]:
+    """The git calls claude-code-action v1.0.236 makes in its working
+    directory on a `pull_request` event before the CLI starts
+    (`configureGitAuth`, then `restoreConfigFromBase` — the
+    `git diff … HEAD` that failed on gate run 41370789518 is its first), the
+    origin URL rewritten as the action rewrites it."""
+    def git(*args, check=True):
+        done = subprocess.run(["git", *args], cwd=ws, env=env, capture_output=True,
+                              text=True, timeout=120)
+        assert not check or done.returncode == 0, (args, done.stdout, done.stderr)
+        return done
+
+    git("config", "user.name", "claude[bot]")
+    git("remote", "set-url", "origin", origin)
+    out = [git("diff", "--name-only", "-z", "--relative", "--ignore-submodules",
+               "HEAD", "--"),
+           git("ls-files", "-z")]
+    shallow = git("rev-parse", "--is-shallow-repository").stdout.strip()
+    out.append(git("fetch", "origin", "main",
+                   *(["--depth=1"] if shallow == "true" else []),
+                   "--no-recurse-submodules"))
+    for path in (".claude", ".mcp.json", "CLAUDE.md"):
+        git("checkout", "origin/main", "--", path, check=False)
+    git("reset", "--", ".claude", ".mcp.json", "CLAUDE.md", check=False)
+    out.append(shallow)
+    return out
+
+
+@pytest.fixture
+def base_repo(tmp_path):
+    """What the action's `origin` serves: a repository with a `main`."""
+    env = _git_env(tmp_path / "home")
+    (tmp_path / "home").mkdir()
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    for args in (["init", "-q", "-b", "main"],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                  "--allow-empty", "-m", "one"],
+                 ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q",
+                  "--allow-empty", "-m", "two"]):
+        subprocess.run(["git", *args], cwd=origin, env=env, check=True,
+                       capture_output=True)
+    return origin, env
+
+
+def _workspace(tmp_path) -> Path:
+    """The verify leg's workspace root as the job leaves it: the pipeline
+    and the card's repo checked out under it, the agent's input at the top."""
+    ws = tmp_path / "work" / "bureau-pipeline"
+    for sub in (".bureau-pipeline", "target", "pipeline"):
+        (ws / sub).mkdir(parents=True)
+    (ws / "verify-input.md").write_text("the input\n", encoding="utf-8")
+    (ws / "verify-targets.json").write_text("[]\n", encoding="utf-8")
+    return ws
+
+
+def test_without_the_step_the_action_s_first_git_call_fails_as_on_the_gate_run(
+        tmp_path, base_repo):
+    """The control: the layout as it was, and the error the run printed."""
+    _, env = base_repo
+    ws = _workspace(tmp_path)
+    done = subprocess.run(["git", "diff", "--name-only", "-z", "--relative",
+                           "--ignore-submodules", "HEAD", "--"], cwd=ws, env=env,
+                          capture_output=True, text=True)
+    assert done.returncode != 0
+    assert "Not a git repository" in done.stderr
+
+
+def test_after_the_step_the_action_s_startup_git_calls_all_succeed(tmp_path, base_repo):
+    origin, env = base_repo
+    ws = _workspace(tmp_path)
+    step = _named(_groomer_jobs()["verify"], GIT_STEP)
+    run_env = {**env, "GITHUB_SERVER_URL": "https://github.com",
+               "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline"}
+    done = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+                           step["run"]], cwd=ws, env=run_env, capture_output=True,
+                          text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+    top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=ws, env=env,
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert Path(top).resolve() == ws.resolve()
+    url = subprocess.run(["git", "remote", "get-url", "origin"], cwd=ws, env=env,
+                         capture_output=True, text=True, check=True).stdout.strip()
+    assert url == "https://github.com/dreadnought-foundry/bureau-pipeline.git"
+
+    diff, files, fetched, shallow = _action_startup(ws, f"file://{origin}", env)
+    assert diff.stdout == "" and files.stdout == ""
+    # Shallow, so the action fetches the base branch at depth 1 rather than
+    # its whole history, once per leg.
+    assert shallow == "true"
+    # The agent's input and the two checkouts are where the prompt says.
+    assert (ws / "verify-input.md").is_file()
+    for sub in ("target", "pipeline", ".bureau-pipeline"):
+        assert (ws / sub).is_dir()
+
+
+def test_the_step_can_run_twice_on_one_workspace(tmp_path, base_repo):
+    """A self-hosted runner may keep the workspace between jobs."""
+    _, env = base_repo
+    ws = _workspace(tmp_path)
+    step = _named(_groomer_jobs()["verify"], GIT_STEP)
+    run_env = {**env, "GITHUB_SERVER_URL": "https://github.com",
+               "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline"}
+    for _ in range(2):
+        done = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c",
+                               step["run"]], cwd=ws, env=run_env, capture_output=True,
+                              text=True, timeout=60)
+        assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_agent_still_reads_target_and_pipeline_from_the_workspace_root():
+    agent = next(s for s in _verify_steps() if s.get("id") == "claude")
+    prompt = agent["with"]["prompt"]
+    assert "verify-input.md at the workspace root" in prompt
+    assert "checked out under target/" in prompt
+    assert "under pipeline/ beside it" in prompt
+    paths = {(s.get("with") or {}).get("path") for s in _verify_steps()
+             if str(s.get("uses") or "").startswith("actions/checkout@")}
+    assert paths == {".bureau-pipeline", "target", "pipeline"}
+
+
+# --------------------------------------------------------------------------
+# the header says what the code does (DRE-8741)
+# --------------------------------------------------------------------------
+def _premortem(question: str) -> str:
+    text = (WORKFLOWS / GATE).read_text(encoding="utf-8")
+    header = "\n".join(line[2:] if line.startswith("# ") else line.lstrip("#")
+                       for line in text.splitlines() if line.startswith("#"))
+    match = re.search(rf"^\s*{question} — (.*?)(?=^\s*Q\d — |^\S|\Z)", header,
+                      re.S | re.M)
+    assert match, f"no {question} paragraph"
+    return " ".join(match.group(1).split())
+
+
+def test_q5_says_the_gate_fails_closed():
+    q5 = _premortem("Q5")
+    assert "the leg's job is red" not in q5
+    assert "never a pass" in q5
+    for words in ("`unverified`", "fails the gate", "names the case",
+                  "no case was checked", "`continue-on-error`"):
+        assert words in q5, f"Q5 does not say {words!r}: {q5}"
+
+
+def test_the_judge_job_comment_says_a_crashed_leg_fails_it():
+    text = (WORKFLOWS / GATE).read_text(encoding="utf-8")
+    block = text[text.index("  # The verdict."):text.index("  judge:")]
+    assert "judged `not judged` here rather than left" not in block
+    assert "fails" in block and "unchecked" in block.lower()
