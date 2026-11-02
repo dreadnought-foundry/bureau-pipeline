@@ -22,6 +22,8 @@ What this file holds shut:
     selects every listed repo and a dispatch only the one it names, the count
     is the real `parts_check.py`, and the filer is handed `--owned-by` exactly
     when the entry carries one;
+  * the count's JSON path on the two steps that read it, where `runner.temp`
+    exists, and never on the job's own `env:`, where it does not (DRE-8913);
   * the Linear key on the filing step's env only, `LINEAR_IDENTITY` declared,
     every third-party action pinned by a commit sha;
   * `Parts Count` watched by the Red-Main Repair caller and the medic.
@@ -61,6 +63,7 @@ CHECKOUT_ACTION = "actions/checkout"
 COUNT_COMMAND = 'python3 .bureau-pipeline/scripts/parts_check.py count --repo "$SLUG" --json'
 FILE_COMMAND = ('python3 .bureau-pipeline/scripts/parts_cleanup.py file --repo "$SLUG" '
                 '--count-json "$COUNT_JSON" --agent "$AGENT" --initiative "$INITIATIVE"')
+COUNT_JSON = "${{ runner.temp }}/parts-count.json"
 AGENT_BUREAU = {"repo": "agent-bureau", "agent": "agent:frontend",
                 "initiative": "initiative:bureau", "owned_by": "DRE-8536"}
 CARD_ID = re.compile(r"^DRE-[0-9]+$")
@@ -281,13 +284,20 @@ def test_the_steps_run_the_contracts_commands():
 
 
 def test_the_steps_read_the_entry_off_the_matrix():
-    assert _count_step()["env"] == {"SLUG": "${{ matrix.repo }}"}
+    assert _count_step()["env"] == {"SLUG": "${{ matrix.repo }}", "COUNT_JSON": COUNT_JSON}
     env = dict(_file_step()["env"])
     env.pop("LINEAR_API_KEY")
     assert env == {"SLUG": "${{ matrix.repo }}", "AGENT": "${{ matrix.agent }}",
                    "INITIATIVE": "${{ matrix.initiative }}",
-                   "OWNED_BY": "${{ matrix.owned_by }}"}
-    assert _job("count")["env"]["COUNT_JSON"] == "${{ runner.temp }}/parts-count.json"
+                   "OWNED_BY": "${{ matrix.owned_by }}", "COUNT_JSON": COUNT_JSON}
+
+
+# DRE-8913: `runner` does not exist when a job's own `env:` is evaluated, so
+# GitHub refused the whole file and every run held no jobs. The path lives on
+# the two steps that read it, where `runner.temp` is provided.
+def test_the_count_json_path_is_set_on_the_steps_not_the_job():
+    assert _job("count")["env"] == {"LINEAR_IDENTITY": "fleet"}
+    assert "runner." not in json.dumps(_job("count")["env"])
 
 
 # --------------------------------------------------------------------------

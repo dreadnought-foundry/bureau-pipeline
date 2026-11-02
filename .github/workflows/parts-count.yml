@@ -122,7 +122,6 @@ jobs:
     # Whose Linear bucket the filer spends: the fleet's.
     env:
       LINEAR_IDENTITY: fleet
-      COUNT_JSON: ${{ runner.temp }}/parts-count.json
     strategy:
       max-parallel: 1
       fail-fast: false
@@ -161,10 +160,14 @@ jobs:
 
       # The JSON goes to a file for the filer; the `parts-count:` line goes to
       # stderr, the log. Exit 1 is the count's UNKNOWN, and the filer never
-      # runs past it.
+      # runs past it. Its path is on this step and the filer's, never the
+      # job's `env:`: the `runner` context does not exist when a job's `env:`
+      # is evaluated, and GitHub refuses the whole file that names it there
+      # (DRE-8913, scripts/check_workflow_contexts.py).
       - name: Count the copies of shared parts
         env:
           SLUG: ${{ matrix.repo }}
+          COUNT_JSON: ${{ runner.temp }}/parts-count.json
         run: |
           python3 .bureau-pipeline/scripts/parts_check.py count --repo "$SLUG" --json > "$COUNT_JSON"
 
@@ -175,6 +178,7 @@ jobs:
           AGENT: ${{ matrix.agent }}
           INITIATIVE: ${{ matrix.initiative }}
           OWNED_BY: ${{ matrix.owned_by }}
+          COUNT_JSON: ${{ runner.temp }}/parts-count.json
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: |
           if [ -n "$OWNED_BY" ]; then
