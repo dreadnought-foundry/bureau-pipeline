@@ -292,6 +292,7 @@ import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 import crashed_review_alert  # noqa: E402 — DRE-8690: a review stuck at its cap is a console alert
+import read_fallback_alert  # noqa: E402 — DRE-8798: a full pass that fell back is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -16473,6 +16474,20 @@ def main(
     except Exception as e:  # noqa: BLE001 — an alert never decides the exit
         print(f"{standing_defect_alert.TAG} not settled this pass — "
               f"{type(e).__name__}: {e}")
+    # The reads this pass fell back to Linear on are one console alert for the
+    # repo, and a full pass that fell back on none resolves it (DRE-8798). The
+    # full sweep's alone, like the standing-defect alert: the card-scoped,
+    # `--promote-only` and `--close-only` passes returned above, and an idle
+    # pass skips the board read, so its empty list is not a full pass's and
+    # would flap the alert. Nothing it raises moves the exit below.
+    if _idle_pass:
+        print(f"{read_fallback_alert.TAG} not settled this pass — idle ({_idle_pass[0]})")
+    else:
+        try:
+            read_fallback_alert.settle(bureau_read.fallbacks(), REPO_SLUG, bureau_read.mode())
+        except Exception as e:  # noqa: BLE001 — an alert never decides the exit
+            print(f"{read_fallback_alert.TAG} not settled this pass — "
+                  f"{type(e).__name__}: {e}")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
         # when a write we claimed to make didn't happen (DRE-1254 lesson), when
