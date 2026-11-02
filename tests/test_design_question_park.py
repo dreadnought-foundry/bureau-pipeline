@@ -106,6 +106,16 @@ sys.stderr.write('design-answer: stubbed\\n')
 """
 
 
+#: `linear_ops.py`, stubbed: logs its argv, a `--body-file=PATH` read back as
+#: the body it carries (DRE-8758), so a comment logs the same either way.
+LINEAR_OPS_STUB = """#!/usr/bin/env python3
+import json, sys
+args = [open(a[len('--body-file='):], encoding='utf-8').read().rstrip('\\n')
+        if a.startswith('--body-file=') else a for a in sys.argv[1:]]
+open({log!r}, 'a').write(json.dumps(args) + '\\n')
+"""
+
+
 def report(*, verdict: str, state: str = "none", blocker: str = BLOCKER,
            card: str = CARD):
     """Run the real report_fix_result.sh on a blocker. Returns
@@ -117,8 +127,7 @@ def report(*, verdict: str, state: str = "none", blocker: str = BLOCKER,
         base = _checkout(td)
         log = os.path.join(td, "calls.jsonl")
         for name, body in (
-                ("linear_ops.py", "#!/usr/bin/env python3\nimport json, sys\n"
-                 f"open({log!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"),
+                ("linear_ops.py", LINEAR_OPS_STUB.format(log=log)),
                 ("hold.py", "#!/usr/bin/env python3\nimport json, sys\n"
                  f"open({log!r}, 'a').write(json.dumps(['hold.py'] + sys.argv[1:]) + '\\n')\n"),
                 ("design_answer.py", DESIGN_ANSWER_STUB.format(log=log))):
