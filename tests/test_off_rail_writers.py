@@ -74,7 +74,7 @@ from test_intake_urgent_fast_path import card as urgent_card  # noqa: E402
 from test_lane_fold_in_review import OLD_QUEUE, _stranded  # noqa: E402
 from test_limit_recovery import card as limit_card  # noqa: E402
 from test_limit_recovery import marker  # noqa: E402
-from test_planner_queue_sweep import TTL, _claimed  # noqa: E402
+from test_planner_queue_sweep import _waiting  # noqa: E402
 from test_reconcile_epic_carry import _board  # noqa: E402
 from test_reconcile_epic_carry import _card as epic_card  # noqa: E402
 from test_reconcile_reviewer_down import (  # noqa: E402
@@ -166,9 +166,10 @@ def _frozen_card():
     return frozen
 
 
-def _expired_claim_card():
-    """An open `planner-slot: claimed` receipt older than the line's TTL."""
-    return _claimed("DRE-5178", "777", minutes_ago=TTL + 30, repo=THIS)
+def _waiting_in_the_old_line():
+    """A card still `waiting` in the old planner line, recorded against this
+    repo: the drain starts it and releases its place (DRE-8618)."""
+    return _waiting("DRE-5178", 30.0, repo=THIS)
 
 
 def _epic_in_todo():
@@ -214,7 +215,7 @@ TRIGGERS = {
     "flag_stranded": ((_stalled_planning_card,), "cmd_state", "DRE-2736"),
     "advance_urgent_intake": ((_urgent_card,), "cmd_advance", "DRE-4150"),
     "repair_frozen_planning_holds": ((_frozen_card,), "remove_label", "DRE-4124"),
-    "serve_planner_line": ((_expired_claim_card,), "post_released", "DRE-5178"),
+    "serve_planner_line": ((_waiting_in_the_old_line,), "post_released", "DRE-5178"),
     "tend_epic_queue": ((_labeled_backlog_card,), "remove_label", "DRE-5152"),
     "start_queued_epics": ((_waiting_epic,), "cmd_advance", "DRE-5136"),
     "carry_epics_out_of_todo": ((_epic_in_todo,), "post_refusal", "DRE-5347"),

@@ -425,7 +425,7 @@ def _intake(ident):
             "comments": {"nodes": []}}
 
 
-def _groom_pass(thread, cards, free, notices, fail_state=()):
+def _groom_pass(thread, cards, notices, fail_state=()):
     def cmd_state(ident, lane, *flags, **kw):
         if ident in fail_state:
             raise linear_ops.LinearError(f"{ident}: Linear said no")
@@ -444,7 +444,7 @@ def _groom_pass(thread, cards, free, notices, fail_state=()):
         patch.object(linear_ops, "cmd_comment"), \
         patch.object(linear_ops, "create_card", side_effect=_no_card), \
         patch.object(linear_ops, "find_open", side_effect=_no_card):
-        return reconcile.release_groom_queue(free)
+        return reconcile.release_groom_queue()
 
 
 def _stalled_thread():
@@ -455,7 +455,7 @@ def _stalled_thread():
 
 def test_a_stalled_queue_raises_groom_stall_at_warn_and_creates_no_card():
     notices = FakeNotices()
-    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")], 1,
+    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")],
                 notices, fail_state={"DRE-11", "DRE-12"})
     (notice, kw), = notices.of("raise")
     assert notice == "groom_stall"
@@ -467,7 +467,7 @@ def test_a_stalled_queue_raises_groom_stall_at_warn_and_creates_no_card():
 
 def test_the_groom_stall_hands_the_client_todays_card_as_its_fallback():
     notices = FakeNotices()
-    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")], 1,
+    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")],
                 notices, fail_state={"DRE-11", "DRE-12"})
     (_, kw), = notices.of("raise")
     fallback = kw["fallback"]
@@ -480,19 +480,18 @@ def test_the_groom_stall_hands_the_client_todays_card_as_its_fallback():
 def test_a_later_pass_with_the_stall_gone_resolves_it_with_no_recovery_copy():
     notices = FakeNotices()
     cards = [_intake("DRE-11"), _intake("DRE-12")]
-    _groom_pass(_stalled_thread(), cards, 1, notices,
+    _groom_pass(_stalled_thread(), cards, notices,
                 fail_state={"DRE-11", "DRE-12"})
-    _groom_pass(_stalled_thread(), cards, 1, notices)  # the moves land
+    _groom_pass(_stalled_thread(), cards, notices)  # the moves land
     assert [kind for kind, _, _ in notices.calls] == ["raise", "resolve"]
     (notice, kw), = notices.of("resolve")
     assert notice == "groom_stall"
     assert kw == {"recovery_title": None, "recovery_body": None}
 
 
-@pytest.mark.parametrize("free", [0, 1])
-def test_a_queue_that_moved_inside_the_bound_resolves_and_raises_nothing(free):
+def test_a_queue_that_moved_inside_the_bound_resolves_and_raises_nothing():
     notices = FakeNotices()
-    _groom_pass([_queued_record(["DRE-11"], 30)], [_intake("DRE-11")], free,
+    _groom_pass([_queued_record(["DRE-11"], 30)], [_intake("DRE-11")],
                 notices, fail_state={"DRE-11"})
     assert notices.of("raise") == []
     assert [n for n, _ in notices.of("resolve")] == ["groom_stall"]
@@ -500,14 +499,14 @@ def test_a_queue_that_moved_inside_the_bound_resolves_and_raises_nothing(free):
 
 def test_an_empty_queue_resolves_the_stall():
     notices = FakeNotices()
-    _groom_pass([], [], 2, notices)
+    _groom_pass([], [], notices)
     assert [n for n, _ in notices.of("resolve")] == ["groom_stall"]
     assert notices.of("raise") == []
 
 
 def test_a_lost_stall_raise_takes_the_sweep_red():
     notices = FakeNotices(outcome="lost")
-    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")], 1,
+    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")],
                 notices, fail_state={"DRE-11", "DRE-12"})
     assert any("groom" in f and "stall" in f for f in reconcile._write_failures), (
         reconcile._write_failures)
