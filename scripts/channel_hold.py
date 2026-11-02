@@ -682,13 +682,13 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
                         "empty — the next Promote Channel run moves it.")
     if outcome in PERSON_OUTCOMES:
         return PERSON, (f"Promote Channel refused with {outcome}, which a re-run "
-                        f"does not clear: {_one_line(decision.reason)[:300]}")
+                        f"does not clear: {_one_line(decision.reason)}")
     if job and job.attempt >= 2:
         return PERSON, (f"the run is already on attempt {job.attempt} and the job "
                         f"{_doing(job)}, so a re-run has not cleared it.")
     if reading.unread:
         return PERSON, ("the diagnosis could not read "
-                        + "; ".join(reading.unread)[:400] + ".")
+                        + "; ".join(reading.unread) + ".")
     if outcome == pc.OUTCOME_MIRROR_FAILED:
         return FIX, ("agent-bureau's mirror tests fail on this commit "
                      "(mirror-tests-failed), so agent-bureau's mirror needs a fix.")
@@ -708,7 +708,7 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
     if outcome in OUTCOME_NEXT:
         return OUTCOME_NEXT[outcome], (
             f"no job has failed, and Promote Channel's newest decision is "
-            f"{outcome}: {_one_line(decision.reason)[:300]}")
+            f"{outcome}: {_one_line(decision.reason)}")
     return PERSON, ("no job has failed and no Promote Channel decision names "
                     "why the channel is held.")
 
