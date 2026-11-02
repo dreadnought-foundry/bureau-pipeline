@@ -227,6 +227,18 @@
       "printed_by": "scripts/triage_unrepaired.py",
       "constant": "TAG",
       "when": "every Triage Repair run since DRE-8649, on stdout: one line per Triage card the repair could not fix (its card, its receipt word and when it arrived in Triage), then one closing line — the cards listed, whether every thread was read, and the console door's outcome, or unread when the door was not called"
+    },
+    {
+      "tag": "design-parts:",
+      "printed_by": "scripts/design_parts.py",
+      "constant": "TAG",
+      "when": "every `catalog` run since DRE-8717, one line on stderr after the catalog block (the catalog's first line with `PARTS CATALOG: ` taken off), and every `check` run, one line on stdout: ok, none or invalid"
+    },
+    {
+      "tag": "parts-review:",
+      "printed_by": "scripts/parts_review.py",
+      "constant": "TAG",
+      "when": "every `review` run since DRE-8719, one line on stderr: the review's first line with `PARTS REVIEW: ` taken off, and `, <m> finding(s)` where it applies; since DRE-8721 in qa-review.yml's `Assemble critic context` step's log on every review"
     }
   ],
   "causes": [
