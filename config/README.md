@@ -257,6 +257,16 @@ mints (see `models.yaml` below).
   non-default class with no phrase, a phrase under two classes, a `default`
   that is not a class, and an `action` missing or not a `[a-z_]+` module name.
   `docs/blocker-classes.md` is the page a person reads.
+- **`operator-step-kinds.json`** — which operator steps in Hand-work a machine
+  could do and which a person must (DRE-8650): a `_readme`, `person.phrases`
+  (the phrases that name a person acting — a bare `sign-in` is not one), then
+  `kinds`, an ordered list of the five machine kinds (`variable`,
+  `linear-admin`, `bot-pr`, `deploy`, `script`), each with `why` and
+  `phrases`. Read only through `scripts/operator_step_kind.py`, whose
+  `classify` matches each phrase case-insensitively and whole: a person phrase
+  wins, then the first kind matched, and no match is a person's. The hygiene
+  lane `scripts/hygiene_hand_step.py` labels each Hand-work operator step
+  `hand-step:machine` or `hand-step:person` by it, and nothing else reads it.
 - **`notice-writers.json`** — every writer that files a Linear card
   automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
   writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,
