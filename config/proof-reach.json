@@ -281,6 +281,12 @@
       "printed_by": "scripts/linear_ops.py",
       "constant": null,
       "when": "every process that sent Linear a request through `linear_ops.py`, at exit on stderr: one line per budget bucket it spent, with the request count this run, the process token and the bucket; a process that never called Linear prints none"
+    },
+    {
+      "tag": "operator-agent:",
+      "printed_by": "scripts/operator_decide.py",
+      "constant": "LOG_TAG",
+      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step"
     }
   ],
   "causes": [
