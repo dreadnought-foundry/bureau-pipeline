@@ -176,6 +176,7 @@ import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping 
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
 import fix_convergence  # noqa: E402 — ONE spelling of a fix run's no-commit line (DRE-6583)
 import fix_dead_run  # noqa: E402
+import fix_exit  # noqa: E402 — DRE-8785: the one reader of a quiet line's outcome
 import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fix.yml (DRE-4157)
 # DRE-4150: the Urgent fast path reads the CEO's per-card exclusions off the
 # groomer's standing card with the groomer's OWN reader (`decision_records`,
@@ -11403,6 +11404,8 @@ def fix_approved_but_red() -> None:
     such line is enough here, deliberately stricter than the fix run's own
     halt at `fix_convergence.HALT_AFTER`: the sweep's reading decides who gets
     the pass's one dispatch, and a run that will halt still spends it.
+    A run the critic overtook — its quiet line marked `approved`, DRE-8785 —
+    had nothing to fix, so it never passes the head over.
 
     A proof record is the proof run's, except when it is red on a check
     (DRE-6571): `proof_dispatch.record_red_checks` is the one rule, and the
@@ -12226,7 +12229,12 @@ def _no_commit_fix_runs(pr: dict) -> int:
     cannot pass a pull request over. Matched on the head's FIRST EIGHT
     characters, not `_worker_receipt_count`'s full sha: the quiet line
     (`fix_exit.py`, `(head `<sha8>`)`) and the escalation line (`fix_budget.py`,
-    `(branch still at `<sha8>`)`) carry only those, and a moved head re-arms."""
+    `(branch still at `<sha8>`)`) carry only those, and a moved head re-arms.
+
+    DRE-8785: a quiet line whose round the critic overtook — the head was
+    approved after the round was sent, so it had nothing to fix — is not a
+    fix that failed, and is not counted. Read off the marker its writer owns
+    (`fix_exit.overtaken_by_approval`); every other no-commit line counts."""
     sha8 = (pr.get("headRefOid") or "")[:8]
     if not sha8:
         return 0
@@ -12236,6 +12244,7 @@ def _no_commit_fix_runs(pr: dict) -> int:
         if is_worker_bot_comment(c)
         and fix_convergence.NO_PROGRESS in (c.get("body") or "")
         and sha8 in (c.get("body") or "")
+        and not fix_exit.overtaken_by_approval(c.get("body"))
     )
 
 

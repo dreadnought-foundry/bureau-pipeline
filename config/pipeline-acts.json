@@ -1044,6 +1044,24 @@
       }
     },
     {
+      "name": "hygiene-hand-step-class",
+      "tag": "hyg-hand-step",
+      "adopted": true,
+      "kind": "hold",
+      "means": "An operator step in Hand-work is marked, once, as one a machine could do or one a person must: the card gains the label hand-step:machine or hand-step:person, and this receipt names the class, the kind — deploy, script, variable, linear-admin, bot-pr, or person — and the phrase of the card that decided it, or that no machine kind matched.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card stays the operator's, who still does every step, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and plans nothing for a card that wears a class label.",
+      "why": "DRE-8650, the hygiene agent's Hand-work class lane (scripts/hygiene_hand_step.py) under epic DRE-8609; the core holds the one table of tags so every lane's receipt reads the same. Of the 22 cards in Hand-work on 2026-11-01, 14 were a deploy, a script run, a variable set, a Linear admin action or a bot pull request, and nothing said so — the Hand-work age alarm fired on them and nothing acted on it. The class is scripts/operator_step_kind.py over the card's title and description, by the phrases in config/operator-step-kinds.json; a person phrase wins, and no match is a person's. A HOLD in the registry's sense: the work stays with the operator, nothing moves and nothing is dispatched because of a class — which machine kinds an agent may one day run is the CEO's decision, asked in the epic's plan, and its own card. Its idempotency key is (tag, cause), the cause naming the class and the kind, and the lane also skips any card that already wears a class label. It discharges nothing: the card's obligation is the operator's step, which the label does not end.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-hand-step\""
+      }
+    },
+    {
       "name": "epic-approval-queued",
       "tag": "epic-queued",
       "adopted": true,
@@ -3120,6 +3138,13 @@
       "kind": "not-an-act",
       "means": "A notice the console's notice door could not take, added to the writer's own card already open under the same title — the comment the writer posted there before the console carried notices, with one line saying the door was not reached and why (DRE-7451).",
       "why": "The notice itself, not a receipt of something the pipeline did: the writer's diagnosis, escalation or run list, filed where it was filed before. Nothing is refused, recovered or held by posting it, so a trailer would name a state and a next actor it does not have. It lands only while the door is down or not yet live; the alert it stands in for is the console's, and the client's one `pipeline-notice:` line is what a reader of the run keys on."
+    },
+    {
+      "file": "scripts/design_answer.py",
+      "anchor": "linear_ops.cmd_comment(card, body)",
+      "kind": "undeclared-act",
+      "means": "The CEO's verified answer to the critic's design question was handed back as one re-review: `🎨 design-question-answered: `<Name>` at `<path>` — re-review of PR #<n> asked at <sha8>`, posted after the review dispatch and before the card's move from In Progress to In Review (DRE-8722).",
+      "why": "Act-shaped — the pipeline started a review by itself and the critic is who has the work next — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. Meanwhile it carries its own single-definition grammar — `design_answer.HANDBACK_MARK`, read back by its one reader, `design_answer.state_of` — and that line is the hand-back's idempotency key: one hand-back per answer."
     }
   ]
 }

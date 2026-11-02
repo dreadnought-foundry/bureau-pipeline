@@ -63,6 +63,23 @@ is counted in its own `empty log` note. A line that says `window rolled` or
 `unknown` is a run seen with a spend that cannot be known; it counts as a
 run, not as 0 spent.
 
+A second table follows the first (DRE-8795): the Linear reads that fell back
+from the read door, per pipeline reader. The client prints one line per
+fallback,
+
+    read-fallback: reader="<workflow> / <job> / <script>" read=<read> reason=<reason>
+
+and this script counts them out of the same run logs, one row per (repo,
+reader, read, reason), sorted by count, then by name. It is reads only:
+Linear writes and the console's own Linear sync never print the line. A run
+whose processes printed `read-door: mode off` (or `shadow`) and never `mode
+on` never asked the door, so it adds nothing to the rows; its repo is named
+on a `door off` line with its run count instead, because its silence must
+never read as zero fallbacks. With no line in the window the table says so
+in words, with the number of runs read in mode `on`, and a repo the token
+cannot read prints UNKNOWN there too. The line is read only where it opens a
+line, exactly as the markers above are.
+
 Never writes anything: `gh run list` and `gh run view --log` are its only
 calls. Usage:
 
@@ -113,6 +130,13 @@ _CALLS_BUCKET_RE = re.compile(r"[(;]\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
 # none of them covers it (item 28, K4): reported, never dropped, and never
 # folded into an exact count it is not part of.
 UNDECLARED = "undeclared"
+# The client's line, one per read that fell back from the read door
+# (DRE-8795), and the mode line bureau_read.mode() prints once per process.
+# The reader is one double-quoted value and may hold spaces.
+_FALLBACK_RE = re.compile(
+    _LINE_START + r'read-fallback: reader="([^"\n]*)" read=(\S+) reason=(\S+)'
+)
+_DOOR_MODE_RE = re.compile(_LINE_START + r"read-door: mode (off|shadow|on)\b")
 
 UNKNOWN = "UNKNOWN"
 
@@ -299,6 +323,91 @@ def render_table(rows: list[dict], unknown_repos: list[str], *,
     return "\n".join(lines)
 
 
+def fallbacks_from_log(log_text: str) -> list[tuple[str, str, str]]:
+    """One `(reader, read, reason)` per `read-fallback:` line that opens its
+    line — an echoed script that merely names the tag is not one (DRE-5201)."""
+    out: list[tuple[str, str, str]] = []
+    for line in (log_text or "").splitlines():
+        m = _FALLBACK_RE.match(line.rstrip())
+        if m:
+            out.append((m.group(1), m.group(2), m.group(3)))
+    return out
+
+
+def door_modes(log_text: str) -> set[str]:
+    """The read-door modes a run's processes printed: none, when no process
+    asked whether the door was on."""
+    return {m.group(1) for m in map(_DOOR_MODE_RE.match, (log_text or "").splitlines())
+            if m}
+
+
+def aggregate_fallbacks(observations) -> dict:
+    """The fallback table from the same `(repo, workflow, log_text)` triples
+    the spend table reads (DRE-8795).
+
+    - `rows`: one per (repo, reader, read, reason) with the count of
+      `read-fallback:` lines, sorted by count, descending, then by name.
+    - `on_runs`: the runs that printed `read-door: mode on`.
+    - `door_off`: repo → runs that printed `mode off` or `mode shadow` and
+      never `mode on`. Such a run never asked the door, so it adds nothing
+      to the rows — its silence is not zero fallbacks.
+    """
+    counts: dict[tuple[str, str, str, str], int] = {}
+    on_runs = 0
+    door_off: dict[str, int] = {}
+    for repo, _workflow, log_text in observations:
+        modes = door_modes(log_text)
+        if modes and "on" not in modes:
+            door_off[repo] = door_off.get(repo, 0) + 1
+            continue
+        if "on" in modes:
+            on_runs += 1
+        for reader, read, reason in fallbacks_from_log(log_text):
+            key = (repo, reader, read, reason)
+            counts[key] = counts.get(key, 0) + 1
+    rows = [{"repo": repo, "reader": reader, "read": read, "reason": reason,
+             "count": n} for (repo, reader, read, reason), n in counts.items()]
+    rows.sort(key=lambda r: (-r["count"], r["repo"], r["reader"], r["read"],
+                             r["reason"]))
+    return {"rows": rows, "on_runs": on_runs, "door_off": door_off}
+
+
+def render_fallbacks(summary: dict, unknown_repos: list[str], *,
+                     hours: float = 1) -> str:
+    """The fallback table, as text: one row per (repo, reader, read, reason),
+    UNKNOWN rows for the repos the token could not read, then a line in words
+    when no fallback line was found, and the `door off` line last. Never an
+    empty table: with nothing to list there is no header at all."""
+    rows = summary["rows"]
+    lines = [f"read fallbacks, last {hours:g}h — reads only: Linear writes and "
+             "the console's own Linear sync never print the line"]
+    if rows or unknown_repos:
+        width = max([len("reader"), len(UNKNOWN)] + [len(r["reader"]) for r in rows])
+        header = (f"{'repo':<20} {'reader':<{width}} {'read':<16} "
+                  f"{'reason':<14} {'count':>6}")
+        lines += [header, "-" * len(header)]
+        for r in rows:
+            lines.append(f"{r['repo']:<20} {r['reader']:<{width}} {r['read']:<16} "
+                         f"{r['reason']:<14} {r['count']:>6}")
+        for repo in sorted(unknown_repos):
+            lines.append(f"{repo:<20} {UNKNOWN:<{width}} {UNKNOWN:<16} "
+                         f"{UNKNOWN:<14} {UNKNOWN:>6}")
+        lines.append("-" * len(header))
+    on_runs = summary["on_runs"]
+    if rows:
+        lines.append(f"{'TOTAL':<20} {sum(r['count'] for r in rows)} fallback(s) "
+                     f"in {on_runs} run(s) read in mode on")
+    else:
+        lines.append(f"no read-fallback line in the window: {on_runs} run(s) "
+                     "read in mode on")
+    if summary["door_off"]:
+        named = ", ".join(f"{repo} {n} run(s)"
+                          for repo, n in sorted(summary["door_off"].items()))
+        lines.append(f"door off: {named} — mode off or shadow: those runs never "
+                     "asked the door, so their silence is not zero fallbacks")
+    return "\n".join(lines)
+
+
 def _gh(*args: str) -> subprocess.CompletedProcess:
     # B603/B607: args are program-constructed, shell=False, `gh` via PATH.
     return subprocess.run(  # nosec B603 B607
@@ -376,6 +485,9 @@ def main(argv: list[str] | None = None) -> int:
 
     print(render_table(aggregate(observations), unknown_repos,
                        hours=args.hours, skipped=skipped, empty=empty))
+    print()
+    print(render_fallbacks(aggregate_fallbacks(observations), unknown_repos,
+                           hours=args.hours))
     return 0
 
 

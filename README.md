@@ -1644,3 +1644,11 @@ card the watcher filed before — its title, lane `Planning`, label
    its code, because the check ran in one repo and the discipline was broken in
    four. The job name is load-bearing — `scripts/unfixable_checks.py` matches
    the published check-run name to escalate the fix loop on its first attempt.
+5. Keep `.github/bureau/design-system.json`, which the onboarding scaffold
+   ships with every list empty, and fill in the repo's parts folders: the
+   folders its atoms, molecules, organisms and templates ship from. That file
+   is how the pipeline knows the repo's design system exists, judges its UI
+   pull requests by the shared-parts rule (`standards/design-system.md`), and
+   hands every UI-building agent its parts catalog. A repo with no shared parts
+   yet leaves the lists empty until its first part ships. The contract is
+   [`docs/design-system-declaration.md`](docs/design-system-declaration.md).
