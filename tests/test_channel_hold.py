@@ -14,8 +14,13 @@ What these pin:
   (run 40502923604, Promote Channel runs 40448885207 to 40512121894) answers
   `--at` 7:20 AM PT with a raise naming the walk shard 5 of 8 job and
   `next=re-run`, 6:10 AM PT with a morning raise, and 5:30 AM PT with nothing;
+* the 11-02 replay (DRE-8778): a merge train kept the hold past 2 hours while
+  the newest run was 15 minutes old, and the pass names no job, says no
+  "Failing job" and asks for no re-run of failed jobs;
 * the next step: attempt 2 is a person's, a failed test is a fix, a hold by
   hand is a person's with the `CHANNEL_HOLD` text quoted;
+* a running or not-started job is named only once the job itself has gone 2
+  hours, and as a `Stuck job:`, never a failing one;
 * every `OUTCOME_*` of `promote_channel`, read off the module, maps to one next
   step or is declared not a hold;
 * the raise windows, against a stubbed `pipeline_notice` and no network;
@@ -543,6 +548,152 @@ class TestNextStep:
         assert seen.job == SHARD
         assert seen.step == channel_hold.RERUN
         assert "still running" in seen.body
+
+
+# ── the 11-02 hold: a merge train, not a broken test (DRE-8778) ─────────────
+
+NOV_STABLE = "4c0ffee000000000000000000000000000000000"
+NOV_CHAIN = (   # first-parent, oldest first, as `main` took them
+    ("5595f7d000000000000000000000000000000000", "2026-11-02T01:54:01Z", 41380000001),
+    ("95d0c8c500000000000000000000000000000000", "2026-11-02T02:31:10Z", 41380000002),
+    ("8a4a4aea00000000000000000000000000000000", "2026-11-02T03:02:44Z", 41380000003),
+    ("875a8b4200000000000000000000000000000000", "2026-11-02T03:21:30Z", 41380000004),
+    ("6bb1715900000000000000000000000000000000", "2026-11-02T03:39:10Z", 41384267119),
+)
+NOV_NEWEST, NOV_RUN = NOV_CHAIN[-1][0], NOV_CHAIN[-1][2]
+#: The pass: 2 hours after the oldest commit `stable` lacks, 15 minutes after
+#: the newest commit's `Pipeline Tests` run was created.
+NOV_PASS = "2026-11-02T03:54:30Z"
+NOV_CANCELLED_LINE = (
+    "harness-cancelled-by-newer-push: not promoting "
+    f"{NOV_CHAIN[-2][0]}: its Integration Harness run was cancelled by a newer "
+    "push — a merge train, queued behind, not lost.")
+
+
+def nov02_jobs(state):
+    """A `Pipeline Tests` attempt's jobs: every part `state`, the roll-up
+    waiting on them."""
+    if state == "success":
+        return [job(1000 + n, f"{ROLLUP} (part {n})", "success",
+                    "2026-11-02T00:00:00Z", "2026-11-02T00:00:00Z")
+                for n in range(1, 5)]
+    started = {2: "2026-11-02T03:39:20Z", 4: "2026-11-02T03:39:31Z",
+               1: "2026-11-02T03:39:44Z", 3: "2026-11-02T03:39:52Z"}
+    return [job(2000 + n, f"{ROLLUP} (part {n})", None, started[n], None,
+                status="in_progress") for n in range(1, 5)] + [
+        job(2100, ROLLUP, None, None, None, status="queued")]
+
+
+def nov02():
+    """The 11-02 state: five commits `stable` lacks, the four older ones' unit
+    suites green, the newest's 15 minutes in with every part running, and the
+    newest decision `harness-cancelled-by-newer-push`."""
+    commits = [commit(NOV_STABLE, "2026-11-01T22:00:00Z",
+                      "1111111000000000000000000000000000000000")]
+    runs, parent = [], NOV_STABLE
+    for sha, date, run_id in NOV_CHAIN:
+        commits.append(commit(sha, date, parent))
+        parent = sha
+        # A commit's run is created a few seconds after it lands.
+        created = date[:-3] + f"{int(date[-3:-1]) + 4:02d}Z"
+        newest = sha == NOV_NEWEST
+        runs.append(run(run_id, "tests.yml", "Pipeline Tests", sha, created, [
+            attempt(created, NOV_PASS if newest else created,
+                    None if newest else "success",
+                    nov02_jobs("in_progress" if newest else "success"),
+                    status="in_progress" if newest else "completed")]))
+    return FakeGitHub(
+        stable=NOV_STABLE, main=NOV_NEWEST, commits=commits, runs=runs,
+        promotions=[
+            promotion(41370000001, "2026-11-01T22:40:00Z", "2026-11-01T22:44:00Z",
+                      f"harness-passed-promoting: promoting stable to {NOV_STABLE} "
+                      "— harness green, strictly ahead."),
+            promotion(41383000002, "2026-11-02T03:30:00Z", "2026-11-02T03:30:40Z",
+                      NOV_CANCELLED_LINE),
+        ])
+
+
+class TestTheSecondOfNovember:
+    @pytest.mark.parametrize("how", ["replay", "live"])
+    def test_a_young_run_under_an_old_hold_names_no_job(self, how):
+        if how == "replay":
+            seen = replay(nov02(), NOV_PASS)
+        else:
+            seen = channel_hold.watch(nov02(), REPO, interval=10,
+                                      now=channel_hold.parse_at(NOV_PASS))
+        assert "age=120m" in seen.line, seen.line
+        assert seen.job == "no failing job — harness-cancelled-by-newer-push"
+        assert seen.step == channel_hold.RERUN
+        assert "Failing job: scripts unit tests" not in seen.body
+        assert "re-running its failed jobs" not in seen.body
+        assert "Stuck job:" not in seen.body
+        assert "harness-cancelled-by-newer-push" in seen.body.splitlines()[1]
+        assert seen.body.splitlines()[3] == "Waiting on stable: 5 commit(s), oldest 5595f7d"
+
+
+class TestStuckJob:
+    def running(self, started, created="2026-10-27T12:20:01Z"):
+        return oct27(attempts=[attempt(created, "2026-10-27T14:00:00Z", None, [
+            job(9, SHARD, None, started, None, status="in_progress")],
+            status="in_progress")])
+
+    def queued(self, created):
+        fake = oct27(attempts=[attempt(created, created, None, [
+            job(9, SHARD, None, None, None, status="queued")],
+            status="queued")])
+        fake.runs[0]["created_at"] = created
+        return fake
+
+    def test_a_job_running_two_hours_is_a_stuck_job_to_cancel_and_re_run(self):
+        seen = replay(self.running("2026-10-27T12:20:22Z"), "2026-10-27T14:25:00Z")
+        assert seen.job == SHARD
+        assert seen.step == channel_hold.RERUN
+        lines = seen.body.splitlines()
+        assert lines[0] == f"Stuck job: {SHARD} ({SITE}/actions/runs/{UNIT_RUN})"
+        assert lines[1].startswith("Needs: a re-run — ")
+        assert "cancel" in lines[1] and "re-run" in lines[1]
+        assert "failed jobs" not in seen.body
+        assert "Failing job" not in seen.body
+
+    def test_two_hours_runs_from_the_jobs_own_start(self):
+        # The hold is 125 minutes old; the job started 119 minutes ago, then
+        # 120.
+        fake = self.running("2026-10-27T12:26:00Z")
+        assert replay(fake, "2026-10-27T14:25:59Z").job != SHARD
+        seen = replay(self.running("2026-10-27T12:26:00Z"), "2026-10-27T14:26:00Z")
+        assert seen.job == SHARD
+        assert seen.body.startswith("Stuck job: ")
+
+    def test_a_job_not_started_two_hours_after_its_run_was_created_is_stuck(self):
+        seen = replay(self.queued("2026-10-27T12:20:01Z"), "2026-10-27T14:25:00Z")
+        assert seen.job == SHARD
+        assert seen.step == channel_hold.RERUN
+        assert seen.body.startswith(f"Stuck job: {SHARD} (")
+        assert "has still not started" in seen.body
+        assert "failed jobs" not in seen.body
+
+    def test_a_job_not_started_under_two_hours_after_its_run_was_created_is_not(self):
+        # The hold is 125 minutes old; the run was created 85 minutes ago.
+        seen = replay(self.queued("2026-10-27T13:00:00Z"), "2026-10-27T14:25:00Z")
+        assert seen.job == "no failing job — unit-suite-unproven"
+        assert "Stuck job" not in seen.body
+        assert SHARD not in seen.body
+
+    @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
+    def test_a_concluded_job_is_still_a_failing_job(self, conclusion):
+        fake = oct27(jobs=unit_jobs(shard_conclusion=conclusion,
+                                    shard_step=conclusion))
+        seen = replay(fake, "2026-10-27T14:20:00Z")
+        assert seen.job == SHARD
+        assert seen.body.splitlines()[0] == (
+            f"Failing job: {SHARD} ({SITE}/actions/runs/{UNIT_RUN})")
+
+    def test_the_docstring_counts_the_jobs_own_two_hours(self):
+        doc = channel_hold.__doc__
+        section = " ".join(doc[doc.index("THE DIAGNOSIS"):doc.index("WHEN IT RAISES")].split())
+        assert "only once the job itself has run 2 hours" in section
+        assert "never from the hold's age" in section
+        assert "past 2 hours of hold" not in section
 
 
 class TestEveryOutcome:
