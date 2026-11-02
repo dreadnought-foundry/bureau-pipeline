@@ -19,6 +19,9 @@ What these pin:
   "Failing job" and asks for no re-run of failed jobs;
 * the next step: attempt 2 is a person's, a failed test is a fix, a hold by
   hand is a person's with the `CHANNEL_HOLD` text quoted;
+* Promote Channel's reason, and every unread read, go into `Needs:` whole
+  (DRE-8797): the 446-character by-hand `no-harness-stamp` refusal, clipped at
+  300, had cut the last proven sha in half;
 * a running or not-started job is named only once the job itself has gone 2
   hours, and as a `Stuck job:`, never a failing one;
 * every `OUTCOME_*` of `promote_channel`, read off the module, maps to one next
@@ -33,6 +36,7 @@ stub.
 """
 from __future__ import annotations
 
+import inspect
 import io
 import os
 import re
@@ -629,6 +633,80 @@ class TestTheSecondOfNovember:
         assert "Stuck job:" not in seen.body
         assert "harness-cancelled-by-newer-push" in seen.body.splitlines()[1]
         assert seen.body.splitlines()[3] == "Waiting on stable: 5 commit(s), oldest 5595f7d"
+
+
+# ── the reason, whole (DRE-8797) ────────────────────────────────────────────
+
+BY_HAND_SHA = "83ee19d0c80f5b5a85b9cfb861ca7ff4e07a142f"
+PROVEN_SHA = "798973bec1eeca4df993193568175d546da85318"
+#: Promote Channel's by-hand `no-harness-stamp` refusal of run 41390182086,
+#: verbatim. Clipped at 300 characters, it ended inside PROVEN_SHA.
+BY_HAND_UNPROVEN = (
+    f"refusing to promote {BY_HAND_SHA} by hand: its integration-harness "
+    "status reports pending. The by-hand path promotes a commit the harness "
+    "has ALREADY proved — from any run, not only the newest — and this one is "
+    f"not proved. The last proven sha is {PROVEN_SHA}, where stable stands "
+    f"now. Re-run the harness on {BY_HAND_SHA}, or dispatch again with force "
+    "and a reason.")
+
+
+def held(decision=None, unread=()):
+    return channel_hold.Reading(held=True, carried="", chain=[], decision=decision,
+                                unread=tuple(unread))
+
+
+class TestTheReasonWhole:
+    def test_the_by_hand_refusal_is_the_one_replayed(self):
+        assert len(BY_HAND_UNPROVEN) == 446
+        assert PROVEN_SHA not in BY_HAND_UNPROVEN[:300]
+
+    def test_a_no_harness_stamp_reason_goes_in_whole(self):
+        step, why = channel_hold.next_step(held(channel_hold.Decision(
+            promote_channel.OUTCOME_UNPROVEN, BY_HAND_UNPROVEN, "")))
+        assert step == channel_hold.RERUN
+        assert PROVEN_SHA in why
+        assert why.endswith("dispatch again with force and a reason.")
+        assert BY_HAND_UNPROVEN in why
+
+    def test_a_person_outcome_reason_goes_in_whole(self):
+        reason = (f"not promoting {BY_HAND_SHA} by hand: could not establish "
+                  "that it is on the trunk (compare='diverged'). " * 4).strip()
+        assert len(reason) > 300
+        assert promote_channel.OUTCOME_NOT_ON_TRUNK in channel_hold.PERSON_OUTCOMES
+        step, why = channel_hold.next_step(held(channel_hold.Decision(
+            promote_channel.OUTCOME_NOT_ON_TRUNK, reason, "")))
+        assert step == channel_hold.PERSON
+        assert reason in why
+
+    def test_every_unread_entry_goes_in_whole(self):
+        unread = [f"gh api repos/{REPO}/actions/workflows/tests.yml/runs?"
+                  f"head_sha={sha} failed rc=1: HTTP 502"
+                  for sha in (BY_HAND_SHA, PROVEN_SHA, MERGE, STABLE)]
+        assert len("; ".join(unread)) > 400
+        step, why = channel_hold.next_step(held(unread=unread))
+        assert step == channel_hold.PERSON
+        for entry in unread:
+            assert entry in why
+
+    def test_the_watch_body_carries_the_reason_whole(self):
+        fake = oct27(jobs=[j for j in unit_jobs() if j["conclusion"] == "success"],
+                     promotions=[
+            promotion(40448885207, "2026-10-27T04:17:06Z",
+                      "2026-10-27T04:21:45Z", PROMOTING_LINE),
+            promotion(40512121894, "2026-10-27T13:27:00Z", "2026-10-27T13:27:40Z",
+                      f"{promote_channel.OUTCOME_UNPROVEN}: {BY_HAND_UNPROVEN}"),
+        ])
+        seen = replay(fake, "2026-10-27T14:20:00Z")
+        assert seen.action == "raise"
+        lines = seen.body.splitlines()
+        assert len(lines) == 4
+        assert lines[1].startswith("Needs: a re-run — ")
+        assert lines[1].endswith(BY_HAND_UNPROVEN)
+
+    def test_next_step_clips_nothing(self):
+        source = inspect.getsource(channel_hold.next_step)
+        assert "[:300]" not in source
+        assert "[:400]" not in source
 
 
 class TestStuckJob:

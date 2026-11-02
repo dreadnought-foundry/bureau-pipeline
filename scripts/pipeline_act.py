@@ -140,12 +140,15 @@ CLI:
     python3 scripts/pipeline_act.py check          # validate the file
     python3 scripts/pipeline_act.py list           # print the acts as JSON
     python3 scripts/pipeline_act.py receipt <act> --body <body> --out <file>
+    python3 scripts/pipeline_act.py receipt <act> --body-file=<path|-> --out <file>
 
 The third is the SHELL seam (DRE-2826). A workflow step composes its body here
 and posts the file, rather than assembling a trailer in bash — one writer for
 Python and shell alike, because two writers is how the grammar drifts. It
 writes nothing on an unknown act: a half-written file would be posted as if it
-had been composed.
+had been composed. A shell caller pipes its body in with `--body-file=-`
+(DRE-8779): Linux refuses any single argument over 128 KiB, so a long body
+passed as `--body` never reaches the writer. `--body` stays for a literal.
 """
 
 from __future__ import annotations
@@ -719,6 +722,24 @@ def _binding_problems(entries, tags) -> list:
 # --------------------------------------------------------------------------- #
 
 
+def _cli_body(args) -> str:
+    """The receipt body as `--body` gave it, or read from `--body-file`.
+
+    Read byte for byte, never stripped: receipt() returns its body untouched,
+    and a caller piping a variable with `printf '%s'` hands over exactly the
+    bytes `--body` carried, so the composed file is the same either way.
+    """
+    if args.body is not None:
+        return args.body
+    try:
+        if args.body_file == "-":
+            return sys.stdin.read()
+        with open(args.body_file, encoding="utf-8") as fh:
+            return fh.read()
+    except (OSError, UnicodeDecodeError) as e:
+        raise ActError(f"could not read the body from {args.body_file!r}: {e}") from e
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="command")
@@ -726,7 +747,12 @@ def main(argv=None) -> int:
     sub.add_parser("list")
     compose = sub.add_parser("receipt")
     compose.add_argument("act")
-    compose.add_argument("--body", required=True)
+    # Exactly one body. A body over 128 KiB cannot be one argument — Linux
+    # refuses it with E2BIG, exit 126 (DRE-8779) — so a shell caller pipes it
+    # to --body-file=- instead, the shape linear_ops.py takes (DRE-8758).
+    given = compose.add_mutually_exclusive_group(required=True)
+    given.add_argument("--body")
+    given.add_argument("--body-file", metavar="PATH|-")
     compose.add_argument("--out", required=True)
 
     args = parser.parse_args(argv)
@@ -737,7 +763,7 @@ def main(argv=None) -> int:
         # act and on an empty body, and a caller that posts --body-file must
         # never find a partial file where a composed one should be.
         try:
-            composed = receipt(args.act, args.body)
+            composed = receipt(args.act, _cli_body(args))
         except (UnknownAct, ActError) as e:
             print(f"pipeline_act: {e}", file=sys.stderr)
             return 2

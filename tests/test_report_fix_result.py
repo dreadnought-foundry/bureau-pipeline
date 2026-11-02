@@ -200,5 +200,53 @@ class APushedRoundRunsAsAFile(unittest.TestCase):
             self._assert_receipt(td, proc, posted)
 
 
+# --------------------------------------------------------------------------- #
+# a hold body too long to be one argument (DRE-8779)                           #
+# --------------------------------------------------------------------------- #
+
+#: Over 200 KiB. Linux refuses any single argument over 128 KiB (E2BIG, exit
+#: 126), so `--body "$HOLD_BODY"` cannot carry it.
+BIG_HOLD = "🛑 Fix attempt 2 finished its fix and GitHub refused the push again.\n\n" + (
+    "A line of the hold body that a long refusal would fill.\n" * 4000)
+
+
+class ALongHoldKeepsItsTrailer(unittest.TestCase):
+    """The `CAP=hold` branch, driven through tests/test_fix_committed_not_pushed.py's
+    harness with `fix_budget.py` replaced by one that writes BIG_HOLD as the
+    hold. Before DRE-8779 the receipt call died with "Argument list too long"
+    and the `|| printf` fallback posted the body with no act trailer, so the
+    sweep and qa-review.yml could not read the hold back."""
+
+    def test_the_whole_body_is_posted_with_the_trailer_after_it(self):
+        from unittest import mock
+
+        import test_fix_committed_not_pushed as cnp
+
+        self.assertGreater(len(BIG_HOLD.encode("utf-8")), 200 * 1024)
+        real_checkout = cnp._checkout
+
+        def checkout(td):
+            base = real_checkout(td)
+            body = os.path.join(td, "big-hold.md")
+            with open(body, "w", encoding="utf-8") as fh:
+                fh.write(BIG_HOLD)
+            with open(os.path.join(base, "scripts", "fix_budget.py"), "w") as fh:
+                fh.write("#!/usr/bin/env python3\nimport shutil, sys\n"
+                         "assert '--hold' in sys.argv, sys.argv\n"
+                         f"shutil.copyfile({body!r}, sys.argv[sys.argv.index('--out') + 1])\n")
+            return base
+
+        with mock.patch.object(cnp, "_checkout", checkout):
+            r = cnp.report(thread=lambda pre: [cnp.marker(pre)])
+        self.assertEqual(0, r.proc.returncode, r.proc.stderr + r.proc.stdout)
+        self.assertNotIn("Argument list too long", r.proc.stderr)
+        self.assertEqual(1, len(r.comments), r.comments)
+        hold = r.comments[0]
+        self.assertTrue(hold.startswith(BIG_HOLD.rstrip("\n")), hold[:200])
+        trailer = pipeline_act.trailer("fix-attempt-disputed")
+        self.assertIn(trailer, hold[len(BIG_HOLD.rstrip("\n")):])
+        self.assertIn("Operator decision", hold)
+
+
 if __name__ == "__main__":
     unittest.main()

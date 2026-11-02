@@ -76,6 +76,7 @@ ACTS = {
     "hygiene-hold-clear": "hyg-hold-cleared",
     "hygiene-triage-alarm": "hyg-triage-aged",
     "hygiene-blocker-owner-notice": "hyg-blocker-owner",
+    "hygiene-hand-step-class": "hyg-hand-step",
 }
 
 
@@ -1609,7 +1610,8 @@ class TestTheActRegistry:
         rows = {r["name"]: r for r in acts_doc()["acts"] if r["name"] in ACTS}
         holds = {n for n, r in rows.items() if r["kind"] == "hold"}
         assert holds == {"hygiene-decision-needed", "hygiene-cause-name",
-                         "hygiene-triage-alarm", "hygiene-blocker-owner-notice"}
+                         "hygiene-triage-alarm", "hygiene-blocker-owner-notice",
+                         "hygiene-hand-step-class"}
         assert {r["kind"] for n, r in rows.items() if n not in holds} == {"recovery"}
 
     def test_the_summary_is_declared_not_an_act(self):
