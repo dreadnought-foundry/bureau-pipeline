@@ -287,6 +287,7 @@ def review_mechanical_step() -> dict:
 #: `$FAKE_COMMENTS`. Nothing else is asked of it by the step under test.
 FAKE_LINEAR_OPS = """\
 import os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 
 
 def gql_paged(query, variables=None):

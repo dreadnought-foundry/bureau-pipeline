@@ -534,7 +534,7 @@
       "why": "Not a transient flake by the time it gets here: the retry already happened, and on a critic infra-crash or an upstream 5xx the medic deliberately neither retries nor diagnoses, because re-running against an exhausted limit cannot succeed and only deepens it (DRE-1921). The body is written by the diagnosis agent, so the anchor pins the WRITE CALL rather than any wording.",
       "emits": {
         "file": ".github/workflows/medic.yml",
-        "anchor": "linear_ops.py comment \"$TARGET\" \"$(cat \"$REPORT\")\" --act=run-failure-diagnosed",
+        "anchor": "linear_ops.py comment \"$TARGET\" --body-file=\"$REPORT\" --act=run-failure-diagnosed",
         "note": "The medic's report is agent-authored prose, so there is no fixed wording to pin. The anchor is the write call in the diagnose job's delivery step — the point at which the receipt is emitted. It sat in the agent's prompt until Stage 2 fix #23 took the Linear key away from the agent."
       }
     },
@@ -1040,7 +1040,7 @@
       "why": "DRE-5136, the activation half of the epic cap (DRE-5129). `plan.yml`'s route step asks `epic_cap.py decide` (DRE-5134) where it would answer `activate`; on `queue`, or when Linear could not be read, it labels the epic, posts this receipt once per planning attempt — the body `decide` wrote, stating place k of n and how many epics are in motion — and returns the epic to Green Light. A HOLD: nothing is dispatched at the epic while it waits, and the sweep (`reconcile.py`, DRE-5152) discharges it by starting the epic when the count falls under the cap. Since DRE-6618 the full sweep's promotion pass writes the same three things in the same order, with the body `epic_cap.receipt_for`, for an approved epic a blocker epic released with no start or place in line on record, when the cap answers `queue`. The tag is epic_cap.QUEUED_TAG, the same string as the label, and the console learned it first (DRE-5135). It discharges nothing: a hold starts an obligation, it does not end one.",
       "emits": {
         "file": ".github/workflows/plan.yml",
-        "anchor": "\"$(cat \"$RUNNER_TEMP/epic-cap-receipt.md\")\" --act=epic-approval-queued"
+        "anchor": "--body-file=\"$RUNNER_TEMP/epic-cap-receipt.md\" --act=epic-approval-queued"
       }
     },
     {
@@ -2278,7 +2278,7 @@
     },
     {
       "file": ".github/workflows/groomer.yml",
-      "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
+      "anchor": "\"$CARD\" --body-file=receipt.txt",
       "step": "Judgement receipt — the model that answered",
       "kind": "not-an-act",
       "means": "Which model answered the groomer's one ranked read, and what the call cost — the same 🧠 model-attempt receipt plan.yml posts for the planning classifier.",
@@ -2436,7 +2436,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Proof card — the epic's last child",
       "kind": "not-an-act",
       "means": "The proof-card check sends an epic back: its last child is missing or wrong.",
@@ -2444,7 +2444,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Re-check the revised plan",
       "kind": "not-an-act",
       "means": "The same proof-and-demo send-back, re-run against a revised plan (DRE-2746).",
@@ -2452,7 +2452,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Roll-up route — check the split",
       "kind": "not-an-act",
       "means": "The split check sends a roll-up back: its children are not yet a split into child epics, and the card still owes one (DRE-4718).",
@@ -2460,7 +2460,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Routing verdicts — the epic's children",
       "kind": "not-an-act",
       "means": "The epic is told which of its children no writer will stamp, so the cards that will freeze in Queued are named on the card a person is about to read (DRE-4593).",
@@ -2468,7 +2468,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Activate the approved epic",
       "kind": "not-an-act",
       "means": "The same note, from the activation backstop — the one site that sees a card an old-rule epic's send-back re-plan added, stamped only on a plan the second critic passed (DRE-4593, DRE-5281).",
@@ -2476,7 +2476,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-note.md\"",
       "step": "First critic — round 1 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 1 note — the judgement the CEO reads.",
@@ -2484,7 +2484,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-record.txt\"",
       "step": "First critic — round 1 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 1 record, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2492,7 +2492,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-note.md\"",
       "step": "First critic — round 2 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 2 note — the judgement the CEO reads.",
@@ -2500,7 +2500,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-record.txt\"",
       "step": "First critic — round 2 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 2 record, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2532,7 +2532,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-note.md\"",
       "step": "Second critic — decision",
       "kind": "not-an-act",
       "means": "The second critic's round note, before Green Light — the judgement the CEO reads.",
@@ -2540,7 +2540,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-record.txt\"",
       "step": "Second critic — decision",
       "kind": "not-an-act",
       "means": "The second critic's round record, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2548,7 +2548,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$RECEIPT\")\"",
+      "anchor": "--body-file=\"$RECEIPT\"",
       "step": "Second critic — turns receipt",
       "kind": "not-an-act",
       "means": "What one review by the second critic SPENT against what it was given — turns, ceiling, child count and model — posted alone because it is only a record while nothing else shares its comment (DRE-3498).",
@@ -2556,7 +2556,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/one-off-note.md\"",
       "step": "One-off critic — decision",
       "kind": "not-an-act",
       "means": "The pre-approval critic's note on a one-off — the judgement the person who filed the card reads.",
@@ -2564,7 +2564,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/one-off-record.txt\"",
       "step": "One-off critic — decision",
       "kind": "not-an-act",
       "means": "The pre-approval critic's round record on a one-off, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2572,7 +2572,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-ran-out-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/one-off-ran-out-record.txt\"",
       "step": "One-off critic — the read that ran out of turns",
       "kind": "not-an-act",
       "means": "The tombstone for a one-off read cut off at its turn ceiling (DRE-4381), posted alone because it is only a credential while nothing else shares its comment. It is what gives the next read of this card a higher ceiling, once.",
@@ -2612,7 +2612,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "anchor": "--body-file=\"$PARK_NOTE\"",
       "step": "One-off critic — park in Triage",
       "kind": "undeclared-act",
       "means": "The planner's revision of a one-off card did not finish, so the card parks in Triage for the operator with the critic's findings named (DRE-5376).",
@@ -2660,7 +2660,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Mechanical findings — posted before the critic reads them",
       "kind": "not-an-act",
       "means": "The structural checks the first critic is handed — the declared footprint of every card, and every finding read off it.",
@@ -2668,7 +2668,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Mechanical findings — the revised plan",
       "kind": "not-an-act",
       "means": "The same structural checks, re-run against the revised plan the second round reads.",
@@ -2684,7 +2684,7 @@
     },
     {
       "file": ".github/workflows/verify.yml",
-      "anchor": "comment \"$CARD\" \"$(cat /tmp/verify-comment.md)\"",
+      "anchor": "comment \"$CARD\" --body-file=/tmp/verify-comment.md",
       "step": "Post verdict or neutral status",
       "kind": "not-an-act",
       "means": "The card-side half of the verifier's verdict.",
@@ -2706,7 +2706,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Mechanical findings — the revised plan (review)",
       "kind": "not-an-act",
       "means": "The same structural checks, re-run against the plan the second critic's re-plan just revised (DRE-3088; named for the review route since DRE-5284), so the next round's critic and the CEO read checks against the plan as it now stands.",
@@ -2714,7 +2714,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-death-note.md\"",
       "step": "Review — the review died",
       "kind": "undeclared-act",
       "means": "The second critic's review died before it decided, on the review route (DRE-5280) — a turn-ceiling death or a crash — so the epic stays in Planning; the review is re-run by the pipeline itself, once, at a higher ceiling, and only a second death parks it in Triage.",
@@ -2722,7 +2722,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$RECORD\")\"",
+      "anchor": "--body-file=\"$RECORD\"",
       "step": "Review — the review died",
       "kind": "not-an-act",
       "means": "The tombstone for a review-route review that died (DRE-5280), posted alone because it is only a credential while nothing else shares its comment.",
@@ -2746,7 +2746,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "anchor": "--body-file=\"$PARK_NOTE\"",
       "step": "Review — the review died",
       "kind": "undeclared-act",
       "means": "The review-route review died a SECOND time, so the epic parks in Triage with needs-human and a note naming both dead runs, for an operator to read why it cannot finish at either ceiling (DRE-5280).",
@@ -2754,7 +2754,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Epic → Green Light — both critics passed",
       "kind": "not-an-act",
       "means": "The routing-verdict note from the Green Light backstop — the one site on the review route that sees a card the second critic's send-back added (DRE-4593, DRE-5280).",
@@ -2770,7 +2770,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Review — the second critic passed a plan the first critic held",
       "kind": "undeclared-act",
       "means": "The second critic passed a plan the first critic has not passed (its last record is a send-back, or there is none), so it has not been through both critics: it parks in Triage with needs-human for an operator instead of reaching Green Light (DRE-5280). Since DRE-5639 the note is `plan_critic.py held-park`, which names the first critic's actual record.",
@@ -2826,7 +2826,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Re-check the revised plan — review mode",
       "kind": "not-an-act",
       "means": "The routing-verdict note from the review route's re-check: the children of a revision the second critic asked for that no writer will stamp (DRE-4593, DRE-5299).",
@@ -2834,7 +2834,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Re-check the revised plan — review mode",
       "kind": "not-an-act",
       "means": "The proof-and-demo send-back, re-run against a plan revised on the review route after the second critic sent it back (DRE-2746, DRE-5299).",
@@ -2842,7 +2842,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Epic → Green Light — both critics passed",
       "kind": "not-an-act",
       "means": "The proof-and-demo send-back from the Green Light backstop: the check that writes a re-filed proof card's verdict refused the epic's cards, so the epic does not reach Green Light (DRE-6604).",
@@ -2850,7 +2850,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Activate the approved epic",
       "kind": "not-an-act",
       "means": "The proof-and-demo send-back from the activation backstop: the check refused the epic's cards, so the epic is not activated and nothing is promoted (DRE-6604).",

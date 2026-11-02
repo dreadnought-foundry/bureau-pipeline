@@ -86,6 +86,7 @@ sys.exit(3)
 
 LOGGING_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps([os.path.basename(sys.argv[0])[:-3], *sys.argv[1:]]) + "\n")
 '''

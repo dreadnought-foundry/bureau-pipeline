@@ -1157,7 +1157,7 @@ jobs:
             --proposal proposal-verified.json --out receipt.txt
           if [ -s receipt.txt ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment \
-              "$CARD" "$(cat receipt.txt)"
+              "$CARD" --body-file=receipt.txt
             {
               echo
               cat receipt.txt

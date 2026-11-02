@@ -750,7 +750,7 @@ jobs:
               printf '%s\n\n%s\n' "$(cat /tmp/unfixable-card.md)" "$HOLD_KEY" \
                 > /tmp/unfixable-card-final.md
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "$(cat /tmp/unfixable-card-final.md)" || true
+                --body-file=/tmp/unfixable-card-final.md || true
             else
               echo "card note already posted for $SHA8 — not repeating it"
             fi

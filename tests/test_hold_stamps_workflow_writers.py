@@ -85,6 +85,7 @@ HEAD = "3e00473c" + "0" * 32
 # order the step made them in.
 STUB = """#!/usr/bin/env python3
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 with open(os.environ["STUB_CALLS"], "a") as fh:
     fh.write(json.dumps([{name!r}] + sys.argv[1:]) + "\\n")
 if sys.argv[1:2] == ["count-comments"]:

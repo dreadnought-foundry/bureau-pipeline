@@ -63,7 +63,7 @@ PR_URL = "https://github.com/dreadnought-foundry/atlas/pull/77"
 REPORT_TEXT = ("The card asks for two lanes that contradict each other. "
                "No build can satisfy both.\n\n"
                "Technical: criteria 2 and 4 name different destinations.\n")
-DIAGNOSIS_ANCHOR = ('linear_ops.py comment "$TARGET" "$(cat "$REPORT")" '
+DIAGNOSIS_ANCHOR = ('linear_ops.py comment "$TARGET" --body-file="$REPORT" '
                     '--act=run-failure-diagnosed')
 RECEIPT_ANCHOR = 'linear_ops.py comment "$TARGET" "$RECEIPT" --act=medic-next-step'
 THREE_STEPS = ("requeue-once", "send-to-planning", "fix-path")
@@ -127,8 +127,15 @@ def _runs(condition: str, ctx: dict) -> bool:
 # `medic_next_step.py` and `medic_resume.py` then run the real script.
 STUB_HEAD = """#!/usr/bin/env python3
 import json, os, subprocess, sys
+def _body(a):
+    # A body in a file arrives as `--body-file=PATH` (DRE-8758); the log
+    # carries the body, as the real client posts it.
+    if a.startswith("--body-file=") and os.path.isfile(a[len("--body-file="):]):
+        with open(a[len("--body-file="):], encoding="utf-8") as fh:
+            return fh.read().rstrip("\\n")
+    return a
 with open(os.environ["CALLS"], "a", encoding="utf-8") as f:
-    f.write(json.dumps([os.path.basename(__file__), *sys.argv[1:]]) + "\\n")
+    f.write(json.dumps([os.path.basename(__file__), *map(_body, sys.argv[1:])]) + "\\n")
 cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 """
 

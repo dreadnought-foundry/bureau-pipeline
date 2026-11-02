@@ -1735,7 +1735,7 @@ jobs:
                 --fallback-label "repo:${SLUG}" \
               || { echo "::warning title=Diagnosis not raised::The diagnosis could not be raised on the console or filed as '${TITLE}'. The report is in this run's log below. Failed run: ${RUN_URL}"; cat "$REPORT"; }
           else
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$REPORT")" --act=run-failure-diagnosed \
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" --body-file="$REPORT" --act=run-failure-diagnosed \
               || echo "::warning title=Diagnosis not posted::The diagnosis could not be posted on ${TARGET}. Failed run: ${RUN_URL}"
           fi
 
@@ -1877,7 +1877,7 @@ jobs:
           FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
           if [ "$RENDERED" != true ]; then
             echo "::warning title=Medic question not rendered::The comment for ${TARGET} could not be rendered, so no question was posted and the card was not moved to ${LANE}. Failed run: ${RUN_URL}"
-          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
+          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" --body-file="$RUNNER_TEMP/medic-ask-comment.md"; then
             echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to ${LANE}. Failed run: ${RUN_URL}"
           elif [ -z "$FROM_LANES" ]; then
             echo "::warning title=Card not moved to ${LANE}::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"

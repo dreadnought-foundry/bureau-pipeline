@@ -21,6 +21,14 @@ Subcommands:
                                        body is composed as that pipeline act's
                                        receipt — byte-identical, plus the
                                        machine-readable trailer (DRE-2826).
+  comment <DRE-N> --body-file=<path|-> [--act=<name>]
+                                       the same, the body read from a file (or
+                                       stdin). Any body held in a file goes in
+                                       this way, never as "$(cat FILE)": one
+                                       argument over 128 KiB is exit 126
+                                       (DRE-8758)
+  set-description <DRE-N> <body> | --body-file=<path|->
+                                       overwrite a card's description
   actor <DRE-N> <role>                 record WHICH agent acted on this card, in
                                        the one machine-readable form
                                        (scripts/agent_marker.py). The briefs tell
@@ -2482,6 +2490,45 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     _pass["threads"].pop(identifier, None)
     print(f"commented on {identifier}")
     return None
+
+
+#: The CLI flag that reads a `comment` or `set-description` body from a file.
+BODY_FILE_FLAG = "--body-file="
+
+
+def body_from_file(args: list[str]) -> list[str]:
+    """`<id> --body-file=PATH [flags]` as `<id> <body> [flags]` (DRE-8758).
+
+    A body passed as `"$(cat FILE)"` is ONE argument, and Linux refuses any
+    single argument over 128 KiB with E2BIG, which bash reports as exit code
+    126. On 2026-11-01 a 138 KiB mechanical note killed an epic's plan run that
+    way before either critic ran. `--body-file=PATH` reads the file here
+    instead, and `--body-file=-` reads stdin. Trailing newlines are dropped,
+    exactly as the command substitution dropped them, so a body is posted
+    byte for byte as it was and a reader matching a comment by its body still
+    finds it. Without the flag the arguments come back unchanged, so the
+    positional body keeps working. The flag is read on the CLI only:
+    `cmd_comment` and `set_description` still take the body itself, so a
+    library caller's body is never read as a path."""
+    files = [a for a in args[1:] if a.startswith(BODY_FILE_FLAG)]
+    if not files:
+        return args
+    if len(files) > 1:
+        raise LinearError(f"give {BODY_FILE_FLAG}PATH once")
+    rest = [a for a in args[1:] if a is not files[0]]
+    if any(not a.startswith("--") for a in rest):
+        raise LinearError(f"give the body once: positionally or as {BODY_FILE_FLAG}PATH, "
+                          "not both")
+    path = files[0][len(BODY_FILE_FLAG):]
+    try:
+        if path == "-":
+            body = sys.stdin.read()
+        else:
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise LinearError(f"could not read the body from {path!r}: {exc}") from exc
+    return [args[0], body.rstrip("\n"), *rest]
 
 
 def _comment_look(identifier: str, body: str, began: datetime):
@@ -5221,6 +5268,8 @@ def cmd_epics_in_flight(*flags: str, states=None) -> None:
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     try:
+        if cmd in ("comment", "set-description"):
+            args = body_from_file(args)
         {
             "state": cmd_state,
             "advance": cmd_advance,

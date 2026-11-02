@@ -177,6 +177,10 @@ def get_issue(identifier, **_):
 
 def main():
     cmd, *args = sys.argv[1:]
+    # A body in a file arrives as `--body-file=PATH` (DRE-8758), read here as
+    # the real client reads it.
+    args = [open(a[len("--body-file="):]).read().rstrip("\\n")
+            if a.startswith("--body-file=") else a for a in args]
     if cmd == "dump-comments":
         records = thread()
         if "--with-authors" in args:

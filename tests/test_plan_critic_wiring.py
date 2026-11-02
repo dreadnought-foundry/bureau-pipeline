@@ -993,7 +993,7 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         self.assertIn(HOLD_WRITE, park)
         self.assertIn('state "$EPIC" "Triage"', park)
         self.assertNotIn('state "$EPIC" "Green Light"', park)
-        self.assertIn('cat "$PARK_NOTE"', park,
+        self.assertIn('--body-file="$PARK_NOTE"', park,
                       "the note after-death wrote, not a rival sentence")
         self.assertIn('--note-file "$PARK_NOTE"', run,
                       "...and that is the file after-death was told to write")
@@ -1090,7 +1090,10 @@ class TheReviewSaysWhatItSpent(unittest.TestCase):
                     "if sys.argv[1] == 'children':\n"
                     "    print(7)\n"
                     "elif sys.argv[1] == 'comment':\n"
-                    f"    open({posted!r}, 'a').write(sys.argv[3])\n"
+                    "    body = sys.argv[3]\n"
+                    "    if body.startswith('--body-file='):\n"
+                    "        body = open(body[len('--body-file='):]).read().rstrip('\\n')\n"
+                    f"    open({posted!r}, 'a').write(body)\n"
                 )
             execution = os.path.join(raw, "claude-execution-output.json")
             with open(execution, "w") as f:
