@@ -8,7 +8,7 @@ canceled test job", and it stood for five hours.
 
 This module answers both, once a pass. It reads whether the channel is held
 and since when, writes a diagnosis that names the failing (or stuck) job and what is
-needed next — `NEXT_STEPS`, a re-run, a fix or a person — and raises it as one
+needed next — `NEXT_STEPS`, a re-run, a fix, a person or a wait — and raises it as one
 console alert through the notice door (`pipeline_notice.py`) at 2 hours and
 before the 06:30 PT briefing. It resolves the alert on the pass that finds no
 hold. The workflow that runs it every 10 minutes is its own card, and so is the
@@ -62,7 +62,11 @@ What is needed next is exactly one of `NEXT_STEPS`:
   * a person — the run is already on attempt 2 or later, the decision is
     `channel-held` (paused by hand, the `CHANNEL_HOLD` text quoted),
     `mirror-check-blocked` or a by-hand refusal, or a diagnosis read failed
-    (named).
+    (named);
+  * a wait — no job has failed or gone 2 hours, and the decision is
+    `unit-suite-not-finished`: the commit's own unit suite is still running,
+    and `stable` moves by itself once it finishes green, so nobody needs to
+    act yet (DRE-8863). A waiting hold is still raised on the same schedule.
 
 With no failing job, the decision's own step answers (`OUTCOME_NEXT`). Every
 `OUTCOME_*` of `promote_channel` maps to one step there, or is declared
@@ -94,7 +98,7 @@ card titled `FALLBACK_TITLE` — one title, so the fallback finds its own open
 card and never files a second. One line per pass on stdout, under `TAG`:
 
     channel-hold: none — stable carries main <sha7>
-    channel-hold: held since <h:mm AM/PM PT> age=<m>m next=<re-run|fix|person> job="<name>" run=<url> — <raise|morning-raise|quiet>
+    channel-hold: held since <h:mm AM/PM PT> age=<m>m next=<re-run|fix|person|wait> job="<name>" run=<url> — <raise|morning-raise|quiet>
     channel-hold: unknown <what could not be read>
 
 With `--apply` the client's `pipeline-notice:` line follows. Without it, or
@@ -134,8 +138,8 @@ NOTICE_KEY = "channel_hold:stable"
 SEVERITY = "WARN"
 
 #: What a held channel needs next — exactly one, every time.
-NEXT_STEPS = ("a re-run", "a fix", "a person")
-RERUN, FIX, PERSON = NEXT_STEPS
+NEXT_STEPS = ("a re-run", "a fix", "a person", "a wait")
+RERUN, FIX, PERSON, WAIT = NEXT_STEPS
 
 #: When it raises: see WHEN IT RAISES above. Pacific time, daylight saving
 #: included.
@@ -189,7 +193,9 @@ OUTCOME_NEXT = {
     pc.OUTCOME_MIRROR_FAILED: FIX,
     pc.OUTCOME_MIRROR_BLOCKED: PERSON,
     pc.OUTCOME_UNIT_RED: FIX,
-    pc.OUTCOME_UNIT_NOT_FINISHED: RERUN,
+    # "a red suite is a break to repair, an unfinished one is a wait" — a
+    # job stuck 2 hours is named by `running_job` before this is read.
+    pc.OUTCOME_UNIT_NOT_FINISHED: WAIT,
     pc.OUTCOME_UNIT_UNPROVEN: RERUN,
 }
 #: The decisions that are a person's whatever the jobs say.
@@ -705,6 +711,14 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
                            "re-run it.")
         return RERUN, (f"the job {_doing(job)} on attempt {job.attempt}, so "
                        "re-running its failed jobs is the next step.")
+    if OUTCOME_NEXT.get(outcome) == WAIT:
+        reason = _one_line(decision.reason)
+        return WAIT, (f"no job has failed or been running "
+                      f"{ALERT_AFTER_MINUTES // 60} hours, and Promote Channel's "
+                      f"newest decision is {outcome}: {reason}"
+                      f"{'' if reason.endswith('.') else '.'} {pc.CHANNEL} moves "
+                      "on its own once that suite finishes green, so nobody "
+                      "needs to act yet.")
     if outcome in OUTCOME_NEXT:
         return OUTCOME_NEXT[outcome], (
             f"no job has failed, and Promote Channel's newest decision is "

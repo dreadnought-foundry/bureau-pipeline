@@ -241,6 +241,18 @@
       "when": "every `review` run since DRE-8719, one line on stderr: the review's first line with `PARTS REVIEW: ` taken off, and `, <m> finding(s)` where it applies; since DRE-8721 in qa-review.yml's `Assemble critic context` step's log on every review"
     },
     {
+      "tag": "parts-check:",
+      "printed_by": "scripts/parts_check.py",
+      "constant": "CHECK_TAG",
+      "when": "every `check` run since DRE-8841, one line on stderr: pass, does not apply, fail or UNKNOWN; on fail, also one stdout line per finding, `COPY` or `NO-SHARED-PART`"
+    },
+    {
+      "tag": "parts-count:",
+      "printed_by": "scripts/parts_check.py",
+      "constant": "COUNT_TAG",
+      "when": "every `count` run since DRE-8841, one line on stderr: the repo, then the number of copies of shared parts and the declaration source, `none` with the reason, or `UNKNOWN` with the problem"
+    },
+    {
       "tag": "read-fallback:",
       "printed_by": "scripts/bureau_read.py",
       "constant": "FALLBACK_TAG",

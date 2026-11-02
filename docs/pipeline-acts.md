@@ -363,7 +363,7 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-resend-to-planning` | `hyg-resent-to-planning` | recovery | `plan.yml` |
 | `hygiene-card-close` | `hyg-card-closed` | recovery | `operator` |
 | `hygiene-proof-close` | `hyg-proof-closed` | recovery | `operator` |
-| `hygiene-triage-return` | `hyg-triage-returned` | recovery | `reconcile.py` |
+| `hygiene-triage-return` | `hyg-triage-returned` | recovery | `plan.yml` |
 | `hygiene-review-move` | `hyg-moved-to-review` | recovery | `reconcile.py` |
 | `hygiene-card-cancel` | `hyg-card-canceled` | recovery | `operator` |
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
