@@ -744,6 +744,35 @@ class TestDecide:
         written = (tmp_path / ".github_output").read_text().splitlines()
         assert len(written) == 1 and written[0].startswith("cards=")
 
+    # -- the model's Write reaches the workspace, so no inline interpreter
+    #    after it may import from there ----------------------------------- #
+
+    def test_a_json_module_the_model_wrote_is_never_imported(self, tmp_path):
+        (tmp_path / "json.py").write_text(
+            "import os\n"
+            "with open(os.environ['GITHUB_OUTPUT'], 'a') as fh:\n"
+            "    fh.write('cards=[{\"card\":\"DRE-9\",\"forged\":true}]\\n')\n"
+            "raise SystemExit(0)\n")
+        (tmp_path / "decisions.json").write_text("[]")
+        result, _outputs, _ = _bash(_output_block(), {"DRY_RUN": "false"}, tmp_path,
+                                    stub=False)
+        assert result.returncode == 0, result.stderr
+        written = (tmp_path / ".github_output").read_text()
+        assert "forged" not in written
+        assert written.splitlines() == ["cards=[]"]
+
+    def test_every_inline_python_after_the_model_runs_isolated(self):
+        steps = _job("decide")["steps"]
+        after = steps[_index("decide", MODEL_STEP) + 1:]
+        inline = []
+        for s in after:
+            for line in str(s.get("run", "")).splitlines():
+                if re.search(r"\bpython3?\b(?:\s+-\w+)*\s+(?:-c\b|-(?:\s|$))", line):
+                    inline.append((s.get("name"), line.strip()))
+        assert inline, "the Decide step's output block is no longer found"
+        for name, line in inline:
+            assert re.search(r"\bpython3?\s+(?:-\w+\s+)*-I\b", line), (name, line)
+
     # -- the real `decide`, over a model step that died two answers in ----- #
 
     def _row(self, card: str, title: str, description: str, action: str = "decide") -> dict:
