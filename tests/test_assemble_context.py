@@ -68,7 +68,7 @@ class MappingTest(unittest.TestCase):
         # request body — the four build roles, the critic, and the fix agent
         # that adds a missing line when the critic sends a pull request back.
         expected = {
-            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
+            "engineer": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md", "design-system.md", "whats-new.md"],
             "frontend": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "design.md", "design-system.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
             "devops": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "whats-new.md"],
             "database-architect": ["comms.md", "untrusted-content.md", "engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "whats-new.md"],
@@ -83,7 +83,7 @@ class MappingTest(unittest.TestCase):
             # to, plus the vendor premortem that catches a false claim.
             "plan-critic-pre": ["comms.md", "untrusted-content.md", "card-quality.md", "design-parity.md", "plan-artifact.md", "plan-critic.md"],
             "plan-critic-post": ["comms.md", "untrusted-content.md", "card-quality.md", "engineering.md", "architecture.md", "vendor-boundaries.md", "plan-artifact.md", "plan-critic.md"],
-            "fix": ["comms.md", "untrusted-content.md", "engineering.md", "whats-new.md"],
+            "fix": ["comms.md", "untrusted-content.md", "engineering.md", "design-system.md", "whats-new.md"],
             "medic": ["comms.md", "untrusted-content.md", "engineering.md"],
             # The proof runner (DRE-5921) writes a record against a proof
             # card's criteria (card-quality) to the engineering floor.
@@ -150,19 +150,26 @@ class MappingTest(unittest.TestCase):
     def test_design_system_reaches_the_design_roles_only(self):
         # DRE-3938: one `design/` standard and one design critic, fleet-wide.
         # It must reach the role that PRODUCES design work and the role whose
-        # checklist gates it done. engineer/devops/database-architect author
-        # backend/infra, the planner's design obligation is design-parity.md,
-        # and the fixer/medic work inside an already-reviewed diff — keeping
-        # their context lean is deliberate. (The verifier is left out on
-        # purpose: it proves a shipped surface against the design ref, which is
-        # design.md + design-parity.md, not the folder-and-lock contract.)
-        for role in ("frontend", "critic"):
+        # checklist gates it done. DRE-8720 adds the other two UI-building
+        # roles: engineer and fix both write UI code, and its shared-parts
+        # section is the rule their briefs' parts catalog points at.
+        # devops/database-architect author infra, the planner's design
+        # obligation is design-parity.md, and the medic works inside an
+        # already-reviewed diff — keeping their context lean is deliberate.
+        # (The verifier is left out on purpose: it proves a shipped surface
+        # against the design ref, which is design.md + design-parity.md, not
+        # the folder-and-lock contract.)
+        for role in ("frontend", "critic", "engineer", "fix"):
             self.assertIn(
                 "design-system.md", ac.standards_for(role),
                 f"{role} must receive the design-system standard",
             )
-        for role in ("engineer", "devops", "planner", "verifier", "fix",
-                     "medic", "database-architect"):
+        for role in ("engineer", "fix"):
+            # Immediately before whats-new.md, which stays last.
+            self.assertEqual(ac.standards_for(role)[-2:],
+                             ["design-system.md", "whats-new.md"], role)
+        for role in ("devops", "planner", "verifier", "medic",
+                     "database-architect"):
             self.assertNotIn(
                 "design-system.md", ac.standards_for(role),
                 f"{role} must not carry the design-system standard",
@@ -207,7 +214,7 @@ class AssembleTest(unittest.TestCase):
         expected = [
             "comms.md", "untrusted-content.md", "engineering.md",
             "architecture.md", "card-quality.md", "vendor-boundaries.md",
-            "console-honesty.md", "whats-new.md", "engineer.md",
+            "console-honesty.md", "design-system.md", "whats-new.md", "engineer.md",
         ]
         self.assertEqual([os.path.basename(p) for p in seen], expected)
         for name in expected:
