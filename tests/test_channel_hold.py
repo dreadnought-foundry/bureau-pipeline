@@ -17,6 +17,9 @@ What these pin:
 * the 11-02 replay (DRE-8778): a merge train kept the hold past 2 hours while
   the newest run was 15 minutes old, and the pass names no job, says no
   "Failing job" and asks for no re-run of failed jobs;
+* the 11-02 6:10 AM replay (DRE-8863): the newest commit's unit suite was
+  seven minutes in, and the pass says `next=wait` and that nobody needs to
+  act, never "a re-run" — until a job has run 2 hours, when it is stuck;
 * the next step: attempt 2 is a person's, a failed test is a fix, a hold by
   hand is a person's with the `CHANNEL_HOLD` text quoted;
 * Promote Channel's reason, and every unread read, go into `Needs:` whole
