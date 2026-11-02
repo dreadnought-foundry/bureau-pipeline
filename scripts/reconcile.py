@@ -1958,6 +1958,11 @@ _door_wip: list[bool] = [False]
 # Set when the door said Linear is held (`linear-hold`): every read of the work
 # lanes this pass raises BoardHeld, and its phase is skipped (item 34).
 _door_hold: list[str] = []
+# Set when the busy-thread read (`_door_busy_threads`) was told `linear-hold`
+# (DRE-8907): the board it completes still serves, but the epic-thread read
+# this pass is held off that answer instead of spending a second `/cards`
+# request on the same held key.
+_thread_hold: list[str] = []
 # Intake and Planning (`DOOR_LINEAR_LANES`) when the work-lane read fell back
 # to Linear's whole-board read, which carries them too (DRE-5848).
 _linear_lane_cards: list[dict] | None = None
@@ -2122,6 +2127,7 @@ def reset_sweep_cards() -> None:
     _door_sourced.clear()
     _door_wip[0] = False
     _door_hold.clear()
+    _thread_hold.clear()
     _shadow_door.clear()
     _idle_pass.clear()
     _limit_recovered.clear()
@@ -2411,7 +2417,9 @@ def _door_busy_threads(cards: list[dict]) -> None:
     once more for the rest, at most two door reads a pass; any other UNKNOWN
     leaves every one to Linear, read as today when a reader asks. A
     `linear-hold` here skips nothing — the board read it completes already
-    served — and the threads are Linear's, as they were."""
+    served — and the threads are Linear's, as they were; it is kept in
+    `_thread_hold`, so `_door_epic_threads` skips its phase this pass with no
+    second `/cards` request on the held key."""
     ask = sorted({c["identifier"] for c in cards
                   if c.get("identifier") and linear_ops.window_is_partial(c.get("comments"))})
     for attempt in (1, 2):
@@ -2421,6 +2429,9 @@ def _door_busy_threads(cards: list[dict]) -> None:
             read = _door_asked("busy-threads", bureau_read.cards, ask,
                                comments="all", relations=False)
         except bureau_read.ReadUnknown as e:
+            if e.skip:
+                _thread_hold.append(e.reason)
+                return
             named = set(_IDENTIFIER.findall(e.detail)) & set(ask)
             if e.reason != "thread-incomplete" or not named or attempt == 2:
                 return
@@ -7937,7 +7948,9 @@ def _door_epic_threads(epic_ids: Iterable[str]) -> None:
       to Linear this pass; the client's own rules decide whether the door is
       used again.
     * `linear-hold` (or a 429 with the key held) — BoardHeld: the phase is
-      skipped with no Linear call (Stage 2 item 34).
+      skipped with no Linear call (Stage 2 item 34). A hold the busy-thread
+      read already got this pass (`_thread_hold`, DRE-8907) is that answer,
+      with no request at all.
 
     The viewer is never taken from the door: its `viewer.id` is the
     console's key, and authorship is judged against THIS process's.
@@ -7951,6 +7964,8 @@ def _door_epic_threads(epic_ids: Iterable[str]) -> None:
     })
     if not wanted:
         return
+    if _thread_hold:
+        raise BoardHeld(_thread_hold[0])
     served: list[str] = []
     to_linear: list[str] = []
     incomplete: list[str] = []
@@ -8057,11 +8072,12 @@ def clock_planning_epics(candidates: list[dict], now: str) -> None:
     `STALL_MINUTES` or undated stops there. Only past that gate are the epic
     (`get_issue`, for its lane and labels — in `BUREAU_READ=on` taken off the
     pass's Planning board read when the epic is on it, DRE-8907), its thread
-    and the plan stub's runs read. It is clocked when the epic is this sweep's (its `repo:` label
-    names this repo, where the relay dispatches its plan runs), carries
-    neither `needs-human` nor `hand-built`, has no limit-death marker still
-    inside its wait (the Planning watchdog's reading), and its newest plan run
-    is dead or absent. Then the epic gets one `🚨 promotion-stalled:` receipt
+    and the plan stub's runs read. It is clocked when the epic is this
+    sweep's (its `repo:` label names this repo, where the relay dispatches
+    its plan runs), carries neither `needs-human` nor `hand-built`, has no
+    limit-death marker still inside its wait (the Planning watchdog's
+    reading), and its newest plan run is dead or absent. Then the epic gets
+    one `🚨 promotion-stalled:` receipt
     per newest run and one ledger entry per pass, which
     `standing_defect_alert.settle` raises as one console alert for the epic.
 
