@@ -73,7 +73,11 @@ DRE-5275 wrote on Green Light's `entrance` in `config/lane-contract.json`.
      (DRE-6459), reached from the resolver alone and reconciled by rule 6, or
      `medic.yml#Ask a person about the diagnosis`, the medic's park on a
      diagnosis only a person can settle (DRE-7794), whose shell echoes its own
-     🙋 question the same way, through `linear_ops.py comment`.
+     🙋 question the same way, through `linear_ops.py comment`, or
+     `agent-fix.yml#Report`, the fix loop's park on the critic's design
+     question (DRE-8735), whose shell writes the question's first line,
+     `design_answer.QUESTION_MARK`, before the `linear_ops.py comment` that
+     precedes the write.
    * `epic-growth`: the unit is `reconcile.py#ask_epic_growth_question` and
      no other (DRE-6414) — the sweep's question about an epic grown past the
      size the CEO approved, created in the lane on a card of its own. Its
@@ -127,6 +131,7 @@ import yaml
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import code_owner_hold  # noqa: E402 — the merge gate's code-owner park (DRE-4341)
+import design_answer  # noqa: E402 — the fix loop's design question (DRE-8735)
 import lane_callers  # noqa: E402 — caller discovery (DRE-5345)
 import lane_contract  # noqa: E402
 import planner_score  # noqa: E402 — agent-task.yml's escalation receipt prefix
@@ -156,16 +161,20 @@ QUEUED_LABEL = "epic-queued"
 #: the receipt its shell must post before the write: DRE-1655's
 #: escalate-by-exception park, the proof run's park on a press only the CEO
 #: can make (DRE-5925), and the medic's park on a diagnosis only a person can
-#: settle (DRE-7794). The step name is the unit `where` declares. The proof
-#: run's and the medic's receipts are literals: no Python module posts them,
-#: the workflow does, and a reworded receipt there fails this rule closed.
+#: settle (DRE-7794), and the fix loop's park on the critic's design question
+#: (DRE-8735), whose receipt is the question's own first line. The step name is
+#: the unit `where` declares. The proof run's and the medic's receipts are
+#: literals: no Python module posts them, the workflow does, and a reworded
+#: receipt there fails this rule closed.
 AGENT_ESCALATION_STEP = "agent-task.yml#Report result to Linear"
 PROOF_PARK_STEP = "proof-task.yml#Report proof result to Linear"
 MEDIC_PARK_STEP = "medic.yml#Ask a person about the diagnosis"
+FIX_QUESTION_STEP = "agent-fix.yml#Report"
 AGENT_ESCALATION_STEPS = {
     AGENT_ESCALATION_STEP: planner_score.ESCALATION_RECEIPT_PREFIX,
     PROOF_PARK_STEP: "🙋 The proof run met a press only the CEO can make",
     MEDIC_PARK_STEP: "🙋 The medic diagnosed a failure only a person can settle",
+    FIX_QUESTION_STEP: design_answer.QUESTION_MARK,
 }
 
 #: What the proof run's park must run before it writes the lane, besides its

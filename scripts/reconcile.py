@@ -2008,10 +2008,11 @@ def reset_sweep_cards() -> None:
     records (DRE-3642), blocker epics (DRE-6407), blocker cards and what the
     strict gate released (DRE-7831) and waiting epics (DRE-6653), the loops
     the promotion pass found (DRE-3539), its workflows listing
-    (DRE-4378), its in-flight build runs (DRE-4830) and its Queued read
-    (DRE-7965). Called once at the top of main()."""
+    (DRE-4378), its in-flight build runs (DRE-4830), its Queued read
+    (DRE-7965) and its plan runs (DRE-8815). Called once at the top of main()."""
     global _swept_cards, _pr_listing, _workflows_listing, _queued_cards
     global _build_runs, _build_runs_unreadable, _build_runs_listed, _linear_lane_cards
+    global _plan_runs, _plan_runs_unreadable
     _swept_cards = None
     _queued_cards = None
     _linear_lane_cards = None
@@ -2030,6 +2031,9 @@ def reset_sweep_cards() -> None:
     _build_runs_listed = None
     _build_job_names.clear()
     _build_job_unreadable.clear()
+    _plan_runs = None
+    _plan_runs_unreadable = None
+    _plan_job_names.clear()
     _epic_records.clear()
     _epic_record_gaps.clear()
     _blocker_epics.clear()
@@ -5198,6 +5202,102 @@ def build_run_refusal(identifier: str) -> str:
     )
 
 
+#: The plan stub's display name, the same in every repo (`dead_run`'s
+#: `_STAGE_BY_WORKFLOW` relies on it too); `gh run list --workflow` resolves a
+#: display name as readily as a filename. The second critic's review runs on
+#: the same workflow under the same job name, so its runs are the epic's too.
+PLAN_WORKFLOW_NAME = "Agent Plan"
+
+#: The plan stub's newest runs and their job names, memoised for the pass
+#: (DRE-8815): one listing answers every epic past the stall clock's age gate,
+#: and two epics share the jobs reads. A failed read is never memoised as
+#: data — `_plan_runs_unreadable` remembers only that it failed.
+_plan_runs: list | None = None
+_plan_runs_unreadable: str | None = None
+_plan_job_names: dict[str, list] = {}
+
+
+class PlanRunsUnreadable(Exception):
+    """The plan stub's listing, or one run's jobs, could not be read."""
+
+
+def _plan_actions_json(args: tuple[str, ...]):
+    """One Actions read for the plan clock, parsed, or PlanRunsUnreadable.
+    An empty answer is a failure too: on the quiet no-token path `gh()`
+    discards the exit code, and a real listing is never empty text."""
+    out, detail = _actions_read(args)
+    if detail is None and not out:
+        detail = "the read answered nothing"
+    if detail is None:
+        try:
+            return json.loads(out)
+        except ValueError:
+            detail = f"an unparseable answer: {out[:200]!r}"
+    raise PlanRunsUnreadable(detail)
+
+
+def _plan_runs_listed() -> list:
+    """The plan stub's newest runs, newest first, as
+    `[{"id", "status", "conclusion", "updatedAt"}]`, or PlanRunsUnreadable."""
+    global _plan_runs, _plan_runs_unreadable
+    import promotion_stall  # noqa: PLC0415 — the stall clock's page size
+
+    if _plan_runs is not None:
+        return _plan_runs
+    if _plan_runs_unreadable is not None:
+        raise PlanRunsUnreadable(_plan_runs_unreadable)
+    try:
+        runs = _plan_actions_json((
+            "run", "list", "--repo", REPO, "--workflow", PLAN_WORKFLOW_NAME,
+            "--limit", str(promotion_stall.PLAN_RUNS_PAGE), "--json",
+            "databaseId,status,conclusion,createdAt,updatedAt,url"))
+        if not isinstance(runs, list):
+            raise PlanRunsUnreadable(f"a listing that is not a list: {runs!r:.200}")
+    except PlanRunsUnreadable as e:
+        _plan_runs_unreadable = f"the {PLAN_WORKFLOW_NAME} run listing — {e}"
+        raise PlanRunsUnreadable(_plan_runs_unreadable) from None
+    _plan_runs = [
+        {"id": str(r["databaseId"]), "status": str(r.get("status") or ""),
+         "conclusion": str(r.get("conclusion") or ""),
+         "updatedAt": r.get("updatedAt") or None}
+        for r in runs if isinstance(r, dict) and r.get("databaseId")
+    ]
+    return _plan_runs
+
+
+def _plan_run_job_names(run_id: str) -> list:
+    """One plan run's job names, memoised for the pass, or PlanRunsUnreadable
+    — never "no names", which would read as another card's run."""
+    if run_id in _plan_job_names:
+        return _plan_job_names[run_id]
+    try:
+        data = _plan_actions_json(("api", f"repos/{REPO}/actions/runs/{run_id}/jobs"))
+    except PlanRunsUnreadable as e:
+        raise PlanRunsUnreadable(f"run {run_id}'s jobs — {e}") from None
+    jobs = data.get("jobs") if isinstance(data, dict) else None
+    if not isinstance(jobs, list):
+        raise PlanRunsUnreadable(f"run {run_id}'s jobs — no jobs in the answer")
+    names = [j.get("name") or "" for j in jobs if isinstance(j, dict)]
+    _plan_job_names[run_id] = names
+    return names
+
+
+def newest_plan_run(epic: str):
+    """The newest run of the plan stub whose jobs name `epic`, as a
+    `promotion_stall.PlanRun`, or None when none of the listed runs does.
+    PlanRunsUnreadable when the listing or a jobs read failed. The match is
+    `dedupe_dispatch`'s, the one parse of the `bureau-card:` job name."""
+    import promotion_stall  # noqa: PLC0415
+
+    found = dedupe_dispatch.sibling_on_this_card(
+        _plan_runs_listed(), epic, _plan_run_job_names)
+    if not found:
+        return None
+    run = found[0]
+    return promotion_stall.PlanRun(run["id"], run["status"], run["conclusion"],
+                                   run["updatedAt"])
+
+
 QA_BOT_LOGIN = "agent-bureau-qa-bot"
 
 
@@ -7720,9 +7820,136 @@ def takes_no_slot(bodies) -> bool:
     )
 
 
+def _newest_limit_marker_at(records: list) -> datetime | None:
+    """When the thread's newest limit marker was posted, or None — the
+    reading `_limit_marker_created_at` makes off a board card, made here off
+    `comment_records`' rows."""
+    for row in reversed(records):
+        if dead_run.parse_limit_marker(row.get("body") or "") is None:
+            continue
+        try:
+            return datetime.fromisoformat((row.get("created_at") or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def clock_planning_epics(candidates: list[dict], now: str) -> None:
+    """The epic its children wait on, read back as a clock (DRE-8815).
+
+    On 2026-11-01 epic DRE-8698's plan run died after posting the plan, in a
+    shell step that left no limit-death marker, and nothing moved the epic
+    on. Its nine children waited five hours behind their ordinary
+    `epic-not-active` receipts, each a declared wait, and nothing else was
+    said until a person found it.
+
+    So the full sweep groups the Queued cards it already read — every repo's
+    — by their parent epic, and builds ONE `promotion_stall.EpicWait` per epic
+    in Planning, never one per child. Cheapest first: the children's oldest
+    receipt comes off the pass's board read, and an epic under
+    `STALL_MINUTES` or undated stops there. Only past that gate are the epic
+    (`get_issue`, for its lane and labels), its thread and the plan stub's
+    runs read. It is clocked when the epic is this sweep's (its `repo:` label
+    names this repo, where the relay dispatches its plan runs), carries
+    neither `needs-human` nor `hand-built`, has no limit-death marker still
+    inside its wait (the Planning watchdog's reading), and its newest plan run
+    is dead or absent. Then the epic gets one `🚨 promotion-stalled:` receipt
+    per newest run and one ledger entry per pass, which
+    `standing_defect_alert.settle` raises as one console alert for the epic.
+
+    A read that fails says one ERROR line and puts the epic on
+    `_ledger_unread`, so the alert is neither raised nor resolved on a guess.
+    """
+    import promotion_stall  # noqa: PLC0415 — the stall clock's records
+
+    waiting: dict[str, list[str]] = {}
+    for card in candidates:
+        parent = card.get("parent") or {}
+        if ((parent.get("state") or {}).get("name") == promotion_stall.EPIC_CLOCKED_LANE
+                and parent.get("identifier")):
+            waiting.setdefault(parent["identifier"], []).append(card["identifier"])
+    key = promotion_wait.key(promotion_wait.EPIC_NOT_ACTIVE)
+    at = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    for epic in sorted(waiting, key=lambda e: int(e.split("-")[1])):
+        kids = waiting[epic]
+        try:
+            receipt_at = promotion_stall.oldest(
+                linear_ops.first_comment_at(kid, key) for kid in kids)
+        except linear_ops.LinearError as e:
+            print(f"ERROR: could not read when {epic}'s children were first told "
+                  f"they wait on it — not clocked this sweep: {e}", file=sys.stderr)
+            _ledger_unread.append(f"{epic}'s waiting children's receipt age ({type(e).__name__})")
+            continue
+        record = promotion_stall.EpicWait(epic, promotion_stall.EPIC_CLOCKED_LANE,
+                                          len(kids), receipt_at, None)
+        if not promotion_stall.receipt_aged(record, now):
+            continue  # young or undated: nothing more is read for it
+        try:
+            issue = linear_ops.get_issue(epic)
+        except linear_ops.LinearError as e:
+            print(f"ERROR: could not read epic {epic}, which {len(kids)} Queued "
+                  f"card(s) wait on — not clocked this sweep: {e}", file=sys.stderr)
+            _ledger_unread.append(f"epic {epic} ({type(e).__name__})")
+            continue
+        lane = (issue.get("state") or {}).get("name")
+        if lane != promotion_stall.EPIC_CLOCKED_LANE:
+            continue  # it left Planning since the board read: nothing to clock
+        repo = card_repo(issue)
+        if repo is None or repo not in validate_card.VALID_SLUGS:
+            print(f"promotion: epic {epic} stands in {lane} with {len(kids)} "
+                  "card(s) waiting on it and carries no repo: label the repo map "
+                  "routes — no sweep clocks it")
+            continue
+        if repo != REPO_SLUG:
+            continue  # the sweep of the repo its plan runs go to speaks for it
+        labels = {(lbl.get("name") or "").lower()
+                  for lbl in (issue.get("labels") or {}).get("nodes", [])}
+        owned = labels & {HOLD_LABEL.lower(), HAND_BUILT_LABEL.lower()}
+        if owned:
+            print(f"promotion: epic {epic} carries {', '.join(sorted(owned))} — a "
+                  "person owns it, so it is not clocked")
+            continue
+        try:
+            thread = linear_ops.comment_records(epic)
+        except Exception as e:  # noqa: BLE001 — unknown is not "no marker"
+            print(f"ERROR: could not read epic {epic}'s thread — whether a limit "
+                  f"recovery owns it is unknown, so it is not clocked this sweep: {e}",
+                  file=sys.stderr)
+            _ledger_unread.append(f"epic {epic}'s thread ({type(e).__name__})")
+            continue
+        marker = limit_recovery.waiting([row.get("body") or "" for row in thread])
+        if marker is not None:
+            ends = limit_wait_ends(marker, _newest_limit_marker_at(thread))
+            if ends is not None and at < ends:
+                print(_limit_wait_line(epic, marker, ends))
+                continue
+        try:
+            run = newest_plan_run(epic)
+        except PlanRunsUnreadable as e:
+            print(f"ERROR: could not read epic {epic}'s newest plan run ({e}) — "
+                  "not clocked this sweep", file=sys.stderr)
+            _ledger_unread.append(f"epic {epic}'s newest plan run")
+            continue
+        record = record._replace(lane=lane, run=run)
+        age = promotion_stall.epic_stalled(record, now)
+        if age is None:
+            if run is not None and not promotion_stall.run_dead(run):
+                print(f"promotion: epic {epic}'s newest plan run {run.id} is "
+                      f"{run.conclusion or run.status} — Planning is working, not clocked")
+            continue
+        _surface_once(
+            epic,
+            promotion_stall.epic_once_key(record),
+            pipeline_act.receipt("promotion-stalled", promotion_stall.epic_notice(record, now)),
+        )
+        entry = promotion_stall.epic_ledger_line(record, age)
+        _stale_defects.append(entry)
+        print(f"ERROR: {entry}", file=sys.stderr)
+
+
 def promote_ready(
     active_count: int, candidates: list[dict] | None = None, *, close_epics: bool = False,
-    resolve_blockers: bool = False, ask_cap: bool = False,
+    resolve_blockers: bool = False, ask_cap: bool = False, clock_epics: bool = False,
 ) -> int:
     """Auto-promote Queued cards whose blockers are all Done.
 
@@ -7781,6 +8008,12 @@ def promote_ready(
     its children meet the cap's hold (`ask_cap_for_released_epic`, DRE-6618).
     Never on a `--promote-only` pass: the activate route runs one right after
     asking the cap itself.
+
+    `clock_epics` — the full sweep's alone as well — reads back the epics in
+    Planning that this pass's Queued cards wait on, one record per epic,
+    and clocks the one whose plan run is dead (`clock_planning_epics`,
+    DRE-8815). Never on a `--promote-only` pass, which reads only a merge's
+    dependents.
     """
     global _queued_cards
     # The clock is the pure half (DRE-4207); imported here because this pass is
@@ -8523,6 +8756,11 @@ def promote_ready(
             entry = promotion_stall.ledger_line(record, age)
             _stale_defects.append(entry)
             print(f"ERROR: {entry}", file=sys.stderr)
+    # The epics its children wait on in Planning (DRE-8815): one record per
+    # epic, apart from `refused`, so the idle-board line still counts only
+    # cards standing in the queue.
+    if clock_epics:
+        clock_planning_epics(candidates, now)
     # The idle board: WIP 0 with nothing dispatched this pass, and cards
     # standing refused or held. `spent` as it stands after the loop, so a pass
     # that dispatched is not idle. Which records count for what is the clock's.
@@ -15641,7 +15879,7 @@ def main(
             # `start_queued_epics`; a Backlog close opens its slot in the cap
             # for the next pass to fill.
             promote_ready(active_count=wip_count(mine), close_epics=True,
-                          resolve_blockers=True, ask_cap=True)
+                          resolve_blockers=True, ask_cap=True, clock_epics=True)
     if promote_only:
         print(f"promote-only: gate evaluated (WIP base {wip_count(mine)})")
         _report_degraded()

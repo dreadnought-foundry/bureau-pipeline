@@ -1034,14 +1034,63 @@ jobs:
       # OUTPUT belongs in the tree: the move step's `mkdir -p` guarantees the
       # directory, and the agent is told to read the file there.
       # tests/test_critic_context_root.py executes this block as written.
+      #
+      # THE PARTS REVIEW AND THE CEO'S ANSWER (DRE-8721). After the standards
+      # and the brief, the step appends two blocks the brief's "UI code in a
+      # repo whose design system exists" section reads:
+      #   • the parts review (scripts/parts_review.py, DRE-8719) of the pull
+      #     request's diff against the catalog in `.`. `.` is whatever the
+      #     checkout above holds — the pull request merged into its base on a
+      #     pull_request run, the default branch on a workflow_dispatch
+      #     re-review, the replayed head on a shadow replay — and the review
+      #     is built for all three: the pull request's components come from
+      #     the diff, only the catalog from `.`. A diff that cannot be read
+      #     (`gh pr diff` refuses a very large pull request) leaves the file
+      #     empty, and the script itself writes `PARTS REVIEW: UNKNOWN`;
+      #   • the CEO's answer to the critic's design question
+      #     (scripts/design_answer.py context, DRE-8722). This step holds the
+      #     Linear key for that one read; the critic agent steps still hold
+      #     none (DRE-2696) and get his verified words as text. An empty CARD
+      #     reads nothing. A shadow replay judges the change, not the answers
+      #     it got, the way the card review context keeps earlier verdicts out.
+      # Both land before the durable copy, so both critic attempts read them.
+      # tests/test_parts_review_wiring.py executes the block against
+      # DRE-8719's fixture trees.
       - name: Assemble critic context
         id: ctx
         if: steps.decide.outputs.review == 'true'
+        env:
+          # Reads — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+          DIFF_FILE: ${{ steps.pr.outputs.diff_file }}
+          SHADOW: ${{ inputs.shadow }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 "$PIPELINE_DIR"/scripts/assemble_context.py assemble critic \
             --root "$PIPELINE_DIR" \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of critic context"
+          PARTS_DIFF="${RUNNER_TEMP:-/tmp}/parts-review.diff"
+          if [ "$SHADOW" = "true" ]; then
+            # `gh pr diff` shows today's head; the replay's diff is on disk.
+            cp "$DIFF_FILE" "$PARTS_DIFF" 2>/dev/null || : > "$PARTS_DIFF"
+          else
+            gh pr diff "$PR" > "$PARTS_DIFF" 2>/dev/null || : > "$PARTS_DIFF"
+          fi
+          PARTS_OUT="${RUNNER_TEMP:-/tmp}/parts-review.out"
+          python3 "$PIPELINE_DIR"/scripts/parts_review.py review --diff "$PARTS_DIFF" --repo-root . > "$PARTS_OUT"
+          ANSWER_OUT="${RUNNER_TEMP:-/tmp}/design-answer.out"
+          if [ "$SHADOW" = "true" ]; then
+            echo "DESIGN ANSWER: none — a shadow replay judges the change, not the answers it got" > "$ANSWER_OUT"
+          else
+            python3 "$PIPELINE_DIR"/scripts/design_answer.py context "$CARD" > "$ANSWER_OUT"
+          fi
+          { echo; cat "$PARTS_OUT"; echo; cat "$ANSWER_OUT"; } >> .bureau-pipeline/agent-context.md
+          grep -E '^PARTS REVIEW:' "$PARTS_OUT" || true
+          grep -E '^DESIGN ANSWER:' "$ANSWER_OUT" || true
           # DRE-3226: keep the durable copy outside the working tree. The
           # agent is pointed at the in-tree path — one path across every
           # workflow — and attempt 1 is the one thing that can remove it, so

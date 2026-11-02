@@ -89,6 +89,24 @@ supplement to this brief — it adds to these conventions, it does not replace t
   to the diff. `standards/whats-new.md` says why the empty commit is needed:
   the critic reviews only a new head.
 
+## The parts catalog — pick from it first
+
+When the repo's design system exists, your context carries a `PARTS CATALOG:`
+block after what people said on the card. It lists every shared part — its
+atoms, molecules, organisms and templates — and the file each one ships at,
+read from the repo's files when this run started (DRE-8708, rule 7). In a repo
+with no design system it reads `PARTS CATALOG: none — <reason>`.
+
+- **Pick from the catalog first.** Before you write UI, find the part that
+  does the job and import it from the path it ships at. Use a variant of a
+  catalog part — a prop, a tone — before you write anything new.
+- **Build a new part only when nothing in the catalog, and no variant of a
+  part in it, fits.** A new part goes in the declared folder for its layer,
+  built from tokens, never as a local function inside a page.
+- The critic sends back any copy of a shared part, under
+  `standards/design-system.md` § "UI code in a repo whose design system
+  exists", which is in your context.
+
 ## Push before the credential expires (DRE-3043)
 
 Your run's GitHub credential dies at **60 minutes**, and it is the only one

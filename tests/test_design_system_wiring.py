@@ -73,22 +73,25 @@ class StandardOnTheRailTest(unittest.TestCase):
     def test_the_design_roles_receive_the_standard(self):
         import assemble_context as ac
 
-        for role in ("frontend", "critic"):
+        # DRE-8720: engineer and fix build UI too — the fixer writes UI code
+        # when it answers a REQUEST_CHANGES — and both briefs point at the
+        # standard's shared-parts section.
+        for role in ("frontend", "critic", "engineer", "fix"):
             self.assertIn(
                 "design-system.md",
                 ac.standards_for(role),
-                f"{role} must receive the design-system standard — a frontend "
-                "build agent produces design work and the critic gates it done",
+                f"{role} must receive the design-system standard — a build "
+                "agent produces UI work and the critic gates it done",
             )
 
     def test_the_lean_roles_do_not_carry_it(self):
         # Keeping the other roles' context lean is deliberate, exactly as it is
-        # for console-honesty.md: devops authors CDK/CI, the fixer and medic work
-        # inside an already-reviewed diff, and the planner's design obligation is
+        # for console-honesty.md: devops authors CDK/CI, the medic works inside
+        # an already-reviewed diff, and the planner's design obligation is
         # design-parity.md (cards summing to the design), not the folder shape.
         import assemble_context as ac
 
-        for role in ("devops", "fix", "medic", "database-architect"):
+        for role in ("devops", "medic", "database-architect"):
             self.assertNotIn(
                 "design-system.md",
                 ac.standards_for(role),
@@ -104,7 +107,7 @@ class StandardOnTheRailTest(unittest.TestCase):
 
     def test_readme_per_role_table_names_it_for_both_roles(self):
         index = readme()
-        for role in ("frontend", "critic"):
+        for role in ("frontend", "critic", "engineer", "fix"):
             row = next((l for l in index.splitlines()
                         if re.match(rf"\|\s*{role}\s*\|", l)), "")
             self.assertTrue(row, f"standards/README.md has no {role!r} role row")

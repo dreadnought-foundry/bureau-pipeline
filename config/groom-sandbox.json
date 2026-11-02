@@ -1,0 +1,5 @@
+{
+  "_readme": "The sandbox groom card (DRE-8782): the one card the morning's sandbox groom proposal is posted on, and the one sandbox card that proposal never lists. Read by scripts/groom_sandbox.py — by `groomer.py propose --sandbox`, which leaves it out of the lane, by `groomer.py drain`, which refuses it, and by self-groomer.yml's gate, which hands it to the `sandbox` job. Committed config and never a repo variable, because a proof run cannot read a repo variable (config/proof-reach.json). Changing the card is a reviewed pull request.",
+  "card": "DRE-8780",
+  "why": "The sandbox groom card DRE-8780, filed for the groomer's memory proofs (DRE-8331, DRE-8333, DRE-8335, DRE-8357), whose presses land on sandbox cards and never on real ones — the CEO approved that rework on 2026-11-01 at 8:30 PM PT."
+}

@@ -67,6 +67,24 @@ httpOnly `bureau_access_token` cookie, owns `/api/auth/*`, and forwards
   "5 / 13 done · 8 left". When a label can be an icon + a number, make it one.
   Visual density over word density; strip clutter.
 
+## The parts catalog — pick from it first
+
+When the repo's design system exists, your context carries a `PARTS CATALOG:`
+block after what people said on the card. It lists every shared part — its
+atoms, molecules, organisms and templates — and the file each one ships at,
+read from the repo's files when this run started (DRE-8708, rule 7). In a repo
+with no design system it reads `PARTS CATALOG: none — <reason>`.
+
+- **Pick from the catalog first.** Before you write UI, find the part that
+  does the job and import it from the path it ships at. Use a variant of a
+  catalog part — a prop, a tone — before you write anything new.
+- **Build a new part only when nothing in the catalog, and no variant of a
+  part in it, fits.** A new part goes in the declared folder for its layer,
+  built from tokens, never as a local function inside a page.
+- The critic sends back any copy of a shared part, under
+  `standards/design-system.md` § "UI code in a repo whose design system
+  exists", which is in your context.
+
 ## Verify on the running app, not just unit green
 
 TDD still rules — failing test committed first. But for visual work, **unit
