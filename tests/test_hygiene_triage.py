@@ -124,18 +124,31 @@ VIEWER = "viewer"
 class FixtureLinear:
     """The read-only `ctx.linear`: one issue read by identifier, answered from
     `ISSUES`, and Linear's own refusal for an id that names no card. The
-    viewer read answers `PIPELINE_USER`, recorded as `VIEWER`."""
+    viewer read answers `PIPELINE_USER`, recorded as `VIEWER`. A card's lane
+    history (DRE-8862) is answered from `histories` — by default each board
+    card's own `history` — and recorded in `history_reads`, apart from
+    `calls`."""
 
-    def __init__(self, issues=None, viewer=PIPELINE_USER):
+    def __init__(self, issues=None, viewer=PIPELINE_USER, histories=None):
         self.issues = dict(ISSUES if issues is None else issues)
         self.viewer = viewer
+        self.histories = histories
         self.calls: list = []
+        self.history_reads: list = []
 
     def __call__(self, query, variables=None):
         assert not query.lstrip().lower().startswith("mutation")
         if "viewer" in query:
             self.calls.append(VIEWER)
             return {"viewer": {"id": self.viewer} if self.viewer else None}
+        if "history" in query:
+            ident = (variables or {}).get("id")
+            self.history_reads.append(ident)
+            nodes = (self.histories or {}).get(ident)
+            if nodes is None:
+                raise AssertionError(f"the fixture holds no lane history for {ident}")
+            return {"issue": {"history": {"nodes": nodes,
+                                          "pageInfo": {"hasNextPage": False}}}}
         ident = (variables or {}).get("id")
         self.calls.append(ident)
         if ident not in self.issues:
@@ -147,9 +160,21 @@ class FixtureLinear:
                           "children": {"nodes": []}}}
 
 
+def histories(doc) -> dict:
+    """Each board card's lane history as Linear's paged read answers it: the
+    board read's own entries, which name no `fromState`."""
+    return {c["identifier"]: [{"createdAt": n["createdAt"], "fromState": None,
+                               "toState": n["toState"]}
+                              for n in (c.get("history") or {}).get("nodes") or []
+                              if n.get("toState")]
+            for cards in doc["lanes"].values() for c in cards}
+
+
 def context(doc, *, linear=None):
     gh = FixtureGh(doc)
     linear = linear if linear is not None else FixtureLinear()
+    if isinstance(linear, FixtureLinear) and linear.histories is None:
+        linear.histories = histories(doc)
     ctx = hygiene.make_context(HOME, gh=gh, linear=linear, dry_run=False, now=NOW,
                                summary_card=SUMMARY)
     return ctx, gh, linear
@@ -229,6 +254,18 @@ class TestTheLane:
 # --------------------------------------------------------------------------- #
 
 
+#: Where a card returns once its routing verdict predates its trip through
+#: Triage (DRE-8862) — every fixture card that carries a verdict, which was
+#: written on 2026-09-29, a day before it entered Triage — and how the cause
+#: names each destination.
+PLANNING = "Planning"
+TO_PLANNING = ", returned to Planning"
+
+
+def to_queue() -> str:
+    return f", returned to {lane_contract.QUEUE_LANE}"
+
+
 class TestAProseBlocker:
     def test_a_done_card_named_in_prose_with_a_verdict_is_three_writes_in_order(self):
         doc = fixture()
@@ -238,10 +275,12 @@ class TestAProseBlocker:
         assert kinds(action) == ["linear_relation", "linear_comment", "linear_state"]
         relation, note, state = action.writes
         assert relation.card == "DRE-4401" and relation.blocked_by == "DRE-4301"
-        assert action.cause == "relation added, blocked by DRE-4301"
+        # DRE-8862: its verdict predates its move to Triage, so Planning.
+        assert action.cause == "relation added, blocked by DRE-4301" + TO_PLANNING
         first = note.body.splitlines()[0]
-        assert first.startswith("🧹 hygiene: hyg-triage-returned — relation added, blocked by DRE-4301")
-        assert state.lane == lane_contract.QUEUE_LANE and state.park is False
+        assert first.startswith("🧹 hygiene: hyg-triage-returned — relation added, "
+                                "blocked by DRE-4301, returned to Planning")
+        assert state.lane == PLANNING and state.park is False
         assert lefts(items, "DRE-4401") == []
 
     def test_the_writes_carry_the_board_card_never_a_bare_id(self):
@@ -267,7 +306,7 @@ class TestAProseBlocker:
         action = the_action(items, "DRE-4404")
         assert kinds(action) == ["linear_relation", "linear_comment", "linear_state"]
         assert action.writes[0].blocked_by == "DRE-4405"
-        assert action.cause == "relation added, blocked by DRE-4405"
+        assert action.cause == "relation added, blocked by DRE-4405" + TO_PLANNING
         assert "DRE-4405" not in linear.calls
 
     def test_an_id_that_resolves_nowhere_is_no_write_and_one_left_row(self):
@@ -293,10 +332,15 @@ class TestAProseBlocker:
         assert len(lefts(items, "DRE-4401")) == 1
 
     def test_a_linear_read_that_fails_is_not_an_id_that_resolves_nowhere(self, capsys):
+        doc = fixture()
+        answers = FixtureLinear(histories=histories(doc))
+
         def failing(query, variables=None):
+            if "history" in query:
+                return answers(query, variables)
             raise linear_ops.LinearError("linear error from https://api.linear.app/graphql: HTTP 502")
 
-        items, _ctx, _gh, _linear = plan(linear=failing)
+        items, _ctx, _gh, _linear = plan(doc, linear=failing)
         assert actions(items, "DRE-4401") == [] and lefts(items, "DRE-4401") == []
         assert lefts(items, "DRE-4403") == []
         assert "DRE-4401 skipped" in capsys.readouterr().err
@@ -318,9 +362,11 @@ class TestADependencyLoop:
         items, _ctx, _gh, _linear = plan()
         action = the_action(items, "DRE-4411")
         assert action.act == "hygiene-triage-return"
-        assert action.cause == "loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is Done"
+        assert action.cause == ("loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is Done"
+                                + TO_PLANNING)
         assert kinds(action) == ["linear_comment", "linear_state"]
-        assert action.writes[1].lane == lane_contract.QUEUE_LANE and action.writes[1].park is False
+        # DRE-8862: its verdict predates its move to Triage, so Planning.
+        assert action.writes[1].lane == PLANNING and action.writes[1].park is False
         assert comment_of(action).splitlines()[0].startswith(
             "🧹 hygiene: hyg-triage-returned — loop DRE-4411 → DRE-4310 → DRE-4411 broken")
         assert lefts(items, "DRE-4411") == []
@@ -355,6 +401,153 @@ class TestADependencyLoop:
         assert not [w for a in actions(items, "DRE-4411") for w in a.writes
                     if w.kind == "linear_state"]
         assert len(lefts(items, "DRE-4411")) == 1
+
+
+# --------------------------------------------------------------------------- #
+# (1) and (2) after a stale verdict — Planning, not the queue (DRE-8862)       #
+# --------------------------------------------------------------------------- #
+
+#: The sweep's own `stale-verdict` reading (DRE-4962) — the one function the
+#: lane must read through, imported here so the tests judge the fixture by it.
+stale_verdict_refusal = routing_verdict.stale_verdict_refusal
+
+#: Before the fixture's verdicts (2026-09-29T17:00Z): a Triage entry here is
+#: one the verdict was written after.
+EARLY_TRIAGE = "2026-09-29T10:00:00.000Z"
+#: After the fixture's Triage entries (2026-09-30T16:00Z): an epic green-lit
+#: here approved its children after their trip through Triage.
+LATE_GREEN_LIGHT = "2026-09-30T18:00:00.000Z"
+EPIC = "DRE-4460"
+
+
+def sweep_reading(doc, ident, approved_at=None):
+    """What the promotion sweep's `stale-verdict` refusal says of `ident`,
+    off the same comments and the same lane history the lane reads."""
+    moves = routing_verdict.lane_moves(ident, gql=FixtureLinear(histories=histories(doc)))
+    assert moves is not None
+    return stale_verdict_refusal(ident, card(doc, ident)["comments"]["nodes"], moves,
+                                 approved_at=approved_at)
+
+
+def triaged_early(doc, ident):
+    card(doc, ident)["history"]["nodes"] = [
+        {"createdAt": EARLY_TRIAGE, "toState": {"name": "Triage"}}]
+
+
+def state_of(action):
+    return next(w for w in action.writes if w.kind == "linear_state")
+
+
+class TestAStaleVerdictReturnsToPlanning:
+    @pytest.mark.parametrize("ident", sorted(["DRE-4401", "DRE-4404", "DRE-4411"]))
+    def test_the_fixture_cards_are_stale_by_the_sweeps_own_reading(self, ident):
+        refusal = sweep_reading(fixture(), ident)
+        assert refusal is not None and refusal.startswith(routing_verdict.STALE_VERDICT_NEEDLE)
+        assert "in Triage" in refusal.splitlines()[0]
+
+    def test_a_prose_blocker_whose_verdict_predates_triage_goes_to_planning(self):
+        items, ctx, _gh, _linear = plan()
+        action = the_action(items, "DRE-4401")
+        assert action.act == "hygiene-triage-return"
+        assert hygiene.read_receipt(comment_of(action))["tag"] == "hyg-triage-returned"
+        assert action.cause == "relation added, blocked by DRE-4301, returned to Planning"
+        state = state_of(action)
+        assert state.lane == PLANNING and state.lane != lane_contract.QUEUE_LANE
+        assert "stale-verdict: FLEET verdict of 2026-09-29" in action.evidence
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_a_broken_loop_whose_verdict_predates_triage_goes_to_planning(self):
+        items, ctx, _gh, _linear = plan()
+        action = the_action(items, "DRE-4411")
+        assert action.act == "hygiene-triage-return"
+        assert hygiene.read_receipt(comment_of(action))["tag"] == "hyg-triage-returned"
+        assert action.cause == ("loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is "
+                                "Done, returned to Planning")
+        state = state_of(action)
+        assert state.lane == PLANNING and state.lane != lane_contract.QUEUE_LANE
+        assert "stale-verdict: FLEET verdict of 2026-09-29" in action.evidence
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    @pytest.mark.parametrize("ident, cause", [
+        ("DRE-4401", "relation added, blocked by DRE-4301"),
+        ("DRE-4411", "loop DRE-4411 → DRE-4310 → DRE-4411 broken, DRE-4310 is Done"),
+    ])
+    def test_a_verdict_written_since_its_triage_entry_returns_to_the_queue(self, ident, cause):
+        doc = fixture()
+        triaged_early(doc, ident)
+        assert sweep_reading(doc, ident) is None
+        items, ctx, _gh, _linear = plan(doc)
+        action = the_action(items, ident)
+        assert action.act == "hygiene-triage-return"
+        assert action.cause == cause + to_queue()
+        assert state_of(action).lane == lane_contract.QUEUE_LANE
+        assert not [e for e in action.evidence if e.startswith("stale-verdict")]
+        for write in action.writes:
+            hygiene.guard(write, ctx)
+
+    def test_an_epic_green_lit_since_the_triage_entry_approves_the_child_again(self):
+        # The sweep's `approved_at`: a child carries its epic's green light,
+        # read here off the epic's own record on the board read.
+        doc = fixture()
+        card(doc, "DRE-4401")["parent"] = {"identifier": EPIC, "state": {"name": "In Progress"}}
+        epic = copy.deepcopy(card(doc, "DRE-4405"))
+        epic.update(identifier=EPIC, id=epic["id"][:-4] + "4460", state={"name": "In Progress"},
+                    history={"nodes": [{"createdAt": LATE_GREEN_LIGHT,
+                                        "toState": {"name": "In Progress"}}]})
+        doc["lanes"]["In Progress"].append(epic)
+        assert sweep_reading(doc, "DRE-4401") is not None
+        assert sweep_reading(doc, "DRE-4401", approved_at=LATE_GREEN_LIGHT) is None
+        items, _ctx, _gh, _linear = plan(doc)
+        assert state_of(the_action(items, "DRE-4401")).lane == lane_contract.QUEUE_LANE
+
+    def test_the_lane_follows_the_sweeps_function_and_nothing_else(self, monkeypatch):
+        doc = fixture()
+        triaged_early(doc, "DRE-4404")
+        seen: list = []
+
+        def spy(identifier, comment_nodes, moves, *, approved_at=None, doc=None):
+            seen.append((identifier, [m["to"] for m in moves], approved_at))
+            # The opposite of the real answer, for both cards.
+            return None if identifier == "DRE-4401" else "🚨 stale-verdict: spy"
+
+        monkeypatch.setattr(routing_verdict, "stale_verdict_refusal", spy)
+        items, _ctx, _gh, _linear = plan(doc)
+        assert state_of(the_action(items, "DRE-4401")).lane == lane_contract.QUEUE_LANE
+        assert state_of(the_action(items, "DRE-4404")).lane == PLANNING
+        assert ("DRE-4401", ["Triage"], None) in seen
+        assert ("DRE-4404", ["Triage"], None) in seen
+
+    def test_no_second_copy_of_the_rule_is_kept_in_the_lane(self):
+        source = MODULE_PATH.read_text(encoding="utf-8")
+        assert "routing_verdict.stale_verdict_refusal(" in source
+        for copy_of_the_rule in ("STALE_VERDICT_LANES", "lanes_entered_since", '"Intake"',
+                                 '"Green Light"'):
+            assert copy_of_the_rule not in source
+
+    def test_the_history_is_read_once_through_ctx_linear_only_for_a_card_it_returns(self):
+        _items, _ctx, _gh, linear = plan()
+        assert sorted(linear.history_reads) == sorted(RETURNED_TO_PLANNING)
+
+    def test_a_history_that_cannot_be_read_skips_that_card_and_no_other(self, capsys):
+        doc = fixture()
+        answers = FixtureLinear(histories=histories(doc))
+
+        def failing(query, variables=None):
+            if "history" in query and (variables or {}).get("id") == "DRE-4401":
+                raise linear_ops.LinearError("linear error from https://api.linear.app/graphql: HTTP 502")
+            return answers(query, variables)
+
+        items, _ctx, _gh, _linear = plan(doc, linear=failing)
+        assert actions(items, "DRE-4401") == [] and lefts(items, "DRE-4401") == []
+        assert "DRE-4401 skipped" in capsys.readouterr().err
+        assert state_of(the_action(items, "DRE-4404")).lane == PLANNING
+
+    def test_the_lane_says_where_it_sends_a_card_and_why(self):
+        doc = " ".join((lane.__doc__ or "").split())
+        assert "DRE-8862" in doc and "stale-verdict" in doc
+        assert "Planning" in doc
 
 
 # --------------------------------------------------------------------------- #
@@ -671,27 +864,32 @@ class TestTheWholeFixture:
 # the queue it returns a card to (DRE-6748)                                    #
 # --------------------------------------------------------------------------- #
 
-#: The fixture's cards a pass returns to the queue: the prose blockers, the
-#: broken loop and the two retired repos.
-RETURNED = {"DRE-4401", "DRE-4404", "DRE-4411", "DRE-4421", "DRE-4422"}
+#: The fixture's cards a pass returns to the queue: the two retired repos. The
+#: prose blockers and the broken loop carry a verdict older than their trip
+#: through Triage, so they return to Planning instead (DRE-8862).
+RETURNED = {"DRE-4421", "DRE-4422"}
+RETURNED_TO_PLANNING = {"DRE-4401", "DRE-4404", "DRE-4411"}
 
 
 class TestTheQueue:
-    def test_every_return_lands_in_the_queue_lane(self):
+    def test_every_return_lands_in_the_queue_lane_or_planning(self):
         items, _ctx, _gh, _linear = plan()
         lanes = {w.card: w.lane for a in actions(items) if a.act == "hygiene-triage-return"
                  for w in a.writes if w.kind == "linear_state"}
-        assert lanes == {ident: lane_contract.QUEUE_LANE for ident in RETURNED}
+        assert lanes == {**{ident: lane_contract.QUEUE_LANE for ident in RETURNED},
+                         **{ident: PLANNING for ident in RETURNED_TO_PLANNING}}
 
     def test_with_the_planning_exit_flipped_every_return_lands_in_queued(self, monkeypatch):
         # `QUEUE_LANE` reads Backlog until DRE-6742 flips the planning exit;
         # flipped, the lane writes Queued and the core's guard admits it.
         monkeypatch.setattr(lane_contract, "QUEUE_LANE", "Queued")
         sent, ledger = run(fixture(), monkeypatch)
+        returned = RETURNED | RETURNED_TO_PLANNING
         lanes = {w.card: w.lane for w in sent
-                 if w.kind == "linear_state" and w.card in RETURNED}
-        assert lanes == {ident: "Queued" for ident in RETURNED}
-        outcomes = {a["outcome"] for a in ledger["actions"] if a["target"] in RETURNED}
+                 if w.kind == "linear_state" and w.card in returned}
+        assert lanes == {**{ident: "Queued" for ident in RETURNED},
+                         **{ident: PLANNING for ident in RETURNED_TO_PLANNING}}
+        outcomes = {a["outcome"] for a in ledger["actions"] if a["target"] in returned}
         assert outcomes == {"executed"}
 
     def test_no_string_in_the_lane_names_the_retired_queue(self):
@@ -745,12 +943,12 @@ class TestIdempotency:
         sent2, ledger2 = run(doc, monkeypatch)
         again = [a for a in ledger2["actions"] if a["target"] == "DRE-4401"]
         assert [(a["outcome"], a["cause"]) for a in again] == [
-            ("executed", "relation added, blocked by DRE-4302")]
+            ("executed", "relation added, blocked by DRE-4302" + TO_PLANNING)]
         relations = [w.blocked_by for w in sent2
                      if w.kind == "linear_relation" and w.card == "DRE-4401"]
         assert relations == ["DRE-4302"]
         assert [w.lane for w in sent2 if w.kind == "linear_state" and w.card == "DRE-4401"] == [
-            lane_contract.QUEUE_LANE]
+            PLANNING]
 
     def test_a_card_back_under_a_parent_in_a_new_state_is_a_new_cause(self, monkeypatch):
         doc = fixture()
