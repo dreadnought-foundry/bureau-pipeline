@@ -20,7 +20,9 @@ The `DRE-<n>` the entry opens with, followed by `:`. The three appenders that
 name a card write it there, two behind one tag word, which is read past:
 
 * `_report_epic_prose_defect` — `DRE-7305: a prose blocker declaring …`;
-* `promotion_stall.ledger_line` — `promotion-stalled DRE-41: refused …`;
+* `promotion_stall.ledger_line` — `promotion-stalled DRE-41: refused …` —
+  and its epic's twin, `epic_ledger_line` — `promotion-stalled DRE-40: 9
+  children wait on it …` (DRE-8815);
 * limit recovery's `STOOD_PHRASE` line, its `ERROR: ` prefix stripped —
   `limit-recovery DRE-42: the limit-death marker has stood …`.
 

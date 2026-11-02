@@ -265,7 +265,12 @@ followed by what the card waits on and what releases it. `<reason>` is one of:
   card under a `manual` hold goes to Hand-work"). A person removing the label
   releases it.
 - `epic-not-active` — its epic is not In Progress. The epic's approval
-  releases it.
+  releases it. An epic in Planning whose newest plan run is dead or was never
+  found is clocked as one record for the epic, never one per child
+  (DRE-8815): once its children's oldest receipt, or the run's end if later,
+  is `STALL_MINUTES` old, the full sweep posts one `🚨 promotion-stalled:` on
+  the EPIC and keeps the run red until a person re-runs the plan or sends the
+  epic on. No other lane is clocked.
 - `epic-gate` — the epic gate holds its epic (`epic_blockers_unmet`).
 - `epic-cap-queued` — the epic cap has queued its epic in line.
 
