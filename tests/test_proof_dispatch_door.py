@@ -465,6 +465,46 @@ def test_a_held_card_read_refuses_the_candidate_and_reads_no_linear_card(
                for line in capsys.readouterr().out.splitlines())
 
 
+def test_a_door_card_with_no_parent_reads_no_epic_and_is_refused_at_condition_2(
+        monkeypatch, capsys, linear):
+    orphan = _door_node(CANDIDATE, "Hand-work")
+    orphan["parent"] = None
+    with door_at(monkeypatch, orphan):
+        issue = proof_dispatch.DoorReads().card(CANDIDATE)
+    assert not issue["parent"]
+    assert linear.kinds() == []
+    bureau_read.reset_for_tests()
+    linear.reads.clear()
+    with door_at(monkeypatch, orphan, *WORLD[1:]):
+        h = Harness(monkeypatch, None)
+        _pass(h)
+    assert h.fired == []
+    assert f"epic-children:{CANDIDATE}" not in linear.kinds()
+    assert any("condition 2" in line and CANDIDATE in line
+               and "the card has no parent epic" in line
+               for line in capsys.readouterr().out.splitlines())
+
+
+def test_linear_answering_no_epic_leaves_the_card_unread_and_refused_at_condition_2(
+        monkeypatch, capsys, linear):
+    def no_epic(query, variables=None):
+        if query == proof_dispatch.EPIC_CHILDREN_QUERY:
+            linear.reads.append((query, dict(variables or {})))
+            return {"issue": {"parent": None}}
+        return linear(query, variables)
+
+    monkeypatch.setattr(linear_ops, "gql", no_epic)
+    with door_at(monkeypatch):
+        with pytest.raises(LookupError):
+            proof_dispatch.DoorReads().card(CANDIDATE)
+        h = Harness(monkeypatch, None)
+        _pass(h)
+    assert h.fired == []
+    assert any("condition 2" in line and CANDIDATE in line
+               and "could not be read" in line
+               for line in capsys.readouterr().out.splitlines())
+
+
 # ── thread ──────────────────────────────────────────────────────────────────
 
 
@@ -498,6 +538,20 @@ def test_an_incomplete_door_thread_falls_back_to_today_and_decides_the_same(
     assert (thread["verdict"], thread["reason"]) == ("UNKNOWN", "thread-incomplete")
 
 
+def test_a_held_thread_read_refuses_the_candidate_and_reads_no_linear_thread(
+        monkeypatch, capsys, linear):
+    today = Today(monkeypatch, _today_board())
+    with door_at(monkeypatch) as door:
+        door.unknown_for["thread"] = bureau_read.LINEAR_HOLD
+        h = Harness(monkeypatch, None)
+        _pass(h)
+    assert ("thread", CANDIDATE) not in today.calls
+    assert "viewer" not in linear.kinds()
+    assert h.fired == []
+    assert any("condition 4" in line and CANDIDATE in line
+               for line in capsys.readouterr().out.splitlines())
+
+
 # ── states ──────────────────────────────────────────────────────────────────
 
 
@@ -523,6 +577,34 @@ def test_a_states_read_the_door_cannot_answer_falls_back_to_today(monkeypatch, l
         got = proof_dispatch.DoorReads().states(["DRE-5921", "DRE-9999"])
     assert today.calls == [("states", ("DRE-5921", "DRE-9999"))]
     assert got == {"DRE-5921": "Done", "DRE-9999": "Done"}
+
+
+def test_a_held_states_read_raises_and_reads_no_linear_states(monkeypatch, linear):
+    today = Today(monkeypatch, _today_board())
+    with door_at(monkeypatch) as door:
+        door.unknown_for["states"] = bureau_read.LINEAR_HOLD
+        with pytest.raises(bureau_read.ReadUnknown):
+            proof_dispatch.DoorReads().states(["DRE-5921", "DRE-5960"])
+    assert today.calls == []
+    assert linear.reads == []
+
+
+def test_a_states_read_asks_the_door_for_at_most_50_cards(monkeypatch, linear):
+    Today(monkeypatch, _today_board())
+    named = [f"DRE-{6000 + n}" for n in range(proof_dispatch.LANE_RELATIONS_CARDS + 1)]
+    with door_at(monkeypatch) as door:
+        proof_dispatch.DoorReads().states(named)
+    (asked,) = door.asked("/cards")
+    assert asked["query"]["ids"].split(",") == named[:50]
+    assert proof_dispatch.LANE_RELATIONS_CARDS == 50
+
+
+def test_a_states_read_of_no_cards_asks_the_door_nothing(monkeypatch, linear):
+    today = Today(monkeypatch, _today_board())
+    with door_at(monkeypatch) as door:
+        assert proof_dispatch.DoorReads().states([]) == {}
+    assert door.requests == []
+    assert today.calls == [("states", ())]
 
 
 # ── what DoorReads is ───────────────────────────────────────────────────────
