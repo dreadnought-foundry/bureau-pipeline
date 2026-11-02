@@ -744,7 +744,7 @@ def _drive_proof_gap_filed(mp):
         repo_slug="bureau-pipeline", records=[])
 
 
-#: The hygiene agent's fifteen acts (DRE-5368, DRE-6180, DRE-6451, DRE-8648). The core composes every one of
+#: The hygiene agent's sixteen acts (DRE-5368, DRE-6180, DRE-6451, DRE-8648, DRE-8650). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
 #: lanes are sibling cards. So each driver hands the real seam the receipt a
@@ -756,6 +756,7 @@ HYGIENE_ACTS = (
     "hygiene-card-close", "hygiene-proof-close", "hygiene-triage-return",
     "hygiene-review-move", "hygiene-card-cancel", "hygiene-cause-name",
     "hygiene-hold-clear", "hygiene-triage-alarm", "hygiene-blocker-owner-notice",
+    "hygiene-hand-step-class",
 )
 
 
@@ -911,6 +912,54 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
             "a refused receipt must write nothing — a half-written file would "
             "be posted as if it were composed"
         )
+
+    # --body-file (DRE-8779): a body over 128 KiB cannot be one argument, so
+    # the shell callers pipe it in. What reaches --out must not depend on
+    # which way the body came.
+    _BODY = "\U0001f6d1 a hold body\n\nwith a blank line, inner  gap, and a trailing newline\n"
+
+    def _receipt(self, tmp_path, *args, stdin=None):
+        out = tmp_path / "receipt.md"
+        r = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "pipeline_act.py"), "receipt",
+             "fix-attempt-disputed", *args, "--out", str(out)],
+            input=stdin, capture_output=True, text=True, cwd=str(ROOT), check=False,
+        )
+        return r, out
+
+    def test_the_receipt_cli_reads_the_body_from_a_file(self, tmp_path):
+        given, by_arg = self._receipt(tmp_path, "--body", self._BODY)
+        assert given.returncode == 0, given.stdout + given.stderr
+        expected = by_arg.read_bytes()
+        by_arg.unlink()
+        body = tmp_path / "body.md"
+        body.write_text(self._BODY, encoding="utf-8")
+        r, out = self._receipt(tmp_path, f"--body-file={body}")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert out.read_bytes() == expected
+
+    def test_the_receipt_cli_reads_the_body_from_stdin(self, tmp_path):
+        given, by_arg = self._receipt(tmp_path, "--body", self._BODY)
+        assert given.returncode == 0, given.stdout + given.stderr
+        expected = by_arg.read_bytes()
+        by_arg.unlink()
+        r, out = self._receipt(tmp_path, "--body-file=-", stdin=self._BODY)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert out.read_bytes() == expected
+
+    @pytest.mark.parametrize("args", [
+        ("--body", "x", "--body-file=-"),
+        (),
+    ], ids=["both", "neither"])
+    def test_the_receipt_cli_takes_exactly_one_body(self, tmp_path, args):
+        r, out = self._receipt(tmp_path, *args, stdin="x")
+        assert r.returncode != 0
+        assert not out.exists(), "a refused receipt must write nothing"
+
+    def test_the_receipt_cli_writes_nothing_when_the_file_is_missing(self, tmp_path):
+        r, out = self._receipt(tmp_path, f"--body-file={tmp_path / 'absent.md'}")
+        assert r.returncode != 0
+        assert not out.exists(), "a refused receipt must write nothing"
 
     def test_linear_ops_comment_composes_when_an_act_is_named(self):
         """The card-side seam, used by the conflict sweep and the medic."""

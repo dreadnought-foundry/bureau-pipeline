@@ -84,8 +84,9 @@ set -e
 #      attempt or, in conflict mode, a conflict resolution round. In fix
 #      mode the round's convergence classification from
 #      `fix_convergence.py` is appended.
-#    Every receipt is composed by `pipeline_act.py receipt` and falls
-#    back to the bare body with `|| printf` when composition fails.
+#    Every receipt is composed by `pipeline_act.py receipt`, its body piped
+#    in on `--body-file=-`, and falls back to the bare body with `|| printf`
+#    when composition fails.
 # 6. Parking means the `needs-human` label and a move to Triage through
 #    `linear_ops.py advance`, falling back to `state --park`. Each park
 #    also posts a plain-English note on the card. A draft's card is never
@@ -292,6 +293,13 @@ set -e
 #   three facts the run escalates as before, and the log says which fact was
 #   missing. Neither new line says "pushed no new commit", which the
 #   convergence halt counts.
+#
+# 2026-11-02, DRE-8779. Every receipt body is piped to `pipeline_act.py
+#   receipt --body-file=-`, never passed as `--body "$VAR"`. Linux refuses
+#   any single argument over 128 KiB with "Argument list too long" (exit
+#   126), so a long hold body made the receipt call fail and the
+#   `|| printf` fallback posted it without the act trailer the sweep and
+#   qa-review.yml read back. DRE-8758 hit the same limit on a plan note.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -380,8 +388,8 @@ report_landed() {
 $CLASSIFICATION"
   fi
   # Both wordings are one act, fix-attempt-landed (DRE-2826).
-  python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
-    --body "$BODY" --out /tmp/act-fix-pushed.md \
+  printf '%s' "$BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
+    --body-file=- --out /tmp/act-fix-pushed.md \
     || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
   # Who made the push, after the trailer like the cause (DRE-6351).
   [ -n "${RESCUE_LINE:-}" ] && printf '\n\n%s' "$RESCUE_LINE" >> /tmp/act-fix-pushed.md
@@ -465,8 +473,8 @@ if [ "$ROUTE" = "committed" ]; then
 $FORMAT"
     # The fixer pushed nothing the reviewer can see: the dispute act, which
     # the sweep discharges on an operator's answer as it does every one.
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-      --body "$HOLD_BODY" --out /tmp/act-fix-refused-again.md \
+    printf '%s' "$HOLD_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+      --body-file=- --out /tmp/act-fix-refused-again.md \
       || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refused-again.md
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refused-again.md
     gh pr comment "$PR" --repo "$REPO" --body-file /tmp/act-fix-refused-again.md
@@ -570,8 +578,8 @@ $REFUTED_TAIL
 
 $REFUTE_KEY"
   if [ -z "${PRIOR:-}" ]; then
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \
-      --body "$REFUTED_BODY" --out /tmp/act-fix-refuted.md \
+    printf '%s' "$REFUTED_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \
+      --body-file=- --out /tmp/act-fix-refuted.md \
       || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted.md
     # Posted before the dispatch: the re-review reads it off the thread.
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted.md
@@ -611,8 +619,8 @@ A person decides which reading is right.
 $FORMAT
 
 $REFUTE_KEY"
-      python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-        --body "$HOLD_BODY" --out /tmp/act-fix-refuted-hold.md \
+      printf '%s' "$HOLD_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+        --body-file=- --out /tmp/act-fix-refuted-hold.md \
         || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refuted-hold.md
       printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-hold.md
       gh pr comment "$PR" --repo $REPO \
@@ -634,8 +642,8 @@ $REFUTE_KEY"
     # nothing, the branch holds a stale REQUEST_CHANGES, and the
     # answer is picked up by the sweep and discharged by
     # `fix-loop-restarted` exactly as it is there.
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-      --body "$REFUTED_BODY" --out /tmp/act-fix-refuted-capped.md \
+    printf '%s' "$REFUTED_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+      --body-file=- --out /tmp/act-fix-refuted-capped.md \
       || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted-capped.md
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-capped.md
     gh pr comment "$PR" --repo $REPO \
@@ -664,8 +672,8 @@ elif [ "$BLOCKED_RC" -eq 0 ]; then
   BLOCKED_BODY="🛑 Fix attempt $ATTEMPT blocked: $BLOCKER
 
 $FORMAT"
-  python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-    --body "$BLOCKED_BODY" --out /tmp/act-fix-blocked.md \
+  printf '%s' "$BLOCKED_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+    --body-file=- --out /tmp/act-fix-blocked.md \
     || printf '%s' "$BLOCKED_BODY" > /tmp/act-fix-blocked.md
   # The cause rides after the trailer, so the body the registry froze is untouched.
   printf '\n\nWhy it stopped: %s\n\n%s\n' "$CAUSE" "$ANSWERS" >> /tmp/act-fix-blocked.md
