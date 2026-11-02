@@ -84,7 +84,8 @@ AGENT_WORKFLOWS = {
 # 2026-11-01 (3,200 of 4,037, 2:00-4:00 PM PT) while the planner's bucket never
 # read below 4,296 of 5,000. It holds the token unless the repo opts OUT with
 # `LINEAR_SWEEP_BUCKET=fleet` (tests/test_reconcile_planner_linear_key.py).
-PLANNER_KEY_READERS = {"plan.yml", "triage-repair.yml", "reconcile.yml", *AGENT_WORKFLOWS}
+PLANNER_KEY_READERS = {"plan.yml", "triage-repair.yml", "alarm-repair.yml", "reconcile.yml",
+                       *AGENT_WORKFLOWS}
 
 
 def _doc(name: str) -> dict:
@@ -333,6 +334,9 @@ TOKEN_JOBS = {
     # DRE-8649: `unrepaired` reads the same Triage lane and threads `select`
     # reads, with the same key, so its receipts read as the pipeline's own.
     "triage-repair.yml": ("select", "repair", "unrepaired"),
+    # DRE-8634: the Alarm Repair's Linear steps spend the planner's bucket,
+    # triage-repair.yml's job env.
+    "alarm-repair.yml": ("select", "repair"),
     # DRE-8716: the sweep's one job.
     "reconcile.yml": ("sweep",),
 }

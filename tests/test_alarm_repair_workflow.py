@@ -48,7 +48,10 @@ WORKFLOW = WORKFLOWS / "alarm-repair.yml"
 TRIAGE = WORKFLOWS / "triage-repair.yml"
 MEDIC_STUB = WORKFLOWS / "self-medic.yml"
 
-CRON = "11,41 * * * *"
+#: The card named `11,41`; minute 11 is Groom Week's own
+#: (tests/test_groom_week_wiring.py) and 10:41 UTC is the nightly suite's
+#: (tests.yml), so the run sits one minute later, still every 30 minutes.
+CRON = "12,42 * * * *"
 ACTION = "anthropics/claude-code-action"
 AGENT_STEP = "Repair the alarm"
 CONTEXT_STEP = "Assemble the alarm's context"
@@ -219,6 +222,15 @@ class TestTheClock:
         # The sweep's */15, Triage Repair's 4,19,34,49, Nightly Watch's :23
         # and Hygiene's :37.
         assert not minutes & {"0", "15", "30", "45", "4", "19", "34", "49", "23", "37"}
+        # Every 30 minutes.
+        assert sorted(int(m) for m in minutes)[1] - sorted(int(m) for m in minutes)[0] == 30
+        # And no other workflow's schedule fires on either minute.
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            if path == WORKFLOW:
+                continue
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            for entry in (_on(doc) or {}).get("schedule") or []:
+                assert entry["cron"].split()[0] not in minutes, (path.name, entry["cron"])
 
     def test_the_dispatch_input_defaults_to_a_dry_run(self):
         inputs = _on(_doc())["workflow_dispatch"]["inputs"]
