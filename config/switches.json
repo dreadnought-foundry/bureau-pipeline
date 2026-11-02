@@ -35,6 +35,12 @@
       "means": "The scheduled Alarm Repair claims console alerts open for 2 hours and has an agent make one repair attempt on each alert's card, instead of printing what it would repair."
     },
     {
+      "name": "OPERATOR_AGENT_LIVE",
+      "reader": ".github/workflows/operator-agent.yml",
+      "step": "Decide dry run",
+      "means": "The scheduled Operator Agent run posts a receipt on each card it routes studio, ceo or done-already and makes that outcome's write, instead of printing what it would decide."
+    },
+    {
       "name": "NAME_GUARD_LIVE",
       "reader": ".github/workflows/proof-task.yml",
       "step": "Install the name guard",

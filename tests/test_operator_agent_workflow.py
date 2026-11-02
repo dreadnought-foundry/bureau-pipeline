@@ -499,7 +499,7 @@ class TestSelectCards:
 
     def test_a_name_that_is_not_a_card_id_never_reaches_the_prompt(self, step, tmp_path):
         rows = [{"card": "DRE-1", "for_model": True, "action": "decide"},
-                {"card": "x; rm -rf /", "for_model": True, "action": "decide"}]
+                {"card": "DRE-2; touch pwned", "for_model": True, "action": "decide"}]
         result, outputs, _ = self._select(step, tmp_path, rows)
         assert outputs["for_model"] == "DRE-1"
         assert outputs["count"] == "1"
@@ -697,7 +697,7 @@ class TestDecide:
         assert step["id"] == "decide"
 
     def test_it_runs_the_contracts_command(self, step, tmp_path):
-        env = {k: _fill(v, tmp_path) for k, v in step["env"].items()}
+        env = {k: _fill(v, tmp_path) for k, v in step["env"].items() if k != "DRY_RUN"}
         env["DRY_RUN"] = "true"
         (tmp_path / "decisions.json").write_text("[]")
         _result, _outputs, argvs = _bash(step["run"], env, tmp_path)
@@ -755,7 +755,8 @@ class TestDecide:
         return row
 
     def _run_decide(self, step, tmp_path, rows, answers: dict, dry_run="false"):
-        env = {k: _fill(v, tmp_path) for k, v in step["env"].items()}
+        assert step["env"]["DRY_RUN"] == "${{ steps.mode.outputs.dry_run }}"
+        env = {k: _fill(v, tmp_path) for k, v in step["env"].items() if k != "DRY_RUN"}
         env["TRUSTED_PIPELINE"] = str(ROOT)
         env["DRY_RUN"] = dry_run
         assert '--cards "$SELECTED/cards.json"' in step["run"]
