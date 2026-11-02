@@ -163,7 +163,14 @@ class BrokenCardsParkInTriageTest(unittest.TestCase):
             self.assertTrue(reconcile.card_parked_for_human("DRE-2009"))
 
     def test_agent_fix_report_parks_in_triage(self):
+        # The one judgement park the fix loop makes, the critic's design
+        # question (DRE-8735), is pinned to Green Light in
+        # `test_escalations_park_in_green_light.py`; everything else parks here.
         step = step_body("agent-fix.yml", "Report")
+        # Read through to the script, indented to the step.
+        question = re.search(r"\n( *)park_for_question\(\) \{\n.*?\n\1\}\n", step, re.S)
+        self.assertIsNotNone(question, "park_for_question() is gone from the Report step")
+        step = step.replace(question.group(0), "\n")
         self.assertIn(f'"{PARKED_LANE}"', step)
         self.assertNotIn(f'"{NEW_LANE}"', step)
 
