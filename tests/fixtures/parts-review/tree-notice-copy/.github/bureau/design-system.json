@@ -1,0 +1,16 @@
+{
+  "parts": {
+    "atoms": [
+      "console/web/src/components/atoms"
+    ],
+    "molecules": [
+      "console/web/src/components/molecules"
+    ],
+    "organisms": [
+      "console/web/src/components/organisms"
+    ],
+    "templates": [
+      "console/web/src/components/templates"
+    ]
+  }
+}
