@@ -1454,9 +1454,10 @@ def moved_on(issue: dict, comment_bodies, contract: dict | None = None,
 
     `from_lane` is the one lane outside the segment the caller is moving the
     card FROM (DRE-7178): a card standing there is still the escalation's to
-    move, as a card in the segment is. The Triage repair is the only caller
-    that names one, always Triage — a repaired card parked there by the
-    plan critic's bound, whose planner found a decision only the CEO can make.
+    move, as a card in the segment is. Two callers name one. The Triage
+    repair names Triage — a repaired card parked there by the plan critic's
+    bound, whose planner found a decision only the CEO can make. The operator
+    agent's apply (DRE-8746) names the lane the card waits on a person in.
     Without it Triage, in `off-flow`, reads as moved on, and the question is
     stood down with nothing asked. It excuses that one lane and nothing else:
     a card in any other lane outside the segment is still moved on, and the
@@ -1604,8 +1605,9 @@ def escalate(linear_ops, identifier: str, reason: str | None,
 
     `from_lane` (DRE-7178) is handed to `moved_on` and to the stand-down
     note: a card standing in that lane is still this escalation's to move to
-    the destination. `triage_repair.py` is the one caller that passes it,
-    always Triage; every other caller passes nothing and reads as before.
+    the destination. `triage_repair.py` passes it, always Triage, and
+    `operator_agent_apply.py` (DRE-8746) passes the lane the card waits on a
+    person in; every other caller passes nothing and reads as before.
 
     `choices_file` is the path the CLI's `--choices-file` names (DRE-7961).
     Passed, it is read as `choices`, and — unless the call is `transport` or
