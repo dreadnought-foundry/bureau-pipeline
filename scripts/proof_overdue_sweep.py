@@ -26,7 +26,10 @@ day in Pacific time, daylight saving included. The once-a-day key is a
 comment on the card that `linear_ops.comment_records` marks
 `authored_by_pipeline` and whose first line opens `MARK` followed by today's
 PT day: with one, the card is told already and nothing is posted. The same
-line from anyone else counts for nothing.
+line from anyone else counts for nothing. Today's mark is looked for first in
+the thread the card was read with; without it, the thread is read again — off
+the read door at a one-minute max-age in `BUREAU_READ=on`, else from Linear —
+before anything is posted (DRE-8909).
 
 It never comments on a card in `Green Light`, the CEO's queue: such a card is
 counted in the note and named there as in Green Light, and nothing is posted

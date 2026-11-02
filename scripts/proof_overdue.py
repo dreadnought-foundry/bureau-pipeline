@@ -84,6 +84,9 @@ record pull request that MODIFIES its one record file under `docs/` or
 the cards the holds and rows name are read in one request, and the card's
 `blocks` relations ride on the card's own read.
 
+In `BUREAU_READ=on` those reads ask the read door first, at a 15-minute
+max-age (`DoorReads`, DRE-8909); `docs/proof-overdue.md` says which.
+
 `diagnose` is the judgment, over facts already read. `reading` reads them —
 `gather` assembles the saved card — and `from_saved` judges a saved card, so
 a card copied off the board replays after the board has moved.
