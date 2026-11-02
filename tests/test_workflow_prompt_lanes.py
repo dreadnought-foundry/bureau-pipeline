@@ -29,6 +29,8 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # that is not here fails this test and has to be classified deliberately.
 EXPECTED_PROMPT_FILES = {
     "agent-fix.yml": 1,
+    # DRE-8634: the repair agent's one decision on an alert open 2 hours.
+    "alarm-repair.yml": 1,
     # Three since DRE-4108: the agent step plus two retries for a GitHub
     # rate-limit refusal that arrives before the model starts. The three
     # prompts are byte-identical — tests/test_presubmit_gate_prompt.py
