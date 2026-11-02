@@ -216,7 +216,15 @@
       "file": "scripts/reconcile.py",
       "title": "<repo>: a fix stranded on <branch>",
       "disposition": "kept",
-      "reason": "work: the card that lands a fix whose commits never reached its pull request (_file_stranded_fix_card)"
+      "reason": "work: the card that lands a fix whose commits never reached its pull request (_file_stranded_fix_card), filed through scripts/failure_tally.py file_or_tally, which counts a repeat on the card already filed (DRE-8635)"
+    },
+    {
+      "id": "failure-tally",
+      "repo": "bureau-pipeline",
+      "file": "scripts/failure_tally.py",
+      "title": "<the caller's title>",
+      "disposition": "kept",
+      "reason": "work: the card a failure is filed as, or counted on when it is already filed (file_or_tally, DRE-8635) — the stranded-fix class's two writers file through it"
     },
     {
       "id": "flaky-test",
@@ -243,7 +251,7 @@
       "file": "scripts/report_fix_result.sh",
       "title": "<repo>: a fix stranded on <branch>",
       "disposition": "kept",
-      "reason": "work: the stranded-fix card a fix run files when its commits never reached the pull request"
+      "reason": "work: the stranded-fix card a fix run files when its commits never reached the pull request, through `failure_tally.py file`, which counts a repeat on the card already filed (DRE-8635) — this file no longer creates the card itself"
     },
     {
       "id": "onboarding-retirement",

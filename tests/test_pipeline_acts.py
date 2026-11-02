@@ -438,3 +438,32 @@ class TestTheTrailerCarriesNoForeignTag:
                 "_AGENT_COMMENT_PREFIXES in particular stays until every "
                 "commenter emits a trailer; its removal is a later card."
             )
+
+
+class TestTheFailedServiceHoldReusesTwoActs:
+    """DRE-8817 adds no act: the sweep's held re-run is said with the
+    existing `canceled-check-again` hold and the medic's with the existing
+    `retry-declined` refusal. Only the two rows' words change — never a
+    name, tag, kind, next actor or cadence the console reads."""
+
+    @staticmethod
+    def _row(name: str) -> dict:
+        return next(a for a in pipeline_act.load()["acts"] if a["name"] == name)
+
+    @pytest.mark.parametrize("name, tag, kind", [
+        ("canceled-check-again", "canceled-check-again", "hold"),
+        ("retry-declined", "medic-retry-declined", "refusal"),
+    ])
+    def test_the_contract_fields_are_unchanged(self, name, tag, kind):
+        row = self._row(name)
+        assert (row["tag"], row["kind"], row["next_actor"], row["cadence_s"],
+                row["state"]) == (tag, kind, "operator", None, "unchanged")
+
+    def test_both_rows_say_the_held_re_run(self):
+        for name in ("canceled-check-again", "retry-declined"):
+            row = self._row(name)
+            assert "DRE-8817" in row["why"], name
+            assert "runner service" in row["means"], name
+        again = self._row("canceled-check-again")
+        assert "six hours" in again["cadence_why"]
+        assert "held:" in again["why"]

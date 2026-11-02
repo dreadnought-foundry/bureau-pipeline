@@ -171,6 +171,7 @@ import dependency_cycle  # noqa: E402 — DRE-3539: the loop across the epic and
 import deliver_rescue  # noqa: E402
 import epic_growth  # noqa: E402 — DRE-6414: the question an epic grown past its green light asks
 import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
+import failure_tally  # noqa: E402 — DRE-8635: a failure already on a card adds a count to it
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -260,6 +261,7 @@ from publish_review_check import CHECK_NAME as HEAD_REVIEW_CHECK_NAME  # noqa: E
 # and the whole four-way decision. This file is the wrapper: it supplies the
 # board snapshot and the `gh` reads and makes the two writes.
 import repair_card  # noqa: E402
+import runner_service  # noqa: E402 — DRE-8817: never re-run back onto the service a job failed on
 # DRE-4492: ONE reading of "the second critic promised a re-review and nothing
 # ran it" — the grace window, the credential it reads a round under and every
 # line it says live there, pure. This file is the wrapper: it supplies the
@@ -290,6 +292,7 @@ import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 import crashed_review_alert  # noqa: E402 — DRE-8690: a review stuck at its cap is a console alert
+import read_fallback_alert  # noqa: E402 — DRE-8798: a full pass that fell back is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -6585,6 +6588,44 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     return live, None
 
 
+def fresh_undeclared_claims(card: dict) -> tuple[set, str | None]:
+    """Ask Linear again before refusing `card` for a prose claim (DRE-8851).
+
+    `(claims, None)` — the claims a FRESH read of the card still finds no
+    `blocks` relation for, empty when it holds them all; `(set(), reason)`
+    when there is no fresh answer to refuse on. ONE request, the gate's own
+    query for this one card (`_fetch_backlog_linear`), asked only of a card
+    the pass's board read would refuse, so a corroborated declaration costs
+    nothing.
+
+    The board read is not enough to refuse on. In `on` it is the door's
+    cached board, and on 2026-11-02 it refused DRE-8635 for lacking DRE-8848
+    eight minutes after an operator had linked it — a passed card moved to
+    Triage on a relation Linear already held. A refusal moves the card, so
+    it is decided on Linear's answer from this pass, never on a copy.
+
+    The fresh description and relations replace the board read's on `card`,
+    so every gate after this one — the dependency gate first — reads the
+    relation the fresh read found, not the page that lacked it.
+    """
+    ident = card["identifier"]
+    try:
+        found = _fetch_backlog_linear([ident])
+    except linear_ops.LinearRateLimited:
+        raise  # the run's own exit code (DRE-2923), never one card's problem
+    except linear_ops.LinearError as e:
+        return set(), f"it could not be read fresh ({e})"
+    if not found:
+        return set(), f"it is no longer in {QUEUE_LANE}"
+    live = found[0]
+    card["description"] = live.get("description")
+    card["inverseRelations"] = live.get("inverseRelations")
+    if prose_blockers.relations_unknown(card):
+        return set(), (f"its relations could not be read to the end "
+                       f"({prose_blockers.UNKNOWN_TAG})")
+    return prose_blockers.undeclared_claims(card), None
+
+
 def card_state(identifier: str) -> str:
     data = linear_ops.gql(
         "query($id: String!) { issue(id: $id) { state { name } } }", {"id": identifier}
@@ -8266,10 +8307,13 @@ def promote_ready(
         # dependency — so it refuses the card, out loud, and routes it, rather
         # than adding a phantom blocker nothing will ever clear.
         #
-        # Checked first, and outside the read-guard below, because it is pure
-        # computation over the card this sweep already fetched: no Linear read,
-        # and the sentence is wrong whatever the card's epic, verdict or
-        # blockers say.
+        # Checked first, and outside the read-guard below, because the sentence
+        # is wrong whatever the card's epic, verdict or blockers say. Suspected
+        # on the board read, which costs nothing, and confirmed on a FRESH read
+        # of the card before anything is posted or moved (DRE-8851): the board
+        # read can predate a relation an operator has since added, and a card
+        # was once refused for lacking one Linear already held. No fresh
+        # answer, no refusal — and no promotion either.
         #
         # Unless the card's relations were not read to the end (DRE-5379). Then
         # neither answer is safe — the prose may name a blocker the unread rest
@@ -8283,6 +8327,23 @@ def promote_ready(
             )
             continue
         undeclared = prose_blockers.undeclared_claims(card)
+        if undeclared:
+            suspected = undeclared
+            undeclared, unread = fresh_undeclared_claims(card)
+            if unread is not None:
+                print(
+                    f"promotion: {card['identifier']}'s board read holds no "
+                    f"relation for {', '.join(sorted(suspected))}, and {unread} "
+                    f"— no {prose_blockers.CARD_TAG} refusal on the board read "
+                    "alone; neither refused nor promoted — skipping"
+                )
+                continue
+            if suspected - undeclared:
+                print(
+                    f"promotion: {card['identifier']}'s board read held no "
+                    f"relation for {', '.join(sorted(suspected - undeclared))}; "
+                    "a fresh read does — not refused"
+                )
         if undeclared:
             notice = prose_blockers.card_refusal(card["identifier"], undeclared)
             print(
@@ -11137,28 +11198,29 @@ def _stranded_on(pr: dict):
 
 def _file_stranded_fix_card(found, card: str) -> None:
     """One card per branch, composed by the one composer the fix loop's own
-    re-route uses."""
+    re-route uses, and filed through `failure_tally` (DRE-8635): a branch
+    whose card is already filed, in any state, gains a count on that card
+    for a new stranded commit and nothing at all for the same one."""
     slug = stranded_fix.slug_for_repo(REPO)
     if slug is None:
         print(f"stranded-fix: {REPO} is not in config/repo-map.json — "
               f"PR #{found.pr}'s stranded commits cannot be routed to a card")
         return
     title = stranded_fix.card_title(slug, found.branch)
-    existing = linear_ops.find_open(title)
-    if existing:
-        return  # said once, and once is the point — keyed on the branch
     body = stranded_fix.card_body(
         repo=REPO, stranded=found, card=card, pushed=True,
     )
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                     encoding="utf-8") as fh:
-        fh.write(body)
-        path = fh.name
-    try:
-        linear_ops.cmd_oneoff(title, path, "--label", f"repo:{slug}",
-                              "--label", "agent:engineer")
-    finally:
-        os.unlink(path)
+    tally = failure_tally.file_or_tally(
+        title, body, occurrence=stranded_fix.occurrence(found),
+        repo_slug=slug, labels=[f"repo:{slug}", "agent:engineer"],
+    )
+    if tally.outcome == failure_tally.UNREAD:
+        # The read that used to raise here: the sweep still says so.
+        _write_failures.append(
+            f"stranded-fix: the card search for {title!r} did not answer")
+        return
+    if tally.outcome != failure_tally.FILED:
+        return  # said once, and once is the point — keyed on the branch
     print(f"stranded-fix: PR #{found.pr} merged at {found.merged_at} and "
           f"{found.branch} carries {len(found.commits)} commit(s) pushed "
           f"after it — filed {title!r}")
@@ -11515,6 +11577,71 @@ def _failed_inside(pr: dict, runs, limits: dict) -> dict:
     return found
 
 
+def _read_run_workflow(run: dict) -> tuple[str | None, str, str | None]:
+    """The text of the run's own workflow file at its head commit, as (text,
+    the file's path, why it could not be read) — the Contents API, raw, read
+    the way the run itself was (DRE-8817). An empty answer is a failed read:
+    a workflow file is never empty."""
+    path = str(run.get("path") or "").split("@", 1)[0]
+    head = str(run.get("head_sha") or "")
+    if not path or not head:
+        return None, path or "(no path)", "the run record names no workflow file or head"
+    out, detail = _actions_read((
+        "api", "-H", "Accept: application/vnd.github.raw",
+        f"repos/{REPO}/contents/{urllib.parse.quote(path)}?ref={head}"))
+    if detail is not None or not out:
+        return None, path, detail or "the Contents read answered nothing"
+    return out, path, None
+
+
+def _runner_gate(pr: dict, run_id, run: dict) -> runner_service.Gate:
+    """Whether re-running `run` would send a job back onto the runner service
+    it just had a hang, an out-of-memory kill or a lost runner on (DRE-8817).
+    Asked by `canceled_check.decide` only for a run it would re-run. Reads,
+    in order and only as far as the answer needs: the run's workflow file
+    (which column its jobs read), its attempt-1 jobs, each failed or canceled
+    job's annotations, and the log of a failed job whose annotations name no
+    bad end. Any read that fails is `runner_service.unread`, naming it."""
+    text, path, why = _read_run_workflow(run)
+    if text is None:
+        return runner_service.unread(f"the workflow file {path} could not be read ({why})")
+    column, column_why = runner_service.read_column(text)
+    if column is None:
+        print(f"canceled-check: PR #{pr['number']} run {run_id} — {path}: "
+              f"{column_why}, so it reads no single runner column and re-runs as before")
+        return runner_service.gate((), None, {})
+    out, detail = _actions_read((
+        "api", f"repos/{REPO}/actions/runs/{run_id}/attempts/1/jobs?per_page=100"))
+    try:
+        jobs = (json.loads(out) or {}).get("jobs") if detail is None and out else None
+    except (ValueError, AttributeError):
+        jobs = None
+    if not isinstance(jobs, list):
+        return runner_service.unread(
+            f"the jobs of run {run_id} attempt 1 could not be read "
+            f"({detail or 'no jobs in the answer'})")
+    failed = []
+    for job in jobs:
+        if not isinstance(job, dict) or job.get("conclusion") not in runner_service.FAILED:
+            continue
+        name = job.get("name") or f"job {job.get('id')}"
+        notes = gh("api", f"repos/{REPO}/check-runs/{job.get('id')}/annotations?per_page=100")
+        try:
+            notes = json.loads(notes) if notes else None
+        except ValueError:
+            notes = None
+        if not isinstance(notes, list):
+            return runner_service.unread(f"the annotations of {name!r} could not be read")
+        end = runner_service.bad_end(job, notes)
+        if end is None and job.get("conclusion") == "failure":
+            log, why = _read_job_log(job)
+            if log is None:
+                return runner_service.unread(f"the log of {name!r} could not be read ({why})")
+            end = runner_service.bad_end(job, notes, log)
+        failed.append((job, end))
+    return runner_service.gate(failed, column, runner_service.columns_from_env(os.environ))
+
+
 def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
     """Re-run, or tell once, each workflow run on `pr`'s head that holds a
     canceled check (DRE-3072). The rule is `canceled_check`'s; the reads and
@@ -11522,10 +11649,17 @@ def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
     the run is read on GH_DISPATCH_TOKEN, re-run with `gh run rerun --failed`,
     and a refused re-run is a write failure that turns the sweep red.
 
+    DRE-8817: a run that would be re-run is first asked `_runner_gate`, and
+    one whose column still names the service a job just failed on is held —
+    said once with `canceled_check.held_receipt` and re-run on a
+    later pass inside `canceled_check.HELD_HOURS` once the column has moved.
+    A gate read that fails re-runs nothing and posts nothing on this pass.
+
     Returns False when a re-run was refused, so the caller sends no fix agent
     for this pull request on this pass."""
-    worker = [c.get("body") or "" for c in pr.get("comments", [])
-              if is_worker_bot_comment(c)]
+    worker = [{"body": c.get("body") or "", "createdAt": c.get("createdAt")}
+              for c in pr.get("comments", []) if is_worker_bot_comment(c)]
+    now = datetime.now(UTC)
     ok = True
     for run_id, checks in unknown.items():
         run = None
@@ -11541,7 +11675,9 @@ def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
                          detail or "the Actions read answered nothing",
                          then="re-running nothing for it this sweep")
         jobs = canceled_check.canceled_jobs(checks)
-        step = canceled_check.decide(run_id, run, sha, worker)
+        step = canceled_check.decide(
+            run_id, run, sha, worker, now=now,
+            gate=(lambda r=run, i=run_id: _runner_gate(pr, i, r)))
         print(f"canceled-check: PR #{pr['number']} {step.action} — {step.why} "
               f"({', '.join(jobs)}); no fix agent for it")
         if step.action == "rerun":
@@ -11564,6 +11700,10 @@ def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
             _post_pr_note(pr["number"], pipeline_act.receipt(
                 canceled_check.AGAIN_ACT,
                 canceled_check.again_receipt(pr["number"], sha, run, jobs)))
+        elif step.action == "held":
+            _post_pr_note(pr["number"], pipeline_act.receipt(
+                canceled_check.AGAIN_ACT,
+                canceled_check.held_receipt(pr["number"], sha, run_id, step.why, now)))
     return ok
 
 
@@ -16559,6 +16699,20 @@ def main(
     except Exception as e:  # noqa: BLE001 — an alert never decides the exit
         print(f"{standing_defect_alert.TAG} not settled this pass — "
               f"{type(e).__name__}: {e}")
+    # The reads this pass fell back to Linear on are one console alert for the
+    # repo, and a full pass that fell back on none resolves it (DRE-8798). The
+    # full sweep's alone, like the standing-defect alert: the card-scoped,
+    # `--promote-only` and `--close-only` passes returned above, and an idle
+    # pass skips the board read, so its empty list is not a full pass's and
+    # would flap the alert. Nothing it raises moves the exit below.
+    if _idle_pass:
+        print(f"{read_fallback_alert.TAG} not settled this pass — idle ({_idle_pass[0]})")
+    else:
+        try:
+            read_fallback_alert.settle(bureau_read.fallbacks(), REPO_SLUG, bureau_read.mode())
+        except Exception as e:  # noqa: BLE001 — an alert never decides the exit
+            print(f"{read_fallback_alert.TAG} not settled this pass — "
+                  f"{type(e).__name__}: {e}")
     if _write_failures or _read_failures or _stale_defects:
         # Red run -> medic's failed-workflow path picks it up. Never exit 0
         # when a write we claimed to make didn't happen (DRE-1254 lesson), when

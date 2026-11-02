@@ -87,7 +87,10 @@ agent-bureau repo; the third clause added by DRE-2103).
     `channel-watch.yml` (`Channel Watch`) runs every 10 minutes. A hung
     `Pipeline Tests` job on `main` is canceled and its run re-run once, by
     the App, so the re-run's completion wakes Promote Channel
-    (`scripts/hung_job.py`). A hold of 2 hours raises
+    (`scripts/hung_job.py`) — unless the `ci` runner column still names the
+    service the job hung on, in which case the re-run is held and a later
+    pass makes it once the column has moved (DRE-8817,
+    `scripts/runner_service.py`). A hold of 2 hours raises
     `pipeline_notice:channel_hold:stable` with its diagnosis — the failing
     job, or one stuck 2 hours by its own clock, and what to do next — and a hold standing between 06:00 and 06:29 PT
     is raised before the briefing, once it is 45 minutes old; a pass that finds no hold resolves it

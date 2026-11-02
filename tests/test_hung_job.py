@@ -43,8 +43,28 @@ SHARD = ("scripts unit tests (walk tests/test_console_project_model_keeps_the_"
 SHARD_JOB = 122184991649
 
 
+#: The runner every job of the 10-27 fixture is given (DRE-8817). The
+#: fixture's records carry no runner name, and a job on an unknown service is
+#: never re-run, so the tests that re-run it name one — a placeholder, not
+#: the machine the 10-27 run used.
+FIXTURE_RUNNER = "GitHub Actions 1000001"
+#: The `ci` column those tests read: both Mac pools, never GitHub's own.
+OTHER_COLUMN = '["self-hosted", "bureau-light"]'
+
+
 def fixture() -> dict:
-    return json.loads(FIXTURE.read_text(encoding="utf-8"))
+    fx = json.loads(FIXTURE.read_text(encoding="utf-8"))
+    for jobs in fx["jobs"].values():
+        for job in jobs:
+            job["runner_name"] = job.get("runner_name") or FIXTURE_RUNNER
+    return fx
+
+
+@pytest.fixture(autouse=True)
+def _ci_column(monkeypatch):
+    """The `CI_RUNS_ON` channel-watch.yml hands the watch, naming a service
+    the fixture's jobs did not run on — so every re-run below is today's."""
+    monkeypatch.setenv("CI_RUNS_ON", OTHER_COLUMN)
 
 
 def at(stamp: str) -> datetime:
@@ -774,3 +794,90 @@ def test_timestamps_are_pacific():
     assert hung_job.pt(datetime(2026, 10, 27, 17, 53, 47, tzinfo=timezone.utc)) == "10:53:47 AM PT"
     assert hung_job.pt(datetime(2026, 11, 2, 20, 0, 0, tzinfo=timezone.utc)
                        + timedelta(seconds=0)) == "12:00:00 PM PT"
+
+
+# --- never back onto the service it hung on (DRE-8817) ------------------------
+#
+# Before `watch` asks for the re-run of a run on attempt 1 it asks
+# `runner_service.gate` with the jobs it judged hung, column `ci` and the
+# `CI_RUNS_ON` value channel-watch.yml hands it. Held, it prints a `held` line
+# and asks for nothing; a running hung run is still canceled. A later pass
+# inside RECENT_HOURS re-runs it once the column has moved.
+
+ON_HOSTED = '["ubuntu-latest"]'
+
+
+def test_a_finished_hung_run_whose_column_still_names_its_service_is_held(
+        gh, monkeypatch, capsys):
+    monkeypatch.setenv("CI_RUNS_ON", ON_HOSTED)
+    run, jobs = finished_incident(gh.fx)
+    watch_running(gh, run, jobs)
+    code, lines = run_main(monkeypatch, capsys,
+                           ["watch", "--repo", REPO, "--apply"], NOW_FINISHED)
+    assert code == 0 and gh.posts() == []
+    line = next(x for x in lines if x.startswith("hung-job: held "))
+    assert line.startswith(f'hung-job: held run={RUN_ID} job="{SHARD}" — finished cancelled')
+    for part in (FIXTURE_RUNNER, "github-hosted", "`ci`", ON_HOSTED):
+        assert part in line, part
+
+
+def test_a_later_pass_after_the_column_moved_re_runs(gh, monkeypatch, capsys):
+    monkeypatch.setenv("CI_RUNS_ON", ON_HOSTED)
+    run, jobs = finished_incident(gh.fx)
+    watch_running(gh, run, jobs)
+    run_main(monkeypatch, capsys, ["watch", "--repo", REPO, "--apply"], NOW_FINISHED)
+    assert gh.posts() == []
+    monkeypatch.setenv("CI_RUNS_ON", '["runs-on"]')
+    code, lines = run_main(monkeypatch, capsys,
+                           ["watch", "--repo", REPO, "--apply"], "2026-10-27T15:34:00Z")
+    assert code == 0
+    assert gh.posts() == [f"repos/{REPO}/actions/runs/{RUN_ID}/rerun-failed-jobs"]
+    assert any(x.startswith("hung-job: rerun ") for x in lines)
+
+
+def test_a_running_hung_run_is_still_canceled_but_not_re_run_when_held(
+        gh, monkeypatch, capsys):
+    monkeypatch.setenv("CI_RUNS_ON", ON_HOSTED)
+    run, jobs = running_incident(gh.fx)
+    watch_running(gh, run, jobs)
+    code, lines = run_main(monkeypatch, capsys,
+                           ["watch", "--repo", REPO, "--apply"], NOW_RUNNING)
+    assert code == 0
+    assert gh.posts() == [f"repos/{REPO}/actions/runs/{RUN_ID}/cancel"]
+    line = next(x for x in lines if x.startswith("hung-job: canceled "))
+    assert "held" in line and FIXTURE_RUNNER in line and "github-hosted" in line
+
+
+def test_an_unknown_runner_holds_the_re_run(gh, monkeypatch, capsys):
+    run, jobs = finished_incident(gh.fx)
+    shard(jobs)["runner_name"] = None
+    watch_running(gh, run, jobs)
+    code, lines = run_main(monkeypatch, capsys,
+                           ["watch", "--repo", REPO, "--apply"], NOW_FINISHED)
+    assert code == 0 and gh.posts() == []
+    line = next(x for x in lines if x.startswith("hung-job: held "))
+    assert "unknown" in line
+
+
+def test_an_unset_ci_column_holds_the_re_run(gh, monkeypatch, capsys):
+    monkeypatch.delenv("CI_RUNS_ON", raising=False)
+    run, jobs = finished_incident(gh.fx)
+    watch_running(gh, run, jobs)
+    code, _lines = run_main(monkeypatch, capsys,
+                            ["watch", "--repo", REPO, "--apply"], NOW_FINISHED)
+    assert code == 0 and gh.posts() == []
+
+
+def test_without_apply_a_held_re_run_is_printed_as_would_hold(gh, monkeypatch, capsys):
+    monkeypatch.setenv("CI_RUNS_ON", ON_HOSTED)
+    run, jobs = finished_incident(gh.fx)
+    watch_running(gh, run, jobs)
+    _code, lines = run_main(monkeypatch, capsys, ["watch", "--repo", REPO], NOW_FINISHED)
+    assert gh.posts() == []
+    assert any(x.startswith(f"hung-job: would-hold run={RUN_ID} ") for x in lines)
+
+
+def test_the_held_decision_is_runner_services():
+    source = SOURCE.read_text(encoding="utf-8")
+    assert "runner_service.gate(" in source
+    assert "import runner_service" in source
