@@ -73,9 +73,11 @@ name: Alarm Repair
 on:
   schedule:
     # Every 30 minutes, clear of the sweep's */15, Triage Repair's
-    # 4,19,34,49, Nightly Watch's :23 and Hygiene's :37. An alert open for 2
-    # hours is acted on within about 30 minutes of that.
-    - cron: "11,41 * * * *"
+    # 4,19,34,49, Nightly Watch's :23, Hygiene's :37 and Channel Watch's
+    # 4-59/10 — and of :11 and :41, which DRE-8634 named: :11 is Groom Week's
+    # own minute and 10:41 UTC the nightly suite's. An alert open for 2 hours
+    # is acted on within about 30 minutes of that.
+    - cron: "12,42 * * * *"
   workflow_dispatch:
     inputs:
       dry_run:
