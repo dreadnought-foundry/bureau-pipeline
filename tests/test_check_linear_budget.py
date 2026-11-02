@@ -571,6 +571,12 @@ def _drive(monkeypatch, capsys, fake: _FakeGh,
     return got.out, got.err
 
 
+def _total_line(out: str) -> str:
+    """The spend table's last line. The fallback table (DRE-8795) prints
+    after it, so it is no longer the output's last line."""
+    return next(line for line in out.splitlines() if line.startswith("TOTAL"))
+
+
 _SPENT_20 = "linear-budget: 900 → 880 (spent 20 this run; window resets 16:00 PT; budget: fleet)"
 
 
@@ -586,7 +592,7 @@ def test_a_run_still_in_progress_is_read_again_and_counted(monkeypatch, capsys, 
     assert fake.views[rid] == 3
     row = next(line for line in out.splitlines() if line.startswith("atlas"))
     assert row.split()[2:4] == ["1", "20"]
-    assert out.splitlines()[-1].split()[:3] == ["TOTAL", "1", "20"]
+    assert _total_line(out).split()[:3] == ["TOTAL", "1", "20"]
     assert "skipped" not in out and "empty log" not in out
     assert len(_no_sleep) == 2 and 0 < sum(_no_sleep) < 30
 
@@ -604,7 +610,7 @@ def test_a_run_never_readable_is_named_after_three_attempts(monkeypatch, capsys,
     out, err = _drive(monkeypatch, capsys, fake,
                       {"atlas": "o/atlas", "portico": "o/portico"})
     assert fake.views == {fine: 1, gone: 3}
-    tail = out.splitlines()[-1]
+    tail = _total_line(out)
     assert tail.split()[:3] == ["TOTAL", "1", "20"]
     assert ("(1 run(s) skipped: log not available after 3 attempts — "
             "portico 34310170001)") in tail
@@ -623,7 +629,7 @@ def test_an_empty_log_is_read_once_and_noted_on_its_own(monkeypatch, capsys, _no
     out, err = _drive(monkeypatch, capsys, fake, {"atlas": "o/atlas"})
     assert fake.views == {rid: 1}
     assert _no_sleep == []
-    tail = out.splitlines()[-1]
+    tail = _total_line(out)
     assert tail.split()[:3] == ["TOTAL", "0", "0"]
     assert "skipped" not in out
     assert "(1 run(s) empty log: no job ran)" in tail

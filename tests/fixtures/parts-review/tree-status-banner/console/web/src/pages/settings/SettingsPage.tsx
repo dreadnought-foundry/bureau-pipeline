@@ -1,0 +1,46 @@
+import { useState, type ReactNode } from "react";
+
+import { useSettings } from "../../data/settings";
+import { tokens } from "../../styles/tokens";
+
+interface StatusBannerProps {
+  tone: "info" | "success" | "danger";
+  title: string;
+  children?: ReactNode;
+  onDismiss?: () => void;
+}
+
+function StatusBanner({ tone, title, children, onDismiss }: StatusBannerProps) {
+  return (
+    <section
+      role="status"
+      style={{
+        background: tokens.color[tone].surface,
+        borderColor: tokens.color[tone].border,
+        padding: tokens.space[3],
+      }}
+    >
+      <strong style={{ font: tokens.type.label }}>{title}</strong>
+      {children}
+      {onDismiss && (
+        <button type="button" onClick={onDismiss}>
+          Dismiss
+        </button>
+      )}
+    </section>
+  );
+}
+
+export function SettingsPage() {
+  const { settings, saved } = useSettings();
+  const [shown, setShown] = useState(true);
+  return (
+    <main style={{ padding: tokens.space[5] }}>
+      <h1 style={{ font: tokens.type.heading }}>Settings</h1>
+      {saved && shown && (
+        <StatusBanner tone="success" title="Settings saved" onDismiss={() => setShown(false)} />
+      )}
+      <form>{settings.fields}</form>
+    </main>
+  );
+}
