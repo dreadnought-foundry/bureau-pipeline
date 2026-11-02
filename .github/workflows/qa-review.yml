@@ -915,14 +915,15 @@ jobs:
       # give the whole answer, else ONE Linear read of the description and the
       # same comment window the old thread read took.
       #
-      # THE DOOR NEVER SERVES A pull_request RUN, and that is the door's rule,
-      # not ours to loosen: it refuses every token minted for a pull_request or
-      # pull_request_target event, so a fork's pull request can never mint
-      # one (agent-bureau github_oidc.py check 7, review S7). The client does
-      # not even ask from one. Nearly every review is a pull_request run, so for
-      # them this is one Linear read where there were two; only a
-      # workflow_dispatch re-review (the sweep's, the refutation's, an
-      # operator's) can be served by the door.
+      # A pull_request RUN GETS ONE READ FROM THE DOOR: its own card, the one
+      # its `agent/` or `repair/DRE-<n>-…` head branch names (agent-bureau
+      # DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review is
+      # such a run, so this read is served by the door like a workflow_dispatch
+      # re-review's (the sweep's, the refutation's, an operator's). Every
+      # other pull_request run, and every pull_request_target run, still reads
+      # Linear once where there were two reads: the door refuses those tokens,
+      # so a fork's pull request can never mint one (agent-bureau
+      # github_oidc.py check 7, review S7), and the client does not ask.
       #
       # A read that fails writes no file, and each reader then degrades exactly
       # as its own failed read did: no Design line (visual QA skips) and
