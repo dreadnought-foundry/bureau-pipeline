@@ -6584,6 +6584,44 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     return live, None
 
 
+def fresh_undeclared_claims(card: dict) -> tuple[set, str | None]:
+    """Ask Linear again before refusing `card` for a prose claim (DRE-8851).
+
+    `(claims, None)` — the claims a FRESH read of the card still finds no
+    `blocks` relation for, empty when it holds them all; `(set(), reason)`
+    when there is no fresh answer to refuse on. ONE request, the gate's own
+    query for this one card (`_fetch_backlog_linear`), asked only of a card
+    the pass's board read would refuse, so a corroborated declaration costs
+    nothing.
+
+    The board read is not enough to refuse on. In `on` it is the door's
+    cached board, and on 2026-11-02 it refused DRE-8635 for lacking DRE-8848
+    eight minutes after an operator had linked it — a passed card moved to
+    Triage on a relation Linear already held. A refusal moves the card, so
+    it is decided on Linear's answer from this pass, never on a copy.
+
+    The fresh description and relations replace the board read's on `card`,
+    so every gate after this one — the dependency gate first — reads the
+    relation the fresh read found, not the page that lacked it.
+    """
+    ident = card["identifier"]
+    try:
+        found = _fetch_backlog_linear([ident])
+    except linear_ops.LinearRateLimited:
+        raise  # the run's own exit code (DRE-2923), never one card's problem
+    except linear_ops.LinearError as e:
+        return set(), f"it could not be read fresh ({e})"
+    if not found:
+        return set(), f"it is no longer in {QUEUE_LANE}"
+    live = found[0]
+    card["description"] = live.get("description")
+    card["inverseRelations"] = live.get("inverseRelations")
+    if prose_blockers.relations_unknown(card):
+        return set(), (f"its relations could not be read to the end "
+                       f"({prose_blockers.UNKNOWN_TAG})")
+    return prose_blockers.undeclared_claims(card), None
+
+
 def card_state(identifier: str) -> str:
     data = linear_ops.gql(
         "query($id: String!) { issue(id: $id) { state { name } } }", {"id": identifier}
@@ -8265,10 +8303,13 @@ def promote_ready(
         # dependency — so it refuses the card, out loud, and routes it, rather
         # than adding a phantom blocker nothing will ever clear.
         #
-        # Checked first, and outside the read-guard below, because it is pure
-        # computation over the card this sweep already fetched: no Linear read,
-        # and the sentence is wrong whatever the card's epic, verdict or
-        # blockers say.
+        # Checked first, and outside the read-guard below, because the sentence
+        # is wrong whatever the card's epic, verdict or blockers say. Suspected
+        # on the board read, which costs nothing, and confirmed on a FRESH read
+        # of the card before anything is posted or moved (DRE-8851): the board
+        # read can predate a relation an operator has since added, and a card
+        # was once refused for lacking one Linear already held. No fresh
+        # answer, no refusal — and no promotion either.
         #
         # Unless the card's relations were not read to the end (DRE-5379). Then
         # neither answer is safe — the prose may name a blocker the unread rest
@@ -8282,6 +8323,23 @@ def promote_ready(
             )
             continue
         undeclared = prose_blockers.undeclared_claims(card)
+        if undeclared:
+            suspected = undeclared
+            undeclared, unread = fresh_undeclared_claims(card)
+            if unread is not None:
+                print(
+                    f"promotion: {card['identifier']}'s board read holds no "
+                    f"relation for {', '.join(sorted(suspected))}, and {unread} "
+                    f"— no {prose_blockers.CARD_TAG} refusal on the board read "
+                    "alone; neither refused nor promoted — skipping"
+                )
+                continue
+            if suspected - undeclared:
+                print(
+                    f"promotion: {card['identifier']}'s board read held no "
+                    f"relation for {', '.join(sorted(suspected - undeclared))}; "
+                    "a fresh read does — not refused"
+                )
         if undeclared:
             notice = prose_blockers.card_refusal(card["identifier"], undeclared)
             print(
