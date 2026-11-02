@@ -376,6 +376,35 @@ def _medic_question() -> None:
         assert esc.finding == medic_next_step.NO_REPORT_FINDING
 
 
+def _fix_design_question() -> None:
+    """`agent-fix.yml#Report` (DRE-8735): the fix loop's park on the critic's
+    design question. Its step writes the question's first line — the receipt
+    `green_light_rows` holds it to — before the `linear_ops.py comment` that
+    precedes the lane write, and the script, run on a verdict carrying the
+    block, posts the three lines `console_escalation.render` writes."""
+    import test_design_question_park as park
+
+    unit = "agent-fix.yml#Report"
+    receipt = green_light_rows.AGENT_ESCALATION_STEPS[unit]
+    writes = [w for w, u in _discovered() if u == unit]
+    assert writes, f"{unit} no longer writes the lane"
+    for write in writes:
+        lines = _step_lines(write)
+        at_receipt = next((i for i, args in enumerate(lines)
+                           if any(a.startswith(receipt) for a in args)), None)
+        at_comment = max((i for i, args in enumerate(lines)
+                          if _runs(args, "linear_ops.py", "comment")), default=None)
+        assert None not in (at_receipt, at_comment), (write.where, at_receipt, at_comment)
+        assert at_receipt < at_comment, write.where
+    for state in ("none", "unknown"):
+        proc, _, calls = park.report(verdict=park.VERDICT, state=state)
+        assert proc.returncode == 0, proc.stderr
+        asked = park.card_comments(calls)
+        assert len(asked) == 1, calls
+        esc = assert_declares_the_lines(asked[0][2])
+        assert esc.recommendation == park.ANSWER
+
+
 #: One case per decision-kind writer, keyed by the discovery's unit name. A
 #: writer added later adds one entry under its own unit name.
 CASES = {
@@ -389,6 +418,7 @@ CASES = {
     "proof-task.yml#Report proof result to Linear":
         _workflow_case("proof-task.yml#Report proof result to Linear"),
     "medic.yml#Ask a person about the diagnosis": _medic_question,
+    "agent-fix.yml#Report": _fix_design_question,
 }
 
 

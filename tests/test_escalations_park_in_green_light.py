@@ -16,6 +16,11 @@ non-convergence park, the unfixable-check hold and the red-main repair card —
 each of them a card that went wrong — do not, and stay pinned next door in
 `test_green_light_rename.py`.
 
+The fix loop has one judgement park of its own since DRE-8735: the critic's
+design question, which the CEO answers, goes to `Green Light` through
+`report_fix_result.sh`'s `park_for_question`. Every other fix-loop park is
+still `park_for_human`, into `Triage`, and the last class below pins both.
+
 Four surfaces have to agree or the rule is only true in one of them: the shell
 that actually moves the card, the prompt that tells the agent where its
 question lands, the brief it reads when deciding to escalate, and the standard
@@ -35,6 +40,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "scripts"))
 
 import console_escalation  # noqa: E402
+import design_answer  # noqa: E402
 import linear_ops  # noqa: E402
 import reconcile  # noqa: E402
 import step_shell  # noqa: E402
@@ -417,6 +423,78 @@ class NoOtherBranchChangedTest(unittest.TestCase):
         before, after = self._pair()
         self.assertEqual(_DEAD_RUN_BLOCK.search(before).group(0),
                          _DEAD_RUN_BLOCK.search(after).group(0))
+
+
+FIX_REPORT_SCRIPT = os.path.join("scripts", "report_fix_result.sh")
+#: The discovery's unit for every lane write in that script: the step that runs it.
+FIX_REPORT_UNIT = "agent-fix.yml#Report"
+
+
+def fix_function(name: str) -> str:
+    """One shell function's body in `report_fix_result.sh`."""
+    m = re.search(rf"\n{name}\(\) \{{\n(.*?)\n\}}\n", read(FIX_REPORT_SCRIPT), re.S)
+    assert m, f"{name}() not found in {FIX_REPORT_SCRIPT}"
+    return m.group(1)
+
+
+def fix_lane_writes(text: str) -> list:
+    """The lane every `linear_ops.py advance|state "$CARD" "<lane>"` in `text` writes."""
+    return re.findall(r'linear_ops\.py (?:advance|state) "\$CARD" "([^"]+)"', text)
+
+
+class TheFixLoopsJudgementParkTest(unittest.TestCase):
+    """DRE-8735: the critic's design question is a decision, so the fix loop
+    parks it in `Green Light` beside the engineer's escalation — and every
+    other fix-loop park, a card whose loop went wrong, stays in `Triage`."""
+
+    def test_the_question_park_advances_to_the_decision_lane(self):
+        body = fix_function("park_for_question")
+        self.assertEqual([DECISION_LANE], fix_lane_writes(body))
+        self.assertNotIn(BROKEN_CARD_LANE, body)
+
+    def test_the_question_is_posted_before_the_move(self):
+        body = fix_function("park_for_question")
+        self.assertIn(design_answer.QUESTION_MARK, body)
+        self.assertLess(body.index(design_answer.QUESTION_MARK),
+                        body.index("linear_ops.py comment"))
+        self.assertLess(body.index("linear_ops.py comment"),
+                        body.index(f'"{DECISION_LANE}"'))
+
+    def test_the_question_park_holds_nothing_and_labels_nothing(self):
+        body = fix_function("park_for_question")
+        self.assertNotIn("hold.py", body)
+        self.assertNotIn("needs-human", body)
+        self.assertNotIn("park_for_human", body)
+
+    def test_the_broken_loop_park_still_goes_to_triage(self):
+        body = fix_function("park_for_human")
+        self.assertEqual([BROKEN_CARD_LANE, BROKEN_CARD_LANE], fix_lane_writes(body))
+        self.assertIn("--reason fix-dispute", body)
+        self.assertNotIn(DECISION_LANE, body)
+
+    def test_every_other_fix_loop_lane_write_is_triage(self):
+        script = read(FIX_REPORT_SCRIPT)
+        outside = script.replace(fix_function("park_for_question"), "")
+        lanes = fix_lane_writes(outside)
+        self.assertTrue(lanes, "no lane write found in the script")
+        self.assertEqual({BROKEN_CARD_LANE}, set(lanes))
+        self.assertNotIn(f'"{DECISION_LANE}"', outside)
+
+    def test_the_lane_contract_declares_the_new_arrival(self):
+        import green_light_rows
+
+        records = [r for r in green_light_rows.arrivals()
+                   if r.get("where") == FIX_REPORT_UNIT]
+        self.assertEqual(1, len(records), records)
+        self.assertEqual(("agent-escalation", "agent-fix.yml", "DRE-8735"),
+                         (records[0]["kind"], records[0]["writer"], records[0]["card"]))
+        self.assertIn("park_for_question", records[0]["evidence"])
+        self.assertIn(design_answer.QUESTION_MARK, records[0]["evidence"])
+        self.assertEqual(design_answer.QUESTION_MARK,
+                         green_light_rows.AGENT_ESCALATION_STEPS[FIX_REPORT_UNIT])
+        self.assertIn(FIX_REPORT_UNIT,
+                      {unit for _, unit in green_light_rows.green_light_writes()})
+        self.assertEqual([], green_light_rows.problems())
 
 
 if __name__ == "__main__":
