@@ -112,6 +112,14 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The planner's OAuth token (DRE-5589): the same Agent-Bureau user,
+      # metered apart from the fleet key at 5,000 requests an hour. The
+      # console keeps it fresh and publishes it as `Bearer <access token>`
+      # (DRE-5587); nothing here ever refreshes it (DRE-2532). OPTIONAL: a
+      # stub that does not pass it, or a repo it was never published to,
+      # sweeps on the fleet key exactly as before (DRE-8716).
+      LINEAR_PLANNER_KEY:
+        required: false
       BUREAU_APP_ID:
         required: true
       BUREAU_APP_PRIVATE_KEY:
@@ -172,8 +180,27 @@ jobs:
     # every one of its lines in check_linear_budget.py. The word `fleet` is
     # written once, as the input's default, so every production stub inherits
     # it with no edit.
+    #
+    # WHICH BUCKET (DRE-8716). On 2026-11-01, 2:00-4:00 PM PT, this sweep sent
+    # 3,200 of the fleet key's 4,037 requests (79%, counted from every run's
+    # own `linear-calls:` lines across config/repo-map.json) and the key ran
+    # down to about 850 of 2,500, while the planner's OAuth bucket never read
+    # below 4,296 of 5,000. So every step below that holds a Linear key holds
+    # plan.yml's shape — the planner's token first, the fleet key when none
+    # is published (`||` takes the first non-empty operand) — and the fleet
+    # key again as LINEAR_API_KEY_FALLBACK, which linear_ops.gql steps onto
+    # on a 401 and nothing else (never on a rate limit). A repo whose variable
+    # `LINEAR_SWEEP_BUCKET` is `fleet` (`!=` ignores case) sweeps on the fleet
+    # key instead: the escape hatch, with no code change and no wait for
+    # `stable`. LINEAR_KEY_HOME follows the same switch, and linear_ops names
+    # the home only while the token is what is being spent and only under an
+    # identity that declares it — so the sandbox's lines still say `sandbox`.
+    # The expiry is the console's published one (Stage 2 review item 30): a
+    # token past it is never sent.
     env:
       LINEAR_IDENTITY: ${{ inputs.linear_identity }}
+      LINEAR_KEY_HOME: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && 'planner-oauth' || '' }}
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -301,7 +328,8 @@ jobs:
       - name: Sweep
         id: sweep
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The read door (Stage 2 #5/#6a). The mode is the CALLER's variable,
           # `off` when unset, so every repo reads Linear until it is flipped —
           # `shadow` first, for a working day with zero unexplained
@@ -436,7 +464,8 @@ jobs:
       - name: Dispatch proof runs
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -488,7 +517,8 @@ jobs:
       - name: Close proof records that cannot merge
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -532,7 +562,8 @@ jobs:
       - name: Proof overdue
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -581,7 +612,8 @@ jobs:
       - name: Reply to the CEO's Green Light comments
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -626,7 +658,8 @@ jobs:
       - name: Read the switches
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}

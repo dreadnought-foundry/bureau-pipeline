@@ -80,7 +80,11 @@ AGENT_WORKFLOWS = {
 # DRE-7179: the Triage Repair run is the planner's work — its `claim`, context
 # and `apply` steps read and write the cards the planner rewrites — so it holds
 # plan.yml's expression, the planner's token first, with no opt-in.
-PLANNER_KEY_READERS = {"plan.yml", "triage-repair.yml", *AGENT_WORKFLOWS}
+# DRE-8716: the Reconcile sweep, which sent 79% of the fleet key's requests on
+# 2026-11-01 (3,200 of 4,037, 2:00-4:00 PM PT) while the planner's bucket never
+# read below 4,296 of 5,000. It holds the token unless the repo opts OUT with
+# `LINEAR_SWEEP_BUCKET=fleet` (tests/test_reconcile_planner_linear_key.py).
+PLANNER_KEY_READERS = {"plan.yml", "triage-repair.yml", "reconcile.yml", *AGENT_WORKFLOWS}
 
 
 def _doc(name: str) -> dict:
@@ -329,6 +333,8 @@ TOKEN_JOBS = {
     # DRE-8649: `unrepaired` reads the same Triage lane and threads `select`
     # reads, with the same key, so its receipts read as the pipeline's own.
     "triage-repair.yml": ("select", "repair", "unrepaired"),
+    # DRE-8716: the sweep's one job.
+    "reconcile.yml": ("sweep",),
 }
 
 
@@ -355,7 +361,8 @@ def test_the_expiry_is_read_by_exactly_the_jobs_that_can_hold_the_token():
 
 # ── the fence ───────────────────────────────────────────────────────────────
 def test_no_other_workflow_reads_the_planners_token():
-    """Gates, medic, sweeps, relays and releases stay on the fleet key. A new
+    """Gates, medic, relays and releases stay on the fleet key, and so does
+    every sweep but Reconcile (DRE-8716 moved that one, with numbers). A new
     reader is a decision about who spends the agents' bucket, and it is made
     here, by editing PLANNER_KEY_READERS — not by a quiet copy of a line."""
     readers = {path.name for path in WORKFLOWS.glob("*.yml")
@@ -382,6 +389,7 @@ _FORBIDDEN = (
 CHANGED = (
     *(f".github/workflows/{name}" for name in sorted(AGENT_WORKFLOWS)),
     ".github/workflows/plan.yml",
+    ".github/workflows/reconcile.yml",
     "agents.yaml",
     "config/linear-identities.json",
     "scripts/linear_ops.py",
