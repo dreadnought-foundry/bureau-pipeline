@@ -415,7 +415,10 @@ must: the label `hand-step:machine` or `hand-step:person`, and a receipt whose
 cause is `<class>, kind <kind>` and whose evidence is the phrase of the card
 that decided it, or `no machine kind matched`. The class is
 `scripts/operator_step_kind.py` over the card's title and description, by the
-phrases in `config/operator-step-kinds.json`. It is said once per card — the
+phrases in `config/operator-step-kinds.json`. The description is read whole,
+one read per card the lane classes, because the board read's copy is cut at
+500 characters; a card whose read fails waits for the next pass and is never
+classed from the cut text. It is said once per card — the
 lane skips a card that already wears a class label — and it moves nothing and
 dispatches nothing: the operator still does every step.
 

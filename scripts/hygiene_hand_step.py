@@ -18,14 +18,21 @@ own cards by `hygiene.in_scope`. A card is classed when all of these hold:
 5. it does not wear `hand-built`, the CEO's own mark for work a named session
    is building.
 
-The class is `operator_step_kind.classify` over the card's title and
-description. Each such card is one `hygiene.Action` of two writes: the label
+The class is `operator_step_kind.classify` over the card's title and its
+description read whole: the board read's `description` is the list API's, cut
+at 500 characters (`board_snapshot`), and the phrase that decides a card often
+sits past the cut. So each card that qualifies, and only such a card, is read
+once more through the read-only `ctx.linear` (`ISSUE_QUERY`). A read that fails
+skips that card for this pass — said on stderr — and it is never classed from
+the cut text, which could miss a person phrase and claim a machine step. Each
+classed card is one `hygiene.Action` of two writes: the label
 `hand-step:<class>`, then hygiene's own receipt, whose cause is `<class>, kind
 <kind>` and whose evidence is the phrase that decided it — with any `·` or line
 break in it read as a space, because the receipt refuses both.
 
 The core's (tag, cause) key and the label's presence both keep a card from
-being classed twice. The lane reads nothing beyond the board, moves no card,
+being classed twice. The lane reads nothing beyond the board and each such
+card's description, moves no card,
 dispatches nothing, and changes no lane: the class changes nobody's job.
 """
 
@@ -36,6 +43,7 @@ import re
 import sys
 
 import hygiene
+import linear_ops
 import operator_step_kind
 import proof_and_demo
 import reconcile
@@ -49,6 +57,9 @@ MACHINE_LABEL = "hand-step:machine"
 PERSON_LABEL = "hand-step:person"
 #: Class → the label that marks it. Exactly one is on a classed card.
 LABELS = {operator_step_kind.MACHINE: MACHINE_LABEL, operator_step_kind.PERSON: PERSON_LABEL}
+
+#: One card's whole description — the list API's is cut at 500 characters.
+ISSUE_QUERY = "query($id: String!) { issue(id: $id) { identifier description } }"
 
 #: What the receipt cannot carry in a quoted phrase: its clock separator, and
 #: a line break.
@@ -90,9 +101,26 @@ def quoted(evidence: str) -> str:
     return " ".join(_UNQUOTABLE.sub(" ", evidence).split())
 
 
-def classed(card: dict, ctx: hygiene.Context) -> hygiene.Action:
-    cls, kind, evidence = operator_step_kind.classify(card.get("title"),
-                                                      card.get("description"))
+def description(card: dict, ctx: hygiene.Context) -> str | None:
+    """The card's whole description — one `ctx.linear` read. None when the read
+    fails, said on stderr: the card waits for the next pass."""
+    ident = card["identifier"]
+    try:
+        data = ctx.linear(ISSUE_QUERY, {"id": ident}) or {}
+    except (linear_ops.LinearError, OSError) as e:  # LinearRateLimited is one too
+        print(f"hygiene: hand-step — {ident} skipped this pass, its description could "
+              f"not be read: {e}", file=sys.stderr)
+        return None
+    issue = data.get("issue")
+    if not isinstance(issue, dict):
+        print(f"hygiene: hand-step — {ident} skipped this pass, Linear returned no "
+              f"card for it", file=sys.stderr)
+        return None
+    return issue.get("description") or ""
+
+
+def classed(card: dict, text: str, ctx: hygiene.Context) -> hygiene.Action:
+    cls, kind, evidence = operator_step_kind.classify(card.get("title"), text)
     label = MACHINE_LABEL
     if cls == operator_step_kind.PERSON:
         label = PERSON_LABEL
@@ -112,5 +140,11 @@ def plan(board: hygiene.Board, ctx: hygiene.Context) -> list:
         print(f"hygiene: hand-step — skipped this pass, the standing cards could not be "
               f"read: {e}", file=sys.stderr)
         return []
-    return [classed(card, ctx) for card in board.cards(ctx, LANE)
-            if qualifies(card, exempt)]
+    actions = []
+    for card in board.cards(ctx, LANE):
+        if not qualifies(card, exempt):
+            continue
+        text = description(card, ctx)
+        if text is not None:
+            actions.append(classed(card, text, ctx))
+    return actions
