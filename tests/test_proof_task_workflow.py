@@ -60,11 +60,11 @@ RELEASE_TRAIN = WORKFLOWS / "release-train.yml"
 ACTION = "anthropics/claude-code-action"
 APP_TOKEN = "actions/create-github-app-token"
 AWS_CREDS = "aws-actions/configure-aws-credentials"
-#: The pin this repo already carries for the App token mint (v3.2.0).
-APP_TOKEN_PIN = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
+#: The pin this repo already carries for the App token mint (v3.3.0).
+APP_TOKEN_PIN = "64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
 
 #: The version comment the pin above carries on every mint.
-APP_TOKEN_VERSION = "v3.2.0"
+APP_TOKEN_VERSION = "v3.3.0"
 
 #: agent-task.yml's secrets the proof run does not take (DRE-7513): the plant
 #: probe is a throwaway handed to the BUILD agent alone, so a planted echo
