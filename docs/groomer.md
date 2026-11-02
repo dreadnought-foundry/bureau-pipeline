@@ -169,7 +169,14 @@ fast path shipped, which the sweep moves straight to Planning (DRE-4150, point
    own `groomer.yml` with `replay` set to the gate set and `pipeline_ref` the
    pull request's merge ref, and `judge` runs `groom_replay_gate.py judge`
    over the verified proposal. A case that passes on `main` and fails on the
-   change turns `judge` red, so the merge gate holds the pull request. Every
+   change turns `judge` red, so the merge gate holds the pull request. The
+   gate fails closed (DRE-8741): a case that passes on `main` and that the
+   replay did not check — its verify record `unverified`, as a leg whose agent
+   step crashed writes it, or `excluded`, or missing — turns `judge` red
+   too, naming the case and the reason, and so does a run that checked no
+   case. The verify leg makes its workspace root a git repository before the
+   agent step, because on a pull request the agent action's startup reads
+   git there and died without one (gate run 41370789518). Every
    other pull request gets a green `reach` and two skipped jobs. The read door
    refuses a pull request's token, so the gate's problem search is Linear's,
    and each `judge` line says `search=linear`.
