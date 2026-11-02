@@ -333,6 +333,68 @@ class ADoneCardMeansTheFixDidNotHold(unittest.TestCase):
         self.assertEqual([], fake.filed)
 
 
+class ACardFiledBeforeTheTally(unittest.TestCase):
+    """The cards on the board when this ships were filed by
+    `stranded_fix.card_body` alone: no `Occurrence:` line, the branch in
+    backticks and each commit as `` - `sha8` — subject ``, never as
+    `<branch>@<sha8>`. The first sweep over the commits such a card already
+    lists is the same instance read again, not occurrence 2."""
+
+    def legacy(self, *shas, state="In Progress", completed="") -> FakeLinear:
+        body = stranded_fix.card_body(
+            repo="dreadnought-foundry/portico",
+            stranded=found(*(commit(s, "2026-09-20T11:00:00Z") for s in shas)),
+            card="DRE-4518", pushed=True)
+        self.assertNotIn(failure_tally.OCCURRENCE_LINE, body)
+        return FakeLinear().card("DRE-4828", state=state, description=body,
+                                 completed=completed,
+                                 created=NOW - timedelta(days=12))
+
+    def test_the_commit_the_card_already_lists_posts_nothing(self):
+        for state in ("In Progress", "Planning", "Canceled", "Duplicate"):
+            with self.subTest(state=state):
+                fake = self.legacy(SHA_1, state=state)
+                tally, _ = run(fake, occ(SHA_1))
+                self.assertEqual(failure_tally.ALREADY_TALLIED, tally.outcome)
+                self.assertEqual("DRE-4828", tally.card)
+                self.assertEqual([], fake.posted)
+                self.assertEqual([], fake.filed)
+
+    def test_the_newest_of_several_listed_commits_posts_nothing(self):
+        fake = self.legacy(SHA_1, SHA_2)
+        tally, _ = run(fake, occ(SHA_2))
+        self.assertEqual(failure_tally.ALREADY_TALLIED, tally.outcome)
+        self.assertEqual([], fake.posted)
+
+    def test_a_done_card_listing_the_commit_files_nothing(self):
+        fake = self.legacy(SHA_1, state="Done", completed="2026-10-25T16:40:00.000Z")
+        tally, _ = run(fake, occ(SHA_1))
+        self.assertEqual(failure_tally.ALREADY_TALLIED, tally.outcome)
+        self.assertEqual([], fake.filed)
+
+    def test_a_newer_commit_counts_two(self):
+        fake = self.legacy(SHA_1)
+        tally, _ = run(fake, occ(SHA_2))
+        self.assertEqual(failure_tally.TALLIED, tally.outcome)
+        self.assertEqual(f"🔢 failure-tally: 2 · {occ(SHA_2)}",
+                         first_line(fake.posted[0][1]))
+
+    def test_the_commit_listed_for_another_branch_is_not_this_occurrence(self):
+        fake = self.legacy(SHA_1)
+        fake.cards[0]["description"] = fake.cards[0]["description"].replace(
+            BRANCH, BRANCH + "-v2")
+        tally, _ = run(fake, occ(SHA_1))
+        self.assertEqual(failure_tally.TALLIED, tally.outcome)
+
+    def test_a_card_with_an_occurrence_line_is_read_by_that_line_alone(self):
+        """A card the tally filed names its occurrence on one line, so a sha
+        that only appears in its commit list is not read as counted."""
+        fake = self.legacy(SHA_1, SHA_2)
+        fake.cards[0]["description"] += f"\nOccurrence: {occ(SHA_1)}\n"
+        tally, _ = run(fake, occ(SHA_2))
+        self.assertEqual(failure_tally.TALLIED, tally.outcome)
+
+
 class AnUnreadSearchFilesNothing(unittest.TestCase):
 
     def test_a_search_that_raises_files_nothing_and_answers_unread(self):
