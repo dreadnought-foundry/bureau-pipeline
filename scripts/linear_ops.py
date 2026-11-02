@@ -230,6 +230,23 @@ class CommentCapReached(LinearError):
     """
 
 
+class BodyTooLong(LinearError):
+    """Linear refused a body as too long (DRE-8818).
+
+    `limit` is the maximum the refusal named, or None when it named none.
+    Its own type because `cmd_comment` answers it unlike any other failure:
+    a named maximum is posted as numbered parts of at most that size, and a
+    refusal naming no number is raised exactly as before, because a guessed
+    size is a note that may be refused again part by part. A LinearError
+    still, so every existing `except LinearError` keeps isolating it, and a
+    fact about one body, so it arms no stop.
+    """
+
+    def __init__(self, message: str, limit: int | None = None):
+        super().__init__(message)
+        self.limit = limit
+
+
 # How much of the response body a raised error carries. Truncated because a
 # Linear error body can be a whole schema dump and the log line has to stay
 # readable; 500 rather than 300 because the quota sentence sits behind the
@@ -345,6 +362,88 @@ def comment_cap_condition(body: str) -> str | None:
     """
     text = body or ""
     return COMMENT_CAP_CONDITION if all(m in text for m in _COMMENT_CAP_MARKERS) else None
+
+
+# ── The size refusal (DRE-8818) ─────────────────────────────────────────────
+# Since DRE-8758 a body reaches `comment` from a file, so the kernel's cap on
+# one argument no longer stops a long note; Linear's own limit is the next
+# wall. Nobody has seen Linear refuse a comment for size: DRE-8698's 57,370
+# characters went up in one, and whether 200 KB does is not known before
+# release. So the shape is not known either, and the two the card names are
+# read — an errors payload naming a maximum length, and an HTTP 413. The
+# number is the contract: a refusal that names none is not split.
+_SIZE_REFUSAL_RE = re.compile(
+    r"too long|too large|max(?:imum)?[ _-]?length|shorter than or equal to",
+    re.I,
+)
+# The maximum, read only where a phrase that states one is directly followed
+# by a number: "shorter than or equal to 65536 characters", "the maximum
+# length is 65,536", `"maxLength": 65536`. Any other number in the refusal —
+# a status, a code, a count of something else — is never read as the size.
+_SIZE_LIMIT_RE = re.compile(
+    r"(?:shorter than or equal to|at most|no more than|max(?:imum)?[ _-]?length"
+    r"(?:\s+(?:is|of))?|maximum(?:\s+(?:is|of))?)[\s:=\"']*(\d[\d,_]*)",
+    re.I,
+)
+# A refusal's own sentences are short; a string longer than this inside one is
+# not a sentence about the limit (an echoed body, a schema dump), and a number
+# in it is never read as the size.
+_REFUSAL_TEXT_CHARS = 2_000
+
+
+def _refusal_text(body: str) -> str:
+    """The text a size refusal is read from: each short scalar of a JSON body
+    as `key: value`, so `"maxLength": 65536` reads like a sentence, or the
+    head of a body that is not JSON."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body[:_REFUSAL_TEXT_CHARS]
+    out: list[str] = []
+
+    def walk(node, key: str = "") -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, str(k))
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, key)
+        elif isinstance(node, (str, int, float)) and not isinstance(node, bool):
+            text = str(node)
+            if len(text) <= _REFUSAL_TEXT_CHARS:
+                out.append(f"{key}: {text}")
+
+    walk(data)
+    return "\n".join(out)
+
+
+def is_size_refusal(body: str, code: int | str | None = None) -> bool:
+    """True when Linear refused the request as too large: an HTTP 413, or a
+    refusal whose own sentences say the input is too long."""
+    if str(code) == "413":
+        return True
+    return bool(_SIZE_REFUSAL_RE.search(_refusal_text(body or "")))
+
+
+def size_refusal_limit(body: str) -> int | None:
+    """The maximum a size refusal names, or None when it names none."""
+    found = _SIZE_LIMIT_RE.search(_refusal_text(body or ""))
+    if not found:
+        return None
+    limit = int(found.group(1).replace(",", "").replace("_", ""))
+    return limit or None
+
+
+def _too_long(detail: str, body: str, shown: str) -> BodyTooLong:
+    """The ONE shape a size refusal is raised in: where it came from, the
+    maximum or that there is none, then the refusal as the log shows it."""
+    limit = size_refusal_limit(body)
+    if limit is None:
+        condition = ("body too long, and the refusal names no maximum, so it is "
+                     "not split and no size is guessed")
+    else:
+        condition = f"body too long: Linear takes at most {limit:,} in one"
+    return BodyTooLong(f"{detail}: {condition} — {shown}", limit)
 
 
 # HOW THE COUNT IS READ, and why it is not one field. DRE-3343 was written
@@ -679,6 +778,10 @@ def _api_error(code: int | str, body: str) -> LinearError:
     cap = comment_cap_condition(body)
     if cap:
         return CommentCapReached(f"{detail}: {cap} — body: {body[:BODY_CHARS]!r}")
+    # A body refused for size, as a 413 or a 400 naming a maximum length
+    # (DRE-8818). It arms no stop either: it is a fact about one body.
+    if is_size_refusal(body, code):
+        return _too_long(detail, body, f"body: {body[:BODY_CHARS]!r}")
     return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
 
 
@@ -1329,6 +1432,10 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
             raise CommentCapReached(
                 f"linear error from {API}: {cap} — {errors[:BODY_CHARS]}"
             )
+        # A body refused for size, same two shapes (DRE-8818): its own type,
+        # so `cmd_comment` can post it in parts, and the refusal still named.
+        if is_size_refusal(errors):
+            raise _too_long(f"linear error from {API}", errors, str(out["errors"]))
         raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]
 
@@ -2464,6 +2571,13 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     all reached DRE-2668 through this function and all of them died in it.
     A caller that ignores the return value is unaffected, which is every
     caller that has nothing better to do than carry on.
+
+    A body Linear refuses for size is posted as numbered parts (DRE-8818),
+    sized from the maximum the refusal names (`comment_parts`), each its own
+    `commentCreate` with its own read-back look, and each printed as
+    `commented on <identifier> (part <i> of <n>)` — the line a PROOF reads
+    off the step's log. A refusal naming no maximum raises as before, and so
+    does a receipt: one split across parts loses its trailer to a later part.
     """
     act = None
     for flag in flags:
@@ -2478,23 +2592,115 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
         body = pipeline_act.receipt(act, body)
     issue = get_issue(identifier)
     try:
-        gql(
-            """mutation($input: CommentCreateInput!) {
-                 commentCreate(input: $input) { success } }""",
-            {"input": {"issueId": issue["id"], "body": body}},
-            landed=_comment_look(identifier, body, datetime.now(UTC)),
-        )
+        try:
+            _create_comment(identifier, issue["id"], body)
+        except BodyTooLong as refused:
+            if act or refused.limit is None:
+                raise
+            parts = comment_parts(body, refused.limit)
+            for i, part in enumerate(parts, 1):
+                try:
+                    _create_comment(identifier, issue["id"], part)
+                except LinearError:
+                    print(f"comment: {identifier} part {i} of {len(parts)} not posted "
+                          f"({i - 1} posted before it)", file=sys.stderr)
+                    raise
+                print(f"commented on {identifier} (part {i} of {len(parts)})")
+            return None
     except CommentCapReached:
         # Named on stderr, for the same reason the budget line is: some of this
         # script's stdout is read through `$(...)` by the workflows, and a
         # degrade must never corrupt an answer a caller is parsing.
         print(f"comment-cap: {identifier} — {COMMENT_CAP_CONDITION}", file=sys.stderr)
         return COMMENT_CAP_CONDITION
+    print(f"commented on {identifier}")
+    return None
+
+
+def _create_comment(identifier: str, issue_id: str, body: str) -> None:
+    """One `commentCreate`, with its own read-back look so a retried post is
+    not doubled (DRE-6839)."""
+    gql(
+        """mutation($input: CommentCreateInput!) {
+             commentCreate(input: $input) { success } }""",
+        {"input": {"issueId": issue_id, "body": body}},
+        landed=_comment_look(identifier, body, datetime.now(UTC)),
+    )
     # The pass's cached thread is stale the moment this lands (DRE-3236): the
     # next reader in the pass must see the comment it just posted.
     _pass["threads"].pop(identifier, None)
-    print(f"commented on {identifier}")
-    return None
+
+
+#: The first line of every part of a comment posted in parts (DRE-8818). The
+#: PROOF reads it off the epic's thread, so it is reworded only with the card.
+PART_HEADER = ("Part {i} of {n} — this note is longer than Linear takes in one "
+               "comment, so it is posted in {n} parts.")
+
+
+def _utf8_size(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def comment_parts(body: str, limit: int) -> list[str]:
+    """`body` as numbered parts, each at most `limit` with its header line
+    (DRE-8818). Removing each part's `PART_HEADER` line and joining the rest
+    in order gives `body` back byte for byte.
+
+    A part is measured in UTF-8 bytes, which is never fewer than the
+    characters or the UTF-16 units Linear may count, so it fits whichever
+    the refusal meant. It is split on line boundaries where a line fits, and
+    a single line longer than a part's room is cut at the size, never inside
+    a character. Every header is given the room of the longest one, part
+    `n` of `n`, and `n` is recomputed until its digits stop growing.
+
+    Raises `LinearError` when the limit leaves no room past the header, or
+    when the body already fits in it: a refusal that names a size the body is
+    within is one this cannot answer by splitting, and nothing is guessed.
+    """
+    n = 1
+    while True:
+        room = limit - _utf8_size(PART_HEADER.format(i=n, n=n) + "\n")
+        if room < 4:
+            raise LinearError(
+                f"comment: Linear's maximum of {limit:,} leaves no room for a part "
+                "past its header, so the body is not split")
+        chunks = _chunks(body, room)
+        if len(str(len(chunks))) <= len(str(n)):
+            break
+        n = len(chunks)
+    if len(chunks) < 2:
+        raise LinearError(
+            f"comment: Linear refused the body for size naming a maximum of {limit:,}, "
+            f"which the body ({_utf8_size(body):,} bytes) is within — not split")
+    n = len(chunks)
+    return [PART_HEADER.format(i=i, n=n) + "\n" + chunk
+            for i, chunk in enumerate(chunks, 1)]
+
+
+def _chunks(body: str, room: int) -> list[str]:
+    """`body` in pieces of at most `room` UTF-8 bytes, cut after a `\\n`
+    wherever the line fits and at the size where one line does not."""
+    pieces = body.split("\n")
+    lines = [p + "\n" for p in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in lines:
+        line_size = _utf8_size(line)
+        if size + line_size > room and current:
+            chunks.append("".join(current))
+            current, size = [], 0
+        while line_size > room:
+            head = line.encode("utf-8")[:room].decode("utf-8", "ignore")
+            chunks.append(head)
+            line = line[len(head):]
+            line_size = _utf8_size(line)
+        if line:
+            current.append(line)
+            size += line_size
+    if current:
+        chunks.append("".join(current))
+    return chunks
 
 
 #: The CLI flag that reads a `comment` or `set-description` body from a file.
