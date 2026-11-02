@@ -1661,6 +1661,11 @@ def _door_state_list() -> list[dict] | None:
             except Exception as e:  # noqa: BLE001 — Linear on ANY door error
                 print(f"read-door: workflow states unreadable ({type(e).__name__}: {e}) — "
                       "read from Linear")
+        else:
+            # A stopped door is never asked, so the client cannot name this
+            # Linear read: it is named here (DRE-8796). `off` prints nothing.
+            bureau_read.note_fallback("workflow-states",
+                                      bureau_read.disabled_reason() or "unavailable")
         _door_workflow_states["nodes"] = nodes
     return _door_workflow_states["nodes"]
 

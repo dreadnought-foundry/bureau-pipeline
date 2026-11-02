@@ -61,8 +61,10 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # answer the vendor-behavior premortem before touching an external
     # trigger/event/command (DRE-2105 — the 2026-07-12 boundary lessons),
     # and build console state surfaces honestly (DRE-2107 — badges derive
-    # from what actually happened, never from adjacent signals).
-    "engineer": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md", "whats-new.md"],
+    # from what actually happened, never from adjacent signals). An engineer
+    # build writes UI code too, so it carries design-system.md (DRE-8720):
+    # its shared-parts section is the rule the brief's parts catalog points at.
+    "engineer": ["engineering.md", "architecture.md", "card-quality.md", "vendor-boundaries.md", "console-honesty.md", "design-system.md", "whats-new.md"],
     # Frontend is the engineer in web mode + the design-fidelity standard, and
     # the fleet-wide design system it produces design work inside of
     # (design-system.md — DRE-3938: one `design/` folder, tokens and atoms
@@ -123,8 +125,11 @@ ROLE_STANDARDS: dict[str, list[str]] = {
     # The fixing agent and the medic work to the engineering floor and report
     # in the CEO's voice. The fixer also reads whats-new.md: it is the agent
     # that puts a missing `What's new:` line into the body when the critic
-    # sends a pull request back, and it reads no brief (DRE-5510).
-    "fix": ["engineering.md", "whats-new.md"],
+    # sends a pull request back, and it reads no brief (DRE-5510). It writes
+    # UI code when it answers a REQUEST_CHANGES, and a fix for one finding can
+    # add a copy of a shared part while it repairs another, so it carries
+    # design-system.md as well (DRE-8720).
+    "fix": ["engineering.md", "design-system.md", "whats-new.md"],
     "medic": ["engineering.md"],
     # The proof runner (DRE-5921) observes a `PROOF:` card's acceptance
     # criteria against real state and writes the record. card-quality.md
