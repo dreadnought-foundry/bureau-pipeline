@@ -47,6 +47,14 @@ mints (see `models.yaml` below).
   run's checkout and lets two cards that share only a ledger be ordered only
   where their lines touch. A ledger renamed or split out of its glob is a
   one-line edit here.
+- **`parts-count.json`** — the repos whose one-time parts count is switched on
+  (DRE-8844): `repos`, one entry per repo with `repo` (a key of
+  `repo-map.json`), the `agent` and `initiative` labels its cleanup cards
+  carry, and an optional `owned_by`, the `DRE-<n>` epic already deleting the
+  copies, handed to `scripts/parts_cleanup.py file` as `--owned-by`. A push to
+  `main` that changes it runs `.github/workflows/parts-count.yml` over every
+  repo listed; the filer files nothing twice, so a repo already counted is
+  counted again and files nothing new.
 - **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
   (DRE-3009): every code commit needs a test commit since the previous code
   commit, and any code commit after the first may instead carry one of these.
