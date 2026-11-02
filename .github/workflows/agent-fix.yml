@@ -976,8 +976,8 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           BODY="🔓 fix-restart-on-operator-decision: your decision started the fix agent directly (DRE-3451) — no hand dispatch and no waiting for the sweep. One restart per answer; a further decision comment re-arms it."
-          python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-loop-restarted \
-            --body "$BODY" --out /tmp/act-fix-restart.md \
+          printf '%s' "$BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-loop-restarted \
+            --body-file=- --out /tmp/act-fix-restart.md \
             || printf '%s' "$BODY" > /tmp/act-fix-restart.md
           gh pr comment "${{ steps.pr.outputs.number }}" \
             --repo ${{ github.repository }} --body-file /tmp/act-fix-restart.md

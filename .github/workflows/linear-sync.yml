@@ -471,8 +471,8 @@ jobs:
               # wherever the notice IS the escalation — a lost trailer is a
               # missing machine-readable line, a lost comment is an invisible
               # conflicted pull request, which is the incident itself.
-              python3 .bureau-pipeline/scripts/pipeline_act.py receipt conflict-sweep-unavailable \
-                --body "$BODY" --out "$NOTE" \
+              printf '%s' "$BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt conflict-sweep-unavailable \
+                --body-file=- --out "$NOTE" \
                 || printf '%s' "$BODY" > "$NOTE"
               gh pr comment "$PR" --repo "$REPO" --body-file "$NOTE"
             done < "$CONFLICTED"
