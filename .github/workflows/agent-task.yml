@@ -124,8 +124,20 @@ jobs:
     # reads (portico and agent-bureau both name `bureau-heavy`), so the
     # console's pool fail-back — which deletes exactly the three BUREAU_*_RUNS_ON
     # variables when no runner is online — already covers this lane. A repo that
-    # sets neither variable renders exactly what it rendered before.
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # sets neither variable renders exactly what it rendered before. It asks
+    # RunsOn for a machine AWS cannot take back (DRE-8890): this is among the
+    # longest jobs in the fleet, so a Spot reclaim costs the most here, and the
+    # variable stays on Spot for the repo's CI — a RunsOn label gains
+    # `spot=false` as agent-bureau's `ci.yml` adds it on `push` (DRE-6879),
+    # one that already says `spot=` is used as it stands, and any other value
+    # renders as before. `tests/test_build_runs_on_lane.py` pins it.
+    runs-on: >-
+      ${{ fromJSON(startsWith(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0], 'runs-on')
+      && !contains(join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), ','), 'spot=')
+      && (fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[1]
+      && format('["{0}","spot=false"]', join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), '","'))
+      || format('["{0}/spot=false"]', fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0]))
+      || vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap. 45 murdered legitimately long builds mid-work
     # (DRE-2074: DRE-2070's profiling runs were killed at the 45-minute mark
     # 4× while in_progress with fresh ⏳ receipts, and the Report step then
