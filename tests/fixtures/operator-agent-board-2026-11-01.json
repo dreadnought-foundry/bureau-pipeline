@@ -1,0 +1,1166 @@
+[
+  {
+    "card": "DRE-7290",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: the operator runs the Sonnet 5.5 proof shadow on bureau-pipeline's proof cards for two weeks and 20 cards, then quotes the counts on DRE-7188",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator turns the Sonnet 5.5 proof shadow on for bureau-pipeline's own proof cards and leaves it on for at least two weeks and at least 20 proof cards."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This is an operator step: a repository variable set and later deleted, a reader run, and one comment."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:13:55.660Z",
+        "text": "The 14 full days are reached tonight at 6:46 PM PT, but the paired cards are not: the reader counts 11 of the 20 required."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7298",
+    "lane": "Hand-work",
+    "title": "OPERATOR: replay the last 4 weekly reports and 20 \"why?\" answers on Sonnet 5.5 and quote the result on DRE-7189",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator asks the production console to replay its past work on Sonnet 5.5, and puts the result on DRE-7189 with a mark on each of the 4 weekly pairs and the 20 answer pairs."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:34:00.157Z",
+        "text": "Step 5, Nov. 1, 2026, 5:33 PM PT: the console's replay posted on DRE-7189 at 5:31 PM PT, but cut to Linear's size limit."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7301",
+    "lane": "Hand-work",
+    "title": "portico: the content buckets' CORS rule has never been applied — run 60-content-bucket-cors.sh in both accounts, late at night",
+    "labels": [
+      "repo:portico",
+      "no-code",
+      "initiative:bureau",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The script was merged, but its rule has never been written to either bucket."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Runs late at night, 11 PM–3 AM PT — it replaces live bucket configuration."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:02:46.058Z",
+        "text": "Decided 2026-11-01 4:57 PM PT: the studio host (DRE-8486) does this step once it is live, after DRE-8582."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7328",
+    "lane": "Hand-work",
+    "title": "OPERATOR: set NO_RECORD_RETURN_MODE=enforce on the live relay, then close this card through the console's Record the outcome",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Turn the relay's no-record return on, live."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The code ships behind `NO_RECORD_RETURN_MODE`, which defaults to `off`, and only the bootstrap deploy sets a relay environment variable — it needs the operator's AWS profile, which no agent holds."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:02:47.612Z",
+        "text": "Decided 2026-11-01 4:57 PM PT: the studio host (DRE-8486) does this step once it is live, after DRE-8582."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7620",
+    "lane": "Hand-work",
+    "title": "Measure the harness with Sonnet 5.5 reviewing over 100 runs against its Opus 5.5 baseline, and only if it matches, turn the probe builder line on and exercise its rollback once",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "no-code",
+      "operator-step",
+      "agent:ops",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator measures the harness with Sonnet 5.5 reviewing its probes, over 100 runs, against the Opus 5.5 baseline over the same scenarios."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Only if the bar is met does the operator turn the switch on, and then exercise its rollback once before the two-week watch begins."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7886",
+    "lane": "Hand-work",
+    "title": "agent-bureau: measure a Console backend shard's real peak memory on the Mac Studio's 4 GB heavy runner, then the CEO picks an 8 GB heavy class or more shards",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This card measures it, with the runner bench the repo already has, and puts the number in front of the CEO with the two ways to fix it."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T04:34:09.500Z",
+        "text": "Canceled: No longer needed: the 8 GB heavy runners are built (DRE-7912, DRE-7917), and none of the 159 Studio shard jobs since 2026-10-31 ran out of memory."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7909",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: deferred: walks on main — once DRE-7907 and DRE-7908 merge, a code merge's walk shards each finish within 15 minutes and a docs-only merge skips its walks and lets stable move",
+    "labels": [
+      "repo:bureau-pipeline",
+      "no-code",
+      "agent:ops",
+      "initiative:bureau",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "It writes no code."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T04:32:29.656Z",
+        "text": "Canceled: No longer possible: DRE-8017 deleted the walks on 2026-10-27, so readings 2 and 3 have nothing left to read (evidence in the comment above)."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7933",
+    "lane": "Hand-work",
+    "title": "OPERATOR: send a check form from the live Foundry shelf into GridCorr's Oncor folder and DeltaSolv's shelf, v1 then v2, and record the rows — committed to docs/evidence/form-origin-readings",
+    "labels": [
+      "repo:portico",
+      "initiative:foundry",
+      "agent:ops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This is the operator's readings card for the epic's proof."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator starts it, not the CEO and not the pipeline."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8173",
+    "lane": "Hand-work",
+    "title": "OPERATOR: grant Members read-only to the five GitHub Apps and set NAME_GUARD_LIVE on bureau-pipeline",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator grants the GitHub App permission the roster reader needs and then turns the name guard on."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Each of the five Apps named above holds `Members: Read-only` under Organization permissions, and the organization's installation of each has accepted it (the operator records the five App slugs and the time in PT on this card)."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8227",
+    "lane": "Hand-work",
+    "title": "agent-bureau: operator stands up the throwaway company Proof Create Co from the console — its GitHub org, the three Apps, and one Create press for each of two projects",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:foundry",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This card records the throwaway org's name, each App install, the org secrets' names and both Create presses, each with its time in PT, and states that no other press was made."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The new company's org setup: on the org's own settings page, create the org-level secrets `docs/customer-onboarding-runbook.md` §3 names, each with Selected repositories visibility and no repository selected — onboarding adds each repo itself."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8331",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: the operator makes the five day-0 presses on one sandbox groom proposal — Not doing, Hold until a date, two Holds until a card, Move to Cancel",
+    "labels": [
+      "repo:bureau-pipeline",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator makes the five day-0 presses in the console that the groomer's-memory proof reads on the next two mornings."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Every press below lands on a sandbox card, on the sandbox's own groom proposal."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8341",
+    "lane": "Hand-work",
+    "title": "portico: after merge, restamp the sign-in pages on all nine portals, create the mixed-case sandbox proof identity, and read how the pool's email filter treats letter case",
+    "labels": [
+      "repo:portico",
+      "initiative:foundry",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Three hand steps after DRE-8339 and DRE-8340 merge."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:02:46.595Z",
+        "text": "Decided 2026-11-01 4:57 PM PT: the studio host (DRE-8486) does this step once it is live, after DRE-8582."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8414",
+    "lane": "Hand-work",
+    "title": "agent-bureau: operator creates the throwaway project pause-sandbox from the console, then pauses and resumes it from its Settings page",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:foundry",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator's steps that give DRE-8205's proof something real to read: a throwaway project, `pause-sandbox`, is created from the console, paused from its Settings page, left paused across one release-train slot, sent one dispatch while paused, resumed, and sent one dispatch after the resume."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8431",
+    "lane": "Hand-work",
+    "title": "agent-bureau: give archive-sandbox an Initiative, then archive it from its Settings page",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:foundry",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The throwaway project `archive-sandbox` (DRE-8430) gets one Linear Initiative by hand, is left to make one scheduled run, and is then archived from its Settings page in the console."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8537",
+    "lane": "Hand-work",
+    "title": "agent-bureau: onboarding archive-sandbox stopped at 45_release_pipeline",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "repo:agent-bureau",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Kind of card: an operator step."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-01T16:10:21.053Z",
+        "text": "The operator clears the stuck routing pull request #4362 (DRE-8516) — DRE-8534's fix merged 2026-10-31 17:39 PT — and then confirms that archive-sandbox's next onboarding run gets past 45_release_pipeline and ends verified."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8643",
+    "lane": "Hand-work",
+    "title": "agent-bureau: operator deploys the release role's template read and the Lambda-code apply role (one time)",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator's one-time AWS step for this epic: deploy the two permissions the identities card wrote as code, so the release train can read the console stacks' live templates and update the Record's bundle Lambda code."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The build applies no IAM change; this card is where it is applied, by hand, once, from the operator's own AWS profile."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8656",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: pause the stable channel for one night so the hold alert and the morning briefing are seen live",
+    "labels": [
+      "repo:bureau-pipeline",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "A one-night pause is a known hold on a known night."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T05:00:33.415Z",
+        "text": "Moved off tonight (2026-11-01, decided 9:02 PM PT): stable was already held for over three hours tonight by a failing mirror test, and work stuck behind it (DRE-8698's plan) only moved once stable caught up at 9:00 PM PT."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8664",
+    "lane": "Hand-work",
+    "title": "agent-bureau: re-run the stopped sandbox onboardings once each onboarding has its own branch",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This card re-runs them."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T09:03:24.405Z",
+        "text": "All three now read `verified`, so this card closes."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8671",
+    "lane": "Hand-work",
+    "title": "OPERATOR: install the DRE-8611 launchers on the Mac Studio, tag the memory lessons with their fixing cards, and record one real run of each mechanism",
+    "labels": [
+      "repo:agent-bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "So about 2¼ hours of the operator's own attention, spread over about 3¾–4¾ hours from start to finish."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:13:43.937Z",
+        "text": "Steps 1, 6 and 7 in part; the rest is held, with the reasons below."
+      }
+    ]
+  },
+  {
+    "card": "DRE-4434",
+    "lane": "Intake",
+    "title": "[OPERATOR] portico: bring the Atlas portal live — cert, DNS, CDN behaviours, grants and the first publish on atlas.everybite.com",
+    "labels": [
+      "repo:portico",
+      "needs-human",
+      "no-code",
+      "agent:ops",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "`--apply` asks for a typed `yes` on a real terminal and there is no `--yes`."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-09-21T18:07:41.259Z",
+        "text": "Atlas is live, 2026-09-21 11:07 PT."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8090",
+    "lane": "Intake",
+    "title": "OPERATOR: the two-hour DeltaSolv data model session with the CEO, this week",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "DeltaSolv's data model and business rules are the CEO's to set, and every DeltaSolv build card waits on them."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8091",
+    "lane": "Intake",
+    "title": "OPERATOR: on DeltaSolv's creation day, rename the June repo to deltasolv-legacy",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Today he decided the June repo gets no new product work and is renamed `deltasolv-legacy` on the day the new repo is created, so the new repo can take the name `deltasolv`."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8092",
+    "lane": "Intake",
+    "title": "OPERATOR: create DeltaSolv's new repo from Slipway with the one command, and put it on the pipeline",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The new-company playbook marks creating a company an operator step: it needs org admin and held credentials, so agents can't do it."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8093",
+    "lane": "Intake",
+    "title": "OPERATOR: archive deltasolv-legacy once the data check finds nothing left to move",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The CEO decided today to archive `deltasolv-legacy` after that check."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Then archive `deltasolv-legacy` in GitHub."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8094",
+    "lane": "Intake",
+    "title": "OPERATOR: DeltaSolv's own AWS account, and its first deploy",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "A go-live step from the Forge plan, section 6: running the MVP loop on a test customer needs DeltaSolv's own AWS account and a first deploy."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Create DeltaSolv's AWS account, as each company has its own."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Bootstrap CDK in it, and run the new repo's rehearsal, then its first production deploy with `deploy.sh`, as the new-company playbook says."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8095",
+    "lane": "Intake",
+    "title": "OPERATOR: DeltaSolv's domain, pointed at what the first deploy creates",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Create the certificate the stack asks for, and the DNS records the deploy guide names, pointing at what the first deploy created."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8096",
+    "lane": "Intake",
+    "title": "OPERATOR: request Amazon email production access in DeltaSolv's AWS account",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Amazon reviews the request, which can take a day or more, so it's asked as soon as the account exists."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8097",
+    "lane": "Intake",
+    "title": "OPERATOR: DeltaSolv's push notification keys, under the existing Apple and Google developer accounts",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Push needs a key from each, held in DeltaSolv's Expo account, never in a repo."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8098",
+    "lane": "Intake",
+    "title": "OPERATOR: an error-tracking project for DeltaSolv, with its keys set in DeltaSolv's settings",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Create the DeltaSolv organization or project in the error-tracking service, with one key each for the backend, web and phone apps."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8099",
+    "lane": "Intake",
+    "title": "OPERATOR: DeltaSolv's own Google sign-in client, so Continue with Google works",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Every later company repeats this step for itself."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8100",
+    "lane": "Intake",
+    "title": "OPERATOR: confirm DeltaSolv's alert email once, so alarms reach a person",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "After the deploy that creates the alert topic in DeltaSolv's account, open the \"AWS Notification - Subscription Confirmation\" email at the alert address and confirm it."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8307",
+    "lane": "Intake",
+    "title": "[OPERATOR] agent-bureau: migrate Aurora and deploy the console",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "`make deploy-console` run after checking pending stack changes; the deployed build id equals the merged head."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T04:32:28.286Z",
+        "text": "Canceled: Already done: the Initiatives migration first shipped in console v1.6.663, and v1.6.693 is live; all of its build cards are Done and the release train migrates and deploys."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8308",
+    "lane": "Intake",
+    "title": "[OPERATOR] agent-bureau: seed the house sandbox for the proofs",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:devops",
+      "needs-human",
+      "no-code"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Run `python3 -m console.backend.trial.seed --live-demo` (T1's live mode) once: in the `agent-bureau-demo` project only, the mockup's situations the proofs need, every initiative, epic and draft named \"Demo · <name>\" so none can be taken for real work."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T04:32:40.916Z",
+        "text": "Decided 2026-11-01 8:33 PM PT, with the CEO's approval: the studio host (DRE-8486) does this step once it is live, after DRE-8582."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8309",
+    "lane": "Intake",
+    "title": "[OPERATOR] agent-bureau: the CEO's five owner-gated presses on the house sandbox",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:devops",
+      "needs-human",
+      "no-code"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "On the deployed console, Demo tenant: (1) answer \"Demo · Which processor\"; (2) approve the plan on \"Demo · Identity\"; (3) answer one question on the draft \"Demo · Billing\"; (4) press Create on it; (5) answer the loose decision \"Demo · Proof console on the mini\"."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8314",
+    "lane": "Intake",
+    "title": "[OPERATOR] agent-bureau: archive the house sandbox's \"Demo · \" objects",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:devops",
+      "needs-human",
+      "no-code"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Run `python3 -m console.backend.trial.seed --cleanup` (T1) with O0's recorded ids."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7078",
+    "lane": "Queued",
+    "title": "OPERATOR: purge the 37 restricted documents from Charter's history and force-push, with the CEO's go right before",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry",
+      "repo:agent-bureau"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The CEO approved the purge on 2026-10-10, and it needs his go again right before the force-push, because it rewrites every commit and can't be undone."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-10-12T22:42:51.365Z",
+        "text": "If branch protection on `main` blocks the push, lift it."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7083",
+    "lane": "Queued",
+    "title": "OPERATOR: archive the project-template repo once nothing points at it",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry",
+      "repo:agent-bureau"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The old repo held only documents and DeltaSolv's own material, so it is archived with its history."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "GitHub reports `dreadnought-foundry/project-template` as `archived: true`."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7223",
+    "lane": "Queued",
+    "title": "[OPERATOR] deltasolv: the app's first release through the train — dispatched by hand, watched, and written to Linear",
+    "labels": [
+      "initiative:bureau",
+      "repo:deltasolv",
+      "agent:ops",
+      "no-code",
+      "needs-human",
+      "operator-step",
+      "size:S"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This card is one supervised production release."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "It is an operator step, a production deploy started by hand and watched by the operator."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7224",
+    "lane": "Queued",
+    "title": "[OPERATOR] deltasolv: the broken deltasolv-github-deploy role is removed, after the new release role has shipped a release",
+    "labels": [
+      "initiative:bureau",
+      "repo:deltasolv",
+      "agent:ops",
+      "no-code",
+      "needs-human",
+      "operator-step",
+      "size:XS"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This card removes one AWS role, DeltaSolv's broken `deltasolv-github-deploy`, after checking nothing in DeltaSolv still names it and recording what it held."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7307",
+    "lane": "Queued",
+    "title": "OPERATOR: move the console's three jobs to Sonnet 5.5, pull the rollback once, restore it, and start the two-week watch",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "needs-human",
+      "no-code",
+      "agent:devops",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator puts the console's three model jobs on Settings › Agents & models and places them in Builders."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "There is no pull request and no console deploy: since DRE-6977 a save writes the one home for model choices, and the console updates its kept copy as it writes, so each save is in force for the console's jobs as it is made."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7621",
+    "lane": "Queued",
+    "title": "Watch the harness on Sonnet 5.5 for two weeks after the switch, and roll it back the same day if a harness pass is followed by a fleet failure on the same Claude Code release",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "needs-human",
+      "no-code",
+      "operator-step",
+      "agent:ops"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator watches the harness for two weeks after the switch to Sonnet 5.5, and rolls the switch back the same day if a harness pass is followed by the fleet failing on the same Claude Code release."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8190",
+    "lane": "Queued",
+    "title": "agent-bureau: operator files the card that retires the throwaway repo onboard-sandbox-5",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "agent:ops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "This is the second of the proof's two presses."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-01T19:50:10.431Z",
+        "text": "Step 2: filed [DRE-8682](https://linear.app/dreadnoughtfoundry/issue/DRE-8682) in Intake at 11:50 AM PT on 2026-11-01, labeled `repo:agent-bureau`, asking to retire `onboard-sandbox-5`."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8335",
+    "lane": "Queued",
+    "title": "bureau-pipeline: once DRE-8238's proof is Done, the operator presses Put back on the first day-0 card",
+    "labels": [
+      "repo:bureau-pipeline",
+      "agent:devops",
+      "needs-human",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator presses Put back in the console, on the sandbox's groom page, on the first of the five day-0 sandbox cards, so no card stays off the sandbox proposals because of the proof, and then moves this card to Done."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8343",
+    "lane": "Queued",
+    "title": "portico: rewrite the sign-in accounts stored with capital letters to lowercase — person@example.com and person@example.com",
+    "labels": [
+      "repo:portico",
+      "agent:devops",
+      "needs-human",
+      "no-code",
+      "initiative:foundry",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Rewrite the sign-in accounts still stored with capital letters to lowercase, and move any rows keyed on their old form."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "An agent runs it, not the operator (CLAUDE.md §\"Agents run the operator steps themselves\", DRE-3886)."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:02:47.049Z",
+        "text": "Decided 2026-11-01 4:57 PM PT: the studio host (DRE-8486) does this step once it is live, after DRE-8582."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8528",
+    "lane": "Queued",
+    "title": "agent-bureau: operator archives and then deletes the throwaway project delete-sandbox from the console",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:foundry",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The throwaway project `delete-sandbox` (DRE-8521) is archived from its Settings page in the console, and then deleted from the same page by an owner of the Dreadnought Foundry workspace, typing its slug."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "If not, the CEO makes that one press from his own session; the plan names it as a step that needs him, and his yes to the plan covers it."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8582",
+    "lane": "Queued",
+    "title": "agent-bureau: the operator's one sitting — deploys StudioDeskStack, makes its key and the GitHub machine account, then on studio-1 creates the two macOS accounts, installs, enrolls and switches on the studio host, and sends the proof's runs",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:person"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "First, in the bureau's AWS account and GitHub organization: the studio's own AWS identity and GitHub machine account, made by a person, because creating an identity and its credentials is an admin act that stays with the CEO."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "It takes one more paid seat on the organization's GitHub plan, a small monthly charge that the CEO's approval of the plan covers."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8623",
+    "lane": "Queued",
+    "title": "bureau-pipeline: delete the PLANNER_MAX_RUNNING repo variable from agent-bureau, bureau-pipeline, portico and agent-bureau-demo, and release any card the groom queue left in Intake (operator)",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Deleting a repo variable needs a person holding admin on each repo, so the operator deletes it, one repo at a time, once nothing that is running reads or writes it any more."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8637",
+    "lane": "Queued",
+    "title": "bureau-pipeline: turn on the Alarm Repair — set the repository variable ALARM_REPAIR_LIVE to true",
+    "labels": [
+      "repo:bureau-pipeline",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "In bureau-pipeline's repository settings, under Actions variables, set `ALARM_REPAIR_LIVE` to `true`, in the operator's name."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "`ALARM_REPAIR_LIVE` reads `true` in bureau-pipeline's repository variables."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7579",
+    "lane": "Hand-work",
+    "title": "agent-bureau: archive the Linear project and Initiative of retired onboard-sandbox",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Archiving a Linear project or Initiative is operator-only, so the process recorded these under `board` in `config/pipeline-channel.json` and leaves them here."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:07:04.966Z",
+        "text": "I am treating the criterion as met in substance and closing the card."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7942",
+    "lane": "Hand-work",
+    "title": "agent-bureau: archive the Linear project and Initiative of retired onboard-sandbox-4",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Archiving a Linear project or Initiative is operator-only, so the process recorded these under `board` in `config/pipeline-channel.json` and leaves them here."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:07:08.873Z",
+        "text": "I am treating the criterion as met in substance and closing the card."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7978",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: the operator opens one throwaway pull request that breaks the verify step, sees the replay gate hold it, and closes it unmerged",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The negative control for the replay gate: the operator makes one change that breaks the verify step, watches the gate hold it, and closes it."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:12:45.323Z",
+        "text": "This card's two criteria describe the press and this record, and both are done."
+      }
+    ]
+  }
+]
