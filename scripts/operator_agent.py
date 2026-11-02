@@ -130,9 +130,11 @@ from datetime import UTC, datetime
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import board_snapshot  # noqa: E402
+import dead_run  # noqa: E402 — the hold label's one spelling
 import linear_ops  # noqa: E402
 import operator_decide  # noqa: E402
 import operator_rules  # noqa: E402
+import routing_verdict  # noqa: E402 — the operator-step and hand-built marks
 from sanitize_untrusted import sanitize_body, sanitize_line  # noqa: E402
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -147,10 +149,10 @@ HAND_WORK = "Hand-work"
 LANES = ("Intake", "Queued", HAND_WORK)
 GREEN_LIGHT = "Green Light"
 DONE = "Done"
-TAKE_LABELS = ("needs-human", "operator-step")
+TAKE_LABELS = (dead_run.HOLD_LABEL, routing_verdict.OPERATOR_STEP_LABEL)
 TITLE_OPENS = ("[OPERATOR]", "OPERATOR:")
 PROOF_OPENS = "PROOF:"
-HAND_BUILT = "hand-built"
+HAND_BUILT = routing_verdict.HAND_BUILT_LABEL
 
 DECIDE, UNREAD, SPENT, APPLY_ONLY, GUARD_RETURNED = (
     "decide", "unread", "spent", "apply-only", "guard-returned")
