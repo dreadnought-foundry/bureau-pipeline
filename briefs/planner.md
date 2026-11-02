@@ -195,6 +195,13 @@ it.
    one a `**Blocked by:** <sibling>` line and `subissue` materialises a native
    Linear `blockedBy` relation, because prose is not a dependency and the gate
    reads only the relation (DRE-2676).
+   - **A blocker between disjoint footprints needs `because <reason>` on its
+     line** — and so does one between two cards whose only shared file is a
+     declared ledger (`config/ledger-files.json`) where their lines are apart.
+     Write the reason after the last card id, as
+     `**Blocked by:** DRE-N — because <reason>`, and never name a card id in
+     it, or the line declares a second blocker. Without one the plan is sent
+     back (`scripts/plan_blocker_footprint.py`, DRE-8688).
 4. **Restructuring is preferred over serializing** — `standards/engineering.md`,
    `Don't fight over shared files`, which owns this rule. Before you serialize
    two cards on a shared file, try to remove the sharing: make discovery

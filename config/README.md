@@ -39,6 +39,14 @@ mints (see `models.yaml` below).
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`ledger-files.json`** — the declared ledgers, per repo (DRE-8688): a repo
+  slug maps to a list of path globs, each naming a file several cards share by
+  design, such as agent-bureau's count ledger
+  `console/web/src/theme/rawValues*.baseline.json`. Read only by
+  `scripts/plan_blocker_footprint.py`, which reads each ledger from the plan
+  run's checkout and lets two cards that share only a ledger be ordered only
+  where their lines touch. A ledger renamed or split out of its glob is a
+  one-line edit here.
 - **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
   (DRE-3009): every code commit needs a test commit since the previous code
   commit, and any code commit after the first may instead carry one of these.
