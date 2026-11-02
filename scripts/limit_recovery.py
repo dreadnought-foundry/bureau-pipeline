@@ -28,6 +28,28 @@ EITHER
     five hours after the run, when the run named none — so that wait is now
     only for markers written before it.
 
+## A review that succeeded is the wall coming down (DRE-8690)
+
+On 2026-11-01 the fleet's Claude account hit its monthly spend limit at 11:34
+AM PT, the credential was rotated at 1:08 PM, and a review on PR #4470
+succeeded at 1:25 PM. The two reviews the medic had marked waited for their
+markers' reset, 5:00 PM, because the account switch above is unwired on
+purpose (DRE-5456: no sweep holds the Claude credential). So the sweep hands
+`recover()` one more fact, `wall_down_at`: when the newest critic verdict in
+this repository landed. A verdict is a Claude run that succeeded, so a
+`kind=claude stage=review` marker whose own comment is older than it is
+re-entered now — the stage a re-run answers, and the one the verdict speaks
+for. Every other marker keeps the triggers above: a verdict says nothing of
+Linear's quota, and a build is not re-entered on a review's word. `None`, an
+unreadable listing or a repository with no verdict, leaves the clock alone,
+and so does a marker whose comment carries no readable time.
+
+It is bounded the way every review re-run is: a re-run keeps its run id, the
+medic marks a run id once, and this pass's `🔁` receipt closes the marker, so a
+review re-run here that dies on the wall again is not re-run again. The sweep's
+crashed-review pass finds it at its retry cap with no live marker and reports
+it to a person.
+
 ## Re-entry is the stage's own front door
 
   * `classify` / `plan` — the card re-enters Planning. The relay's planner
@@ -144,7 +166,9 @@ enumerated as data, a glyph people reach for (👍 🎉 👀 ✅ ❌ 🙏) is no
 a receipt the pipeline opens with a glyph not listed here simply does not close
 the marker — the safe direction, because the recovery's own receipt always does.
 
-Bounded by `wip_room` per pass; skips terminal cards (Done / Canceled /
+Bounded by `wip_room` per pass — except a `review` re-entry, which re-runs an
+existing review run, starts no build and takes no build's slot, so it neither
+waits on the room nor spends it (DRE-8690); skips terminal cards (Done / Canceled /
 Duplicate) and cards held for a human (`needs-human`), which the sweep leaves
 alone everywhere else too — EXCEPT a held card's `sync` stage (Stage 2 fix
 #23, `hold_blocks_stage`): re-running Linear Sync's card-done is bookkeeping
@@ -255,6 +279,27 @@ def trigger(marker: dict, now: datetime, active_account: str | None) -> str | No
         return ("Linear's quota answered this sweep's own board read, so it has "
                 "refilled")
     return None
+
+
+def wall_down(card: dict, marker: dict, wall_down_at: datetime | None) -> str | None:
+    """The wall-down trigger (DRE-8690) — one plain sentence — or None.
+
+    Only a `kind=claude stage=review` marker takes it, and only when its own
+    comment is older than `wall_down_at`, the newest critic verdict in this
+    repository: a review on the same account succeeded after this death."""
+    if (wall_down_at is None or marker.get("kind") != "claude"
+            or marker.get("stage") != "review"):
+        return None
+    node = marker_node(card)
+    created = _created(node) if node is not None else None
+    if created is None:
+        return None  # an unknown age is never "older than" anything
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=wall_down_at.tzinfo)
+    if created >= wall_down_at:
+        return None
+    return (f"the wall is down: a review on the same account succeeded after "
+            f"this death, at {dead_run.pacific(wall_down_at)}")
 
 
 def _until(marker: dict) -> str:
@@ -491,13 +536,16 @@ def recovery_receipt(marker: dict, why: str, what: str) -> str:
 
 
 def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
-            rerun, move, dispatch, cards) -> list[str]:
+            rerun, move, dispatch, cards,
+            wall_down_at: datetime | None = None) -> list[str]:
     """One pass. Returns the lines the sweep prints; `ERROR:` lines are the
     writes that did not land, which the sweep adds to its ledger.
 
     `lops` posts the receipt (`cmd_comment`). `rerun(run_id) -> bool`,
     `move(identifier, lane)` and `dispatch(card) -> bool` are the sweep's own
-    writes, injected — see the module docstring for why.
+    writes, injected — see the module docstring for why. `wall_down_at` is
+    when the newest critic verdict in this repository landed, or None
+    (DRE-8690).
     """
     lines: list[str] = []
     room = wip_room
@@ -533,10 +581,11 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         # and a hand-off now would close the marker before it does. Only a
         # held card, which nothing here re-enters, is handed off before it.
         ahead = marker.get("reset") is not None and now < marker["reset"]
+        why = (trigger(marker, now, active_account)
+               or wall_down(card, marker, wall_down_at))
         alarm = None
         if (reason is None and stood
-                and (held or (not ahead and (
-                    watchers or trigger(marker, now, active_account) is None)))):
+                and (held or (not ahead and (watchers or why is None)))):
             # Past the clock with no re-entry this pass can make: the hand-off
             # is the clock's, and the run goes red on a standing defect.
             reason = stood_reason(card, marker, age, held=held)
@@ -558,12 +607,14 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
                          f"is the re-review watcher's — it waits out the marker's reset, "
                          f"then asks for the review again")
             continue
-        why = trigger(marker, now, active_account)
         if why is None:
             lines.append(f"{RECOVERY_TAG}: {ident} is waiting {_until(marker)} "
                          f"({marker['kind']} limit, {marker['stage']} stage)")
             continue
-        if room <= 0:
+        # DRE-8690: a review re-entry re-runs an existing review run and
+        # starts no build, so it neither waits on the WIP room nor spends it.
+        review = marker.get("stage") == "review"
+        if room <= 0 and not review:
             lines.append(f"{RECOVERY_TAG}: {ident} is ready ({why}) but the WIP room "
                          f"is spent this pass — next sweep")
             if stood:
@@ -578,7 +629,8 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
             lines.append(f"ERROR: {RECOVERY_TAG} {ident}: {marker['stage']} re-entry "
                          f"did not land: {exc}")
             continue
-        room -= 1
+        if not review:
+            room -= 1
         lops.cmd_comment(ident, recovery_receipt(marker, why, what))
         lines.append(f"{RECOVERY_TAG}: {ident} {marker['stage']} re-entered — {why}")
     return lines
