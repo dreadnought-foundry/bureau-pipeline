@@ -126,14 +126,17 @@ def test_this_repos_own_workflow_files(name, column):
     ({"runner_name": "i-0abc", "labels": ["runs-on"]}, "runs-on"),
     ({"runner_name": "i-0abc", "labels": ["runs-on=41379620566/runner=4cpu-linux-x64"]},
      "runs-on"),
+    # The form the fleet's jobs carry (docs/red-main-proof-2026-10.md).
+    ({"runner_name": "", "labels": ["runs-on/runner=2cpu-linux-arm64/spot=false"]},
+     "runs-on"),
     ({"runner_name": "bureau-studio-sDcV8SdrTXe9n"}, "mac-studio"),
     ({"runner_name": "bureau-studio-light-1"}, "mac-studio"),
     ({"runner_name": "bureau-mini-light-3"}, "mac-mini"),
     ({"runner_name": "bureau-mini-PQk8rgNMXNXGn"}, "mac-mini"),
     ({"runner_name": "GitHub Actions 12"}, "github-hosted"),
 ], ids=["runs-on-group", "runs-on-group-any-name", "runs-on-name", "runs-on-label",
-        "runs-on-label-value", "studio", "studio-light", "mini-light", "mini-heavy",
-        "hosted"])
+        "runs-on-label-value", "runs-on-label-path", "studio", "studio-light",
+        "mini-light", "mini-heavy", "hosted"])
 def test_each_job_record_row_names_its_service(job, service):
     assert runner_service.service_of(job) == service
 
@@ -154,6 +157,9 @@ def test_a_job_record_that_matches_no_row_is_unknown(job):
 @pytest.mark.parametrize("value, services", [
     ('["runs-on"]', {"runs-on"}),
     ('["runs-on=${{ github.run_id }}/runner=4cpu-linux-x64"]', {"runs-on"}),
+    # The forms the fleet's columns read back (tests/test_plan_proof_reach.py).
+    ('["runs-on/runner=4cpu-linux-arm64"]', {"runs-on"}),
+    ('["runs-on/runner=2cpu-linux-x64/spot=false"]', {"runs-on"}),
     ('["self-hosted", "mac-studio"]', {"mac-studio"}),
     ('["self-hosted", "bureau-light", "machine-studio-1"]', {"mac-studio"}),
     ('["self-hosted", "mac-mini"]', {"mac-mini"}),
@@ -162,7 +168,8 @@ def test_a_job_record_that_matches_no_row_is_unknown(job):
     ('["ubuntu-latest"]', {"github-hosted"}),
     ('["ubuntu-24.04", "macos-15"]', {"github-hosted"}),
     ('["windows-latest"]', {"github-hosted"}),
-], ids=["runs-on", "runs-on-value", "studio", "machine-studio", "mini",
+], ids=["runs-on", "runs-on-value", "runs-on-path", "runs-on-path-spot", "studio",
+        "machine-studio", "mini",
         "machine-mini", "either-mac", "ubuntu", "ubuntu-macos", "windows"])
 def test_each_column_value_row_names_its_services(value, services):
     assert runner_service.services_named(value) == frozenset(services)
@@ -237,6 +244,13 @@ def test_a_hang_on_a_service_the_column_no_longer_names_is_allowed():
     columns = dict(COLUMNS, ci='["runs-on=1/runner=4cpu-linux-x64"]')
     answer = runner_service.gate([(STUDIO, runner_service.HANG)], "ci", columns)
     assert answer.allow is True and answer.service == "mac-studio"
+
+
+def test_a_hang_on_mac_studio_is_allowed_once_the_column_reads_the_fleets_runs_on_form():
+    columns = dict(COLUMNS, ci='["runs-on/runner=4cpu-linux-arm64"]')
+    answer = runner_service.gate([(STUDIO, runner_service.HANG)], "ci", columns)
+    assert answer.allow is True and answer.service == "mac-studio"
+    assert "names runs-on" in answer.why
 
 
 def test_the_runs_column_is_compared_never_ci():

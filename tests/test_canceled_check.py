@@ -1006,7 +1006,7 @@ REUSABLE_FILE = ("name: CI\non: [pull_request]\njobs:\n  call:\n"
                  "    uses: ./.github/workflows/ci-reusable.yml\n")
 ON_STUDIO = '["self-hosted", "mac-studio"]'
 ON_MINI = '["self-hosted", "mac-mini"]'
-ON_RUNS_ON = '["runs-on=1/runner=4cpu-linux-x64"]'
+ON_RUNS_ON = '["runs-on/runner=4cpu-linux-arm64"]'
 PYTEST_JOB = 114131786651
 
 
@@ -1196,10 +1196,21 @@ def test_the_held_receipt_names_everything_and_the_bound():
     assert body.startswith(
         f"🛑 {canceled_check.AGAIN_TAG} @{fx['head_sha']} run {RUN_ID} held:")
     for part in (SHARD, "bureau-studio-light-1", "mac-studio", "`ci`",
-                 '["self-hosted", "mac-studio"]', "six hours", "operator",
+                 '["self-hosted", "mac-studio"]', "6 hours", "operator",
                  "2:50 AM PT"):
         assert part in body, part
     assert canceled_check.said([body], canceled_check.AGAIN_TAG, fx["head_sha"], RUN_ID) is False
+
+
+def test_the_held_receipt_names_the_bound_off_held_hours():
+    from datetime import UTC, datetime
+    fx = fixture()
+    with mock.patch.object(canceled_check, "HELD_HOURS", 3):
+        body = canceled_check.held_receipt(
+            fx["pr"], fx["head_sha"], RUN_ID, "why",
+            datetime(2026, 11, 2, 4, 50, tzinfo=UTC))
+    assert "within 3 hours" in body and "11:50 PM PT" in body
+    assert "6 hours" not in body
 
 
 # --- the sweep, replayed -----------------------------------------------------

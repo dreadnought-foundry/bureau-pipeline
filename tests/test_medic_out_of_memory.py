@@ -979,7 +979,7 @@ HUNG_ID = 125088332790
 HUNG_RUNNER = "bureau-studio-sDcV8SdrTXe9n"
 ON_STUDIO = '["self-hosted", "mac-studio"]'
 ON_MINI = '["self-hosted", "mac-mini"]'
-ON_RUNS_ON = '["runs-on=1/runner=4cpu-linux-x64"]'
+ON_RUNS_ON = '["runs-on/runner=4cpu-linux-arm64"]'
 
 
 def hung_jobs(runner: str = HUNG_RUNNER) -> str:
