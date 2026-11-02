@@ -2,22 +2,23 @@
 
 Two of the reconcile sweep's notices, the fleet reviewer outage and the groom
 stall, used to be Linear cards created straight into Triage, the lane DRE-2723
-keeps for broken cards. Each is now one console alert, raised and resolved
+keeps for broken cards. Each became one console alert, raised and resolved
 through `scripts/pipeline_notice.py` (DRE-7451):
 
   * `reviewer_outage:fleet` at CRITICAL — raised by every full sweep that
     finds the outage and resolved, with the all-clear copy, by a sweep that
-    finds no could-not-run at all;
-  * `groom_stall` at WARN — raised while the stall holds and resolved, with no
-    all-clear copy, by a pass where it no longer does.
+    finds no could-not-run at all.
+
+The groom stall went with the groom queue it watched (DRE-8619): the drain
+moves every approved card, so there is no queue left to stall.
 
 The client is faked here, and the board is too: creating a card on any of
 these paths is a failure, never a cost. When the door cannot take a raise the
 client files the card the writer filed before, so each writer hands it that
 card exactly — title, lane and labels.
 
-The third writer, the switch alarm, lives in `scripts/switch_reason.py` and
-is held by `tests/test_switch_reason.py`; this file reads all three off
+The other writer, the switch alarm, lives in `scripts/switch_reason.py` and
+is held by `tests/test_switch_reason.py`; this file reads both off
 `notice_writers.py report`.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_reconcile_notices.py -v
@@ -42,11 +43,9 @@ os.environ.setdefault("REPO_SLUG", "agent-bureau")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import epic_cap  # noqa: E402
-import groomer  # noqa: E402
 import linear_ops  # noqa: E402
 import medic_classify  # noqa: E402
 import pipeline_notice  # noqa: E402
-import planner_queue  # noqa: E402
 import reconcile  # noqa: E402
 import reviewer_down  # noqa: E402
 
@@ -399,132 +398,17 @@ def test_a_fallback_card_is_not_a_failure():
 
 
 # --------------------------------------------------------------------------- #
-# the groom stall                                                              #
-# --------------------------------------------------------------------------- #
-
-STANDING = "DRE-5400"
-BATCH = "0123456789ab"
-
-
-def _queued_record(cards, minutes_ago):
-    return {"body": groomer.queued_record(
-                BATCH, [{"identifier": i, "repo": "portico"} for i in cards]),
-            "authored_by_pipeline": True, "created_at": _iso(minutes_ago)}
-
-
-def _released_record(released, minutes_ago):
-    return {"body": groomer.released_record(
-                [{"id": BATCH, "released": released, "left": [], "unqueued": []}]),
-            "authored_by_pipeline": True, "created_at": _iso(minutes_ago)}
-
-
-def _intake(ident):
-    return {"id": f"uuid-{ident}", "identifier": ident, "title": "a card",
-            "description": "work", "state": {"name": "Intake"},
-            "labels": {"nodes": [{"name": groomer.QUEUED_LABEL}]},
-            "comments": {"nodes": []}}
-
-
-def _groom_pass(thread, cards, free, notices, fail_state=()):
-    def cmd_state(ident, lane, *flags, **kw):
-        if ident in fail_state:
-            raise linear_ops.LinearError(f"{ident}: Linear said no")
-        return True
-
-    with patch.dict(os.environ, {reconcile.GROOM_CARD_ENV: STANDING}), \
-        patch.object(reconcile, "REPO_SLUG", epic_cap.START_OWNER_SLUG), \
-        patch.object(reconcile, "pipeline_notice", notices), \
-        patch.object(reconcile, "active_cards",
-                     side_effect=lambda *a, **k: list(cards)), \
-        patch.object(reconcile, "_door_lane_still", return_value=True), \
-        patch.object(linear_ops, "comment_records",
-                     side_effect=lambda *a, **k: list(thread)), \
-        patch.object(linear_ops, "cmd_state", side_effect=cmd_state), \
-        patch.object(linear_ops, "remove_label"), \
-        patch.object(linear_ops, "cmd_comment"), \
-        patch.object(linear_ops, "create_card", side_effect=_no_card), \
-        patch.object(linear_ops, "find_open", side_effect=_no_card):
-        return reconcile.release_groom_queue(free)
-
-
-def _stalled_thread():
-    bound = planner_queue.waiting_max()
-    return [_queued_record(["DRE-11", "DRE-12"], bound + 60),
-            _released_record(["DRE-10"], bound + 30)]
-
-
-def test_a_stalled_queue_raises_groom_stall_at_warn_and_creates_no_card():
-    notices = FakeNotices()
-    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")], 1,
-                notices, fail_state={"DRE-11", "DRE-12"})
-    (notice, kw), = notices.of("raise")
-    assert notice == "groom_stall"
-    assert kw["severity"] == "WARN"
-    assert kw["title"] == reconcile.GROOM_STALL_TITLE
-    assert BATCH in kw["body"] and "2 cards" in kw["body"]
-    assert notices.of("resolve") == []
-
-
-def test_the_groom_stall_hands_the_client_todays_card_as_its_fallback():
-    notices = FakeNotices()
-    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")], 1,
-                notices, fail_state={"DRE-11", "DRE-12"})
-    (_, kw), = notices.of("raise")
-    fallback = kw["fallback"]
-    assert isinstance(fallback, pipeline_notice.Fallback)
-    assert fallback.title == reconcile.GROOM_STALL_TITLE
-    assert fallback.lane == "Triage" == reconcile.GROOM_STALL_LANE
-    assert tuple(fallback.labels) == ("repo:bureau-pipeline", linear_ops.NO_CODE_LABEL)
-
-
-def test_a_later_pass_with_the_stall_gone_resolves_it_with_no_recovery_copy():
-    notices = FakeNotices()
-    cards = [_intake("DRE-11"), _intake("DRE-12")]
-    _groom_pass(_stalled_thread(), cards, 1, notices,
-                fail_state={"DRE-11", "DRE-12"})
-    _groom_pass(_stalled_thread(), cards, 1, notices)  # the moves land
-    assert [kind for kind, _, _ in notices.calls] == ["raise", "resolve"]
-    (notice, kw), = notices.of("resolve")
-    assert notice == "groom_stall"
-    assert kw == {"recovery_title": None, "recovery_body": None}
-
-
-@pytest.mark.parametrize("free", [0, 1])
-def test_a_queue_that_moved_inside_the_bound_resolves_and_raises_nothing(free):
-    notices = FakeNotices()
-    _groom_pass([_queued_record(["DRE-11"], 30)], [_intake("DRE-11")], free,
-                notices, fail_state={"DRE-11"})
-    assert notices.of("raise") == []
-    assert [n for n, _ in notices.of("resolve")] == ["groom_stall"]
-
-
-def test_an_empty_queue_resolves_the_stall():
-    notices = FakeNotices()
-    _groom_pass([], [], 2, notices)
-    assert [n for n, _ in notices.of("resolve")] == ["groom_stall"]
-    assert notices.of("raise") == []
-
-
-def test_a_lost_stall_raise_takes_the_sweep_red():
-    notices = FakeNotices(outcome="lost")
-    _groom_pass(_stalled_thread(), [_intake("DRE-11"), _intake("DRE-12")], 1,
-                notices, fail_state={"DRE-11", "DRE-12"})
-    assert any("groom" in f and "stall" in f for f in reconcile._write_failures), (
-        reconcile._write_failures)
-
-
-# --------------------------------------------------------------------------- #
-# the enumeration reads all three as repointed                                 #
+# the enumeration reads both as repointed                                     #
 # --------------------------------------------------------------------------- #
 
 
-def test_notice_writers_report_reads_the_three_as_repointed():
+def test_notice_writers_report_reads_the_two_as_repointed():
     done = subprocess.run(
         [sys.executable, str(ROOT / "scripts" / "notice_writers.py"), "report"],
         capture_output=True, text=True, cwd=ROOT, check=False)
     assert done.returncode == 0, done.stderr
     lines = done.stdout.splitlines()
-    for writer in ("reviewer-outage", "groom-stall", "switch-alarm"):
+    for writer in ("reviewer-outage", "switch-alarm"):
         assert f"notice-writers: {writer} repointed" in lines, lines
 
 

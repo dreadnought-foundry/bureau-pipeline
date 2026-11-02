@@ -218,6 +218,19 @@ passes `secrets: inherit`: it already holds the token, so without the variable
 it would change buckets the moment `stable` advanced, with nobody deciding.
 `==` in a GitHub expression ignores case, so `PLANNER` opts in too.
 
+**The Reconcile sweep is the exception: it spends the token by default
+(DRE-8716).** On 2026-11-01 the sweep sent about three of every four requests
+on the fleet key, which ran down to about 840 of 2,500 while the planner's
+bucket sat near full. So every key-holding step in `reconcile.yml`'s `sweep`
+job reads `LINEAR_PLANNER_KEY` ahead of the fleet key, with the fleet key as
+its 401 fallback, in every repo that holds the token, `secrets: inherit` stubs
+included. A repo puts its sweep back on the fleet key by setting the variable
+`LINEAR_SWEEP_BUCKET` to `fleet` (`!=` ignores case too, so `FLEET` works). It
+takes no code change and no wait for `stable`. Set it when the planner's bucket
+runs short: planners posting `🪫 planner-hold: held`, or `planner-oauth`
+budget lines reading under about 2,000. Set it on agent-bureau and
+bureau-pipeline first, since they send most of the sweep's requests.
+
 **Before setting it on any repo, measure what that repo's agents would spend.**
 The OAuth bucket allows 5,000 requests an hour against the API key's 2,500, but
 only 2,000,000 complexity points an hour against the API key's 3,000,000, and
@@ -229,7 +242,8 @@ both buckets.
 **A token already known to be dead is never sent (Stage 2 #30).** The repository
 variable `LINEAR_PLANNER_KEY_EXPIRES_AT` holds the published token's expiry in
 epoch seconds. Every job that can hold the token (the four above, plus
-plan.yml's `plan` and `publish`) passes it to `scripts/linear_ops.py`. When the
+plan.yml's `plan` and `publish` and reconcile.yml's `sweep`) passes it to
+`scripts/linear_ops.py`. When the
 expiry has passed, or is less than a minute away, each process goes straight to
 the fleet key and prints one `linear-key: planner-oauth not sent (...)` line,
 rather than spending a 401 first. When the variable is absent, nothing changes.

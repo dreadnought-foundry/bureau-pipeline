@@ -311,7 +311,16 @@ class TheRepairCardIsTheTargetTest(unittest.TestCase):
 
 # ── 4. the delivery step, executed ───────────────────────────────────────────
 SHIM = r"""#!/bin/bash
-printf '%s\n' "$*" >> "$SHIM_LOG"
+# A body in a file arrives as `--body-file=PATH` (DRE-8758); the log carries
+# the body, as the real client posts it.
+logged=()
+for a in "$@"; do
+  case "$a" in
+    --body-file=*) [ -f "${a#--body-file=}" ] && a="$(cat "${a#--body-file=}")" ;;
+  esac
+  logged+=("$a")
+done
+printf '%s\n' "${logged[*]}" >> "$SHIM_LOG"
 case "$*" in
   *linear_ops.py\ find-open*) printf '%s' "${FAKE_FOUND:-}"; exit "${FAKE_FIND_RC:-0}" ;;
   *medic_retry.py\ repair-card*) printf '%s' "${FAKE_REPAIR:-}"; exit "${FAKE_REPAIR_RC:-0}" ;;

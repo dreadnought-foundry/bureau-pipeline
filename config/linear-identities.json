@@ -61,7 +61,10 @@
     "published it, and since Stage 2 (fix #12) so do agent-task.yml,",
     "agent-fix.yml, qa-review.yml, verify.yml and proof-task.yml in a repo",
     "that has opted in with the variable `LINEAR_AGENT_BUCKET=planner`",
-    "(review item 29); each",
+    "(review item 29); and since DRE-8716 so does reconcile.yml, in every",
+    "repo whose variable `LINEAR_SWEEP_BUCKET` is not `fleet` — the sweep sent",
+    "79% of the fleet key's requests on 2026-11-01 while this bucket idled;",
+    "each",
     "names it on the run's `linear-budget:` line as `budget: planner-oauth`;",
     "scripts/linear_ops.py prints a home's name only when this file declares",
     "it under the run's identity.",
@@ -94,7 +97,7 @@
         {
           "name": "planner-oauth",
           "env": "LINEAR_PLANNER_KEY",
-          "lives_in": "AWS Secrets Manager bureau/linear-oauth-planner/agent-bureau-token — the OAuth token the agent-bureau console keeps fresh (DRE-5587), the console being its only refresher — published by the console as the GitHub Actions secret LINEAR_PLANNER_KEY in every repo in config/repo-map.json, already in the form `Bearer <access token>`, and read as secrets.LINEAR_PLANNER_KEY by plan.yml, and by agent-task.yml, agent-fix.yml, qa-review.yml, verify.yml and proof-task.yml in a repo whose variable LINEAR_AGENT_BUCKET is `planner`. The same Agent-Bureau user on its own 5,000-an-hour bucket (DRE-5589). Exported by the operator into LINEAR_PLANNER_KEY, in that same `Bearer` form, before this check runs"
+          "lives_in": "AWS Secrets Manager bureau/linear-oauth-planner/agent-bureau-token — the OAuth token the agent-bureau console keeps fresh (DRE-5587), the console being its only refresher — published by the console as the GitHub Actions secret LINEAR_PLANNER_KEY in every repo in config/repo-map.json, already in the form `Bearer <access token>`, and read as secrets.LINEAR_PLANNER_KEY by plan.yml, by agent-task.yml, agent-fix.yml, qa-review.yml, verify.yml and proof-task.yml in a repo whose variable LINEAR_AGENT_BUCKET is `planner`, and by reconcile.yml in every repo whose variable LINEAR_SWEEP_BUCKET is not `fleet` (DRE-8716). The same Agent-Bureau user on its own 5,000-an-hour bucket (DRE-5589). Exported by the operator into LINEAR_PLANNER_KEY, in that same `Bearer` form, before this check runs"
         }
       ]
     },

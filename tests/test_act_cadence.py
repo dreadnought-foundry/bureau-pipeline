@@ -137,9 +137,10 @@ class TestEveryActDeclaresItsCadence:
         added the receipt of the step the medic takes on its diagnosis;
         sixty-one since DRE-7952 added the receipt of the one fix card a
         PROOF closes with when its unmet rows are all gaps; sixty-two since
-        DRE-8633 added the receipt of the Alarm Repair's one attempt on an
-        alarm left open on a card."""
-        assert len(pipeline_act.acts()) == 62
+        DRE-8648 added the notice a blocker parked in Intake or Hand-work
+        gives its owner; sixty-three since DRE-8633 added the receipt of the
+        Alarm Repair's one attempt on an alarm left open on a card."""
+        assert len(pipeline_act.acts()) == 63
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
@@ -225,8 +226,10 @@ class TestEveryActDeclaresItsCadence:
         bounds = {
             ".github/workflows/qa-review.yml": 65 * 60,
             ".github/workflows/agent-fix.yml": 120 * 60,
-            # The plan job a started epic's activate run is (DRE-5152).
-            ".github/workflows/plan.yml": 115 * 60,
+            # The plan job a started epic's activate run is (DRE-5152): the
+            # planner's own 115 plus the allowance hold in front of it
+            # (DRE-8617). No row waits on the whole job — see below.
+            ".github/workflows/plan.yml": 180 * 60,
             # The proof job a dispatched proof run is (DRE-5926).
             ".github/workflows/proof-task.yml": 120 * 60,
         }
@@ -236,6 +239,17 @@ class TestEveryActDeclaresItsCadence:
                 f"{workflow} no longer declares timeout-minutes: {seconds // 60}"
                 " — the cadences read off it move with it"
             )
+        # The planner's own share of plan.yml's job, declared once as
+        # PLANNER_OWN_MINUTES and summed against every turn ceiling there
+        # (DRE-8617). The four rows a plan.yml run follows wait on this, not on
+        # the whole job: the allowance hold before it is at most 65 minutes,
+        # posts `held` at its first answered read, and an activation run has
+        # removed the epic-queued label well inside 115.
+        own = "tests/test_plan_critic_wiring.py"
+        own_text = (ROOT / own).read_text(encoding="utf-8")
+        own_minutes = re.search(r"^PLANNER_OWN_MINUTES = (\d+)$", own_text, re.M)
+        assert own_minutes, f"{own} no longer declares PLANNER_OWN_MINUTES"
+        bounds[own] = int(own_minutes.group(1)) * 60
         # A threshold the pipeline declares as data rather than as a job
         # timeout: the switch alarm's `alarm_after_hours` (DRE-6437).
         switches = json.loads((ROOT / "config" / "switches.json").read_text())

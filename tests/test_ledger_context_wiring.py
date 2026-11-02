@@ -132,7 +132,7 @@ def fake_checkout(tmp: str) -> str:
     """
     pipeline = os.path.join(tmp, ".bureau-pipeline")
     os.makedirs(pipeline)
-    for name in ("scripts", "standards", "briefs"):
+    for name in ("scripts", "standards", "briefs", "agents.yaml"):
         os.symlink(os.path.join(ROOT, name), os.path.join(pipeline, name))
     config = os.path.join(pipeline, "config")
     os.makedirs(config)
@@ -287,14 +287,28 @@ def review_mechanical_step() -> dict:
 #: `$FAKE_COMMENTS`. Nothing else is asked of it by the step under test.
 FAKE_LINEAR_OPS = """\
 import os, sys
-cmd = sys.argv[1]
-if cmd == "children-json":
-    sys.stdout.write(open(os.environ["FAKE_CHILDREN"], encoding="utf-8").read())
-elif cmd == "comment":
-    with open(os.environ["FAKE_COMMENTS"], "a", encoding="utf-8") as fh:
-        fh.write(sys.argv[3] + "\\n")
-else:
-    sys.exit(f"fake linear_ops: unexpected {cmd!r}")
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
+
+
+def gql_paged(query, variables=None):
+    # `plan_proof_reach.py operator-cards` imports this module for its one
+    # board read: no operator card is open.
+    return []
+
+
+if __name__ == "__main__":
+    cmd = sys.argv[1]
+    if cmd == "children-json":
+        sys.stdout.write(open(os.environ["FAKE_CHILDREN"], encoding="utf-8").read())
+    elif cmd == "children-detail":
+        sys.stdout.write(open(os.environ["FAKE_DETAIL"], encoding="utf-8").read())
+    elif cmd == "description":
+        sys.stdout.write(open(os.environ["FAKE_DESCRIPTION"], encoding="utf-8").read())
+    elif cmd == "comment":
+        with open(os.environ["FAKE_COMMENTS"], "a", encoding="utf-8") as fh:
+            fh.write(sys.argv[3] + "\\n")
+    else:
+        sys.exit(f"fake linear_ops: unexpected {cmd!r}")
 """
 
 
@@ -453,25 +467,46 @@ class LedgerIsDerivedOncePerRunTest(unittest.TestCase):
             key, value = exported[0].split("=", 1)
 
             children = os.path.join(tmp, "children.json")
+            detail = os.path.join(tmp, "children-detail.json")
             comments = os.path.join(tmp, "comments.txt")
+            body = ("Edit them.\n**Files:** "
+                    + ", ".join(f"`{f}`" for f in files) + "\n")
             with open(children, "w", encoding="utf-8") as fh:
                 json.dump([{"identifier": "DRE-9501", "labels": [], "state": "Todo",
-                            "parent": epic,
-                            "body": "Edit them.\n**Files:** "
-                                    + ", ".join(f"`{f}`" for f in files) + "\n"}],
-                          fh)
+                            "parent": epic, "body": body}], fh)
+            # The children's detail, which the blocker-footprint check
+            # (DRE-8688) reads for each card's relations. One card blocks
+            # nothing, so its note says so rather than that it could not read.
+            with open(detail, "w", encoding="utf-8") as fh:
+                json.dump([{"identifier": "DRE-9501", "title": "Edit the ledger files",
+                            "body": body, "labels": [], "blocked_by": []}], fh)
+            # What the real run always has beside the children: the plan
+            # artifact and the epic's description, which the inventory check
+            # (DRE-8612) reads. Without them its note says they could not be
+            # read, which is not what this test is about.
+            description = os.path.join(tmp, "description.md")
+            with open(description, "w", encoding="utf-8") as fh:
+                fh.write("Split the ledger files.\n")
+            with open(os.path.join(runner_temp, "plan-artifact.md"), "w",
+                      encoding="utf-8") as fh:
+                fh.write("# Plan\n\nOne card edits the ledger files.\n")
             script = (review_mechanical_step()["run"]
                       .replace("${{ github.event.client_payload.identifier }}", epic)
                       .replace("${{ runner.temp }}", runner_temp))
             self.assertNotIn("${{", script)
             proc = run_step(script, tmp, {**without_ledger_env(), key: value,
+                                          "REPO_SLUG": "bureau-pipeline",
                                           "FAKE_CHILDREN": children,
+                                          "FAKE_DETAIL": detail,
+                                          "FAKE_DESCRIPTION": description,
                                           "FAKE_COMMENTS": comments})
             self.assertEqual(proc.returncode, 0, proc.stderr)
             note = open(comments, encoding="utf-8").read()
         self.assertIn("DRE-9501: shares 2 file(s) with DRE-9402", proc.stdout)
         self.assertIn("DRE-9402", note)
         self.assertIn("1 death row(s)", note)
+        self.assertIn("Inventory: none — the plan names no approved mockup", note)
+        self.assertIn("Blockers: 0 edge(s) read", note)
         self.assertNotIn("could not be read", note)
 
     def test_without_the_path_the_context_step_says_could_not_be_read(self):

@@ -166,12 +166,6 @@ on:
       BUREAU_APP_PRIVATE_KEY:
         required: false
 
-env:
-  # How many planners may run at once, as the console published it to this
-  # repo (epic DRE-5783). Empty when never published: planner_queue.cap()
-  # then reads config/planner-queue.json exactly as before.
-  PLANNER_MAX_RUNNING: ${{ vars.PLANNER_MAX_RUNNING }}
-
 jobs:
   groom:
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
@@ -885,6 +879,40 @@ jobs:
           echo "selected model: $MODEL (agent: verifier, groom verify)"
           case "$WHY" in DEGRADED*) echo "::warning::$WHY" ;; esac
 
+      # THE AGENT RUNS IN A GIT REPOSITORY (DRE-8741). The action works in the
+      # workspace root, and every checkout above lands under it, never in it.
+      # On a `pull_request` run — the replay gate — the action restores its
+      # config paths from the base branch before the CLI starts, and that
+      # opens with `git diff … HEAD`, `git ls-files` and `git fetch origin
+      # <base>` in the root. With no repository there it died on startup
+      # (`Not a git repository`, gate run 41370789518), and the leg wrote
+      # `unverified (agent step failed)` for every card. A `schedule` run
+      # makes none of those calls, which is why the morning never saw it.
+      #
+      # So the root is made an empty repository: one empty commit, nothing
+      # tracked, and `origin` this repository, which the action rewrites with
+      # its own token as it does any checkout's. Shallow (`.git/shallow`
+      # names the one commit), so the action fetches the base branch at
+      # depth 1 instead of its whole history, once per leg. The agent sees
+      # what it saw before, plus `.git/` — and, on a `pull_request` run only,
+      # the base branch's `CLAUDE.md`, which the restore checks out at the
+      # root. Never a checkout at the root: that would clean the downloaded
+      # proposal away and put a second repository beside `target/`.
+      # `continue-on-error`: a morning never loses its legs to this step.
+      # Pinned in tests/test_groom_replay_gate_wiring.py, which runs it and
+      # then the action's own git calls.
+      - name: Make the workspace root a git repository
+        if: ${{ matrix.repository != '' && steps.target.outcome == 'success' && steps.install_claude.outcome == 'success' }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          git init -q
+          git -c user.name=groom-verify -c user.email=groom-verify@users.noreply.github.com \
+            commit -q --allow-empty -m "the verify leg's workspace"
+          git rev-parse HEAD > .git/shallow
+          git config remote.origin.url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git config remote.origin.fetch "+refs/heads/*:refs/remotes/origin/*"
+
       # THE AGENT. Through the vendor action, never a raw Messages API call: a
       # subscription token answers 429 to every raw request (DRE-3074). The
       # two credential inputs are plan.yml's classify-step grammar, read by
@@ -1163,7 +1191,7 @@ jobs:
             --proposal proposal-verified.json --out receipt.txt
           if [ -s receipt.txt ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment \
-              "$CARD" "$(cat receipt.txt)"
+              "$CARD" --body-file=receipt.txt
             {
               echo
               cat receipt.txt

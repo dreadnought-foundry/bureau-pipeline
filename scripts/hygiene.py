@@ -17,7 +17,8 @@ One command per job of the workflow (DRE-5369).
 ## `read` — the board, once, and the budget floor
 
 The lanes in `LANES`, the start lanes among them as the contract names them
-(`lane_contract.START_LANES`) — plus `Hand-work` the day the lane contract
+(`lane_contract.START_LANES`), and `Intake`, which a lane reads and the guard
+still refuses to write (DRE-8648) — plus `Hand-work` the day the lane contract
 declares that lane (DRE-5240) — in ONE paged query through `board_snapshot.read_board`,
 in the shape `board_snapshot.CARD_QUERY` returns, written to a file keyed by
 lane. Then the floor: the fleet key's remaining requests off
@@ -116,9 +117,11 @@ ROOT = Path(__file__).resolve().parent.parent
 #: The lanes the board read covers. The start lanes are the contract's
 #: (`lane_contract.START_LANES`, DRE-7112), so a card in any of them is read
 #: and a retiring one's deleted entry narrows the read with no edit here.
-#: `Hand-work` joins them when the contract declares it (`board_lanes`); until
-#: then it is absent and skipped, never an error.
-LANES = ("Green Light", *lane_contract.START_LANES, "Triage", "In Review")
+#: `Intake` is read for the blocker-owner lane (`hygiene_blockers`, DRE-8648)
+#: and stays in `REFUSED_LANES`: read, never written. `Hand-work` joins them
+#: when the contract declares it (`board_lanes`); until then it is absent and
+#: skipped, never an error.
+LANES = ("Green Light", *lane_contract.START_LANES, "Triage", "In Review", "Intake")
 HAND_WORK = "Hand-work"
 
 #: Where lane modules are discovered, and the glob that finds them.
@@ -165,6 +168,7 @@ TAGS = {
     "hygiene-cause-name": "hyg-cause-named",
     "hygiene-hold-clear": "hyg-hold-cleared",
     "hygiene-triage-alarm": "hyg-triage-aged",
+    "hygiene-blocker-owner-notice": "hyg-blocker-owner",
 }
 _ACT_OF_TAG = {tag: act for act, tag in TAGS.items()}
 
@@ -379,15 +383,22 @@ def _clock(now: datetime | str) -> str:
     return now if isinstance(now, str) else pt(now)
 
 
-def receipt(act: str, cause: str, evidence: list, now: datetime | str) -> str:
+def receipt(act: str, cause: str, evidence: list, now: datetime | str,
+            notes: list | tuple = ()) -> str:
     """Every comment the agent writes, composed here and never by hand:
 
         🧹 hygiene: <tag> — <cause> · <HH:MM PT>
         evidence: <item>, <item>
 
+        <note>
+        <note>
+
     and the act's `📎 pipeline-act:` trailer, through `pipeline_act.receipt`.
     `now` is the pass's clock, or the `HH:MM PT` it already rendered to — the
-    seam recomposes a receipt it read back, to prove it was composed here."""
+    seam recomposes a receipt it read back, to prove it was composed here.
+    `notes` are the lines a person reads, behind one blank line — a notice
+    that lists what it found (DRE-8648); most acts carry none, and their
+    receipts are what they always were. A note is one line, and may be empty."""
     tag = _act_tag(act)
     _check_cause(cause)
     items = [str(e) for e in evidence or []]
@@ -396,8 +407,13 @@ def receipt(act: str, cause: str, evidence: list, now: datetime | str) -> str:
             f"a {act} receipt names the evidence it read — one line per item, "
             "at least one item"
         )
+    lines = [str(n) for n in notes or ()]
+    if any("\n" in n or "\r" in n for n in lines):
+        raise ValueError(f"a {act} receipt's note is one line")
     detail = (f"{RECEIPT_MARK} {tag} — {cause}{_SEPARATOR}{_clock(now)}\n"
               f"{_EVIDENCE}{', '.join(items)}")
+    if lines:
+        detail += "\n\n" + "\n".join(lines)
     return pipeline_act.receipt(act, detail)
 
 
@@ -418,8 +434,15 @@ def _receipt_parts(body: str) -> tuple:
     lines = (body or "").splitlines()
     if head is None or len(lines) < 2 or not lines[1].startswith(_EVIDENCE):
         raise Forbidden("every comment the hygiene agent writes is composed by hygiene.receipt")
-    parts = (_ACT_OF_TAG[head["tag"]], head["cause"],
-             lines[1][len(_EVIDENCE):].split(", "), head["clock"])
+    act = _ACT_OF_TAG[head["tag"]]
+    # The notes are what stands between the evidence line and the trailer,
+    # behind the one blank line `receipt` writes; any other shape recomposes
+    # to a different body and is refused below.
+    suffix = f"\n\n{pipeline_act.trailer(act)}"
+    detail = body[:-len(suffix)] if body.endswith(suffix) else body
+    rest = detail.split("\n")[2:]
+    notes = tuple(rest[1:] if rest[:1] == [""] else rest)
+    parts = (act, head["cause"], lines[1][len(_EVIDENCE):].split(", "), head["clock"], notes)
     try:
         composed = receipt(*parts)
     except ValueError as e:

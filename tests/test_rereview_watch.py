@@ -62,6 +62,7 @@ import os
 import sys
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timedelta
 from unittest import mock
 
 ROOT = os.path.join(os.path.dirname(__file__), "..")
@@ -74,7 +75,7 @@ os.environ.setdefault("REPO_SLUG", "bureau-pipeline")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import plan_critic as pc  # noqa: E402
-import planner_queue  # noqa: E402
+import planner_allowance  # noqa: E402
 import rereview_watch as rw  # noqa: E402
 import review_rerun  # noqa: E402
 
@@ -933,12 +934,24 @@ def died_thread(*extra) -> list[dict]:
                    else _rec(item, "2026-09-15T18:00:00Z") for item in extra]
 
 
+def _at(iso: str) -> datetime:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00"))
+
+
 def _slot(state: str, at: str, *, run: str = "36700000001",
-          pipeline: bool = True, place: int | None = None) -> dict:
-    """One planner-slot receipt in DRE-5176's grammar, as a thread row."""
-    body = planner_queue.format_receipt(
-        state, card=EPIC, run=run, repo=REPO, trigger="planning", at=at,
-        place=place, of=place)
+          pipeline: bool = True, until: str | None = None) -> dict:
+    """One `🪫 planner-hold:` receipt in DRE-8616's grammar, composed by the
+    module that owns it, as a thread row. A `held` is live until `until`
+    (an hour after `at` unless said)."""
+    if state == "held":
+        body = planner_allowance.format_receipt(
+            "held", card=EPIC, run=run, repo=REPO, remaining=312, limit=5000,
+            at=_at(at), next_read=_at(at) + timedelta(minutes=5), every=5,
+            until=_at(until) if until else _at(at) + timedelta(minutes=65))
+    else:
+        body = planner_allowance.format_receipt(
+            state, card=EPIC, run=run, repo=REPO, remaining=1400, limit=5000,
+            at=_at(at), because="allowance-ok")
     return _rec(body, at, pipeline)
 
 
@@ -1190,16 +1203,20 @@ class DiedNoRetry(unittest.TestCase):
         self.assertIn(DEAD_RUN, rw.notice(EPIC, found))
 
     def test_a_retry_that_reached_the_planner_is_dispatched_behind_it(self):
-        """The retry the review asked for itself claimed a slot: that is a
-        retry dispatched behind the tombstone, not silence."""
-        records = died_thread(_slot("claimed", "2026-09-15T17:50:00Z",
-                                    run="36700000009"),
-                              _slot("released", "2026-09-15T18:10:00Z",
+        """The retry the review asked for was held by the allowance and then
+        started: that is a retry dispatched behind the tombstone, not
+        silence."""
+        records = died_thread(_slot("held", "2026-09-15T17:50:00Z",
+                                    run="36700000009",
+                                    until="2026-09-15T18:20:00Z"),
+                              _slot("started", "2026-09-15T17:55:00Z",
                                     run="36700000009"))
         self.assertIsNone(rw.overdue(records, EPIC, pc.REVIEW_LANE, LATER, 45))
+        reading = rw.read(records, EPIC, pc.REVIEW_LANE, LATER, 45)
+        self.assertIn("a retry reached the planner behind it", reading.why)
 
-    def test_the_dead_runs_own_release_is_not_a_retry(self):
-        records = died_thread(_slot("released", "2026-09-15T17:44:00Z",
+    def test_the_dead_runs_own_receipt_is_not_a_retry(self):
+        records = died_thread(_slot("started", "2026-09-15T17:44:00Z",
                                     run=DEAD_RUN))
         found = rw.overdue(records, EPIC, pc.REVIEW_LANE, LATER, 45)
         self.assertIsNotNone(found)
@@ -1279,13 +1296,13 @@ class InProgressSentBack(unittest.TestCase):
         self.assertIn("died", reading.why)
 
 
-# --- 15. The planner line is not silence -------------------------------------
+# --- 15. A held planner is not silence --------------------------------------
 
-LINE_NOW = "2026-09-15T20:45:00Z"            # three hours after the line entry
-LINE_ENTRY = "2026-09-15T17:45:00Z"
+HOLD_NOW = "2026-09-15T20:45:00Z"            # three hours after the promise
+HOLD_AT = "2026-09-15T20:40:00Z"
 
 
-class ThePlannerLine(unittest.TestCase):
+class TheHeldPlanner(unittest.TestCase):
 
     def _all_silences_quiet(self, extra, now):
         for name, build, _ in PLANNING_SILENCES:
@@ -1304,33 +1321,45 @@ class ThePlannerLine(unittest.TestCase):
                     self.assertEqual(sweep.writes(), [])
                     yield reading, out
 
-    def test_an_epic_waiting_in_line_inside_the_bound_is_quiet(self):
-        extra = (_slot("waiting", LINE_ENTRY, place=3),)
-        for reading, out in self._all_silences_quiet(extra, LINE_NOW):
-            self.assertIn("waiting", reading.why)
-            self.assertIn("180", reading.why)
-            self.assertIn("waiting", out)
-            self.assertIn("180", out)
+    def test_an_epic_with_a_live_held_receipt_is_quiet(self):
+        extra = (_slot("held", HOLD_AT, run="36700000004",
+                       until="2026-09-15T21:45:00Z"),)
+        for reading, out in self._all_silences_quiet(extra, HOLD_NOW):
+            self.assertIn("held by the planners' Linear allowance", reading.why)
+            self.assertIn("36700000004", reading.why)
+            self.assertIn("held by the planners' Linear allowance", out)
 
-    def test_a_dispatch_from_the_line_inside_its_grace_is_quiet_too(self):
-        extra = (_slot("waiting", LINE_ENTRY, place=3),
-                 _slot("dispatched", "2026-09-15T20:40:00Z"))
-        for reading, _ in self._all_silences_quiet(extra, LINE_NOW):
-            self.assertIn("waiting", reading.why)
-            self.assertIn("180", reading.why)
-
-    def test_past_the_lines_bound_it_is_the_stall_watchdogs(self):
-        now = "2026-09-16T00:00:00Z"
-        extra = (_slot("waiting", "2026-09-15T17:59:00Z", place=3),)
-        for reading, _ in self._all_silences_quiet(extra, now):
-            self.assertIn("361", reading.why)
-            self.assertIn("stall watchdog", reading.why)
+    def test_an_epic_without_a_live_held_receipt_is_asked_for_as_before(self):
+        """No planner-hold receipt, a `held` past its `until`, or a `started`
+        older than the grace: the first firing asks for the review exactly as
+        it does on the bare thread. A died review is the exception for any
+        receipt at all: another run's receipt behind the tombstone is the
+        retry reaching the planner (section 13), so it is asked about bare."""
+        for extra in ((),
+                      (_slot("held", "2026-09-15T18:00:00Z",
+                             until="2026-09-15T19:05:00Z"),),
+                      (_slot("held", "2026-09-15T18:00:00Z",
+                             until="2026-09-15T19:05:00Z"),
+                       _slot("started", "2026-09-15T19:05:00Z"))):
+            for name, build, lane in self._promise_lanes():
+                if extra and name == "died":
+                    continue
+                with self.subTest(receipts=len(extra), silence=name, lane=lane):
+                    bare = rw.overdue(build(), EPIC, lane, HOLD_NOW, 45)
+                    self.assertIsNotNone(bare)
+                    found = rw.overdue(build(*extra), EPIC, lane, HOLD_NOW, 45)
+                    self.assertEqual(found, bare)
+                    sweep = _Sweep()
+                    spoke, _ = sweep(_Reader({EPIC: build(*extra)}), {EPIC: lane},
+                                     now=HOLD_NOW)
+                    self.assertEqual(spoke, [EPIC])
+                    self.assertEqual(len(sweep.dispatches), 1)
 
     def test_a_claim_after_the_notice_stops_the_second_firing(self):
         for name, build, _ in PLANNING_SILENCES:
             with self.subTest(silence=name):
                 records = build(_first_notice(build),
-                                _slot("claimed", "2026-09-15T19:22:00Z"))
+                                _slot("started", "2026-09-15T19:22:00Z"))
                 sweep = _Sweep()
                 spoke, _ = sweep(_Reader({EPIC: records}),
                                  {EPIC: pc.REVIEW_LANE}, now=PAST_NOTICE)
@@ -1339,16 +1368,15 @@ class ThePlannerLine(unittest.TestCase):
                 self.assertEqual(sweep.dispatches, [])
 
     def test_any_receipt_after_the_notice_stops_the_second_firing(self):
-        """The card's rule is literal: no planner-slot receipt after the
-        notice. A claim that has already been released is not an open claim,
-        so this is the rule itself holding, not the running-review rule."""
+        """The rule is literal: no planner-hold receipt after the notice. A
+        `held` that has expired is no hold, so this is the rule itself
+        holding, not the held-planner rule."""
         for name, build, _ in PLANNING_SILENCES:
             with self.subTest(silence=name):
                 records = build(_first_notice(build),
-                                _slot("claimed", "2026-09-15T18:50:00Z",
-                                      run="36700000007"),
-                                _slot("released", "2026-09-15T19:00:00Z",
-                                      run="36700000007"))
+                                _slot("held", "2026-09-15T18:50:00Z",
+                                      run="36700000007",
+                                      until="2026-09-15T19:20:00Z"))
                 reading = rw.read(records, EPIC, pc.REVIEW_LANE, PAST_NOTICE, 45)
                 self.assertTrue(reading.found is None or reading.spoken,
                                 reading.why)
@@ -1366,14 +1394,14 @@ class ThePlannerLine(unittest.TestCase):
             yield name, build, pc.REVIEW_LANE
         yield "sent back", thread, pc.APPROVAL_LANE
 
-    def test_a_claim_newer_than_the_promise_means_the_review_is_running(self):
-        """No notice yet, so nothing but the open claim stands between the
-        promise and a first firing. The claim is still open at LATER (the
-        TTL is 115 minutes)."""
+    def test_a_start_newer_than_the_promise_means_the_review_is_running(self):
+        """No notice yet, so nothing but the start stands between the promise
+        and a first firing: a review held past its promise started 35
+        minutes before LATER, inside its 45-minute grace."""
         claim_run = "36700000005"
         for name, build, lane in self._promise_lanes():
             with self.subTest(silence=name, lane=lane):
-                records = build(_slot("claimed", "2026-09-15T18:00:00Z",
+                records = build(_slot("started", "2026-09-15T18:10:00Z",
                                       run=claim_run))
                 self.assertIsNone(rw.overdue(records, EPIC, lane, LATER, 45))
                 reading = rw.read(records, EPIC, lane, LATER, 45)
@@ -1386,24 +1414,24 @@ class ThePlannerLine(unittest.TestCase):
                 self.assertEqual(sweep.dispatches, [])
                 self.assertEqual(sweep.writes(), [])
 
-    def test_a_claim_older_than_the_promise_is_not_the_review(self):
-        """A claim still open but made before the promise — the first
-        critic's own run, say — is not the review the promise asked for. It
-        sits in the thread where its stamp puts it: after the attempt's
-        marker, before the promise."""
+    def test_a_start_older_than_the_promise_is_not_the_review(self):
+        """A start made before the promise — the first critic's own run,
+        say — is not the review the promise asked for. It sits in the thread
+        where its stamp puts it: after the attempt's marker, before the
+        promise."""
         for name, build, lane in self._promise_lanes():
             with self.subTest(silence=name, lane=lane):
                 records = build()
-                records.insert(2, _slot("claimed", "2026-09-15T17:30:00Z",
+                records.insert(2, _slot("started", "2026-09-15T17:30:00Z",
                                         run="36700000006"))
                 found = rw.overdue(records, EPIC, lane, LATER, 45)
                 self.assertIsNotNone(found)
                 self.assertEqual(found["firing"], 1)
 
-    def test_a_waiting_receipt_someone_else_posted_is_not_read(self):
+    def test_a_held_receipt_someone_else_posted_is_not_read(self):
         records = handed_off_thread(
-            _slot("waiting", LINE_ENTRY, place=3, pipeline=False))
-        found = rw.overdue(records, EPIC, pc.REVIEW_LANE, LINE_NOW, 45)
+            _slot("held", HOLD_AT, until="2026-09-15T21:45:00Z", pipeline=False))
+        found = rw.overdue(records, EPIC, pc.REVIEW_LANE, HOLD_NOW, 45)
         self.assertIsNotNone(found)
         self.assertEqual(found["firing"], 1)
 

@@ -190,9 +190,25 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: `needs-human`); a lane read in its place paid 22 whole-thread reads for
 #: Queued cards no hold was ever on.
 #:
+#: It was 54 until DRE-8646 (measured 2026-11-01: 53 before, 59 after) said
+#: on the card why a Queued card whose blockers are all finished waits. This
+#: board keeps 16 such cards under an epic that is not active, and each gets
+#: one `🧾 promotion-wait: epic-not-active —` comment, said once by
+#: `_surface_once` counting its key on the card's whole thread. Thirteen
+#: threads come off the board read; three are exhausted comment windows,
+#: DRE-900077, DRE-900203 and DRE-900287, each read whole in two pages, all
+#: charged to `promote_ready`: 53 + 6 = 59. The count runs on every pass that
+#: refuses the card, so a live board pays it each pass for each such card
+#: past the window, whether or not the comment is already there.
+#:
+#: It was 59 until DRE-8622 (measured 2026-11-02: 58) deleted the planner
+#: line's backstop with the cap. Its one paged read of Green Light, charged to
+#: `serve_planner_line` since DRE-5178, is no longer asked, and no other phase
+#: reads that lane: 59 − 1 = 58.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 54
+REAL_BOARD_SWEEP_BUDGET = 58
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing

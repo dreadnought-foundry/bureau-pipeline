@@ -24,8 +24,11 @@ THE RULES UNDER TEST:
      and nothing after it, or any second-critic round or tombstone, is left in
      Planning with one line naming the watcher as its owner.
   3. One whose newest attempt record is a first-critic SEND_BACK is a stall.
-  4. The planner line's rule runs before the age gate, so an epic under review
-     that has waited in line past the bound is parked by THAT rule.
+  4. The stall clock alone measures a card (DRE-8618): one whose only recent
+     comment is an old planner-line `waiting` receipt is parked exactly as a
+     card with nothing on it would be, and one a planner run's heartbeat
+     touched inside the window is left alone. The planner line's own rule
+     (DRE-5177) went with the cap.
   5. The sweep hands `rereview_watch.report` this repo's Planning epics with
      children beside the active ones, and a lane reader that answers for them
      — and the skip in rule 2 covers no card outside that set, so an
@@ -36,6 +39,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_stall_leaves_re
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import re
 import sys
@@ -54,7 +58,6 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import dedupe_dispatch  # noqa: E402
 import plan_critic  # noqa: E402
-import planner_queue  # noqa: E402
 import planning_escalation  # noqa: E402
 import reconcile  # noqa: E402
 import rereview_watch  # noqa: E402
@@ -62,8 +65,7 @@ import validate_card  # noqa: E402
 
 CARD = "DRE-9301"
 EPIC = "DRE-9300"
-BOUND = 360  # the planner line's bound, pinned in test_planner_queue_escalation
-STALE = 180  # past PLANNING_MINUTES (120), inside the line's bound
+STALE = 180  # past PLANNING_MINUTES (120)
 
 #: Who wrote a comment, as the board read's `user { id }` carries it.
 FLEET = "fleet-user"
@@ -131,12 +133,25 @@ def _tombstone() -> str:
                                     "post", "error_max_turns", 141, 140)
 
 
+#: DRE-3698's thread as Linear held it (DRE-5644), old planner-line receipts
+#: and all — a recorded thread, so it may keep naming what the cap left.
+RECORDED_THREAD = ROOT / "tests" / "fixtures" / "dre5644_rereview_thread.json"
+
+
 def _waiting(minutes_ago: float, card: str = EPIC) -> str:
-    return planner_queue.format_receipt(
-        "waiting", card=card, run=f"run-waiting-{int(minutes_ago)}",
-        repo="dreadnought-foundry/agent-bureau", trigger="Planning",
-        at=_iso(minutes_ago), place=2, of=5,
-    )
+    """The old planner line's `waiting` receipt, as an old card still carries
+    it: the first one on DRE-3698's recorded thread, with its card and its
+    `at` rewritten. The ledger that composed it is deleted (DRE-8622), so the
+    line is read off the record rather than restated."""
+    thread = json.loads(RECORDED_THREAD.read_text(encoding="utf-8"))["thread"]
+    body = next(c["body"] for c in thread
+                if c["body"].startswith("🎟️") and " waiting · card " in c["body"])
+    body = re.sub(r" · card DRE-\d+", f" · card {card}", body, count=1)
+    return _AT.sub(f" · at {_iso(minutes_ago)}", body, count=1)
+
+
+#: The `at` a receipt line carries, dating its comment the way Linear would.
+_AT = re.compile(r" · at (\S+)")
 
 
 def _card(identifier=CARD, state="Planning", labels=(), minutes_stale=STALE,
@@ -148,8 +163,8 @@ def _card(identifier=CARD, state="Planning", labels=(), minutes_stale=STALE,
     nodes = []
     for n, entry in enumerate(bodies):
         body, author = entry if isinstance(entry, tuple) else (entry, FLEET)
-        parsed = planner_queue.parse_receipt(body)
-        created = parsed.at if parsed else _iso(minutes_stale + len(bodies) - n)
+        at = _AT.search(body.splitlines()[0]) if body else None
+        created = at.group(1) if at else _iso(minutes_stale + len(bodies) - n)
         nodes.append({"body": body, "createdAt": created, "user": {"id": author}})
     return {
         "id": f"uuid-{identifier}",
@@ -465,33 +480,44 @@ class TestEverythingElseIsAStall:
 
 
 # ===========================================================================
-# 4. The line's rule runs first
+# 4. The stall clock alone
 # ===========================================================================
-class TestTheLinesRuleRunsBeforeTheReviewSkip:
-    def test_an_epic_under_review_past_the_lines_bound_is_parked_by_the_line(self, capsys):
-        board = _Board(_epic(_boundary(), _pre(), _waiting(BOUND + 1),
-                             minutes_stale=BOUND + 1))
-        records = board.comment_records(EPIC)
-        assert rereview_watch.under_review(records, EPIC) is True
-        assert board.watch() == {EPIC}
-        assert board.states == [(EPIC, reconcile.PARKED_STATE)]
-        (note,) = board.notes(EPIC)
-        assert "waiting in line for a planner" in note
-        assert OWNER_LINE.format(EPIC) not in capsys.readouterr().out
+OLD_WAIT = 400  # past the old line's 360-minute bound and the stall window both
 
-    def test_the_lines_release_lands_before_the_note(self):
-        """The park ends the card's place in line (DRE-5378), and that release
-        is a comment: posted after the note it would be the newest comment on
-        the card when it enters Triage, and the plan-gate would let the relay
-        re-plan it."""
-        board = _Board(_epic(_waiting(BOUND + 1), minutes_stale=BOUND + 1,
-                             labels=MINE + ("agent:planner",)))
-        assert board.watch() == {EPIC}
-        (newest,) = board.newest_at_move
-        assert dedupe_dispatch.STALL_PARK_TAG in newest
-        released = [b for _, b in board.posted
-                    if planner_queue.parse_receipt(b) is not None]
-        assert len(released) == 1
+
+class TestTheStallClockAloneMeasuresTheCard:
+    def test_an_old_waiting_receipt_is_parked_as_a_card_with_nothing_on_it(self):
+        waiting = _Board(_card(bodies=[_waiting(OLD_WAIT, card=CARD)],
+                               minutes_stale=OLD_WAIT))
+        bare = _Board(_card(minutes_stale=OLD_WAIT))
+        assert waiting.watch() == bare.watch() == {CARD}
+        assert waiting.states == bare.states == [(CARD, reconcile.PARKED_STATE)]
+        (note,) = waiting.notes()
+        assert note == bare.notes()[0]
+        assert reconcile.stalled_planning_reason() in note
+        assert "waiting in line for a planner" not in note
+        assert "planner line" not in note
+        assert [b for _, b in waiting.posted] == [note], "no release, no receipt"
+
+    def test_a_planner_runs_heartbeat_inside_the_window_leaves_it_alone(self):
+        """The heartbeat bumped `updatedAt`: the clock reads a card something
+        happened to, whatever the old receipt under it says."""
+        heartbeat = "⏳ planning — reading the card"
+        board = _Board(_card(bodies=[_waiting(OLD_WAIT, card=CARD), heartbeat],
+                             minutes_stale=10))
+        assert board.watch() == set()
+        assert board.posted == [] and board.states == []
+        assert board.lane() == "Planning"
+
+    def test_an_epic_under_review_with_an_old_wait_is_the_watchers(self, capsys):
+        """The line's rule no longer runs before the review skip: the epic's
+        re-asked review is the re-review watcher's, as any review is."""
+        board = _Board(_epic(_boundary(), _pre(), _waiting(OLD_WAIT),
+                             minutes_stale=OLD_WAIT))
+        assert rereview_watch.under_review(board.comment_records(EPIC), EPIC) is True
+        assert board.watch() == set()
+        assert board.states == []
+        assert OWNER_LINE.format(EPIC) in capsys.readouterr().out
 
 
 # ===========================================================================
@@ -572,26 +598,24 @@ class TestTheWordsFollowTheDestination:
         assert not re.search(r"post-approval", source, re.IGNORECASE)
 
     def test_the_hold_message_names_the_second_critic(self, capsys):
-        waiting = planner_queue.format_receipt(
-            "waiting", card=EPIC, run="run-1",
-            repo="dreadnought-foundry/agent-bureau", trigger="In Progress",
-            at=_iso(40), place=1, of=2)
+        held = (f"🪫 planner-hold: held · card {EPIC} · run 1 · repo "
+                "dreadnought-foundry/agent-bureau · remaining 312 of 5000 · "
+                f"next read at {_iso(-5)} · every 5 min · until {_iso(-60)} · "
+                f"at {_iso(5)}")
         assert reconcile.post_critic_hold_is_overdue(
-            plan_critic.POST_UNREAD_TAG, _iso(45), [waiting]) is False
+            plan_critic.POST_UNREAD_TAG, _iso(45), [held]) is False
         out = capsys.readouterr().out
         assert "the second critic's review has not started" in out
 
     @pytest.mark.parametrize("reason", [
         lambda: reconcile.stalled_planning_reason(),
         lambda: reconcile.FROZEN_PLANNING_REASON,
-        lambda: reconcile.waiting_too_long_reason(BOUND + 1),
     ])
     def test_no_reason_says_it_is_in_front_of_the_ceo(self, reason):
         assert "in front of you" not in reason()
 
-    def test_the_line_reason_keeps_its_last_sentence(self):
-        assert reconcile.waiting_too_long_reason(BOUND + 1).endswith(
-            "Sending it back through Planning gives it a fresh place in line.")
+    def test_the_line_reason_is_gone_with_the_line(self):
+        assert not hasattr(reconcile, "waiting_too_long_reason")
 
 
 if __name__ == "__main__":

@@ -21,11 +21,15 @@ proposal a replay leaves behind.
         groom-replay-gate: reach <true|false> cards=<n> — <why>
 
   * `judge --proposal <proposal-verified.json> [--targets …] [--cases …]
-    [--out …]` — one line per case, then a count line; exit 1 when a case
-    whose `main.passes` is true fails its `expect` on the change.
+    [--out …]` — one line per case, then a count line, then a `failed
+    closed` line for each way the run failed closed; exit 1 when a case
+    whose `main.passes` is true fails its `expect` on the change, when such
+    a case was not checked, or when no case was checked at all.
 
-        groom-replay-gate: <case> expect=<expect> main=<pass|fail|none> head=<ended|none> search=<door|linear|none> <pass|fail|not judged>[ — REGRESSED| — now passes]
+        groom-replay-gate: <case> expect=<expect> main=<pass|fail|none> head=<ended|none> search=<door|linear|none> <pass|fail|not judged>[ — REGRESSED| — UNCHECKED: <why>| — now passes]
         groom-replay-gate: <n> cases — <p> pass, <f> fail, <x> not judged, <r> regressed
+        groom-replay-gate: failed closed — <u> case(s) pass(es) on main and was/were not checked: <case> (<card>, <why>), …
+        groom-replay-gate: failed closed — no case was checked: the replay judged none of the <n> cases
 
   * `record-main --proposal <proposal-verified.json> --at <ISO> [--cases …]`
     — the same lines, and each case's `main` block rewritten from a replay of
@@ -43,10 +47,23 @@ reported as pass, fail or not judged, and one that passes is `now passes`:
 the next Sunday's replay on `main` records it once the change merges.
 
 A case card is judged when its row in the verified proposal carries a
-`verify` record whose verdict is not `excluded`, and it ends somewhere that
-says something (`groom_replay_cases.passes`). Anything else — a crashed leg,
-a card the window did not reach, a card left out of the gate set — is `not
-judged`, never a pass.
+`verify` record whose verdict is an answer — not `excluded`, and not
+`unverified` — and it ends somewhere that says something
+(`groom_replay_cases.passes`). Anything else — a crashed leg, a card the
+window did not reach, a card left out of the gate set — is `not judged`,
+never a pass.
+
+## Failing closed (DRE-8741)
+
+`not judged` is never silent either. A case whose `main.passes` is true is
+in the gate set because the replay is meant to check it, so when the run
+leaves it `not judged` it is `unchecked`: its line ends with why — the
+`unverified` record's reason (`agent step failed`, …), `excluded` and its
+reason, `no verify record`, or `not on the replayed proposal` — and the run
+fails. A run that judged no case at all fails too, whatever `main` says.
+Gate run 41370789518 is why: its one verify leg crashed on startup, the
+record said `unverified (agent step failed)`, and the judge read the card's
+`not-verified` as off Planning, a pass.
 
 `--targets` names the `verify-targets.json` of the same run, and each case's
 line says which search its card was judged on: the row's
@@ -67,6 +84,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import groom_replay  # noqa: E402 — where a card ended
 import groom_replay_cases  # noqa: E402 — the cases, `passes`, the gate set
+import groom_verify_agent  # noqa: E402 — the two verdicts that are no answer
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -119,7 +137,11 @@ FAMILY = "groom"
 
 (PASS, FAIL, NOT_JUDGED) = ("pass", "fail", "not judged")
 REGRESSED = "REGRESSED"
+UNCHECKED = "UNCHECKED"
 NOW_PASSES = "now passes"
+FAILED_CLOSED = "failed closed"
+#: The verdicts that are no answer about the card: nothing judged it.
+NO_ANSWER = (groom_verify_agent.EXCLUDED, groom_verify_agent.UNVERIFIED)
 SEARCHES = ("door", "linear")
 NO_SEARCH = "none"
 NO_PATH = "no verify-step path changed"
@@ -232,10 +254,25 @@ def _on_proposal(proposal: dict, card: str) -> bool:
 
 
 def judged(proposal: dict, card: str) -> bool:
-    """The card's row carries a verify record whose verdict is not
-    `excluded`."""
+    """The card's row carries a verify record whose verdict is an answer —
+    neither `excluded` nor `unverified`."""
     mark = groom_replay._records(proposal).get(card)
-    return mark is not None and mark.get("verdict") != groom_replay.EXCLUDED
+    return mark is not None and mark.get("verdict") not in NO_ANSWER
+
+
+def why_not_judged(proposal: dict, card: str, head: str | None) -> str:
+    """Why the replay did not judge the card, in a few words: the record's
+    verdict and its reason when it carries one."""
+    if not _on_proposal(proposal, card):
+        return "not on the replayed proposal"
+    mark = groom_replay._records(proposal).get(card)
+    if mark is None:
+        return "no verify record"
+    verdict = groom_replay._one_line(mark.get("verdict")) or groom_verify_agent.UNVERIFIED
+    if verdict in NO_ANSWER:
+        reason = groom_replay._one_line(mark.get("reason"))
+        return f"{verdict} ({reason})" if reason else verdict
+    return f"{verdict}, ended {head or NO_SEARCH}"
 
 
 def searches(rows) -> dict[str, str]:
@@ -267,12 +304,15 @@ def judge_case(case: dict, proposal: dict, search: dict[str, str]) -> dict:
             "search": search.get(card, NO_SEARCH), "result": result,
             "passes": passes,
             "regressed": on_main is True and passes is False,
+            "unchecked": on_main is True and passes is None,
+            "why": why_not_judged(proposal, card, head) if passes is None else None,
             "now_passes": on_main is not True and passes is True}
 
 
 def case_line(judged_case: dict) -> str:
     j = judged_case
     tail = (f" — {REGRESSED}" if j["regressed"]
+            else f" — {UNCHECKED}: {j['why']}" if j["unchecked"]
             else f" — {NOW_PASSES}" if j["now_passes"] else "")
     return (f"{TAG} {j['case']} expect={j['expect']} main={j['main']} "
             f"head={j['head'] or NO_SEARCH} search={j['search']} "
@@ -281,7 +321,8 @@ def case_line(judged_case: dict) -> str:
 
 def judge(cases: list[dict], proposal: dict,
           search: dict[str, str] | None = None) -> tuple[list[str], dict]:
-    """`(lines, the --out document)`."""
+    """`(lines, the --out document)` — the case lines and the count line;
+    `failed_closed` reads the document for the rest."""
     done = [judge_case(case, proposal, search or {}) for case in cases]
     count = {word: sum(1 for j in done if j["result"] == word)
              for word in (PASS, FAIL, NOT_JUDGED)}
@@ -293,8 +334,30 @@ def judge(cases: list[dict], proposal: dict,
     doc = {"cases": [{k: v for k, v in j.items() if k != "passes"} for j in done],
            "regressed": regressed,
            "now_passes": [j["case"] for j in done if j["now_passes"]],
-           "not_judged": [j["case"] for j in done if j["result"] == NOT_JUDGED]}
+           "not_judged": [j["case"] for j in done if j["result"] == NOT_JUDGED],
+           "unchecked": [j["case"] for j in done if j["unchecked"]],
+           "checked": count[PASS] + count[FAIL]}
     return lines, doc
+
+
+def failed_closed(doc: dict) -> list[str]:
+    """The `failed closed` lines for a `judge` document: one naming every
+    case that passes on `main` and was not checked, with why, and one when
+    no case was checked at all. Empty when the run checked what it had to."""
+    lines = []
+    unchecked = [c for c in doc["cases"] if c["unchecked"]]
+    if unchecked:
+        n = len(unchecked)
+        said = ", ".join(f"{c['case']} ({c['card']}, {c['why']})" for c in unchecked)
+        lines.append(f"{TAG} {FAILED_CLOSED} — {n} "
+                     + ("case passes on main and was" if n == 1
+                        else "cases pass on main and were")
+                     + f" not checked: {said}")
+    if not doc["checked"]:
+        n = len(doc["cases"])
+        lines.append(f"{TAG} {FAILED_CLOSED} — no case was checked: the replay "
+                     f"judged none of the {n} case{'' if n == 1 else 's'}")
+    return lines
 
 
 # --------------------------------------------------------------------------- #
@@ -383,7 +446,8 @@ def main(argv=None) -> int:
                 print(f"{TAG} {e} — every case is search={NO_SEARCH}",
                       file=sys.stderr)
         lines, out = judge(doc["cases"], proposal, search)
-        print("\n".join(lines))
+        closed = failed_closed(out)
+        print("\n".join(lines + closed))
         if args.out:
             try:
                 with open(args.out, "w", encoding="utf-8") as fh:
@@ -391,7 +455,7 @@ def main(argv=None) -> int:
                     fh.write("\n")
             except OSError as e:
                 raise GateError(f"{args.out} could not be written: {e}")
-        return 1 if out["regressed"] else 0
+        return 1 if out["regressed"] or closed else 0
     except GateError as e:
         print(f"{TAG} {e}", file=sys.stderr)
         return 2

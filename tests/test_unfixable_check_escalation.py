@@ -630,6 +630,7 @@ class GateScenarioTest(unittest.TestCase):
         linear_log = td / "linear.jsonl"
         (td / ".bureau-pipeline" / "scripts" / "linear_ops.py").write_text(
             "#!/usr/bin/env python3\nimport json, os, sys\n"
+            'sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)\n'
             f"open({str(linear_log)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
             "code = int(os.environ.get('STUB_LINEAR_EXIT', '0'))\n"
             "if sys.argv[1:2] == ['count-comments'] and not code:\n"

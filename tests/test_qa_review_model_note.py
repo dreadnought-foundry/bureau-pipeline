@@ -113,7 +113,11 @@ class _Harness:
         for f in sorted(self.linear_dir.iterdir()):
             argv = json.loads(f.read_text())
             if len(argv) >= 3 and argv[0] == "comment":
-                out.append(argv[2])
+                body = argv[2]
+                # A body in a file arrives as `--body-file=PATH` (DRE-8758).
+                if body.startswith("--body-file="):
+                    body = Path(body[len("--body-file="):]).read_text().rstrip("\n")
+                out.append(body)
         return out
 
 

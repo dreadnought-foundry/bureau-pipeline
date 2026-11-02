@@ -114,7 +114,11 @@ SEED_CASES = ({
     "repo": "bureau-pipeline", "main": _unjudged()},)
 
 #: Where a card ended that says nothing about the verify step's answer.
-_UNJUDGED_ENDS = (None, groom_replay.EXCLUDED, groom_replay.UNPLACED)
+#: `not-verified` is where every `unverified` record puts its card — an agent
+#: step that failed or was skipped, no verdict file, no proof — so it is no
+#: answer either (DRE-8741: read as a pass, it let a broken brief through).
+_UNJUDGED_ENDS = (None, groom_replay.EXCLUDED, groom_replay.UNPLACED,
+                  groom_replay.NOT_VERIFIED)
 
 
 class CasesError(Exception):
@@ -127,7 +131,8 @@ class CasesError(Exception):
 
 def passes(case: dict, ended: str | None, *, judged: bool) -> bool | None:
     """Did the replay take the card where the person did? None when nothing
-    judged it — `judged` False, or it ended nowhere, excluded or unplaced."""
+    judged it — `judged` False, or it ended nowhere, excluded, unplaced or
+    not verified."""
     if not judged or ended in _UNJUDGED_ENDS:
         return None
     if case["expect"] == "off-planning":

@@ -97,6 +97,12 @@
       "when": "full passes only"
     },
     {
+      "tag": "proof-overdue:",
+      "printed_by": "scripts/proof_overdue_sweep.py",
+      "constant": "TAG",
+      "when": "every full reconcile pass since DRE-8626, in the `Proof overdue` step's log, where the repo carries a proof-run stub: one line per overdue card, then the note line"
+    },
+    {
       "tag": "proof identity:",
       "printed_by": ".github/workflows/proof-task.yml",
       "constant": null,
@@ -199,10 +205,28 @@
       "when": "every `sweep` run since DRE-8437, one line on stdout: the open record pull requests read, those closed (or that would be, not live), kept and unread"
     },
     {
+      "tag": "hung-job:",
+      "printed_by": "scripts/hung_job.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hung-jobs job's log and step summary"
+    },
+    {
+      "tag": "channel-hold:",
+      "printed_by": "scripts/channel_hold.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hold job's log"
+    },
+    {
       "tag": "planner-allowance:",
       "printed_by": "scripts/planner_allowance.py",
       "constant": "TAG",
       "when": "every read of the planners' Linear allowance since DRE-8616, one line on stdout: start or hold, the card, the remaining and the limit, the threshold, whether the read was answered or refused, the receipt and the run's request count"
+    },
+    {
+      "tag": "triage-unrepaired:",
+      "printed_by": "scripts/triage_unrepaired.py",
+      "constant": "TAG",
+      "when": "every Triage Repair run since DRE-8649, on stdout: one line per Triage card the repair could not fix (its card, its receipt word and when it arrived in Triage), then one closing line — the cards listed, whether every thread was read, and the console door's outcome, or unread when the door was not called"
     }
   ],
   "causes": [

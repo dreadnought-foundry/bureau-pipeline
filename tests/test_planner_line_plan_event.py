@@ -1,4 +1,4 @@
-"""The planner line dispatches the PLAN route, whatever the card's labels (DRE-5366).
+"""A plan is asked for on the PLAN route, whatever the card's labels (DRE-5366).
 
 THE INCIDENT. On 2026-09-30 DRE-5198 — a one-off with no `agent:planner` label
 — was sent back to Planning and waited in the fleet planner line (DRE-5167).
@@ -7,14 +7,16 @@ the event off the labels alone: no `agent:planner`, so `agent-execute`. A
 build run started on a card that was waiting to be PLANNED, and moved it to In
 Progress with no classification, no plan and no critic.
 
-A card waiting in the planner line is waiting to be planned. Both places that
-serve the line — `planner_queue.py dispatch` (plan.yml's end-of-run hand-off,
-DRE-5180) and `reconcile.serve_planner_line` (the sweep's backstop, DRE-5178)
-— must fire `agent-plan`, and the label rule stays for `review_rerun.py
-dispatch`'s activate route. The reconcile re-dispatch of a promoted card that
-has not started names `agent-execute` outright since DRE-7108: its cards are
-never epics, and left to the labels a one-off wearing `agent:planner` would be
-sent to the planner.
+A card waiting in the planner line was waiting to be planned, so both places
+that served the line fired `agent-plan` (DRE-5180, DRE-5178). The line went
+with the planner cap (DRE-8618), and its ledger and the sweep's drain of it
+with DRE-8622, so neither call site is left. What stays is the rule for
+`plan_run.fire`'s other callers: a caller asking for a plan names
+`agent-plan`, the label rule stays for `review_rerun.py dispatch`'s activate
+route, and the reconcile re-dispatch of a promoted card that has not started
+names `agent-execute` outright since DRE-7108: its cards are never epics, and
+left to the labels a one-off wearing `agent:planner` would be sent to the
+planner.
 
 Every dispatch here goes through the REAL `plan_run.fire`; only the `gh api
 repos/<repo>/dispatches` call is faked, and it records the event_type GitHub
@@ -45,10 +47,8 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import linear_ops  # noqa: E402
 import plan_run  # noqa: E402
-import planner_queue  # noqa: E402
 import reconcile  # noqa: E402
 import review_rerun  # noqa: E402
-from test_planner_queue_sweep import THIS, _pin, _waiting, _world  # noqa: E402,F401
 
 REPO = "dreadnought-foundry/agent-bureau"
 # The labels DRE-5198 carried when it was served: a one-off, no agent:planner.
@@ -93,75 +93,6 @@ def _fake_dispatch():
     fake = FakeDispatch()
     with mock.patch.object(plan_run.subprocess, "run", side_effect=fake.run):
         yield fake
-
-
-# --------------------------------------------------------------------------- #
-# The line's dispatch paths                                                    #
-# --------------------------------------------------------------------------- #
-
-
-def _cli_dispatch(record: dict, trigger: str = "Planning", reason: str = "") -> FakeDispatch:
-    """`planner_queue.py dispatch` exactly as plan.yml's end-of-run step runs it."""
-    posted = []
-    with _fake_dispatch() as fake, \
-            mock.patch.object(linear_ops, "gql", return_value={"issue": record}), \
-            mock.patch.object(planner_queue, "post_dispatched",
-                              side_effect=lambda *a, **k: posted.append((a, k))), \
-            contextlib.redirect_stdout(io.StringIO()):
-        rc = planner_queue.main(["dispatch", record["identifier"], "--run-id", "run-end",
-                                 "--repo", REPO, "--trigger-state", trigger,
-                                 "--reason", reason])
-    assert rc == 0
-    assert len(posted) == 1, "a confirmed dispatch posts its `dispatched` receipt"
-    return fake
-
-
-def test_the_end_of_run_hand_off_plans_a_one_off_it_serves_from_the_line():
-    fake = _cli_dispatch(_record("DRE-5198", ONE_OFF_LABELS), reason="re-run")
-    assert fake.events == ["agent-plan"]
-    assert fake.sent[0]["repo"] == REPO
-    assert fake.sent[0]["client_payload"]["identifier"] == "DRE-5198"
-
-
-def test_the_end_of_run_hand_off_plans_an_epic_as_before():
-    assert _cli_dispatch(_record("DRE-9001", EPIC_LABELS)).events == ["agent-plan"]
-
-
-def test_the_end_of_run_hand_off_plans_a_card_with_no_labels_at_all():
-    assert _cli_dispatch(_record("DRE-9002", [])).events == ["agent-plan"]
-
-
-def test_the_end_of_run_hand_off_keeps_the_activate_route_on_the_plan_event():
-    fake = _cli_dispatch(_record("DRE-9003", EPIC_LABELS), trigger="in progress",
-                         reason="re-review")
-    assert fake.events == ["agent-plan"]
-    assert fake.sent[0]["client_payload"]["trigger_state"] == "in progress"
-
-
-def _serve_one_off(ident: str, labels: list) -> FakeDispatch:
-    """`reconcile.serve_planner_line` over one waiting card, the real `fire`
-    under the fake dispatch."""
-    card = _waiting(ident, 30.0, reason="re-run")
-    card["labels"] = {"nodes": list(labels)}
-    real_fire = plan_run.fire
-    with _world([card]) as world, \
-            mock.patch.object(reconcile.plan_run, "fire", side_effect=real_fire), \
-            _fake_dispatch() as fake:
-        reconcile.serve_planner_line()
-    served = world.receipts("dispatched")
-    assert [ident for ident, _ in served] == [card["identifier"]]
-    return fake
-
-
-def test_the_sweep_backstop_plans_a_one_off_it_serves_from_the_line():
-    fake = _serve_one_off("DRE-5314", ONE_OFF_LABELS)
-    assert fake.events == ["agent-plan"]
-    assert fake.sent[0]["repo"] == THIS
-    assert fake.sent[0]["client_payload"]["identifier"] == "DRE-5314"
-
-
-def test_the_sweep_backstop_plans_an_epic_as_before():
-    assert _serve_one_off("DRE-9004", EPIC_LABELS).events == ["agent-plan"]
 
 
 # --------------------------------------------------------------------------- #
@@ -242,17 +173,14 @@ def test_fire_refuses_an_event_it_does_not_know():
 
 
 # --------------------------------------------------------------------------- #
-# No planner-line call site can produce agent-execute                          #
+# No plan call site can produce agent-execute                                  #
 # --------------------------------------------------------------------------- #
 
 # Every call of `plan_run.fire` in scripts/, by (file, enclosing function).
-# The planner line's call sites MUST pin the plan event; the others keep the
-# label rule. A new call site fails `test_every_fire_call_site_is_classified`
-# until it is placed in one of the two sets.
-PLANNER_LINE_SITES = {
-    ("planner_queue.py", "_cmd_dispatch"),
-    ("reconcile.py", "serve_planner_line"),
-}
+# A call site asking for a plan MUST pin the plan event; the others keep the
+# label rule or name their own. A new call site fails
+# `test_every_fire_call_site_is_classified` until it is placed in one of the
+# sets below.
 # The write layer's in-place restart of a card already in the start lane
 # (DRE-7109) keeps the label rule; the sweep's `redispatch` no longer does
 # (DRE-7108).
@@ -272,8 +200,9 @@ ROUTED_SITES = {
     ("review_rerun.py", "_cmd_dispatch"),
 }
 # Asks for an epic's activate run, which lives in plan.yml, so it pins
-# PLAN_EVENT like the planner line rather than trusting the label (DRE-5152:
-# the sweep's one re-dispatch of a start the relay never activated).
+# PLAN_EVENT, as the old planner line did, rather than trusting the label
+# (DRE-5152: the sweep's one re-dispatch of a start the relay never
+# activated).
 EPIC_START_SITES = {
     ("reconcile.py", "_redispatch_epic_start"),
 }
@@ -303,23 +232,26 @@ def _fire_calls() -> list[tuple[str, str, ast.Call]]:
 
 def test_every_fire_call_site_is_classified():
     sites = {(name, fn) for name, fn, _ in _fire_calls()}
-    assert sites == (PLANNER_LINE_SITES | LABEL_RULE_SITES | ROUTED_SITES
+    assert sites == (LABEL_RULE_SITES | ROUTED_SITES
                      | EPIC_START_SITES | BUILD_SITES), (
-        "a plan_run.fire call site was added or moved — say whether it serves "
-        "the planner line (it must pass event=plan_run.PLAN_EVENT) or keeps "
+        "a plan_run.fire call site was added or moved — say whether it asks "
+        "for a plan (it must pass event=plan_run.PLAN_EVENT) or keeps "
         f"the label rule: {sorted(sites)}")
 
 
-def test_no_planner_line_call_site_can_produce_agent_execute():
+def test_no_plan_call_site_can_produce_agent_execute():
+    found = 0
     for name, fn, node in _fire_calls():
-        if (name, fn) not in PLANNER_LINE_SITES | EPIC_START_SITES:
+        if (name, fn) not in EPIC_START_SITES:
             continue
+        found += 1
         event = [kw.value for kw in node.keywords if kw.arg == "event"]
         assert len(event) == 1, f"{name}:{fn} fires without pinning the event"
         value = event[0]
         assert (isinstance(value, ast.Attribute) and value.attr == "PLAN_EVENT"
                 and isinstance(value.value, ast.Name) and value.value.id == "plan_run"), (
             f"{name}:{fn} must pass event=plan_run.PLAN_EVENT, not {ast.unparse(value)}")
+    assert found == len(EPIC_START_SITES)
     assert plan_run.PLAN_EVENT == "agent-plan"
 
 

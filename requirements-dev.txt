@@ -3,7 +3,7 @@
 # minor/patch bumps ride the merge-gate rail, majors wait for a human
 # (.github/dependabot.yml). CI installs from this file (tests.yml), so a
 # bump here is what the suite actually runs against.
-pytest==9.1.1
+pytest==9.2.0
 # The mirror check's own test tools come from this file too (DRE-6622):
 # `scripts/mirror_check.py discover` names it after agent-bureau's
 # requirements, and the check runs pytest with `--no-cov`, which is
@@ -16,9 +16,9 @@ pytest-cov==7.1.0
 # had none. 1.4.0 is what agent-bureau's backend job installs inline
 # (recorded in tests/test_ci_python_plumbing_once.py), and it declares
 # `pytest<10,>=8.4`, which the pytest pin above satisfies.
-pytest-asyncio==1.4.0
+pytest-asyncio==1.4.1
 PyYAML==6.0.3
 # The proof run's browser (DRE-6025): `scripts/proof_browser.py prepare` reads
 # this line and installs exactly this version into a venv of its own, so the
 # proof run and the suite move together on one bump.
-playwright==1.63.0
+playwright==1.64.1

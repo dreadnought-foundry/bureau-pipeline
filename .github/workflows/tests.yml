@@ -108,11 +108,15 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history (DRE-5179): tests/test_planner_queue_wiring.py diffs
-          # plan.yml against the commit that added the planner slot step, and
-          # a depth-1 clone has no such commit — the check would skip, green
-          # and vacuous. BUREAU_REQUIRE_GIT_HISTORY below turns that skip into
-          # a failure here.
+          # Full history (DRE-5179; DRE-8617 deleted the test that asked for
+          # it first): tests/test_planner_allowance_wiring.py compares plan.yml's
+          # duplicate-dispatch guard with the merge base on `main`, and
+          # tests/test_epic_cap_activation.py,
+          # tests/test_escalations_park_in_green_light.py and
+          # tests/test_proof_task_workflow.py diff the file each one pins
+          # against the commit that changed it. A depth-1 clone has neither commit — each
+          # check would skip, green and vacuous. BUREAU_REQUIRE_GIT_HISTORY
+          # below turns that skip into a failure here.
           fetch-depth: 0
       # The shared plumbing, dogfooded (DRE-2589). This job used to run THREE
       # pip installs — one from the pinned manifest and two of bare `pyyaml`

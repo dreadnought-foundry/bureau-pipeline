@@ -351,7 +351,7 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
-## The hygiene agent's fourteen rows — `🧹 hyg-*` (DRE-5368)
+## The hygiene agent's fifteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |
 | -- | -- | -- | -- |
@@ -369,14 +369,17 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
 | `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
 | `hygiene-triage-alarm` | `hyg-triage-aged` | hold | `operator` |
+| `hygiene-blocker-owner-notice` | `hyg-blocker-owner` | hold | `operator` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
 table of tags is each row's anchor, and every receipt opens
 `🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
-trailer. **Which** act a pass takes is decided by a lane module
+trailer. A notice that lists what it found — the blocker-owner lane's
+(DRE-8648) — carries those lines behind one blank line after the evidence,
+and they are composed by the same `hygiene.receipt`. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all fourteen through one seam, which is why `tests/test_check_act_receipts.py`
+all fifteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 
@@ -394,6 +397,16 @@ reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
 that sees it), held or not: it parked again after the repair, or the repair did
 not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
 repair still running never alarms.
+
+`hygiene-blocker-owner-notice` (`scripts/hygiene_blockers.py`, DRE-8648) is
+said once on a card that has sat more than 48 hours in `Intake` or `Hand-work`
+while a `blocks` relation names an open card. It names the card's owner as
+plain text — the assignee, or the creator when nobody is assigned — lists every
+open card it holds up, directly and through chains of relations, and says the
+two ways on. An owner who is not a person reads `no owner to tell`, and the
+card is a left row in the summary too. The cause is `<card> in <lane> since
+<YYYY-MM-DD>`, so a card is told once per stay. The board read covers `Intake`
+for it, and the guard still never writes a card into that lane.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
@@ -573,7 +586,10 @@ an event hold owed its one chase (DRE-7967), unless the run reading finds
 somebody else on the card. The same switch governs the step after it, `Close
 proof records that cannot merge` (DRE-8452): until it is `true`, that step
 prints `would: close #<n>` for each open record pull request whose record
-cannot merge and closes nothing.
+cannot merge and closes nothing. So does `Proof overdue` (DRE-8626): until
+then it prints `would: comment`, `would: raise` and `would: resolve` lines
+and posts nothing. Its `⏳ proof-overdue:` comment is a report, not an act,
+so it is an `unconverted` row and carries no trailer.
 
 **A proof shadow posts no receipt** (DRE-7287). While the repository variable
 `PROOF_SHADOW_MODEL` names a model, each confirmed dispatch on a live pass is
@@ -706,7 +722,7 @@ job refuses a row the console does not carry.
 | act name | `triage-repair` |
 | kind · state · next actor | `recovery` · `dispatched` · `plan.yml` |
 | discharges | nothing |
-| cadence | `6900` — plan.yml's plan job, `timeout-minutes: 115`, the run a rewritten card's entry to Planning fires |
+| cadence | `6900` — the planner's own 115 minutes of plan.yml's plan job (`PLANNER_OWN_MINUTES`), the run a rewritten card's entry to Planning fires; the allowance hold in front of it posts `held` (DRE-8617) |
 | emitted by | `scripts/triage_repair.py`, at the `pipeline_act.receipt("triage-repair", …)` call in `_post` |
 
 A card the plan critic's bound parks in Triage, held `plan-critic-bound`, gets

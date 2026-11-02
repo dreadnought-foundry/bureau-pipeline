@@ -31,7 +31,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: The retired job's names, each spelled in two halves so the card's retirement
 #: grep over the tree for these three names stays clean and only ever finds a
-#: real leftover.
+#: real leftover. The workflow file and its name now belong to DRE-8655's
+#: Channel Watch; only the module is still retired.
 RETIRED_WORKFLOW = ".github/workflows/channel" "-watch.yml"
 RETIRED_MODULE = "channel" "_watch"
 RETIRED_NAME = "Channel" " Watch"
@@ -96,20 +97,35 @@ class CronIntervalHoursTest(unittest.TestCase):
 
 
 class TheChannelAlarmIsRetiredTest(unittest.TestCase):
-    """The job, its decision module and its registry row are gone, and nothing
-    still imports the module the helpers above came out of."""
+    """The alarm's decision module and its registry row are gone, and nothing
+    still imports the module the helpers above came out of.
 
-    def test_the_workflow_and_its_module_are_gone(self):
-        for path in (RETIRED_WORKFLOW,
-                     f"scripts/{RETIRED_MODULE}.py",
+    The workflow file and its name were taken again by DRE-8655, for a
+    different job: the hung-job watch and the stable hold check. So the file
+    may exist, and the medic watches that name; what must not come back is the
+    staleness alarm, so the file is held to run the new job's two modules and
+    never the retired one."""
+
+    def test_the_module_is_gone(self):
+        for path in (f"scripts/{RETIRED_MODULE}.py",
                      f"tests/test_{RETIRED_MODULE}.py"):
             self.assertFalse((ROOT / path).exists(), path)
 
-    def test_the_medic_no_longer_watches_it(self):
+    def test_the_workflow_by_that_name_is_not_the_alarm(self):
+        workflow = ROOT / RETIRED_WORKFLOW
+        if not workflow.exists():
+            return
+        text = workflow.read_text(encoding="utf-8")
+        self.assertNotIn(f"{RETIRED_MODULE}.py", text)
+        for module in ("hung_job.py", "channel_hold.py"):
+            self.assertIn(module, text)
+
+    def test_the_medic_watches_the_name_only_while_the_workflow_exists(self):
         medic = yaml.safe_load(
             (ROOT / ".github" / "workflows" / "self-medic.yml").read_text())
         watched = check_workflow_watchers.on_block(medic)["workflow_run"]["workflows"]
-        self.assertNotIn(RETIRED_NAME, watched)
+        self.assertEqual(RETIRED_NAME in watched,
+                         (ROOT / RETIRED_WORKFLOW).exists())
 
     def test_the_act_registry_has_no_row_for_it(self):
         acts = json.loads((ROOT / "config" / "pipeline-acts.json").read_text())

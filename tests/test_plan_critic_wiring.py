@@ -98,6 +98,82 @@ def agent_steps() -> list[dict]:
     return [s for s in steps() if str(s.get("uses") or "").split("@")[0] == ACTION]
 
 
+# The planner's own budget, in minutes: the clock the job had before the
+# allowance hold was put in front of it (DRE-5288's 115), and the one every
+# agent step's turn ceiling below is summed against. `jobs.plan.timeout-minutes`
+# is this plus the longest hold (DRE-8617, tests/test_planner_allowance_wiring.py).
+PLANNER_OWN_MINUTES = 115
+
+
+def planner_allowance_config() -> dict:
+    with open(os.path.join(ROOT, "config", "planner-allowance.json"), encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def planner_own_minutes() -> int:
+    """The job's clock less the longest a held planner waits before it starts:
+    `hold_max_minutes` plus `wait_minutes`, the stagger after a hold-max read
+    included (it is capped at `wait_minutes`, DRE-8616)."""
+    cfg = planner_allowance_config()
+    timeout = yaml.safe_load(wf_src())["jobs"]["plan"]["timeout-minutes"]
+    return timeout - cfg["hold_max_minutes"] - cfg["wait_minutes"]
+
+
+def planner_step_turns() -> tuple[list[int], list[dict], tuple, int]:
+    """Every agent step's worst-case turn ceiling in this file, as the job
+    timeout test sums them: (the turns, the `_retry` steps taken back out, the
+    five ceilings added by name, the one-off revision's worst case)."""
+    turns = [int(m) for m in re.findall(r"--max-turns\s+(\d+)", wf_src())]
+    # DRE-3970: a planner step's re-run on the next rung only starts after
+    # an attempt that did no work — a capacity refusal is one turn and $0,
+    # and anything more is vetoed — so the pair's worst case is ONE ceiling.
+    # The re-runs are taken back out of the sum, one ceiling each.
+    retries = [s for s in agent_steps()
+               if str(s.get("id") or "").endswith("_retry")]
+    for step in retries:
+        # A re-run whose ceiling is an expression (the re-plans, DRE-5288)
+        # was never in the literal scan, so there is nothing to take out.
+        literal = re.search(r"--max-turns\s+(\d+)",
+                            step["with"]["claude_args"])
+        if literal:
+            turns.remove(int(literal.group(1)))
+    # FIVE of the agent steps carry an EXPRESSION rather than a literal, so
+    # the literal scan above cannot see them; each one's worst case is
+    # added by name so the arithmetic keeps counting it.
+    #
+    #   * the post-approval review, sized per plan since DRE-3241 — and
+    #     since DRE-3289 its worst case is the RETRY cap, not the first-run
+    #     one: a review that died is re-run in a job of its own at
+    #     `retry_ceiling` turns, and the arithmetic has to cover the
+    #     longest run this workflow can start.
+    #   * the one-off read, sized per card since DRE-4381, whose worst case
+    #     is likewise its retry cap — the re-read after a turn-ceiling
+    #     death.
+    #   * the two re-plans — after the first critic and after the second —
+    #     sized per plan since DRE-5288, whose worst case is the cap.
+    #   * the planner's revision of a one-off card (DRE-5376), sized from
+    #     the one-off read's ceiling since DRE-7177
+    #     (`plan_critic.one_off_revision_turns`), which stops at the same
+    #     retry cap and so shares its worst case.
+    #
+    # A SIXTH expression would drop out of this arithmetic, which the job
+    # timeout test's count refuses. The revision is not summed: see there.
+    revision = max(pc.one_off_revision_turns(c)
+                   for c in range(1, pc.ONE_OFF_TURNS_RETRY_CAP + 1))
+    expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP,
+                   pc.REPLAN_TURNS_CAP, pc.REPLAN_TURNS_CAP, revision)
+    return turns, retries, expressions, revision
+
+
+def planner_step_minutes() -> float:
+    """The step budgets in minutes: every summed ceiling at 7 s/turn — the
+    upper end measured on completed portico runs — plus ~8 minutes of token
+    minting, checkouts, context assembly and Linear calls that the turn
+    arithmetic does not model."""
+    turns, _retries, expressions, _revision = planner_step_turns()
+    return (sum(turns) + sum(expressions[:-1])) * 7 / 60 + 8
+
+
 def assert_app_token_minted_after_review(case: unittest.TestCase, fragment: str) -> None:
     """The step's GH_TOKEN is a GitHub App token, minted AFTER the second
     critic's review — never the one minted at job start, which a review past
@@ -372,47 +448,7 @@ class TheBoundIsWired(unittest.TestCase):
                          - route.count("--act=epic-approval-queued"), 2)
 
     def test_the_job_timeout_leaves_room_for_two_planner_runs_and_two_reviews(self):
-        doc = yaml.safe_load(wf_src())
-        timeout = doc["jobs"]["plan"]["timeout-minutes"]
-        turns = [int(m) for m in re.findall(r"--max-turns\s+(\d+)", wf_src())]
-        # DRE-3970: a planner step's re-run on the next rung only starts after
-        # an attempt that did no work — a capacity refusal is one turn and $0,
-        # and anything more is vetoed — so the pair's worst case is ONE ceiling.
-        # The re-runs are taken back out of the sum, one ceiling each.
-        retries = [s for s in agent_steps()
-                   if str(s.get("id") or "").endswith("_retry")]
-        for step in retries:
-            # A re-run whose ceiling is an expression (the re-plans, DRE-5288)
-            # was never in the literal scan, so there is nothing to take out.
-            literal = re.search(r"--max-turns\s+(\d+)",
-                                step["with"]["claude_args"])
-            if literal:
-                turns.remove(int(literal.group(1)))
-        # FIVE of the agent steps carry an EXPRESSION rather than a literal, so
-        # the literal scan above cannot see them; each one's worst case is
-        # added by name so the arithmetic keeps counting it.
-        #
-        #   * the post-approval review, sized per plan since DRE-3241 — and
-        #     since DRE-3289 its worst case is the RETRY cap, not the first-run
-        #     one: a review that died is re-run in a job of its own at
-        #     `retry_ceiling` turns, and the arithmetic has to cover the
-        #     longest run this workflow can start.
-        #   * the one-off read, sized per card since DRE-4381, whose worst case
-        #     is likewise its retry cap — the re-read after a turn-ceiling
-        #     death.
-        #   * the two re-plans — after the first critic and after the second —
-        #     sized per plan since DRE-5288, whose worst case is the cap.
-        #   * the planner's revision of a one-off card (DRE-5376), sized from
-        #     the one-off read's ceiling since DRE-7177
-        #     (`plan_critic.one_off_revision_turns`), which stops at the same
-        #     retry cap and so shares its worst case.
-        #
-        # A SIXTH expression would drop out of this arithmetic, which is what
-        # the count below refuses.
-        revision = max(pc.one_off_revision_turns(c)
-                       for c in range(1, pc.ONE_OFF_TURNS_RETRY_CAP + 1))
-        expressions = (rr.POST_REVIEW_RETRY_CAP, pc.ONE_OFF_TURNS_RETRY_CAP,
-                       pc.REPLAN_TURNS_CAP, pc.REPLAN_TURNS_CAP, revision)
+        turns, retries, expressions, revision = planner_step_turns()
         self.assertEqual(
             len(turns), len(agent_steps()) - len(retries) - len(expressions),
             "every agent step but the five sized ones carries a literal "
@@ -427,25 +463,35 @@ class TheBoundIsWired(unittest.TestCase):
         revisers = [s for s in agent_steps()
                     if "steps.oneoff.outputs.action" in str(s.get("if") or "")]
         self.assertEqual(1, len(revisers), revisers)
-        turns.extend(expressions[:-1])
-        # 7 s/turn is the upper end measured on completed portico runs, plus
-        # ~8 minutes of token minting, checkouts, context assembly and Linear
-        # calls that the turn arithmetic does not model.
-        self.assertGreaterEqual(timeout, sum(turns) * 7 / 60 + 8,
+        # The planner's own share of the clock: the job's, less the longest a
+        # held planner waits before it starts (DRE-8617) — every minute of
+        # the hold is a minute no step of this arithmetic runs in.
+        own = planner_own_minutes()
+        self.assertEqual(own, PLANNER_OWN_MINUTES)
+        self.assertGreaterEqual(own, planner_step_minutes(),
                                 "the plan job cannot finish the rounds it now runs")
         # ...and the one-off route alone: the classifier, one read and one
         # revision, each at its worst case.
         self.assertGreaterEqual(
-            timeout, (pc.ONE_OFF_TURNS_RETRY_CAP + revision) * 7 / 60 + 8,
+            own, (pc.ONE_OFF_TURNS_RETRY_CAP + revision) * 7 / 60 + 8,
             "the one-off route cannot finish a read and a revision")
 
     def test_the_planning_stall_window_still_exceeds_the_job(self):
         """reconcile flags a Planning card nothing is happening to; it must not
-        alarm on a plan run that is simply still going."""
+        alarm on a plan run that is simply still going.
+
+        The sweep's clock is the card's `updatedAt`, which every receipt the
+        run posts bumps (reconcile.py, `PLANNING_MINUTES`). Since DRE-8617
+        the job is two stretches, and each has to fit inside the window on
+        its own: the allowance hold, which can post nothing between its
+        `held` and `started` receipts (`planner_allowance.py check` refuses a
+        config whose hold reaches the window), and the planner's own share,
+        whose route step posts the attempt boundary as soon as it starts."""
         import lane_contract
-        doc = yaml.safe_load(wf_src())
-        self.assertGreater(lane_contract.stale_minutes()["Planning"],
-                           doc["jobs"]["plan"]["timeout-minutes"])
+        stall = lane_contract.stale_minutes()["Planning"]
+        cfg = planner_allowance_config()
+        self.assertGreater(stall, planner_own_minutes())
+        self.assertGreater(stall, cfg["hold_max_minutes"] + cfg["wait_minutes"])
 
 
 ONE_OFF_MODEL = "Select model — one-off critic"
@@ -947,7 +993,7 @@ class ADeadReviewRetriesItselfOnce(unittest.TestCase):
         self.assertIn(HOLD_WRITE, park)
         self.assertIn('state "$EPIC" "Triage"', park)
         self.assertNotIn('state "$EPIC" "Green Light"', park)
-        self.assertIn('cat "$PARK_NOTE"', park,
+        self.assertIn('--body-file="$PARK_NOTE"', park,
                       "the note after-death wrote, not a rival sentence")
         self.assertIn('--note-file "$PARK_NOTE"', run,
                       "...and that is the file after-death was told to write")
@@ -1044,7 +1090,10 @@ class TheReviewSaysWhatItSpent(unittest.TestCase):
                     "if sys.argv[1] == 'children':\n"
                     "    print(7)\n"
                     "elif sys.argv[1] == 'comment':\n"
-                    f"    open({posted!r}, 'a').write(sys.argv[3])\n"
+                    "    body = sys.argv[3]\n"
+                    "    if body.startswith('--body-file='):\n"
+                    "        body = open(body[len('--body-file='):]).read().rstrip('\\n')\n"
+                    f"    open({posted!r}, 'a').write(body)\n"
                 )
             execution = os.path.join(raw, "claude-execution-output.json")
             with open(execution, "w") as f:
@@ -1290,7 +1339,7 @@ class TheResultFileDecidesNotTheStepOutcome(unittest.TestCase):
 
 REVIEW_MODE = "steps.route.outputs.mode == 'review'"
 ACTIVATE_MODE = "steps.route.outputs.mode == 'activate'"
-SLOT_CLAUSE = "steps.slot.outputs.admitted == 'true'"
+ALLOWANCE_CLAUSE = "steps.allowance.outputs.start == 'true'"
 
 GREEN_LIGHT_BOTH = "Epic → Green Light — both critics passed"
 REVIEW_HELD_PASS = "Review — the second critic passed a plan the first critic held"
@@ -1395,7 +1444,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         # writer check reads, and opens an attempt only on `activate-cycle`.
         self.assertGreaterEqual(run.count('state "$EPIC" "Planning"'), 1)
         self.assertIn("activate-cycle", run)
-        self.assertIn(SLOT_CLAUSE, gate_of(exact_step(ROUTE)))
+        self.assertIn(ALLOWANCE_CLAUSE, gate_of(exact_step(ROUTE)))
 
     def test_every_step_name_and_id_this_card_found_still_exists(self):
         names = {s.get("name") for s in steps()}
@@ -1585,7 +1634,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
         self.assertIn("linear_ops.py epics-in-flight --sight", run)
         self.assertIn('plan_critic.py sight --this "$EPIC" --sight', run)
 
-    def test_every_review_mode_model_step_waits_for_its_planner_slot(self):
+    def test_every_review_mode_model_step_waits_for_the_planner_allowance(self):
         models = [s for s in steps()
                   if runs_in_review(s) and str(s.get("uses") or "").split("@")[0] == ACTION]
         self.assertEqual(
@@ -1593,7 +1642,7 @@ class TheReviewRouteRunsTheSecondCriticBeforeGreenLight(unittest.TestCase):
             ["posta", "postreplan", "postreplan_retry"])
         for s in models:
             with self.subTest(step=s.get("name")):
-                self.assertIn(SLOT_CLAUSE, gate_of(s))
+                self.assertIn(ALLOWANCE_CLAUSE, gate_of(s))
 
     def test_every_review_mode_comment_is_declared_by_its_step(self):
         sites = [site for site in car.sites()
@@ -1863,14 +1912,14 @@ def job_step(job_name: str, name: str) -> dict:
 
 
 class _Facts:
-    """`test_planner_queue_wiring.Walk` resolves only `steps.*.outputs`; the
+    """`workflow_walk.Walk` resolves only `steps.*.outputs`; the
     `publish` job's gate reads `needs.plan.outputs`, so the facts are handed
     to it by name."""
 
     @staticmethod
     def walk(known: dict):
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from test_planner_queue_wiring import Walk, truth  # noqa: E402
+        from workflow_walk import Walk, truth  # noqa: E402
 
         class Facts(Walk):
             def _name(self, text):
@@ -2068,11 +2117,11 @@ RETIRED_PROMPT_SENTENCES = ("The CEO has already approved", "The CEO has APPROVE
 
 
 def plan_route_walk(known: dict):
-    """The three-valued `if:` reader the planner-slot wiring tests walk plan.yml
-    with (DRE-5179), with the job read as still green and the plan route's
-    facts handed in by name."""
+    """The three-valued `if:` reader plan.yml's gate tests walk it with
+    (`tests/workflow_walk.py`), with the job read as still green and the plan
+    route's facts handed in by name."""
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from test_planner_queue_wiring import Walk, truth  # noqa: E402
+    from workflow_walk import Walk, truth  # noqa: E402
 
     class PlanRoute(Walk):
         def _name(self, text):

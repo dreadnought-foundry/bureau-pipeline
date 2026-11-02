@@ -27,7 +27,7 @@ Each is judged past `REREVIEW_GRACE_MINUTES` from the record that made the
 promise and fires at most twice per record. The FIRST firing asks for the
 review itself (`review_rerun.py dispatch`, with `--reason` and
 `--trigger-state` always explicit) and says so. The SECOND is judged from the
-watcher's own notice — older than the grace, with no planner-slot receipt, no
+watcher's own notice — older than the grace, with no planner-hold receipt, no
 round and no tombstone after it — and parks the epic: `needs-human` FIRST,
 then `plan_critic.BOUND_PARK_LANE`, then a note ending with
 `plan_critic.REAPPROVE_HOW`. The label goes first because the relay
@@ -54,14 +54,16 @@ fire one):
     cannot come back on its own, and a review asked for into that wall
     would only die again, so the park note quotes the hand-off's reason.
 
-THE PLANNER LINE IS NOT SILENCE (DRE-5167). A review asked for claims a planner
-slot like any plan run; with none free it posts a `waiting` receipt and the
-line's backstop (DRE-5178) dispatches it in order. An epic in line inside
-the line's bound (`planner_queue.overdue`) is quiet whatever the age of its
-promise, and one past
-the bound belongs to the stall watchdog's line rule (DRE-5177) — one owner per
-shape. Every line fact is `planner_queue`'s, read off pipeline-written
-receipts only.
+A HELD PLANNER IS NOT SILENCE (DRE-8618). A review asked for reads the
+planners' Linear allowance before it starts, like any plan run (DRE-8616);
+below the threshold it posts a `🪫 planner-hold: held` receipt and waits,
+bounded by `hold_max_minutes`. While `planner_allowance.held` is true the
+epic is quiet whatever the age of its promise, and only then: an expired
+`held` reads as no hold. The planner line this replaces (DRE-5167) went with
+the cap. The rules below that ask whether a planner run reached the epic read
+the same receipts — a `started` one after the promise, inside the grace, is
+the review running — and every planner-hold fact is `planner_allowance`'s,
+read off pipeline-written receipts only.
 
 WHAT IT DOES NOT OWN. Every credential this reads is `plan_critic`'s, imported
 rather than re-spelled, so the sweep's gate and this detector can never
@@ -116,7 +118,7 @@ import hold  # noqa: E402
 import limit_recovery  # noqa: E402
 import linear_ops  # noqa: E402
 import plan_critic  # noqa: E402
-import planner_queue  # noqa: E402
+import planner_allowance  # noqa: E402
 import review_rerun  # noqa: E402
 
 #: The first word of every notice, and its idempotency key. In the
@@ -153,8 +155,8 @@ DIED = "died"
 #: DRE-3164 — about twenty minutes with setup. Forty-five minutes is
 #: comfortably longer than the kept promise and short enough that the shortest
 #: incident this was built for (DRE-4083, 3.5 hours) is acted on within four
-#: sweeps. A wait in the planner line is not measured against it at all (see
-#: the module docstring).
+#: sweeps. A planner held by the planners' Linear allowance is not measured
+#: against it at all (see the module docstring).
 #:
 #: Beside `reconcile.POST_CRITIC_GRACE_MINUTES` in spirit, including the reason
 #: it exists at all: this is a decision about when to ACT, never about what is
@@ -182,7 +184,7 @@ class Reading(NamedTuple):
     are separate because the console-honesty rule and the idempotency rule
     pull in opposite directions: the log line speaks on every sweep, a firing
     at most twice per record. `log` is a line the sweep prints for a QUIET
-    reading that still has something to say — the planner line.
+    reading that still has something to say — a held planner.
     """
 
     found: dict | None
@@ -276,7 +278,7 @@ def _records(entries) -> dict:
 
 
 def _receipt_node(entry):
-    """A thread row as the node `planner_queue.parse_receipt` dates by
+    """A thread row as the node `planner_allowance.parse_receipt` dates by
     Linear's own stamp (`createdAt`), not by the receipt's `at` field."""
     if isinstance(entry, dict):
         return {"body": entry.get("body") or "",
@@ -285,8 +287,8 @@ def _receipt_node(entry):
 
 
 def _receipt_bodies(records) -> list:
-    """The planner-slot evidence this may read: pipeline-written comments
-    only. A `waiting` receipt anyone else posts is not a place in line."""
+    """The planner-hold evidence this may read: pipeline-written comments
+    only. A `held` receipt anyone else posts is not a hold."""
     out = []
     for entry in records or []:
         if isinstance(entry, dict):
@@ -298,31 +300,40 @@ def _receipt_bodies(records) -> list:
 
 
 def _receipt(entry):
-    return planner_queue.parse_receipt(_receipt_node(entry))
+    return planner_allowance.parse_receipt(_receipt_node(entry))
 
 
-def _the_line(epic: str, bodies, now: str | None) -> Reading | None:
-    """The epic in the planner line, read through `planner_queue` — or None
-    when it is not in line."""
-    if not planner_queue.in_line(bodies, now):
+def _clock(now: str | None) -> str:
+    """`now` as the ISO instant `planner_allowance` compares against."""
+    return now or datetime.now(UTC).isoformat()
+
+
+def _the_hold(epic: str, bodies, now: str | None) -> Reading | None:
+    """The epic's planner run held by the planners' Linear allowance, read
+    through `planner_allowance.held` — or None when it is not held."""
+    if not planner_allowance.held(bodies, _clock(now)):
         return None
-    waited = planner_queue.waited_minutes(bodies, now)
-    receipts = [r for r in (planner_queue.parse_receipt(b) for b in bodies) if r]
+    receipts = [r for r in (planner_allowance.parse_receipt(b) for b in bodies) if r]
     newest = receipts[-1] if receipts else None
-    waits = [r for r in receipts if r.state == "waiting" and r.place]
-    place = (f", place {waits[-1].place} of {waits[-1].of}" if waits else "")
-    state = newest.state if newest else "waiting"
-    minutes = ("an unknown number of" if waited is None else str(int(waited)))
-    said = (f"waiting in the planner line for {minutes} min (newest receipt "
-            f"`{state}`{place})")
-    if planner_queue.overdue(bodies, now):
-        why = (f"{said}, past the line's bound — the Planning stall "
-               "watchdog's line rule (DRE-5177) owns this epic, so this "
-               "watcher leaves it alone")
-    else:
-        why = (f"{said} — a wait inside the line's bound is not silence; the "
-               "line's backstop dispatches it in order")
+    until = f" until {_utc(newest.until)}" if newest and newest.until else ""
+    run = f" (run {newest.run})" if newest else ""
+    why = (f"its planner run{run} is held by the planners' Linear allowance"
+           f"{until} — a held review is not silence; it starts by its bound")
     return Reading(None, False, why, log=f"rereview-missing: {epic} quiet — {why}")
+
+
+def _started(bodies, since: str, now: str | None, grace: int):
+    """The `started` planner-hold receipt posted after the promise and inside
+    the grace, or None: a review held past its promise starts later than the
+    promise, and is running for `grace` minutes from its start."""
+    receipts = [r for r in (planner_allowance.parse_receipt(b) for b in bodies) if r]
+    newest = receipts[-1] if receipts else None
+    if newest is None or newest.state != "started" or not _after(newest.created_at, since):
+        return None
+    try:
+        return newest if _minutes_since(newest.created_at, now) < grace else None
+    except ValueError:
+        return None
 
 
 def _lane_refusal(lane: str | None) -> str:
@@ -542,7 +553,7 @@ def _the_wall(promise: dict, entries, now: str | None, grace: int):
 
 
 def _receipts_after(entries, after: int) -> list:
-    """Planner-slot receipts the pipeline posted after `entries[after]`."""
+    """Planner-hold receipts posted after `entries[after]`."""
     return [r for r in (_receipt(e) for e in entries[after + 1:]) if r]
 
 
@@ -551,15 +562,15 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
     """What this epic's thread says about the promise, in one pass.
 
     Every refusal below is somebody else's business, and each one is read off
-    `plan_critic` or `planner_queue` rather than re-derived:
+    `plan_critic` or `planner_allowance` rather than re-derived:
 
       * a lane that is not Planning or In Progress. In Green Light both
         critics passed the plan; anywhere else — a start lane waiting on
         the dispatch lane among them — the epic is in a lane its plan does
         not explain, and there is no plan under review. An UNREADABLE lane is unknown,
         and unknown says nothing.
-      * the planner line. An epic waiting for a planner slot is quiet inside
-        the line's bound and the stall watchdog's past it.
+      * a held planner. An epic whose planner run the planners' Linear
+        allowance holds (`planner_allowance.held`) is quiet, and only then.
       * no promise this lane watches (see the module docstring), the bound
         reached, or a newest round of `NO_RESULT`.
       * a record Linear gave no `created_at` for. There is no arithmetic to do
@@ -568,17 +579,18 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
       * a limit death still behind its wall, or a stage the limit recovery
         re-entered inside the grace (DRE-5842, `_the_wall`). A hand-off
         from the recovery is the opposite: the park is due at once.
-      * a planner run that claimed a slot after the promise: the review is
-        running. For a dead review, any receipt behind the tombstone but the
-        dead run's own release: a retry reached the planner behind it.
+      * a planner run that started after a hold, after the promise and
+        inside the grace: the review is running. For a dead review, any
+        planner-hold receipt behind the tombstone but the dead run's own: a
+        retry reached the planner behind it.
     """
     grace = REREVIEW_GRACE_MINUTES if grace_minutes is None else grace_minutes
     if lane not in WATCHED_LANES:
         return Reading(None, False, _lane_refusal(lane))
     bodies = _receipt_bodies(records)
-    line = _the_line(epic, bodies, now)
-    if line is not None:
-        return line
+    hold = _the_hold(epic, bodies, now)
+    if hold is not None:
+        return hold
     entries = plan_critic.current_cycle_entries(records, epic)
     promise, refusal = _promise(records, epic, lane, entries)
     if promise is None:
@@ -616,21 +628,20 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
             f"{_what(promise)} {int(minutes)} min ago and the review it "
             f"promised has {grace} minutes to run"
         ))
-    claim = planner_queue.open_claim(bodies, now)
-    if claim is not None and _after(claim.created_at, since):
+    started = _started(bodies, since, now, grace)
+    if started is not None:
         return Reading(None, False, (
-            f"{_what(promise)}, and planner run {claim.run} claimed a slot "
-            "for this epic after it — the review is running"
+            f"{_what(promise)}, and planner run {started.run} started after a "
+            f"hold since — the review is running, and has {grace} minutes to run"
         ))
     index = promise["index"]
     if promise["silence"] == DIED:
         behind = [r for r in _receipts_after(entries, index)
-                  if not (r.state == "released"
-                          and r.run == promise["dead_run"])]
+                  if r.run != promise["dead_run"]]
         if behind:
             return Reading(None, False, (
                 f"the second critic's review died, and a retry reached the "
-                f"planner behind it (`{behind[-1].state}` from run "
+                f"planner behind it (planner-hold `{behind[-1].state}` from run "
                 f"{behind[-1].run}) — the retry the review asked for owns it"
             ))
     found = dict(promise, minutes=minutes, lane=lane, firing=1)
@@ -660,7 +671,7 @@ def read(records, epic: str, lane: str | None, now: str | None = None,
     landed = _receipts_after(entries, asked_index)
     if landed:
         return Reading(found, True, why + (
-            f" — asked for the review once already, and a planner-slot "
+            f" — asked for the review once already, and a planner-hold "
             f"receipt (`{landed[-1].state}`) landed after that, so the ask "
             "reached the planner; not parked"))
     return Reading(found, False, why + (

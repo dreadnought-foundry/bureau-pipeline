@@ -436,8 +436,9 @@ def test_a_finished_epic_outside_the_close_lanes_is_left_alone(board_pins, lane)
     assert sum("Triage" in lanes for lanes in lanes_read(with_epic)) == 1, (
         "the one board read carries the outage card's lane (DRE-6576), and "
         "closing from Backlog buys no other read of it")
-    assert sum("Green Light" in lanes for lanes in lanes_read(with_epic)) == 1, (
-        "the planner line's Green Light read is the only one")
+    assert not any("Green Light" in lanes for lanes in lanes_read(with_epic)), (
+        "no pass reads Green Light since DRE-8622 deleted the planner line's "
+        "drain, and closing from Backlog buys no read of it")
 
 
 class MergeBoard(budget.EpicBoard):

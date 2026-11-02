@@ -133,6 +133,15 @@ def _run_factory(state):
             return SimpleNamespace(
                 returncode=0, stdout=json.dumps(state["prs"]), stderr=""
             )
+        if argv[1] == "pr" and argv[2] == "view" and \
+                argv[argv.index("--json") + 1] != "comments":
+            # The alert's read of a pull request the listing does not hold
+            # (DRE-8690), or a refused read when the test names none.
+            view = state["views"].get(int(argv[3]))
+            if view is None:
+                return SimpleNamespace(returncode=1, stdout="",
+                                       stderr="HTTP 502: Bad Gateway")
+            return SimpleNamespace(returncode=0, stdout=json.dumps(view), stderr="")
         if argv[1] == "pr" and argv[2] == "view":
             # The full-thread read (DRE-7510): a thread the test names, or a
             # refused read when it names None.
@@ -165,22 +174,41 @@ def _run_factory(state):
     return fake_run
 
 
-def _sweep(prs, checks=CRASHED, runs=(), card_bodies=(), threads=None):
+def _sweep(prs, checks=CRASHED, runs=(), card_bodies=(), threads=None, alerts=(),
+           views=None):
     """Run recover_crashed_reviews once. `checks` is the jq'd review-check
-    payload for every head; `runs` the workflow_dispatch review runs;
+    payload for every head; `runs` the review runs every `gh run list`
+    answers (the workflow_dispatch probe and the per-head listing alike);
     `card_bodies` the linked card's existing Linear comments; `threads` the
-    whole comment thread `gh pr view` answers per PR number (None = refused)."""
+    whole comment thread `gh pr view` answers per PR number (None = refused);
+    `alerts` the open console alerts the door serves, and `views` the pull
+    request `gh pr view` answers for an alert whose PR is not listed
+    (DRE-8690)."""
     state = {
         "prs": prs,
         "checks": checks,
         "runs": list(runs),
         "threads": dict(threads or {}),
+        "views": dict(views or {}),
         "gh_calls": [],
         "dispatches": [],
         "receipts": [],
         "reports": [],
+        "raised": [],
+        "resolved": [],
     }
+    door = {"schema": "bureau-read/1", "read_at": "2026-11-01T21:30:00Z",
+            "alerts": [dict(a) for a in alerts]}
     with patch.object(
+        reconcile.pipeline_notice, "raise_notice",
+        side_effect=lambda notice, **kw: state["raised"].append({"notice": notice, **kw})
+        or "raised",
+    ), patch.object(
+        reconcile.pipeline_notice, "resolve_notice",
+        side_effect=lambda notice, **kw: state["resolved"].append(notice) or "resolved",
+    ), patch.object(
+        reconcile.bureau_read, "open_alerts", side_effect=lambda: door,
+    ), patch.object(
         reconcile.subprocess, "run", side_effect=_run_factory(state)
     ), patch.object(
         reconcile.linear_ops, "comment_bodies",
@@ -311,6 +339,116 @@ def test_reviewer_down_report_is_per_head_a_new_commit_re_arms():
         card_bodies=[old_report],
     )
     assert len(state["reports"]) == 1
+
+
+# --------------------------------------------------------------------------
+# 2b. DRE-8690: a review that died on the Claude limit waits for limit
+#     recovery, and every other review at the cap is a console alert
+# --------------------------------------------------------------------------
+LIMIT_RUN = "41349671195"
+CRASHED_RUN = {"databaseId": int(LIMIT_RUN), "status": "completed",
+               "conclusion": "failure", "createdAt": "2026-11-01T20:05:00Z"}
+
+
+def _limit_marker(stage="review", kind="claude", run=LIMIT_RUN):
+    """The medic's marker, as it wrote it on 11-01."""
+    return (f"🪦 limit-death: kind={kind} stage={stage} "
+            f"reset=2026-11-02T01:00:00Z run={run}")
+
+
+def test_a_claude_review_death_at_the_cap_is_left_to_limit_recovery(capsys):
+    """ACCEPTANCE: a live `kind=claude stage=review` marker naming the
+    crashed review run at this head means wait — no `🚨 reviewer-down`, no
+    alert, and one non-ERROR line naming the run. MUTATION CHECK: drop the
+    marker check and the report closes the marker, which is what switched the
+    recovery off on 11-01."""
+    state = _sweep([_pr(comments=[_receipt()])], runs=[CRASHED_RUN],
+                   card_bodies=[_limit_marker()])
+    assert state["reports"] == []
+    assert state["raised"] == []
+    captured = capsys.readouterr()
+    lines = [line for line in captured.out.splitlines() if LIMIT_RUN in line]
+    assert len(lines) == 1, captured.out
+    assert "limit-recovery owns it" in lines[0]
+    assert "ERROR" not in lines[0]
+    assert "reviewer is down" not in captured.err
+
+
+@pytest.mark.parametrize("bodies", [
+    [_limit_marker(run="99999999999")],                     # another run's death
+    [_limit_marker(stage="build")],                         # not a review death
+    [_limit_marker(kind="linear")],                         # not the Claude wall
+    [_limit_marker(), "🚨 reviewer-down PR #9 @x: closed"],  # the marker is closed
+])
+def test_any_other_marker_still_reports_the_reviewer_down(bodies):
+    state = _sweep([_pr(comments=[_receipt()])], runs=[CRASHED_RUN], card_bodies=bodies)
+    assert len(state["raised"]) == 1
+    assert len(state["reports"]) == 1
+
+
+def test_the_cap_reports_the_card_and_raises_its_alert():
+    """ACCEPTANCE: the `🚨 reviewer-down` comment exactly as today, plus the
+    card's WARN alert naming the PR, the crashed run and the operator's
+    re-run command."""
+    state = _sweep([_pr(comments=[_receipt()])], runs=[CRASHED_RUN])
+    assert len(state["reports"]) == 1
+    assert state["reports"][0][1].startswith(f"🚨 {reconcile.REVIEWER_DOWN_TAG} PR #141 @{SHA}:")
+    assert len(state["raised"]) == 1
+    raised = state["raised"][0]
+    assert raised["notice"] == "reviewer-down:atlas:DRE-2290"
+    assert raised["severity"] == "WARN"
+    assert raised["fallback"] is None
+    assert raised["title"].startswith(f"DRE-2290: PR #141 @{SHA[:8]} —")
+    body = raised["body"]
+    assert "https://github.com/dreadnought-foundry/atlas/pull/141" in body
+    assert f"https://github.com/dreadnought-foundry/atlas/actions/runs/{LIMIT_RUN}" in body
+    assert f"gh run rerun {LIMIT_RUN} --failed --repo dreadnought-foundry/atlas" in body
+
+
+def test_a_reported_head_raises_its_alert_on_every_pass():
+    """The comment is once per head; the alert is raised each pass, and a
+    repeat raise is free — so a sweep after the report still names the card."""
+    first = _sweep([_pr(comments=[_receipt()])], runs=[CRASHED_RUN])
+    again = _sweep([_pr(comments=[_receipt()])], runs=[CRASHED_RUN],
+                   card_bodies=[b for _, b in first["reports"]])
+    assert again["reports"] == []
+    assert [r["notice"] for r in again["raised"]] == ["reviewer-down:atlas:DRE-2290"]
+
+
+def _open_alert(card="DRE-2290", pr=141, head=SHA):
+    import crashed_review_alert
+    return {"kind": f"pipeline_notice:reviewer-down:atlas:{card}", "severity": "WARN",
+            "title": crashed_review_alert.title(
+                crashed_review_alert.Capped(card, pr, head, LIMIT_RUN)),
+            "raised_at": "2026-11-01T20:18:00Z", "card": card}
+
+
+def test_a_head_skipped_for_a_dispatch_in_flight_keeps_its_alert():
+    """ACCEPTANCE: skipped is not recovered. The head is off this pass's
+    capped list only because a review dispatch is in flight; resolving it
+    would restart the Alarm Repair's two-hour clock on the next raise."""
+    state = _sweep([_pr(comments=[_receipt()])],
+                   runs=[{"status": "in_progress"}], alerts=[_open_alert()])
+    assert state["raised"] == []
+    assert state["resolved"] == []
+
+
+def test_a_head_with_a_verdict_resolves_its_alert():
+    state = _sweep([_pr(comments=[_receipt(), _verdict(SHA)])], alerts=[_open_alert()])
+    assert state["resolved"] == ["reviewer-down:atlas:DRE-2290"]
+
+
+def test_a_head_that_moved_resolves_its_alert():
+    state = _sweep([_pr(sha=OLD_SHA)], checks=NO_REVIEW_CHECKS, alerts=[_open_alert()])
+    assert state["resolved"] == ["reviewer-down:atlas:DRE-2290"]
+
+
+def test_a_pr_gone_from_the_listing_is_read_once_and_resolved_when_merged():
+    state = _sweep([], alerts=[_open_alert()],
+                   views={141: {"number": 141, "state": "MERGED", "headRefOid": SHA,
+                                "headRefName": "agent/DRE-2290-widget", "comments": []}})
+    assert any(c[:3] == ("pr", "view", "141") for c in state["gh_calls"])
+    assert state["resolved"] == ["reviewer-down:atlas:DRE-2290"]
 
 
 # --------------------------------------------------------------------------

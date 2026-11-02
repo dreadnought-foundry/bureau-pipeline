@@ -146,7 +146,7 @@ class TestEveryActHasARow:
             # The diagnosis delivery step's write since Stage 2 fix #23; it
             # was the agent prompt's `linear_ops.py comment DRE-N "<report>"`.
             (".github/workflows/medic.yml",
-             'linear_ops.py comment "$TARGET" "$(cat "$REPORT")" --act=run-failure-diagnosed'),
+             'linear_ops.py comment "$TARGET" --body-file="$REPORT" --act=run-failure-diagnosed'),
             # The blocker resolver's receipt (DRE-6508), the one f-string that
             # composes it in the module the row lands with.
             ("scripts/blocker_resolve.py", "🧹 agent-blocker-resolved: class="),

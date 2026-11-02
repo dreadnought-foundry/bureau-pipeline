@@ -39,6 +39,14 @@ mints (see `models.yaml` below).
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`ledger-files.json`** — the declared ledgers, per repo (DRE-8688): a repo
+  slug maps to a list of path globs, each naming a file several cards share by
+  design, such as agent-bureau's count ledger
+  `console/web/src/theme/rawValues*.baseline.json`. Read only by
+  `scripts/plan_blocker_footprint.py`, which reads each ledger from the plan
+  run's checkout and lets two cards that share only a ledger be ordered only
+  where their lines touch. A ledger renamed or split out of its glob is a
+  one-line edit here.
 - **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
   (DRE-3009): every code commit needs a test commit since the previous code
   commit, and any code commit after the first may instead carry one of these.
@@ -76,35 +84,6 @@ mints (see `models.yaml` below).
   question. The numbers are the card's own example, not a CEO decision
   (`decided_by` says so), so changing them is an ordinary edit. Read only
   through `scripts/epic_growth.py`.
-- **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
-  "file the planner cap at 4"; two from DRE-5326, three from DRE-5634): how many planner runs may hold a slot at once,
-  how long a claim lives, how long a dispatch reserves a slot, and how long a
-  card may wait before the watchdog treats it as stuck. Read only through
-  `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
-  file rather than defaulting; `python3 scripts/planner_queue.py check`
-  validates it. `plan.yml` claims against it in its `Planner slot — claim or
-  wait` step, after the duplicate-dispatch guard and before any model step
-  (DRE-5179); a run it does not admit waits in line and ends green.
-  Two more keys bound the number (DRE-5792): `max_running_ceiling`, a positive
-  integer no smaller than `max_running`, and `ceiling_reason`, a non-empty
-  string saying why the ceiling stands where it does; `check` refuses a file
-  missing either, or with a ceiling below `max_running`. The console publishes
-  the number in force to each repo as the GitHub Actions repo variable
-  `PLANNER_MAX_RUNNING`, handed to the steps as an environment variable of the
-  same name, and `planner_queue.cap()` is the one place the rule is applied:
-  set to a positive integer, the variable is the cap, clamped to
-  `max_running_ceiling` with a warning; set to anything else, the file's
-  `max_running` is in force with a warning quoting the value; unset or empty,
-  the file's `max_running` is in force. **A repo holding the variable does not
-  read the file's `max_running` — on that repo it is a fallback only, and
-  editing it changes nothing there.** Deleting the variable is the way back
-  (`gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>`, one repo at a
-  time). The ceiling is never published: it is read from this file on every
-  repo, so a ceiling change is a file edit that takes effect everywhere. The
-  console reads both keys off this file and refuses a number above the
-  ceiling with `ceiling_reason` as the words. The cap is being removed (epic
-  DRE-8539): `planner-allowance.json` below is what replaces it, and the
-  cards of that epic delete this file's readers one by one.
 - **`planner-allowance.json`** — the one limit left on planners (DRE-8616,
   the CEO's "No limit, slow down near empty" of 2026-10-31, epic DRE-8539;
   `architecture/decisions/adr-planner-cap-removed.md`). Exactly five keys:
@@ -121,6 +100,11 @@ mints (see `models.yaml` below).
   validates it, and refuses `hold_max_minutes` plus `wait_minutes` at or above
   the Planning stall window in `lane-contract.json`, because a held card posts
   nothing between its `🪫 planner-hold: held` and `started` receipts.
+  `plan.yml` reads it in its `Planner allowance — start or wait` step, after
+  the duplicate-dispatch guard and before any model step (DRE-8617), and the
+  plan job's `timeout-minutes` is the planner's own budget plus
+  `hold_max_minutes` plus `wait_minutes`, so raising either means raising
+  that clock too — `tests/test_planner_allowance_wiring.py` holds the sum.
 - **`whats-new-cutover.json`** — the switch for the What's New rule
   (DRE-5576): `enforced_from`, the UTC instant from which the merge gate holds
   a pull request opened without a `What's new:` line, and `why`. Absent, the
@@ -393,7 +377,9 @@ mints (see `models.yaml` below).
   3,000,000. `plan.yml` — and since Stage 2 (fix #12) `agent-task.yml`,
   `agent-fix.yml`, `qa-review.yml`, `verify.yml` and `proof-task.yml` in a
   repo that sets the variable `LINEAR_AGENT_BUCKET=planner` (review item 29),
-  and no other workflow — reads it ahead of the fleet key, steps back onto the
+  and since DRE-8716 `reconcile.yml` in every repo whose variable
+  `LINEAR_SWEEP_BUCKET` is not `fleet` (an opt-out, where the agents' is an
+  opt-in), and no other workflow — reads it ahead of the fleet key, steps back onto the
   fleet key on a 401 — never on a rate limit — and its `linear-budget:` line names
   `budget: planner-oauth` while the token is what it spends, which is
   how `scripts/check_linear_budget.py` keeps that spend out of the fleet
