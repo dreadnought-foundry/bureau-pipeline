@@ -40,6 +40,12 @@ DOCUMENTED_EXCEPTIONS = {
         "`contents: read` is its whole permission set, so dropping `id-token` "
         "is the point: the run holds no token it does not use."
     ),
+    ("parts-check.yml", "workflow"): (
+        "Deliberately credential-free (DRE-8842): the duplicate-parts check "
+        "reads the pull request's own checkout and the public pipeline, needs "
+        "no secret, posts nothing and never calls the read door, and its stub "
+        "grants `contents: read` alone. Holding no OIDC token is the point."
+    ),
 }
 
 

@@ -238,6 +238,22 @@ mints (see `models.yaml` below).
   wins, then the first kind matched, and no match is a person's. The hygiene
   lane `scripts/hygiene_hand_step.py` labels each Hand-work operator step
   `hand-step:machine` or `hand-step:person` by it, and nothing else reads it.
+- **`operator-agent.json`** — the operator agent's fixed routes (DRE-8743,
+  epic DRE-8738): exactly six keys, no `_readme`. `ceo_acts`, the six acts the
+  CEO kept on 2026-10-30 (`{"id", "label", "phrases"}` each);
+  `destructive_go`, two phrase lists that must both match; `studio_access`;
+  `deploy`; `studio`, the `blocker`, `deploy_epic` and `never_blocker` ids the
+  apply reads, and `host_limits`, this repo's one copy of what the studio host
+  cannot do as built, with its `source` and the day it was `read_on`; and
+  `leave_alone`, the cards the agent never takes (`{"card", "why"}`). Read only
+  through `scripts/operator_rules.py`, whose `load_rules` refuses a table that
+  breaks the shape. A kept act wins over `destructive-go`, which wins over
+  studio access; no match is the model's to read. A phrase's last word matches
+  in the singular or the plural, so each phrase is listed once, as its fixture
+  sentence writes it. Every phrase is quoted from
+  a sentence of `tests/fixtures/operator-agent-board-2026-11-01.json`, and
+  `tests/test_operator_rules.py` pins every fixture card the table sends to
+  the CEO or to the studio host.
 - **`notice-writers.json`** — every writer that files a Linear card
   automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
   writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,

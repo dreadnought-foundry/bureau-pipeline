@@ -312,7 +312,9 @@ jobs:
               fh.write("\n".join(lines) + "\n")
           print(title)
           PY
-          TITLE=$(cat "$TITLE_FILE")
+          # Read bounded (DRE-8819): 256 bytes is GitHub's own title limit, and
+          # the title above is far under it.
+          TITLE=$(head -c 256 "$TITLE_FILE")
           # This run's files, carried onto the branch.
           rm -rf "$RUNNER_TEMP/groom-replay-cases"
           cp -R tests/fixtures/groom-replay-cases "$RUNNER_TEMP/groom-replay-cases"

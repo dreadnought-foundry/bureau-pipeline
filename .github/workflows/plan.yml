@@ -5493,12 +5493,19 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          # What the re-plan changed goes into a file, and each comment is
+          # composed around it and posted with `--body-file` (DRE-8819): the
+          # summary is the planner's own, with no bound on its size, and Linux
+          # refuses one argument over 128 KiB (E2BIG, exit 126). `printf` and
+          # `$(< …)` are bash's own, so the summary is never an argument.
+          CHANGED_FILE="$RUNNER_TEMP/post-replan-changed.md"
+          COMMENT_FILE="$RUNNER_TEMP/post-replan-review-comment.md"
           if [ -s "$SUMMARY" ]; then
-            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+            printf 'What the re-plan changed: %s' "$(< "$SUMMARY")" > "$CHANGED_FILE"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
-            CHANGED="The re-plan ran but wrote no summary."
+            printf '%s' "The re-plan ran but wrote no summary." > "$CHANGED_FILE"
           else
-            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+            printf '%s' "The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it." > "$CHANGED_FILE"
           fi
           case "$ROUND" in ''|*[!0-9]*) ROUND=1;; esac
           NEXT=$((ROUND + 1))
@@ -5506,11 +5513,19 @@ jobs:
                --epic "$EPIC" \
                --repo "$GITHUB_REPOSITORY" \
                --reason re-review --trigger-state planning; then
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+            {
+              printf '%s' "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. "
+              cat "$CHANGED_FILE"
+              printf '%s' " The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+            } > "$COMMENT_FILE"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
           else
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. ${CHANGED} This run is red, so the medic picks it up; nothing here is yours to do."
+            {
+              printf '%s' "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. "
+              cat "$CHANGED_FILE"
+              printf '%s' " This run is red, so the medic picks it up; nothing here is yours to do."
+            } > "$COMMENT_FILE"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
             exit 1
           fi
 
@@ -5553,12 +5568,16 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          # Into a file and posted with `--body-file`, never an argument
+          # (DRE-8819) — the re-review step above says why.
+          CHANGED_FILE="$RUNNER_TEMP/post-replan-changed.md"
+          COMMENT_FILE="$RUNNER_TEMP/post-replan-bound-comment.md"
           if [ -s "$SUMMARY" ]; then
-            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+            printf 'What the re-plan changed: %s' "$(< "$SUMMARY")" > "$CHANGED_FILE"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
-            CHANGED="The re-plan ran but wrote no summary — read the children before re-planning."
+            printf '%s' "The re-plan ran but wrote no summary — read the children before re-planning." > "$CHANGED_FILE"
           else
-            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+            printf '%s' "The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it." > "$CHANGED_FILE"
           fi
           if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
           if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
@@ -5567,8 +5586,12 @@ jobs:
           fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
-          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} ${CHANGED} When it is settled, ${HOW}."
+          {
+            printf '%s' "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} "
+            cat "$CHANGED_FILE"
+            printf '%s' " When it is settled, ${HOW}."
+          } > "$COMMENT_FILE"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
 
       # --- APPROVE MEANS GO (DRE-5281) --------------------------------------
       #
