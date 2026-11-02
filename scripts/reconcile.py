@@ -11409,7 +11409,7 @@ def _tend_canceled_runs(pr: dict, sha: str, unknown: dict) -> bool:
 
     DRE-8817: a run that would be re-run is first asked `_runner_gate`, and
     one whose column still names the service a job just failed on is held —
-    said once with a `canceled-check-again … held:` receipt and re-run on a
+    said once with `canceled_check.held_receipt` and re-run on a
     later pass inside `canceled_check.HELD_HOURS` once the column has moved.
     A gate read that fails re-runs nothing and posts nothing on this pass.
 
