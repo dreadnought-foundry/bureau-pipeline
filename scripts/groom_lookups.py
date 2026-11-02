@@ -789,6 +789,9 @@ def _door_search(terms: list[str]) -> dict | None:
     or could not answer them all — then Linear answers every term, so one
     card's answer is never half the door's."""
     if not bureau_read.enabled():
+        # A stopped door is never asked, so the client cannot name this
+        # Linear read: it is named here (DRE-8796). `off` prints nothing.
+        bureau_read.note_fallback("search", bureau_read.disabled_reason() or "unavailable")
         return None
     found = {}
     for term in terms:

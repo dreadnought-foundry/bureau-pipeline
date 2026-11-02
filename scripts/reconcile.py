@@ -2354,6 +2354,10 @@ def _fleet_or_linear(lanes: tuple[str, ...], label: str) -> list[dict]:
             for card in cards:
                 _door_sourced.add(card["identifier"])
                 linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
+    else:
+        # A stopped door is never asked, so the client cannot name this
+        # Linear read: it is named here (DRE-8796).
+        bureau_read.note_fallback("board", bureau_read.disabled_reason() or "unavailable")
     if cards is None:
         cards = _fetch_active_cards(lanes)
     _fleet_lane_cards[lanes] = cards
@@ -2374,8 +2378,10 @@ def _door_retiring_cards() -> list[dict]:
     if RETIRING_LANES in _fleet_lane_cards:
         return _fleet_lane_cards[RETIRING_LANES]
     cards = None
+    stopped = None
     for scope in ("fleet", "repo"):
         if not bureau_read.enabled():
+            stopped = bureau_read.disabled_reason() or "unavailable"
             break
         try:
             read = bureau_read.board(RETIRING_LANES, scope=scope,
@@ -2397,6 +2403,11 @@ def _door_retiring_cards() -> list[dict]:
     if cards is None:
         if _door_hold:
             raise BoardHeld(_door_hold[0])
+        if stopped is not None:
+            # A stopped door is never asked, so the client cannot name this
+            # Linear read: it is named here, once it is sure to be made
+            # (DRE-8796) — a held bucket above is a skip, not a fallback.
+            bureau_read.note_fallback("board", stopped)
         cards = _fetch_active_cards(RETIRING_LANES)
     _fleet_lane_cards[RETIRING_LANES] = cards
     return cards
@@ -7653,6 +7664,9 @@ def _door_epic_threads(epic_ids: Iterable[str]) -> None:
     ask = wanted
     for attempt in (1, 2):
         if not bureau_read.enabled():
+            # A stopped door is never asked, so the client cannot name this
+            # Linear read: it is named here (DRE-8796).
+            bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
             other, to_linear = "door unavailable", to_linear + ask
             break
         try:
@@ -10318,7 +10332,12 @@ def _unlanded_door_lanes(cards: list[str]) -> dict[str, str]:
         return {}
     if _door_hold:
         raise BoardHeld(_door_hold[0])
-    if not cards or not bureau_read.enabled():
+    if not cards:
+        return {}
+    if not bureau_read.enabled():
+        # A stopped door is never asked, so the client cannot name this
+        # Linear read: it is named here (DRE-8796).
+        bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
         return {}
     try:
         read = bureau_read.cards(cards, max_age=bureau_read.BOARD_MAX_AGE,
@@ -15052,7 +15071,11 @@ def sweep_idle() -> str | None:
     """
     if MAX_WIP <= 0:
         return f"the WIP cap is {MAX_WIP}, so nothing here is built or promoted"
-    if bureau_read.mode() == "on" and bureau_read.enabled():
+    if bureau_read.mode() == "on" and not bureau_read.enabled():
+        # A stopped door is never asked, so the client cannot name this
+        # Linear read: it is named here (DRE-8796).
+        bureau_read.note_fallback("board", bureau_read.disabled_reason() or "unavailable")
+    elif bureau_read.mode() == "on":
         try:
             read = bureau_read.board(DOOR_WORK_LANES + QUEUE_LANES, scope="repo",
                                      max_age=bureau_read.BOARD_MAX_AGE)
