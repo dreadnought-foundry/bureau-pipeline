@@ -262,6 +262,29 @@ def test_an_answer_whose_receipt_does_not_verify_is_not_his_answer(
     assert state_of([node(question(), at=ASKED_AT), node(edited)]) == D.ASKED
 
 
+def test_an_unchecked_answer_is_unknown_never_asked(monkeypatch):
+    """A receipt whose check could not run is not his answer, and it is not a
+    missing one either: the part reads `unknown`, so the fix loop never asks
+    him again over an answer nobody could read, and nothing is handed back."""
+    def loader():
+        raise console_receipt.KeyUnavailable("timed out")
+    monkeypatch.setattr(spoken_thread, "_VERIFIER",
+                        console_receipt.Verifier(key_loader=loader))
+    nodes = [node(question(), at=ASKED_AT), node(V.ANSWER_COMMENT)]
+    assert state_of(nodes) == D.UNKNOWN
+    world = World(monkeypatch, nodes=nodes)
+    code, out, err = run("context", CARD)
+    assert code == 0
+    assert out.splitlines() == [
+        f"DESIGN ANSWER: UNKNOWN — `{PART}` at `{PATH}`: an answer after the "
+        "question could not be checked, because the console's key could not "
+        "be read"]
+    assert "option B" not in out
+    assert len(tagged(err)) == 1
+    run("handback", CARD, "--repo", SELF)
+    assert world.events == []
+
+
 def test_a_persons_unsigned_answer_is_not_his_answer():
     assert state_of([node(question(), at=ASKED_AT),
                      node("Answer from Sid: keep it in one file.",
