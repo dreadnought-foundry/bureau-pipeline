@@ -169,6 +169,7 @@ TAGS = {
     "hygiene-hold-clear": "hyg-hold-cleared",
     "hygiene-triage-alarm": "hyg-triage-aged",
     "hygiene-blocker-owner-notice": "hyg-blocker-owner",
+    "hygiene-hand-step-class": "hyg-hand-step",
 }
 _ACT_OF_TAG = {tag: act for act, tag in TAGS.items()}
 
