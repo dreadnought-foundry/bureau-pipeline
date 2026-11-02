@@ -87,11 +87,17 @@
 # hung-job pass reads "once" off the run's own `run_attempt` and never re-runs
 # attempt 2, and the hold check's alert key is a constant, so a repeated raise
 # is answered `repeat` and a repeated resolve `not-open`.
+#
+# Parts Count (DRE-8844) is the one-time count in a listed repo, watched on
+# the same terms. Retrying it is safe because the count is recomputed from the
+# repo's files and `parts_cleanup.py file` searches for every copy's identity
+# line before filing, so a retried leg files only the cards a crash left
+# unfiled and never one twice.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Triage Repair, Alarm Repair, Groom Replay Gate, Groom Week, Channel Watch]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Triage Repair, Alarm Repair, Groom Replay Gate, Groom Week, Channel Watch, Parts Count]
     types: [completed]
 
 permissions:
