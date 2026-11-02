@@ -1566,14 +1566,7 @@
       "anchor": "moved_note(record[\"id\"], position=row[\"position\"]",
       "kind": "not-an-act",
       "means": "Which batch moved a card into Planning, on the card itself, in one line: the proposal id, the card's position on the approved Planning list (or that the CEO added it), the lanes, the drain as the writer, and the card the proposal record stands on (DRE-3326).",
-      "why": "The CEO decided this, not the pipeline. The drain moves a card only because the CEO approved the batch it is in, or reached in for it, so the note is bookkeeping of that decision rather than something the pipeline chose — the same reason the cancel note beside it is not an act. A trailer would name a next actor nobody chose: the card's next actor is its own planner run, started by its entry to Planning. One renderer (`groomer.moved_note`), shared with the sweep's release, so a moved card carries one shape of note."
-    },
-    {
-      "file": "scripts/groomer.py",
-      "anchor": "queued_record(record[\"id\"], plan[\"queued\"])",
-      "kind": "not-an-act",
-      "means": "The cards of an approved batch the free planner slots could not take, on the proposal card in one record written just before the drained record: the queue, in place order, that the reconcile sweep releases into Planning as slots free (DRE-5435).",
-      "why": "The CEO decided this, not the pipeline. The cards are queued only because the CEO approved the batch they are in, so the record is bookkeeping of that approval rather than something the pipeline chose — the same reason the drained record beside it is not an act. A trailer would name a next actor nobody chose: the next actor is the sweep, and it reads this record by its own grammar (`parse_queued_record`). One record per drain, never one per card."
+      "why": "The CEO decided this, not the pipeline. The drain moves a card only because the CEO approved the batch it is in, or reached in for it, so the note is bookkeeping of that decision rather than something the pipeline chose — the same reason the cancel note beside it is not an act. A trailer would name a next actor nobody chose: the card's next actor is its own planner run, started by its entry to Planning. One renderer (`groomer.moved_note`) at one call site, so a moved card carries one shape of note — the sweep's queue release was its second caller until DRE-8619 removed the queue."
     },
     {
       "file": "scripts/groomer.py",
@@ -1588,27 +1581,6 @@
       "kind": "not-an-act",
       "means": "The body a card carried before the drain wrote the CEO's accepted rewrite over it, on the card itself under `## Body before the rewrite`, posted just before the description changes and naming the proposal and the draft it came from (DRE-6667).",
       "why": "The CEO decided this, not the pipeline: the CEO accepted the draft by name, so the note is bookkeeping of that acceptance — the same reading the moved_note(record[\"id\"], position=row[\"position\"] row gives the moved card's note. Nothing was refused, recovered or held, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. One renderer at one call site in _drain, so the record carries one shape."
-    },
-    {
-      "file": "scripts/reconcile.py",
-      "anchor": "groomer.released_record(list(changes.values()))",
-      "kind": "not-an-act",
-      "means": "What one sweep pass did to the groom queue, on the groomer's standing card in one comment: per batch it touched, the queued cards it released into Planning and the ones that had left the lane (DRE-5435).",
-      "why": "Bookkeeping of a queue the CEO's approval filled, not a decision the pipeline made: each release only carries out that approval at the rate the planner line can take. The queue's standing is read off the thread from these rows (`groomer.queue_standing`), so its grammar is the groomer's, and a trailer would announce a recovery that has not happened. One comment per pass that changed the queue, never one per card."
-    },
-    {
-      "file": "scripts/reconcile.py",
-      "anchor": "groomer.requeued_record(",
-      "kind": "not-an-act",
-      "means": "The cards of an approved batch that a groom-released row recorded as taken out by hand while nobody had removed their groom-queued label, put back in the queue on the groomer's standing card: one groom-queued record per batch, the batch's own id, the cards in their original place order, and prose naming the row it corrects and its date (DRE-6640).",
-      "why": "It corrects the queue's own bookkeeping back to what the CEO's approval already decided — the cards were never taken out by a person — so it is the same record the drain writes, not a new decision. The sweep reads it by the queue's one grammar (`groomer.queue_standing`), and the thread is the test it is written once: a pipeline groom-queued record newer than the row already names the card. A trailer would name a next actor nobody chose; the next actor is the sweep's release, as for any queued card. One record per batch, never one per card."
-    },
-    {
-      "file": "scripts/reconcile.py",
-      "anchor": "groomer.moved_note(",
-      "kind": "not-an-act",
-      "means": "Which batch moved a card the sweep released from the groom queue into Planning, on the card itself, in one line: the proposal id, its position read off the proposal record on the standing card's thread, the lanes, the sweep's queue release and the card's queue place as the writer, and the card the proposal record stands on (DRE-3326).",
-      "why": "Bookkeeping of a queue the CEO's approval filled, not a decision the pipeline made: the release only carries out that approval at the rate the planner line can take, exactly as the groom-released row beside it does. A trailer would name a next actor nobody chose: the card's next actor is its own planner run. The note is the groomer's (`groomer.moved_note`), the same renderer the drain calls, so a released card and a drained card carry one shape of note."
     },
     {
       "file": "scripts/groomer.py",

@@ -63,16 +63,6 @@
       "reason": "repointed by this epic — closed by the writer when the switch is on"
     },
     {
-      "id": "groom-stall",
-      "repo": "bureau-pipeline",
-      "file": "scripts/reconcile.py",
-      "site": "_report_groom_stall",
-      "title": "bureau-pipeline: the groom queue has stalled — approved cards are not reaching Planning",
-      "disposition": "notice",
-      "notice_key": "groom_stall",
-      "reason": "repointed by this epic — closed by the writer when the stall no longer holds"
-    },
-    {
       "id": "reviewer-outage",
       "repo": "bureau-pipeline",
       "file": "scripts/reconcile.py",
