@@ -858,7 +858,11 @@ closed card is seen by nobody. A search that never answered files nothing.
 **The receipt key is live**: an occurrence already on the card's description
 or on one of these receipts writes nothing, and the receipts the pipeline
 wrote are what `<n>` counts; a comment of that shape from any other author
-counts for nothing. The stranded-fix class files through it at both of its
+counts for nothing. A card filed before the tally has no `Occurrence:` line,
+so on it a `<key>@<id>` occurrence is already named when its description holds
+the key and the id each as a whole token: the stranded-fix card lists the
+branch and each commit's sha8 apart, and the first sweep over commits it
+already lists is not a second occurrence. The stranded-fix class files through it at both of its
 writers, with `<branch>@<sha8 of the newest stranded commit>` as the
 occurrence. The tag is `failure-tally-receipt`, never the bare act name, so a
 `tag in body` count never reads the `failure-tally:` log line as a receipt.
