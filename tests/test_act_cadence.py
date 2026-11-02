@@ -141,8 +141,9 @@ class TestEveryActDeclaresItsCadence:
         gives its owner; sixty-four since DRE-8650 added the receipt that
         marks an operator step in Hand-work as a machine's or a person's, and
         DRE-8633 the receipt of the Alarm Repair's one attempt on an alarm left
-        open on a card."""
-        assert len(pipeline_act.acts()) == 64
+        open on a card; sixty-five since DRE-8849 added the note the sweep
+        posts when it returns a card the medic held on an inherited red main."""
+        assert len(pipeline_act.acts()) == 65
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
