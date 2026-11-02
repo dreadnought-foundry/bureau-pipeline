@@ -268,21 +268,198 @@ def test_budget_zero_makes_no_request():
         assert card["why"] == "request budget of 0 spent"
 
 
-def test_a_rate_limit_stops_the_leg():
+def test_a_rate_limit_stops_the_leg(monkeypatch):
+    """Refused on every request from the third: two waits, a third ask, and
+    then the stop (DRE-8859)."""
+    clock = Clock()
+    waits = waiting(monkeypatch, clock)
+
     def fail(n, endpoint):
-        return RuntimeError(RATE_LIMIT) if n == 3 else None
+        return RuntimeError(RATE_LIMIT) if n >= 3 else None
 
     gh = FakeGh(every_path=lambda repo, path: [], fail=fail)
     rows = [row("DRE-1"), row("DRE-2"), row("DRE-3"), row("DRE-4")]
-    doc = run(rows, gh)
-    assert len(gh.calls) == 3
+    doc = run(rows, gh, clock=clock)
+    assert waits == [60, 120]
+    assert len(gh.calls) == 5
+    assert gh.calls[2] == gh.calls[3] == gh.calls[4]
     assert doc["cards"]["DRE-1"]["read"] is True
     assert doc["cards"]["DRE-2"]["read"] is True
+    why = f"rate limited: {RATE_LIMIT}; still refused after 2 waits of 60, 120 s"
     for card in ("DRE-3", "DRE-4"):
         assert doc["cards"][card]["read"] is False
         assert doc["cards"][card]["why"].startswith("rate limited: ")
         assert "API rate limit exceeded" in doc["cards"][card]["why"]
+        assert doc["cards"][card]["why"] == why
+    assert doc["why"] == why
+    assert doc["requests"] == 5
     assert doc["cards"]["DRE-3"]["unread_repos"] == {}
+
+
+# --------------------------------------------------------------------------
+# DRE-8859 — a rate limit is waited out, inside the leg's own clock
+# --------------------------------------------------------------------------
+def waiting(monkeypatch, clock=None) -> list:
+    """Replace the module's `_wait`: each wait is recorded and, when a fake
+    clock is given, spent on it — never slept."""
+    waits: list = []
+
+    def wait(seconds):
+        waits.append(seconds)
+        if clock is not None:
+            clock.t += seconds
+
+    monkeypatch.setattr(gl, "_wait", wait)
+    return waits
+
+
+def test_the_rate_limit_wait_constants():
+    assert gl.RATE_LIMIT_WAITS == 2
+    assert gl.RATE_LIMIT_BACKOFF == 60
+    # Two backoff waits leave the leg time to read; a third doubled one
+    # could never fit its clock.
+    assert gl.RATE_LIMIT_BACKOFF + 2 * gl.RATE_LIMIT_BACKOFF < gl.MAX_SECONDS
+    assert (gl.RATE_LIMIT_BACKOFF + 2 * gl.RATE_LIMIT_BACKOFF
+            + 4 * gl.RATE_LIMIT_BACKOFF) > gl.MAX_SECONDS
+
+
+def _three_cards():
+    repo = "dreadnought-foundry/agent-bureau"
+    commits = {(repo, "a.py"): ["s1"], (repo, "b.py"): ["s2", "s3"],
+               (repo, "c.py"): ["s4"]}
+    pulls = {(repo, "s1"): [pr(1)], (repo, "s2"): [pr(2)],
+             (repo, "s3"): [pr(3, merged=False)], (repo, "s4"): [pr(4)]}
+    rows = [row("DRE-1", paths=("a.py",)), row("DRE-2", paths=("b.py",)),
+            row("DRE-3", paths=("c.py",))]
+    return commits, pulls, {(repo, "b.py")}, rows
+
+
+def test_a_rate_limit_is_waited_out_and_the_leg_reads_what_it_would_have(monkeypatch):
+    commits, pulls, nexts, rows = _three_cards()
+    clean = run(rows, FakeGh(commits, pulls, nexts=nexts))
+    assert clean["why"] is None
+
+    clock = Clock()
+    waits = waiting(monkeypatch, clock)
+    gh = FakeGh(commits, pulls, nexts=nexts, clock=clock,
+                fail=lambda n, e: RuntimeError(RATE_LIMIT) if n in (3, 4) else None)
+    doc = run(_three_cards()[3], gh, clock=clock)
+
+    assert waits == [60, 120]
+    assert gh.calls[2] == gh.calls[3] == gh.calls[4]
+    assert set(doc["cards"]) == set(clean["cards"]) == {"DRE-1", "DRE-2", "DRE-3"}
+    for card, want in clean["cards"].items():
+        got = doc["cards"][card]
+        for key in ("read", "merged_prs", "cut", "unread_repos"):
+            assert got[key] == want[key], (card, key)
+    assert doc["cards"]["DRE-2"]["cut"]
+    assert doc["read"] is True and doc["why"] is None
+    assert doc["requests"] == clean["requests"] + 2
+    assert len(gh.calls) == doc["requests"]
+    # The two waits were spent on the leg's own clock.
+    assert doc["seconds"] == 180
+
+
+def test_a_retry_after_header_is_the_wait(monkeypatch):
+    clock = Clock()
+    waits = waiting(monkeypatch, clock)
+
+    def fail(n, endpoint):
+        if n == 2:
+            return gl.GhError(RATE_LIMIT, headers={"Retry-After": "7"})
+        return None
+
+    gh = FakeGh(every_path=lambda repo, path: [], fail=fail)
+    doc = run([row("DRE-1"), row("DRE-2"), row("DRE-3")], gh, clock=clock)
+    assert waits == [7]
+    assert len(gh.calls) == 4 and gh.calls[1] == gh.calls[2]
+    assert all(card["read"] is True for card in doc["cards"].values())
+    assert doc["why"] is None and doc["requests"] == 4
+
+
+def test_a_spent_primary_limit_waits_until_its_reset(monkeypatch):
+    clock = Clock()
+    waits = waiting(monkeypatch, clock)
+    monkeypatch.setattr(gl, "_epoch", lambda: 1_000_000.0)
+
+    def fail(n, endpoint):
+        if n == 1:
+            return gl.GhError(RATE_LIMIT, headers={
+                "X-Ratelimit-Remaining": "0", "X-Ratelimit-Reset": "1000042"})
+        return None
+
+    gh = FakeGh(every_path=lambda repo, path: [], fail=fail)
+    doc = run([row("DRE-1")], gh, clock=clock)
+    assert waits == [42]
+    assert doc["cards"]["DRE-1"]["read"] is True and doc["why"] is None
+
+
+@pytest.mark.parametrize("headers,at,asked,left", [
+    ({"retry-after": "600"}, 0, 600, 300),
+    (None, 250, 60, 50),
+], ids=["retry-after-600", "backoff-near-the-clock"])
+def test_a_wait_longer_than_the_clock_has_left_is_not_made(
+        headers, at, asked, left, monkeypatch):
+    clock = Clock()
+    waits = waiting(monkeypatch, clock)
+
+    def fail(n, endpoint):
+        if n == 3:
+            clock.t = at
+            return gl.GhError(RATE_LIMIT, headers=headers)
+        return None
+
+    gh = FakeGh(every_path=lambda repo, path: [], fail=fail)
+    rows = [row("DRE-1"), row("DRE-2"), row("DRE-3"), row("DRE-4")]
+    doc = run(rows, gh, clock=clock)
+    assert waits == []
+    assert len(gh.calls) == 3
+    why = (f"rate limited: {RATE_LIMIT}; not asked again: GitHub asked for "
+           f"{asked} s and the leg had {left} s of its {gl.MAX_SECONDS} s left")
+    assert doc["why"] == why
+    for card in ("DRE-1", "DRE-2"):
+        assert doc["cards"][card]["read"] is True
+    for card in ("DRE-3", "DRE-4"):
+        assert doc["cards"][card]["read"] is False
+        assert doc["cards"][card]["why"].startswith("rate limited: ")
+        assert doc["cards"][card]["why"] == why
+
+
+def test_a_refusal_that_is_not_a_rate_limit_is_never_waited_on(monkeypatch):
+    waits = waiting(monkeypatch)
+    gh = FakeGh(every_path=lambda repo, path: [],
+                fail=lambda n, e: gl.GhError("gh: Not Found (HTTP 404)",
+                                             headers={"Retry-After": "7"}))
+    doc = run([row("DRE-1")], gh)
+    assert waits == [] and len(gh.calls) == 1
+    assert doc["cards"]["DRE-1"]["unread_repos"] == {
+        "dreadnought-foundry/agent-bureau": "gh: Not Found (HTTP 404)"}
+
+
+def test_the_real_gh_runner_keeps_a_refused_answers_headers(monkeypatch):
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(
+            argv, 1,
+            stdout=('HTTP/2.0 403 Forbidden\r\nRetry-After: 7\r\n'
+                    'X-Ratelimit-Remaining: 12\r\n\r\n{"message": "slow down"}'),
+            stderr=RATE_LIMIT + "\n")
+
+    monkeypatch.setattr(gl.subprocess, "run", fake_run)
+    with pytest.raises(gl.GhError) as raised:
+        gl._gh(["repos/o/r/commits?path=a"])
+    assert str(raised.value) == RATE_LIMIT
+    assert raised.value.headers["Retry-After"] == "7"
+    assert raised.value.headers["X-Ratelimit-Remaining"] == "12"
+
+
+def test_a_gh_error_with_no_answer_carries_no_headers(monkeypatch):
+    monkeypatch.setattr(gl.subprocess, "run", lambda argv, **kw:
+                        subprocess.CompletedProcess(argv, 1, stdout="",
+                                                    stderr="gh: boom"))
+    with pytest.raises(gl.GhError) as raised:
+        gl._gh(["repos/o/r/commits?path=a"])
+    assert raised.value.headers == {}
+    assert gl.GhError("bare").headers == {}
 
 
 def test_the_first_responses_remaining_caps_the_leg_at_a_quarter():

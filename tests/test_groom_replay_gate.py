@@ -492,6 +492,83 @@ def test_a_passing_case_whose_record_is_unverified_fails_closed_naming_the_reaso
     assert doc["cases"][0]["result"] == "not judged"
     assert doc["cases"][0]["unchecked"] is True
     assert doc["cases"][0]["why"] == f"unverified ({reason})"
+    # A crash is no rate limit (DRE-8859): nothing calls it infrastructure.
+    assert doc["rate_limited"] == []
+    assert not any("rate-limited" in line for line in lines)
+
+
+# --------------------------------------------------------------------------
+# a case left unchecked by a rate-limited lookup is named infrastructure
+# (DRE-8859) — and still fails closed
+# --------------------------------------------------------------------------
+LIMITED = ("lookup failed: dreadnought-foundry/bureau-pipeline did not answer — "
+           "rate limited: gh: API rate limit exceeded for installation ID 42 (HTTP 403)")
+RERUN = ("not a finding about this change — re-run all jobs: re-running only "
+         "the failed job re-reads the same lookup")
+
+
+def test_a_passing_case_unchecked_on_a_rate_limit_is_named_infrastructure(
+        tmp_path, capsys):
+    """bureau-pipeline #1396, gate run 41439594582: the lookup leg was
+    throttled, the seed case's card was recorded `unverified (lookup failed:
+    … rate limited: …)`, and the judge failed closed with nothing saying the
+    cause was GitHub's and a full re-run the cure."""
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": LIMITED})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    case = _line(lines, "c-planning")
+    assert case == (f"{TAG} c-planning expect=off-planning main=pass "
+                    f"head=not-verified search=none not judged — UNCHECKED: "
+                    f"unverified ({LIMITED})")
+    # The result is `not judged`, never `fail`, and never REGRESSED.
+    assert case.split(" search=none ")[1].startswith("not judged — UNCHECKED: ")
+    assert "REGRESSED" not in case
+    limited = (f"{TAG} failed closed — rate-limited: could not read "
+               f"dreadnought-foundry/bureau-pipeline for c-planning (DRE-101), {RERUN}")
+    assert limited in lines
+    # Before the existing failed-closed lines, which are unchanged.
+    assert lines[-2] == limited
+    assert lines[-1] == (f"{TAG} failed closed — 1 case passes on main and was "
+                         f"not checked: c-planning (DRE-101, unverified ({LIMITED}))")
+    assert doc["rate_limited"] == ["c-planning"]
+    assert doc["unchecked"] == ["c-planning"] and doc["regressed"] == []
+
+
+def test_a_rate_limit_whose_reason_names_no_repo_says_the_cards_repo(tmp_path, capsys):
+    reason = ("lookup failed: no repo answered — dreadnought-foundry: rate limited: "
+              "gh: API rate limit exceeded for installation ID 42 (HTTP 403)")
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": reason})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    assert (f"{TAG} failed closed — rate-limited: could not read the card's repo "
+            f"for c-planning (DRE-101), {RERUN}") in lines
+    assert doc["rate_limited"] == ["c-planning"]
+
+
+@pytest.mark.parametrize("reason", [
+    "board context unread: Linear said 429: rate limited",
+    "lookup failed: dreadnought-foundry/bureau-pipeline did not answer — "
+    "time budget of 300 s spent",
+], ids=["rate-limit-not-a-lookup", "lookup-not-a-rate-limit"])
+def test_only_a_rate_limited_lookup_is_named_infrastructure(reason, tmp_path, capsys):
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": reason})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    assert doc["rate_limited"] == []
+    assert not any("rate-limited" in line for line in lines)
+
+
+def test_a_rate_limited_case_that_never_passed_on_main_is_not_named(tmp_path, capsys):
+    """Only an unchecked case — one that passes on `main` — is listed."""
+    proposal = _proposal(tmp_path, {"DRE-101": "cancel", "DRE-102": "not-verified"},
+                         reasons={"DRE-102": LIMITED})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 0, lines
+    assert doc["rate_limited"] == []
+    assert not any("rate-limited" in line for line in lines)
 
 
 def test_an_unverified_record_on_a_case_that_never_passed_fails_nothing(tmp_path, capsys):
@@ -637,6 +714,31 @@ def test_the_gate_fails_closed_over_the_cases_file_as_it_ships(tmp_path, capsys)
             "search=none not judged — UNCHECKED: unverified (agent step failed)") in said
     assert "seed-DRE-7239 (DRE-7239, unverified (agent step failed))" in said
     assert "no case was checked" in said
+    assert "rate-limited" not in said
+
+
+def test_the_throttled_run_over_the_cases_file_as_it_ships(tmp_path, capsys):
+    """Gate run 41439594582's shape: the seed case's card unverified because
+    the lookup leg was rate limited (DRE-8859)."""
+    shipped = json.loads((ROOT / grc.CASES_PATH).read_text(encoding="utf-8"))
+    for case in shipped["cases"]:
+        case["main"] = {"ended": None, "at": None, "passes": None}
+        if case["case"] == "seed-DRE-7239":
+            case["main"] = {"ended": "cancel", "at": AT, "passes": True}
+    path = tmp_path / "cases.json"
+    path.write_text(json.dumps(shipped), encoding="utf-8")
+    proposal = _proposal(tmp_path, {"DRE-7239": "not-verified"},
+                         reasons={"DRE-7239": LIMITED})
+    out = tmp_path / "judged.json"
+    code = gate.main(["judge", "--proposal", str(proposal), "--cases", str(path),
+                      "--out", str(out)])
+    said = capsys.readouterr().out
+    assert code == 1
+    assert (f"{TAG} failed closed — rate-limited: could not read "
+            f"dreadnought-foundry/bureau-pipeline for seed-DRE-7239 (DRE-7239), "
+            f"{RERUN}") in said
+    assert "no case was checked" in said
+    assert json.loads(out.read_text())["rate_limited"] == ["seed-DRE-7239"]
 
 
 def test_a_card_missing_from_the_proposal_is_head_none(tmp_path, capsys):
@@ -650,7 +752,7 @@ def test_the_out_file_carries_every_case(tmp_path, capsys):
     proposal = _proposal(tmp_path, {"DRE-101": "planning", "DRE-102": "planning"})
     _, _, doc = _judge(tmp_path, proposal, capsys)
     assert set(doc) == {"cases", "regressed", "now_passes", "not_judged",
-                        "unchecked", "checked"}
+                        "unchecked", "rate_limited", "checked"}
     assert [c["case"] for c in doc["cases"]] == ["c-planning", "c-cancel", "c-none"]
     first = doc["cases"][0]
     assert first["card"] == "DRE-101" and first["expect"] == "off-planning"

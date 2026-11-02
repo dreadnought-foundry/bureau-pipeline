@@ -28,6 +28,7 @@ proposal a replay leaves behind.
 
         groom-replay-gate: <case> expect=<expect> main=<pass|fail|none> head=<ended|none> search=<door|linear|none> <pass|fail|not judged>[ — REGRESSED| — UNCHECKED: <why>| — now passes]
         groom-replay-gate: <n> cases — <p> pass, <f> fail, <x> not judged, <r> regressed
+        groom-replay-gate: failed closed — rate-limited: could not read <repo> for <case> (<card>), not a finding about this change — re-run all jobs: re-running only the failed job re-reads the same lookup
         groom-replay-gate: failed closed — <u> case(s) pass(es) on main and was/were not checked: <case> (<card>, <why>), …
         groom-replay-gate: failed closed — no case was checked: the replay judged none of the <n> cases
 
@@ -65,6 +66,17 @@ Gate run 41370789518 is why: its one verify leg crashed on startup, the
 record said `unverified (agent step failed)`, and the judge read the card's
 `not-verified` as off Planning, a pass.
 
+## A rate-limited lookup (DRE-8859)
+
+An unchecked case whose reason holds `lookup failed: ` and `rate limited: `
+was left so by a lookup leg GitHub throttled — the fleet shares one
+installation — and that is infrastructure, not a finding about the change.
+It still fails the run: an unchecked case is unchecked whatever the cause.
+But the `--out` document lists it under `rate_limited`, and a line before
+the others names it so and says to re-run every job: the lookup leg ended
+`success`, so re-running only the failed `judge` re-reads the same record.
+Gate run 41439594582 is why: three re-runs of `judge` alone read it again.
+
 `--targets` names the `verify-targets.json` of the same run, and each case's
 line says which search its card was judged on: the row's
 `matched_work.source`, `door` or `linear`, else `none`. It is reported and
@@ -82,6 +94,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import groom_lookups  # noqa: E402 — the words a rate-limited lookup leaves
 import groom_replay  # noqa: E402 — where a card ended
 import groom_replay_cases  # noqa: E402 — the cases, `passes`, the gate set
 import groom_verify_agent  # noqa: E402 — the two verdicts that are no answer
@@ -149,6 +162,15 @@ NO_ANSWER = (groom_verify_agent.EXCLUDED, groom_verify_agent.UNVERIFIED)
 SEARCHES = ("door", "linear")
 NO_SEARCH = "none"
 NO_PATH = "no verify-step path changed"
+#: An unchecked case whose reason holds both was left unchecked by a lookup
+#: leg GitHub throttled (DRE-8859): `fold`'s `lookup failed: <repo> did not
+#: answer — rate limited: …`.
+RATE_LIMITED_SAID = groom_lookups.RATE_LIMITED.format(message="")
+DID_NOT_ANSWER = " did not answer"
+SOME_REPO = "the card's repo"
+RATE_LIMITED_LINE = ("rate-limited: could not read {repo} for {case} ({card}), "
+                     "not a finding about this change — re-run all jobs: "
+                     "re-running only the failed job re-reads the same lookup")
 
 
 class GateError(Exception):
@@ -292,6 +314,21 @@ def searches(rows) -> dict[str, str]:
     return out
 
 
+def rate_limited(why: str | None) -> bool:
+    """Did a throttled lookup leave the case unchecked? Its reason holds
+    `groom_lookups.LOOKUP_FAILED` and `rate limited: `."""
+    return bool(why) and (groom_lookups.LOOKUP_FAILED in why
+                          and RATE_LIMITED_SAID in why)
+
+
+def limited_repo(why: str) -> str:
+    """The repo a rate-limited reason names — between `lookup failed: ` and
+    ` did not answer` — or `the card's repo` when it names none."""
+    after = why.split(groom_lookups.LOOKUP_FAILED, 1)[-1]
+    repo, sep, _ = after.partition(DID_NOT_ANSWER)
+    return repo.strip() if sep and repo.strip() else SOME_REPO
+
+
 def _main_word(passes) -> str:
     return {True: PASS, False: FAIL}.get(passes, NO_SEARCH)
 
@@ -340,15 +377,22 @@ def judge(cases: list[dict], proposal: dict,
            "now_passes": [j["case"] for j in done if j["now_passes"]],
            "not_judged": [j["case"] for j in done if j["result"] == NOT_JUDGED],
            "unchecked": [j["case"] for j in done if j["unchecked"]],
+           "rate_limited": [j["case"] for j in done
+                            if j["unchecked"] and rate_limited(j["why"])],
            "checked": count[PASS] + count[FAIL]}
     return lines, doc
 
 
 def failed_closed(doc: dict) -> list[str]:
-    """The `failed closed` lines for a `judge` document: one naming every
-    case that passes on `main` and was not checked, with why, and one when
-    no case was checked at all. Empty when the run checked what it had to."""
-    lines = []
+    """The `failed closed` lines for a `judge` document: first one for each
+    unchecked case a rate-limited lookup left so, naming it infrastructure
+    (DRE-8859); then one naming every case that passes on `main` and was not
+    checked, with why, and one when no case was checked at all. Empty when
+    the run checked what it had to."""
+    limited = set(doc.get("rate_limited") or [])
+    lines = [f"{TAG} {FAILED_CLOSED} — " + RATE_LIMITED_LINE.format(
+                 repo=limited_repo(c["why"]), case=c["case"], card=c["card"])
+             for c in doc["cases"] if c["case"] in limited]
     unchecked = [c for c in doc["cases"] if c["unchecked"]]
     if unchecked:
         n = len(unchecked)
