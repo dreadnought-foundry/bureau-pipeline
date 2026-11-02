@@ -1153,7 +1153,7 @@ jobs:
             gh pr comment "$PR" --body-file /tmp/verify-comment.md && break
             echo "comment attempt $i failed; retrying in $((i*10))s"; sleep $((i*10))
           done
-          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/verify-comment.md)" || true
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" --body-file=/tmp/verify-comment.md || true
 
       # Fail the job loudly AFTER the neutral comment is posted, so the infra
       # failure is visibly red and the medic picks it up. A genuine verdict

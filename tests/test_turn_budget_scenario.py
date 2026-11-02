@@ -196,7 +196,8 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    # A body in a file arrives as `--body-file=PATH` (DRE-8758).
+    sys.exit(main([open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv[1:]]))
 '''
 
 CARD_PR_STUB = '''#!/usr/bin/env python3

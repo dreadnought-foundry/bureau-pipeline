@@ -84,35 +84,6 @@ mints (see `models.yaml` below).
   question. The numbers are the card's own example, not a CEO decision
   (`decided_by` says so), so changing them is an ordinary edit. Read only
   through `scripts/epic_growth.py`.
-- **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
-  "file the planner cap at 4"; two from DRE-5326, three from DRE-5634): how many planner runs may hold a slot at once,
-  how long a claim lives, how long a dispatch reserves a slot, and how long a
-  card may wait before the watchdog treats it as stuck. Read only through
-  `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
-  file rather than defaulting; `python3 scripts/planner_queue.py check`
-  validates it. `plan.yml` claimed against it before any model step until
-  DRE-8617, which put `planner-allowance.json` below in that place; no planner
-  run claims a slot any more.
-  Two more keys bound the number (DRE-5792): `max_running_ceiling`, a positive
-  integer no smaller than `max_running`, and `ceiling_reason`, a non-empty
-  string saying why the ceiling stands where it does; `check` refuses a file
-  missing either, or with a ceiling below `max_running`. The console publishes
-  the number in force to each repo as the GitHub Actions repo variable
-  `PLANNER_MAX_RUNNING`, handed to the steps as an environment variable of the
-  same name, and `planner_queue.cap()` is the one place the rule is applied:
-  set to a positive integer, the variable is the cap, clamped to
-  `max_running_ceiling` with a warning; set to anything else, the file's
-  `max_running` is in force with a warning quoting the value; unset or empty,
-  the file's `max_running` is in force. **A repo holding the variable does not
-  read the file's `max_running` — on that repo it is a fallback only, and
-  editing it changes nothing there.** Deleting the variable is the way back
-  (`gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>`, one repo at a
-  time). The ceiling is never published: it is read from this file on every
-  repo, so a ceiling change is a file edit that takes effect everywhere. The
-  console reads both keys off this file and refuses a number above the
-  ceiling with `ceiling_reason` as the words. The cap is being removed (epic
-  DRE-8539): `planner-allowance.json` below is what replaces it, and the
-  cards of that epic delete this file's readers one by one.
 - **`planner-allowance.json`** — the one limit left on planners (DRE-8616,
   the CEO's "No limit, slow down near empty" of 2026-10-31, epic DRE-8539;
   `architecture/decisions/adr-planner-cap-removed.md`). Exactly five keys:

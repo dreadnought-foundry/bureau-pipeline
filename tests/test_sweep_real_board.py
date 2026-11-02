@@ -201,9 +201,14 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: refuses the card, so a live board pays it each pass for each such card
 #: past the window, whether or not the comment is already there.
 #:
+#: It was 59 until DRE-8622 (measured 2026-11-02: 58) deleted the planner
+#: line's backstop with the cap. Its one paged read of Green Light, charged to
+#: `serve_planner_line` since DRE-5178, is no longer asked, and no other phase
+#: reads that lane: 59 − 1 = 58.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 59
+REAL_BOARD_SWEEP_BUDGET = 58
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing

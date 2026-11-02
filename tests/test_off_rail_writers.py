@@ -9,24 +9,25 @@ fleet-wide writer. The age-out is gone (DRE-4141), but a full pass still has
 phases that write to cards this repo does not own, because an unlabelled card
 is "everybody's" (`_another_repos_card`). Read function by function on
 2026-10-01 there were exactly eight; DRE-5152 added the two epic-queue phases,
-which change any repo's waiting epic, so there are exactly ten, in the order
-`main()` runs them — the names in `OFF_RAIL_SKIPPED`.
+which change any repo's waiting epic, and DRE-8622 removed the old planner
+line's drain with the cap, so there are exactly nine, in the order `main()`
+runs them — the names in `OFF_RAIL_SKIPPED`.
 
 WHAT THESE TESTS PIN:
 
   * `off_rail()` is True for the sandbox's slug and False for every key of
     the real `config/repo-map.json` — iterated off the file, never restated.
   * A FULL `main()` under `REPO_SLUG=bureau-harness`, over a board holding a
-    trigger card for every one of the ten, prints exactly ten
+    trigger card for every one of the nine, prints exactly nine
     `off-rail:` lines, makes none of the writes, records no failure, exits 0,
-    and prints no `sweep-spend:` line for any of the ten phases.
-  * For each of the ten, one board holding only that phase's trigger card,
+    and prints no `sweep-spend:` line for any of the nine phases.
+  * For each of the nine, one board holding only that phase's trigger card,
     run twice: under `agent-bureau` the phase makes its write and no
     `off-rail:` line is printed; under `bureau-harness` exactly one line names
     the phase and nothing is written. So every fixture is one the fence
     actually stops — a fixture that wrote nothing on the rail would prove the
     fence by doing nothing.
-  * `OFF_RAIL_SKIPPED` is exactly the ten names, each a function defined in
+  * `OFF_RAIL_SKIPPED` is exactly the nine names, each a function defined in
     `scripts/reconcile.py`, each reached from `main()` as a backstop-tuple
     member or a `_phase("<name>")` literal — a renamed, removed or relocated
     phase fails by name.
@@ -74,7 +75,6 @@ from test_intake_urgent_fast_path import card as urgent_card  # noqa: E402
 from test_lane_fold_in_review import OLD_QUEUE, _stranded  # noqa: E402
 from test_limit_recovery import card as limit_card  # noqa: E402
 from test_limit_recovery import marker  # noqa: E402
-from test_planner_queue_sweep import _waiting  # noqa: E402
 from test_reconcile_epic_carry import _board  # noqa: E402
 from test_reconcile_epic_carry import _card as epic_card  # noqa: E402
 from test_reconcile_reviewer_down import (  # noqa: E402
@@ -88,16 +88,15 @@ SANDBOX = "bureau-harness"
 ON_RAIL = "agent-bureau"
 THIS = "dreadnought-foundry/agent-bureau"
 
-#: The ten, in the order `main()` runs them. Spelled out ONCE, here, as the
+#: The nine, in the order `main()` runs them. Spelled out ONCE, here, as the
 #: card's contract — the mapping in reconcile.py is checked against it.
-TEN = (
+NINE = (
     "drain_retiring_lanes",
     "recover_limit_deaths",
     "report_fleet_reviewer_outage",
     "flag_stranded",
     "advance_urgent_intake",
     "repair_frozen_planning_holds",
-    "serve_planner_line",
     "tend_epic_queue",
     "start_queued_epics",
     "carry_epics_out_of_todo",
@@ -106,7 +105,7 @@ TEN = (
 #: Every write the card names. A sweep off the rail calls none of them.
 WRITE_SEAMS = (
     "cmd_advance", "cmd_state", "cmd_comment", "add_label", "remove_label",
-    "set_title", "find_open_prefix", "post_released", "fire",
+    "set_title", "find_open_prefix", "fire",
     "post_refusal", "raise_notice",
 )
 
@@ -116,7 +115,7 @@ PORTICO_RUN_URL = "https://github.com/dreadnought-foundry/portico/actions/runs/3
 
 
 # --------------------------------------------------------------------------
-# the ten trigger cards — one per phase, each from its own suite's fixture
+# the nine trigger cards — one per phase, each from its own suite's fixture
 # --------------------------------------------------------------------------
 def _drain_card():
     """A card stranded in the shipped retiring lane, Backlog (DRE-6753): the
@@ -166,12 +165,6 @@ def _frozen_card():
     return frozen
 
 
-def _waiting_in_the_old_line():
-    """A card still `waiting` in the old planner line, recorded against this
-    repo: the drain starts it and releases its place (DRE-8618)."""
-    return _waiting("DRE-5178", 30.0, repo=THIS)
-
-
 def _epic_in_todo():
     """An `[EPIC]` card in Todo with no `repo:` label — everybody's."""
     return epic_card("DRE-5347", title="[EPIC] an epic somebody dragged into Todo",
@@ -215,7 +208,6 @@ TRIGGERS = {
     "flag_stranded": ((_stalled_planning_card,), "cmd_state", "DRE-2736"),
     "advance_urgent_intake": ((_urgent_card,), "cmd_advance", "DRE-4150"),
     "repair_frozen_planning_holds": ((_frozen_card,), "remove_label", "DRE-4124"),
-    "serve_planner_line": ((_waiting_in_the_old_line,), "post_released", "DRE-5178"),
     "tend_epic_queue": ((_labeled_backlog_card,), "remove_label", "DRE-5152"),
     "start_queued_epics": ((_waiting_epic,), "cmd_advance", "DRE-5136"),
     "carry_epics_out_of_todo": ((_epic_in_todo,), "post_refusal", "DRE-5347"),
@@ -236,10 +228,9 @@ def _a_retiring_start_lane(monkeypatch):
 def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO", THIS)
     monkeypatch.setattr(reconcile, "REPO_SLUG", ON_RAIL)
-    monkeypatch.setattr(reconcile.planner_queue, "cap", lambda cfg=None, environ=None: 4)
     monkeypatch.setenv(reconcile.GROOM_CARD_ENV, STANDING)
     for name in ("INTAKE_HOLD", "MERGED_CARD", "SWEEP_REASON", "SWEEP_CARD",
-                 "CLAUDE_ACCOUNT", reconcile.planner_queue.CONFIG_ENV):
+                 "CLAUDE_ACCOUNT"):
         monkeypatch.delenv(name, raising=False)
     ledgers = (reconcile._write_failures, reconcile._read_failures,
                reconcile._stale_defects)
@@ -293,7 +284,6 @@ def _world(cards, slug, closed=None):
         "remove_label": mock.MagicMock(),
         "set_title": mock.MagicMock(),
         "find_open_prefix": mock.MagicMock(return_value=None),
-        "post_released": mock.MagicMock(),
         "fire": mock.MagicMock(return_value=(True, "")),
         "post_refusal": mock.MagicMock(return_value=True),
         "raise_notice": mock.MagicMock(return_value="raised"),
@@ -317,8 +307,8 @@ def _world(cards, slug, closed=None):
         enter = stack.enter_context
         enter(mock.patch.object(reconcile, "REPO_SLUG", slug))
         for m in _main_mocks():
-            # The ten stay LIVE: they are the phases under test.
-            if m.attribute not in TEN:
+            # The nine stay LIVE: they are the phases under test.
+            if m.attribute not in NINE:
                 enter(m)
         for name in _ALSO_STOOD_DOWN:
             enter(mock.patch.object(reconcile, name))
@@ -354,8 +344,6 @@ def _world(cards, slug, closed=None):
         for name in ("cmd_advance", "cmd_state", "cmd_comment", "add_label",
                      "remove_label", "set_title", "find_open_prefix"):
             enter(mock.patch.object(lops, name, writes[name]))
-        enter(mock.patch.object(reconcile.planner_queue, "post_released",
-                                writes["post_released"]))
         enter(mock.patch.object(reconcile.plan_run, "fire", writes["fire"]))
         enter(mock.patch.object(reconcile.epic_todo_gate, "post_refusal",
                                 writes["post_refusal"]))
@@ -450,10 +438,10 @@ def test_the_notice_is_one_line_naming_the_slug_the_phase_and_the_write(monkeypa
     assert "escalated a stalled card" in line
 
 
-def test_the_mapping_is_exactly_the_ten():
-    """An eleventh fleet-wide writer joins deliberately, by name — here and in
+def test_the_mapping_is_exactly_the_nine():
+    """A tenth fleet-wide writer joins deliberately, by name — here and in
     the mapping together."""
-    assert tuple(reconcile.OFF_RAIL_SKIPPED) == TEN
+    assert tuple(reconcile.OFF_RAIL_SKIPPED) == NINE
     for name, would in reconcile.OFF_RAIL_SKIPPED.items():
         assert isinstance(would, str) and would.strip(), name
 
@@ -503,20 +491,20 @@ def test_main_keeps_the_text_other_suites_read():
 # --------------------------------------------------------------------------
 # 2: THE CRITERION — a full pass off the rail writes nothing
 # --------------------------------------------------------------------------
-def test_a_full_sandbox_pass_skips_all_ten_and_writes_nothing(capsys):
+def test_a_full_sandbox_pass_skips_all_nine_and_writes_nothing(capsys):
     reads = {}
     writes, lines, red = _sweep(_full_board(), SANDBOX, capsys, reads=reads)
 
     off = _off_rail_lines(lines)
-    assert len(off) == 10, off
-    for name in TEN:
+    assert len(off) == 9, off
+    for name in NINE:
         assert sum(name in line for line in off) == 1, (name, off)
     assert _called(writes) == {}, _called(writes)
     assert reconcile._write_failures == []
     assert reconcile._read_failures == []
     assert not red, "a skipped phase is a normal pass — never red"
     spend = [line for line in lines if line.startswith("sweep-spend:")]
-    for name in TEN:
+    for name in NINE:
         assert not any(line.startswith(f"sweep-spend: {name} ") for line in spend), (
             name, spend)
     for name, fake in reads.items():
@@ -528,20 +516,20 @@ def test_a_full_sandbox_pass_skips_all_ten_and_writes_nothing(capsys):
 
 def test_the_same_board_on_the_rail_enters_every_phase(capsys):
     """The control for the spend assertion above: on the rail each of the
-    ten is entered, so each prints its `sweep-spend:` line, and no
+    nine is entered, so each prints its `sweep-spend:` line, and no
     `off-rail:` line appears."""
     writes, lines, _red = _sweep(_full_board(), ON_RAIL, capsys)
     assert _off_rail_lines(lines) == []
     assert "DRE-5152" in _targets(writes["remove_label"]), _called(writes)
     assert "DRE-5136" in _targets(writes["cmd_advance"]), _called(writes)
-    for name in TEN:
+    for name in NINE:
         assert any(line.startswith(f"sweep-spend: {name} ") for line in lines), name
 
 
 # --------------------------------------------------------------------------
 # 3: each fixture is one the fence actually stops
 # --------------------------------------------------------------------------
-@pytest.mark.parametrize("phase", TEN)
+@pytest.mark.parametrize("phase", NINE)
 def test_each_trigger_writes_on_the_rail_and_nothing_off_it(phase, capsys):
     builders, seam, ident = TRIGGERS[phase]
 

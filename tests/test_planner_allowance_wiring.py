@@ -19,8 +19,8 @@ THE WIRING UNDER TEST:
      `steps.allowance.outputs.start == 'true'`, and a run whose step did not
      answer `start=true` reaches no model step, no route and no Green Light
      writer — walked through the gates, never read off step names;
-  3. the slot steps, `planner_queue.py` and `PLANNER_MAX_RUNNING` are gone
-     from the file;
+  3. the slot steps, the slot ledger's module and the cap's variable are
+     gone from the file — the names read off `tests/test_no_planner_cap.py`;
   4. `jobs.plan.timeout-minutes` is the planner's own budget plus
      `hold_max_minutes` plus `wait_minutes`, both read from
      `config/planner-allowance.json`, so the pin moves with either;
@@ -53,6 +53,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 
 import test_plan_critic_wiring as pcw  # noqa: E402
+from test_no_planner_cap import PATTERN as PLANNER_CAP  # noqa: E402
 from workflow_walk import Walk, truth  # noqa: E402
 
 WF = os.path.join(ROOT, ".github", "workflows", "plan.yml")
@@ -259,9 +260,10 @@ class TheWalk(unittest.TestCase):
 class TheSlotIsGone(unittest.TestCase):
     def test_no_slot_reference_queue_call_or_cap_variable_is_left(self):
         src = wf_src()
-        # Spelled in pieces, so `git grep` for the slot gate finds no test either.
-        for word in ("planner_queue", "steps." + "slot", "PLANNER_MAX_RUNNING"):
-            self.assertNotIn(word, src, word)
+        # Spelled in pieces, so `git grep` for the slot gate finds no test
+        # either, and the cap's names read off the guard's own pattern.
+        self.assertEqual(PLANNER_CAP.findall(src), [])
+        self.assertNotIn("steps." + "slot", src)
 
     def test_no_step_name_or_id_mentions_a_planner_slot(self):
         for s in steps():
@@ -307,7 +309,7 @@ class TheJobTimeout(unittest.TestCase):
         self.assertIn("wait_minutes", block)
         self.assertIn("DRE-8617", block)
         self.assertNotIn("claim TTL", block)
-        self.assertNotIn("planner-queue.json", block)
+        self.assertEqual(PLANNER_CAP.findall(block), [])
 
 
 # --------------------------------------------------------------------------- #

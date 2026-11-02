@@ -614,7 +614,7 @@ class TestTheAgentEscalationGate:
         root = _copy_repo(tmp_path)
         _edit(root / self.REPORT_SCRIPT,
               'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\\n'
-              '    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"',
+              '    --body-file="${RUNNER_TEMP:-/tmp}/escalation-comment.md"',
               'cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md"')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
@@ -849,7 +849,7 @@ class TestTheMedicPark:
     UNIT = "medic.yml#Ask a person about the diagnosis"
     RECEIPT = "🙋 The medic diagnosed a failure only a person can settle"
     POST = ('python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" '
-            '"$(cat "$RUNNER_TEMP/medic-ask-comment.md")"')
+            '--body-file="$RUNNER_TEMP/medic-ask-comment.md"')
 
     def test_the_park_is_discovered_and_declared(self):
         assert self.UNIT in {unit for _, unit in grl.green_light_writes()}

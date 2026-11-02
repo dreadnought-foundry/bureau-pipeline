@@ -123,6 +123,7 @@ def step_named(name: str) -> dict:
 # real write path rather than by the stub.
 STUB = '''#!/usr/bin/env python3
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 
 NO_CODE_LABEL = "no-code"
 
