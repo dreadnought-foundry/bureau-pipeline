@@ -248,7 +248,9 @@ mints (see `models.yaml` below).
   `leave_alone`, the cards the agent never takes (`{"card", "why"}`). Read only
   through `scripts/operator_rules.py`, whose `load_rules` refuses a table that
   breaks the shape. A kept act wins over `destructive-go`, which wins over
-  studio access; no match is the model's to read. Every phrase is quoted from
+  studio access; no match is the model's to read. A phrase's last word matches
+  in the singular or the plural, so each phrase is listed once, as its fixture
+  sentence writes it. Every phrase is quoted from
   a sentence of `tests/fixtures/operator-agent-board-2026-11-01.json`, and
   `tests/test_operator_rules.py` pins every fixture card the table sends to
   the CEO or to the studio host.

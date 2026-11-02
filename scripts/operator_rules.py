@@ -35,7 +35,10 @@ a model reads into them. Those routes are declared once, as data, in
 A phrase matches case-insensitively and whole — never inside a longer word,
 with any run of whitespace standing for a space, a curly apostrophe read as a
 straight one (`operator_step_kind`'s matcher) — in the card's title or
-description, outside fenced code. Every phrase was taken from a sentence of
+description, outside fenced code. Its last word also matches in the singular
+or the plural, so `AWS role` fires on `AWS roles`, `AWS identity` on `AWS
+identities` and `org-level secrets` on `org-level secret`; `AWS roleplay`
+still matches nothing. Every phrase was taken from a sentence of
 the replay fixture, `tests/fixtures/operator-agent-board-2026-11-01.json`.
 
 ## Precedence
@@ -68,7 +71,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from operator_step_kind import _APOSTROPHES, _phrase_re
+from operator_step_kind import _APOSTROPHES
 
 ROOT = Path(__file__).resolve().parent.parent
 CONFIG_PATH = ROOT / "config" / "operator-agent.json"
@@ -90,6 +93,7 @@ HOST_LIMIT_KEYS = ("source", "read_on", "cannot")
 FIXTURE_AUTHOR_KIND = "person"
 
 _FENCE = re.compile(r"(`{3,}|~{3,})")
+_LAST_WORD = re.compile(r"([A-Za-z]+)$")
 
 
 @dataclass(frozen=True)
@@ -204,6 +208,27 @@ def _outside_fences(text: str) -> str:
         elif stripped.startswith(fence) and not stripped.strip(fence[0]):
             fence = None
     return "\n".join(kept)
+
+
+def _number(word: str) -> str:
+    """A pattern for `word` in the singular or the plural."""
+    if re.search(r"[^aeiou]y$", word, re.IGNORECASE):
+        return re.escape(word[:-1]) + "(?:y|ies)"
+    if re.search(r"[^s]s$", word, re.IGNORECASE):
+        return re.escape(word[:-1]) + "s?"
+    return re.escape(word) + "(?:e?s)?"
+
+
+def _phrase_re(phrase: str) -> re.Pattern:
+    """`operator_step_kind`'s whole-phrase matcher with the last word read in
+    either number. That matcher stays exact: its own tests pin it."""
+    phrase = phrase.translate(_APOSTROPHES)
+    last = _LAST_WORD.search(phrase)
+    stem = phrase[:last.start()] if last else phrase
+    body = re.escape(stem).replace("\\ ", r"\s+") + (_number(last.group(1)) if last else "")
+    head = r"(?<![\w-])" if re.match(r"\w", phrase) else ""
+    tail = r"(?![\w-])" if re.search(r"\w$", phrase) else ""
+    return re.compile(f"{head}{body}{tail}", re.IGNORECASE)
 
 
 def _first(text: str, phrases) -> str | None:
