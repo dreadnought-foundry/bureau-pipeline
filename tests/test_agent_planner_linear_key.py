@@ -84,8 +84,10 @@ AGENT_WORKFLOWS = {
 # 2026-11-01 (3,200 of 4,037, 2:00-4:00 PM PT) while the planner's bucket never
 # read below 4,296 of 5,000. It holds the token unless the repo opts OUT with
 # `LINEAR_SWEEP_BUCKET=fleet` (tests/test_reconcile_planner_linear_key.py).
+# DRE-8747: the Operator Agent's `select`, `claim` and `apply` read and write
+# the cards it decides, on the planner's bucket as the Triage Repair's do.
 PLANNER_KEY_READERS = {"plan.yml", "triage-repair.yml", "alarm-repair.yml", "reconcile.yml",
-                       *AGENT_WORKFLOWS}
+                       "operator-agent.yml", *AGENT_WORKFLOWS}
 
 
 def _doc(name: str) -> dict:
@@ -337,6 +339,9 @@ TOKEN_JOBS = {
     # DRE-8634: the Alarm Repair's Linear steps spend the planner's bucket,
     # triage-repair.yml's job env.
     "alarm-repair.yml": ("select", "repair"),
+    # DRE-8747: the Operator Agent's `select` in `decide`, and its `claim` and
+    # `apply` legs, on triage-repair.yml's job env.
+    "operator-agent.yml": ("decide", "apply"),
     # DRE-8716: the sweep's one job.
     "reconcile.yml": ("sweep",),
 }
