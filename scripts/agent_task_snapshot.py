@@ -159,7 +159,7 @@ def take(identifier: str, out: str) -> dict | None:
         # A stopped door is never asked, so the client cannot name this
         # Linear read: it is named here (DRE-8796).
         bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
-    snap =door if (mode == "on" and door is not None) else None
+    snap = door if (mode == "on" and door is not None) else None
     if snap is None:
         try:
             snap = _from_linear(identifier)
