@@ -138,9 +138,11 @@ class TestEveryActDeclaresItsCadence:
         sixty-one since DRE-7952 added the receipt of the one fix card a
         PROOF closes with when its unmet rows are all gaps; sixty-two since
         DRE-8648 added the notice a blocker parked in Intake or Hand-work
-        gives its owner; sixty-three since DRE-8650 added the receipt that
-        marks an operator step in Hand-work as a machine's or a person's."""
-        assert len(pipeline_act.acts()) == 63
+        gives its owner; sixty-four since DRE-8650 added the receipt that
+        marks an operator step in Hand-work as a machine's or a person's, and
+        DRE-8633 the receipt of the Alarm Repair's one attempt on an alarm left
+        open on a card."""
+        assert len(pipeline_act.acts()) == 64
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():

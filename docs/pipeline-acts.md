@@ -780,6 +780,41 @@ The console must learn this act before this row merges. The `act registry
 consumers` job refuses a row the console does not carry, and it knows an act
 by its tag or its name.
 
+## The row that records an Alarm Repair — `🔩 alarm-repair` (DRE-8633)
+
+| Field | Value |
+| -- | -- |
+| tag | `alarm-repair-receipt` |
+| act name | `alarm-repair` |
+| kind · state · next actor | `recovery` · `unchanged` · `reconcile.py` |
+| discharges | nothing |
+| cadence | `null` — the receipt leaves the card's state unchanged with `reconcile.py` next, and the sweep reads the card again on its own schedule, so nothing is expected to speak on it and the console reads it as parked, not overdue |
+| emitted by | `scripts/alarm_repair.py`, at the `pipeline_act.receipt("alarm-repair", …)` call in `_post` |
+
+An open console alert that names a card, at `WARN` or `CRITICAL` and open for
+at least two hours, gets one automatic repair attempt per raise (epic
+DRE-8606). `alarm_repair.py select` reads `bureau_read.open_alerts()` and the
+card's whole thread; `claim` posts the first receipt before the repair agent
+runs; `apply` posts the last, after every other write of its outcome:
+
+    🔩 alarm-repair: started · alert=<kind> · raised=<raised_at>
+    🔩 alarm-repair: repaired · alert=<kind> · raised=<raised_at> · move=pipeline
+    🔩 alarm-repair: diagnosed · alert=<kind> · raised=<raised_at> · move=operator|ceo
+    🔩 alarm-repair: unfinished · alert=<kind> · raised=<raised_at> · move=operator
+
+`repaired` is a relation the card's own prose declares, added through
+`linear_ops._add_blocked_by`, or a hold lift its own rule says is due,
+`🔓 hold lifted: … by=scripts/alarm_repair.py`. The description, title, labels
+and lane are never written. **The receipt key is live**: a pipeline-authored
+comment whose first line is one of these, naming the alert's kind and
+`raised_at`, is that raise's one attempt, so `select` answers `spent` and
+`claim` exits 3. An alert raised again has a new `raised_at` and gets a new
+attempt. A comment of that shape from any other author counts for nothing.
+The tag is `alarm-repair-receipt`, never the bare act name, so a `tag in body`
+count never reads the lift line as one of its receipts.
+
+The console must learn this act before this row merges, as for every row.
+
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
 
 | Field | Value |
