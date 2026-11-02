@@ -81,16 +81,14 @@ def test_stalled_reads_an_unparseable_first_seen_as_unknown():
 # --- clocked ---------------------------------------------------------------
 
 
-def test_clocked_is_true_for_exactly_the_seven_clocked_tags():
+def test_clocked_is_true_for_exactly_the_six_clocked_tags():
     """The sixth is the epic cap's hold (DRE-6618): a sweep asks the cap only
     for an epic a blocker released, so a hold on any other stands until a
-    person acts, and is clocked like every refusal no sweep clears. The
-    seventh is an epic in Planning whose plan run is dead (DRE-8815), clocked
-    as one record per epic, never per child."""
+    person acts, and is clocked like every refusal no sweep clears."""
     assert promotion_stall.CLOCKED_TAGS == (
         "routing-no-verdict", "mid-epic-no-verdict",
         "plan-critic-post-unread", "plan-critic-post-sent-back",
-        "plan-critic-post-died", "epic-cap-undecided", "epic-not-active",
+        "plan-critic-post-died", "epic-cap-undecided",
     )
     for tag in promotion_stall.CLOCKED_TAGS:
         assert promotion_stall.clocked(tag) is True, tag

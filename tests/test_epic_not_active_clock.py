@@ -71,18 +71,32 @@ def registry_tags() -> list[str]:
 # --------------------------------------------------------------------------- #
 
 
-def test_clocked_tags_are_the_six_of_before_plus_epic_not_active():
+def test_the_per_card_clocked_tags_are_the_six_of_before():
+    """`epic-not-active` is clocked only as the epic's record, so it never
+    joins the tuple the per-card `clocked()` reads."""
     assert promotion_stall.CLOCKED_TAGS == (
         "routing-no-verdict", "mid-epic-no-verdict",
         "plan-critic-post-unread", "plan-critic-post-sent-back",
-        "plan-critic-post-died", "epic-cap-undecided", "epic-not-active",
+        "plan-critic-post-died", "epic-cap-undecided",
     )
+    assert promotion_stall.EPIC_CLOCKED_TAGS == ("epic-not-active",)
+    assert not set(promotion_stall.EPIC_CLOCKED_TAGS) & set(promotion_stall.CLOCKED_TAGS)
 
 
-def test_of_the_promotion_wait_reasons_only_epic_not_active_is_clocked():
+def test_no_promotion_wait_reason_is_clocked_per_card():
     clocked = [r for r in promotion_wait.REASONS if promotion_stall.clocked(r)]
-    assert clocked == [promotion_wait.EPIC_NOT_ACTIVE]
+    assert clocked == []
     assert promotion_stall.EPIC_NOT_ACTIVE_TAG == promotion_wait.EPIC_NOT_ACTIVE
+
+
+def test_a_child_recorded_under_epic_not_active_is_never_clocked_per_card():
+    """The guard on the per-card path: were `stand()` ever handed the tag, the
+    child's record would still never stall, however old its receipt — the
+    children are counted into the epic's one record, never clocked."""
+    child = promotion_stall.Refused("DRE-8699", promotion_wait.EPIC_NOT_ACTIVE,
+                                    ago(600), "DRE-8698")
+    assert promotion_stall.clocked(child.tag) is False
+    assert promotion_stall.stalled(child, iso(NOW)) is None
 
 
 def test_the_other_declared_waits_stay_unclocked():
