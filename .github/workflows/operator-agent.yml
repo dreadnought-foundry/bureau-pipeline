@@ -374,7 +374,10 @@ jobs:
         run: |
           python3 "$TRUSTED_PIPELINE"/scripts/operator_agent.py decide --cards "$SELECTED/cards.json" \
             --cards-dir "$OUT_DIR/cards" --answers "$OUT_DIR/answers" --out decisions.json
-          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          # Isolated (-I), as alarm-repair.yml's post-model heredoc: the model's
+          # Write reaches this directory, and a module it left here must never
+          # be imported by the code that writes the `cards` output.
+          python3 -I - >> "$GITHUB_OUTPUT" <<'PY'
           import json, os
           written = ("studio", "ceo", "done-already")
           rows = []
