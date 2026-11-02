@@ -135,7 +135,6 @@ Env: LINEAR_API_KEY, GH_TOKEN, REPO (owner/name).
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import functools
 import json
 import math
@@ -227,10 +226,14 @@ import pipeline_act  # noqa: E402
 # cards; when the door cannot take a raise it files the card each filed before.
 import pipeline_notice  # noqa: E402
 from pipeline_notice import Fallback as NoticeFallback  # noqa: E402
-# DRE-5177: ONE reading of the fleet-wide planner line — a card waiting its
-# turn for a planner is not a dead planner, and its wait has its own bound.
 import planning_escalation  # noqa: E402 — the plain-English check for CEO-facing text
+# DRE-8618: the old planner line's ledger, read only by its one-way drain
+# (`serve_planner_line`) and the groom stall's bound until DRE-8622 and
+# DRE-8619 remove them.
 import planner_queue  # noqa: E402
+# DRE-8616: ONE reading of a planner held by the planners' Linear allowance —
+# the quiet notices stay quiet while it holds, and only then.
+import planner_allowance  # noqa: E402
 # DRE-5435: the one repo whose sweep releases the groom queue — the repo that
 # starts waiting epics (DRE-5152), named once there. DRE-5152's two phases
 # read the epic line and the count of epics in motion through it.
@@ -289,6 +292,7 @@ import reviewer_down  # noqa: E402
 import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
+import crashed_review_alert  # noqa: E402 — DRE-8690: a review stuck at its cap is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
 # the marker and the receipt body all live there. This file is the wrapper:
@@ -3514,20 +3518,16 @@ def flag_stalled_planning() -> set[str]:
     parked card is no longer in Planning, so nothing needs to remember it.
     Returns the identifiers parked this sweep.
 
-    A CARD WAITING IN THE PLANNER LINE IS NOT A STRAND (DRE-5177). Under the
-    fleet-wide planner cap (DRE-5176) a card can sit here for hours with only
-    its `waiting` receipt on it, so the line is read before the clock: a card
-    in line inside the line's own bound (`planner_queue.overdue`) is skipped
-    and logged, and one past it is parked through the same seam with the
-    line's own reason — once, under the same WATCHDOG_TAG rule, and BEFORE the
-    under-review skip, so an epic under review whose re-asked review has
-    waited past the bound is parked by the line's rule and never hidden by
-    the skip. The park takes it out of the line: the `because parked` release
-    (DRE-5378) ends its place, so a re-send starts a fresh wait rather than an
-    overdue one. The release is posted BEFORE the park's note, because the
-    note has to be the card's newest comment when it enters Triage (see
-    `escalate_out_of_planning`). A card whose newest receipt is a claim, or
-    that carries none, is measured by the stall clock exactly as before.
+    THE STALL CLOCK ALONE MEASURES A CARD IN PLANNING (DRE-8618). The planner
+    line's rule (DRE-5177) is gone with the cap it served: no card is skipped
+    for waiting in a line, and none is parked for waiting too long in one. A
+    card whose only recent comment is an old `waiting` receipt is parked by
+    the clock exactly as a card with nothing on it would be. A held planner
+    is not a strand either: DRE-8616's `check` keeps `hold_max_minutes` plus
+    `wait_minutes` (the bound and its stagger) below the stall window, and
+    the `held` receipt, when Linear accepts it, bumps the card's `updatedAt`
+    (on a refused read none is posted, and the bound alone keeps the hold
+    inside the window).
 
     THE REPO FILTER IS flag_stranded's, EXACTLY (DRE-2929), and the reason it
     reads oddly here is the reason it was missing: a card in Planning usually
@@ -3583,41 +3583,6 @@ def flag_stalled_planning() -> set[str]:
         # Off the card the board read already returned (DRE-2929): no per-card
         # request, however many cards Planning holds.
         bodies = card_comment_bodies(card)
-        # The line BEFORE the clock (DRE-5177). Under the fleet-wide planner
-        # cap a card can sit here for hours with only its `waiting` receipt on
-        # it, and `updatedAt` cannot tell that from a planner that died — so
-        # a card in line is judged by the line's own, longer bound instead,
-        # and never by the stall clock below. A card holding a claim, or
-        # carrying no receipt at all, falls through and is measured as before.
-        line = _planner_line(bodies)
-        if line is not None:
-            waited, overdue = line
-            if not overdue:
-                print(
-                    f"watchdog: {ident} is waiting for a planner slot "
-                    f"({_line_place(bodies)}, waited {waited:.0f} minutes) — "
-                    "not a strand"
-                )
-                continue
-            if any(WATCHDOG_TAG in b for b in bodies):
-                continue  # flagged once already — idempotent forever
-            # A card the door's read put here is read live once, before the
-            # release: a card that left Planning since gets neither (item 33).
-            if not _door_lane_still(card):
-                continue
-            # The release first (DRE-5378), the note second: the note must be
-            # the newest comment when the card enters Triage, or the plan-gate
-            # lets the relay re-plan it (`escalate_out_of_planning`).
-            _end_line_place(ident, bodies)
-            if escalate_out_of_planning(card, waiting_too_long_reason(waited),
-                                        bodies, live_checked=True):
-                flagged.add(ident)
-                print(
-                    f"watchdog: {ident} has waited {waited:.0f} minutes for a "
-                    "planner slot, past the line's bound — parked in "
-                    f"{PARKED_STATE}"
-                )
-            continue
         # The stall clock needs `updatedAt` and nothing else, and a young card
         # is the common case — so every check below it is work the lane's own
         # question has already made unnecessary.
@@ -3812,99 +3777,6 @@ def limit_wait_overran_reason(marker: dict, created_at: datetime | None) -> str:
         f"{death}{when} The sweep has not brought it back since: either no "
         "pass found room to re-enter it, or every re-entry failed. Why is not "
         "known from here."
-    )
-
-
-def _slot_receipts(bodies) -> list:
-    """The planner-slot receipts among `bodies`, oldest first — parsed by the
-    module that owns the grammar (DRE-5176), never re-read here."""
-    parsed = [planner_queue.parse_receipt(b) for b in bodies or []]
-    return sorted(
-        (r for r in parsed if r is not None),
-        key=lambda r: datetime.fromisoformat(r.created_at.replace("Z", "+00:00")),
-    )
-
-
-def _planner_line(bodies) -> tuple[float, bool] | None:
-    """`(minutes waited, past the bound)` for a card in the planner line, or
-    None for a card that is not in it (DRE-5177).
-
-    In line means the foundation card's rule and nothing else:
-    `planner_queue.in_line` — `waiting`, or `dispatched` inside the grace —
-    with the wait measured from the line entry, never from the dispatch.
-
-    An unreadable queue config answers None: the card is then measured by the
-    stall clock exactly as it was before the line existed, which can raise a
-    false alarm but can never hide a card.
-    """
-    now = datetime.now(UTC)
-    try:
-        if not planner_queue.in_line(bodies, now):
-            return None
-        waited = planner_queue.waited_minutes(bodies, now) or 0.0
-        return waited, planner_queue.overdue(bodies, now)
-    except planner_queue.PlannerQueueError as e:
-        print(f"::warning::the planner line could not be read ({e}) — "
-              "measuring by the stall clock as before")
-        return None
-
-
-def _line_place(bodies) -> str:
-    """Where the card stands, as its own newest receipt says."""
-    receipts = _slot_receipts(bodies)
-    if receipts and receipts[-1].state == "dispatched":
-        return "dispatched from the line, its run not yet started"
-    waits = [r for r in receipts if r.state == "waiting"]
-    if waits and waits[-1].place:
-        return f"place {waits[-1].place} of {waits[-1].of}"
-    return "place not stated"
-
-
-def _end_line_place(ident: str, bodies) -> None:
-    """A park out of Planning ends the card's place in line (DRE-5378).
-
-    The watchdog's park is the one park no planner run follows with a release
-    of its own: the card was waiting, so no run held its claim. The
-    `because parked` release is what makes the reason's last sentence true —
-    a re-send starts a fresh wait instead of coming back already overdue, the
-    way DRE-5213 did at 14:26 PT on 2026-09-30. It carries the card's own
-    repo and trigger and this sweep's run id. A release that does not land
-    goes on the write ledger: the card is parked all the same.
-    """
-    receipts = _slot_receipts(bodies)
-    stand = receipts[-1] if receipts else None
-    try:
-        planner_queue.post_released(
-            linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
-            repo=stand.repo if stand else REPO,
-            trigger_state=stand.trigger if stand else "-", because="parked",
-        )
-    except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
-        _write_failures.append(f"{ident} planner-slot park release: {e}")
-        print(f"ERROR: planner line: {ident} was parked but its place in line was "
-              f"not released: {e}", file=sys.stderr)
-
-
-_COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
-                "eight", "nine", "ten")
-
-
-def waiting_too_long_reason(waited_minutes: float) -> str:
-    """What the operator reads on a card the planner line never served
-    (DRE-5177). Since DRE-5286 it is parked in Triage, not put in front of
-    the CEO. The cap is read off the queue's config rather than written
-    here, so the sentence stays true if the number moves.
-    """
-    hours = max(1, round(waited_minutes / 60))
-    running = planner_queue.cap()
-    count = _COUNT_WORDS[running] if running < len(_COUNT_WORDS) else str(running)
-    return (
-        "this card has been waiting in line for a planner for about "
-        f"{hours} hour{'s' if hours != 1 else ''} and nothing has started it. "
-        f"{count[0].upper() + count[1:]} planners run at a time across the "
-        "company and the rest wait their turn, and a wait this long means the "
-        "line has stopped moving for this card. Why is not known from here. "
-        "Sending it back through Planning gives it a fresh place in line."
     )
 
 
@@ -4124,114 +3996,67 @@ def repair_frozen_planning_holds() -> set[str]:
     return repaired
 
 
-def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
-    """The planner line's backstop (DRE-5178, epic DRE-5167). Full sweeps only.
+def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> list[str]:
+    """The one-way drain of the old planner line (DRE-8618, epic DRE-8539).
+    Full sweeps only, until DRE-8622 removes it.
 
-    The end-of-run dispatch in `plan.yml` is the line's fast path, and it does
-    not run when a runner is killed, when a job hits its timeout (its
-    `always()` steps are skipped), or when the finishing run cannot mint a
-    token for the waiting card's owner. This is the promise behind it: no
-    waiting card outlives two sweeps of its own repo while a slot is free.
+    The fleet-wide planner cap is gone (`architecture/decisions/
+    adr-planner-cap-removed.md`): since DRE-8617 a plan run reads the
+    planners' Linear allowance and claims no slot, so nothing joins the line
+    any more. What the cap's line still holds is started at once, so no card
+    is stranded when the line stops being served. Nothing is counted: no cap,
+    no claim, no TTL and no free slot.
 
-    WHAT IT READS. The ledger's lanes (`planner_queue.LEDGER_LANES`): the ones
-    inside SWEPT_LANES come off the board read this sweep already paid for,
-    and Green Light — outside it — is read because a run whose epic has just
-    moved there still holds its slot until its release step. In
-    `BUREAU_READ=on` that is the door's own `scope=fleet` read of it, cached
-    apart from Intake and Planning's; where the door declines that scope, and
-    in `off` and `shadow`, it is one real paged Linear query, the one extra
-    request this phase costs (`_fleet_or_linear`, DRE-5848). The ledger itself, the
-    order of the line and every receipt's text are `planner_queue`'s; nothing
-    here decides who is next.
+    WHAT IT SERVES. Every card the ledger finds waiting — its newest
+    `🎟️ planner-slot:` receipt `waiting`, or a `dispatched` past its grace
+    (`planner_queue.ordered_ledger`, served in the line's own order) —
+    recorded against THIS repo. Each is fired through `plan_run.fire` with
+    the card record the board read returned, its recorded trigger and its
+    recorded reason, on the plan event whatever its labels (DRE-5366) — never
+    `sent_by_run`: the sweep is not the card's planner run. A confirmed
+    dispatch is followed by a `released … · because cap-removed` receipt,
+    which takes the card out of the line, so no pass serves it twice. A
+    failed dispatch goes on the write ledger, posts nothing, and ends the
+    drain for this pass: the card stays waiting for the next one. A card
+    escalated out of Planning earlier in this pass (`skip`) is still waiting
+    on this pass's board read, and is not served.
 
-    1. DEAD CLAIMS. Only open claims are read — a claim closed by its own
-       release or by a handover is never released twice. One past the TTL is
-       released fleet-wide `because expired`, with no GitHub read: no plan job
-       outlives its timeout. One of THIS repo whose run GitHub reports
-       `completed` is released `because run-gone` — the fast path for a killed
-       runner, own-repo only because the sweep's token reaches only its own
-       owner. An unreadable status keeps the claim: the slot is held for at
-       most the TTL, and a second dispatch is never the fallback.
-    2. FREE SLOTS. While one is free, the first waiting card in line (an
-       approval, then the order the CEO set on the Overview, then the earliest
-       arrival — `planner_queue.ordered_ledger`, DRE-5807) recorded
-       against THIS repo is fired through `plan_run.fire` with the card
-       record the board read returned, its recorded trigger and its recorded
-       reason, on the plan event whatever its labels (DRE-5366) — never
-       `sent_by_run`: the sweep is not the card's planner run,
-       and the run it starts must be judged as any dispatch. The `dispatched`
-       receipt follows only a confirmed dispatch (`redispatch`'s rule); a
-       failure goes on the write ledger, the card stays waiting, and nothing
-       else is dispatched this pass. A card escalated out of Planning earlier
-       in this pass (`skip`) is still waiting on this pass's board read, and
-       is not served.
-    3. DEPTH. One line per pass, as a `::warning::` once the oldest card has
-       waited over half the line's bound. Passing the whole bound is the
-       Planning watchdog's to escalate (DRE-5177); this phase never does.
+    WHAT IT READS. The ledger's lanes (`planner_queue.LEDGER_LANES`), as the
+    backstop read them: the ones inside SWEPT_LANES off the board read this
+    sweep already paid for, and Green Light through `_fleet_or_linear`
+    (DRE-5848). Only Planning and In Progress hold a waiting card.
 
-    A config that cannot be read is the fleet cap switched off everywhere —
-    every planner run's claim step admits uncapped with only a warning — so
-    here it is a `::error::` and a read failure: the sweep exits red for the
-    medic.
+    WHY ITS OWN REPO IS ENOUGH. A repo's sweep and its plan workflow ride
+    one channel — `@main` for agent-bureau and bureau-pipeline, and `@stable`
+    for every other repo, whose every consumer stub pins it with the paired
+    `pipeline_ref: stable` (`docs/self-hosting.md`). So this drain reaches a
+    repo whose plan workflow already carries DRE-8617, which posts no
+    `waiting`, and its first full pass there empties the line that repo's old
+    plan workflow left. A repo whose plan workflow still posts `waiting` is
+    still running the old sweep, which serves its own line as before. The one
+    card no pass of the drain reaches is one left `waiting` in a repo whose
+    single channel advance carries DRE-8617, DRE-8618 and DRE-8622 together:
+    the Planning stall clock parks it in Triage within the stall window, and
+    the operator's step (DRE-8623) moves it back to Planning by hand.
 
-    Returns the slots the line has LEFT once it is served (DRE-5435): the cap
-    less every planner running, every slot dispatched and every card still
-    waiting, fleet-wide — `groomer.free_planner_slots`' arithmetic, read off
-    this pass's ledger. `release_groom_queue` releases into exactly those. An
-    unreadable config leaves none.
+    A queue config that cannot be read leaves the ledger unreadable: a
+    `::error::` and a read failure, and the sweep exits red for the medic.
+
+    Returns the cards dispatched this pass.
     """
-    try:
-        limit = planner_queue.cap()
-        bound = planner_queue.waiting_max()
-    except planner_queue.PlannerQueueError as e:
-        print(
-            f"::error::planner line: the planner queue config could not be read "
-            f"— {e}. Every planner run is admitting without a cap until it is fixed."
-        )
-        _read_failures.append(f"planner-line: {e}")
-        return 0
+    served: list[str] = []
     swept = tuple(lane for lane in planner_queue.LEDGER_LANES if lane in SWEPT_LANES)
     extra = tuple(lane for lane in planner_queue.LEDGER_LANES if lane not in SWEPT_LANES)
     cards = active_cards(swept) + (
         _fleet_or_linear(extra, "/".join(extra)) if extra else [])
     records = {card["identifier"]: card for card in cards}
-    now = datetime.now(UTC)
-    # In the order the CEO set on the Overview, read through the console's
-    # door, then arrival order (DRE-5807) — the order `next` serves in.
-    line = planner_queue.ordered_ledger(cards, now)
-
-    def release(claim, because: str) -> bool:
-        try:
-            planner_queue.post_released(
-                linear_ops, claim.card, run_id=claim.run, repo=claim.repo,
-                trigger_state=claim.trigger, because=because,
-            )
-        except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
-            _write_failures.append(f"{claim.card} planner-slot release: {e}")
-            print(f"ERROR: planner line: {claim.card} run {claim.run} was not "
-                  f"released: {e}", file=sys.stderr)
-            return False
-        print(f"planner line: released {claim.card} run {claim.run} — because {because}")
-        return True
-
-    for claim in planner_queue.expired_claims(line, now):
-        release(claim, "expired")
-    running = []
-    for claim in line.running:
-        # A run id is digits; anything else on the ledger is not a run GitHub
-        # can answer for, and the TTL ends it instead.
-        if claim.repo.lower() != REPO.lower() or not claim.run.isdigit():
-            running.append(claim)
-            continue
-        status = gh_actions_read(
-            "api", f"repos/{REPO}/actions/runs/{claim.run}", "--jq", ".status"
-        )
-        if status != "completed" or not release(claim, "run-gone"):
-            running.append(claim)
-    line = dataclasses.replace(line, running=running)
-
-    free = line.free_slots(limit)
-    served: list[str] = []
+    try:
+        line = planner_queue.ordered_ledger(cards, datetime.now(UTC))
+    except planner_queue.PlannerQueueError as e:
+        print(f"::error::planner line: the planner queue config could not be read "
+              f"— {e}. The old line's waiting cards are not started this pass.")
+        _read_failures.append(f"planner-line: {e}")
+        return served
     halted = False
     for stand in line.waiting:
         ident = stand.card
@@ -4241,8 +4066,6 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
             why = f"recorded against {stand.repo} — that repo's sweep serves it"
         elif halted:
             why = "a dispatch failed this pass — it stays waiting for the next sweep"
-        elif free <= 0:
-            why = "no free slot — it keeps its place in line"
         elif ident not in records:
             why = "not on this pass's board read"
         else:
@@ -4261,49 +4084,38 @@ def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> int:
             print(f"planner line: {ident} skipped — its dispatch failed; it stays waiting")
             halted = True
             continue
-        free -= 1
         served.append(ident)
         try:
-            planner_queue.post_dispatched(
+            planner_queue.post_released(
                 linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
-                repo=stand.repo, trigger_state=stand.trigger, reason=stand.reason,
+                repo=stand.repo, trigger_state=stand.trigger, because="cap-removed",
             )
         except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
-            _write_failures.append(f"{ident} planner-slot dispatched receipt: {e}")
-            print(f"ERROR: planner line: {ident} was dispatched but its receipt did "
-                  f"not post: {e}", file=sys.stderr)
-        print(f"planner line: {ident} served — dispatched at {REPO} "
-              f"(trigger {stand.trigger}, reason {stand.reason or 'none'})")
-
-    waiting = [stand for stand in line.waiting if stand.card not in served]
-    oldest = max(
-        (planner_queue.waited_minutes(
-            (records[stand.card].get("comments") or {}).get("nodes"), now) or 0.0
-         for stand in waiting if stand.card in records),
-        default=0.0,
-    )
-    depth = (
-        f"planner line: {len(waiting)} waiting, oldest {oldest:.0f} minutes, "
-        f"{len(line.running)} running and {len(line.reserved) + len(served)} "
-        f"dispatched of {limit}"
-    )
-    print(f"::warning::{depth}" if oldest > bound / 2 else depth)
-    return max(0, free - len(waiting))
+            _write_failures.append(f"{ident} planner-slot cap-removed release: {e}")
+            print(f"ERROR: planner line: {ident} was dispatched but its release "
+                  f"did not post: {e}", file=sys.stderr)
+        print(f"planner line: {ident} started — dispatched at {REPO} "
+              f"(trigger {stand.trigger}, reason {stand.reason or 'none'}) and "
+              "released because cap-removed")
+    print(f"planner line: {len(served)} of {len(line.waiting)} waiting card(s) "
+          "started this pass — the cap is removed, and the line is only drained")
+    return served
 
 
 # --- the groom queue's release (DRE-5435) ------------------------------------
 #
-# An approved groom batch goes into the planner line instead of being refused:
-# the drain moves what the free planner slots take and QUEUES the rest — each
+# An approved groom batch went into the planner line instead of being refused:
+# the drain moved what the free planner slots took and QUEUED the rest — each
 # card stays in Intake under `groomer.QUEUED_LABEL`, and one `groom-queued`
 # record on the groomer's standing card lists them in place order. This is the
-# other half: the planner line's backstop (DRE-5178) releases the queue into
-# the slots it has left, one card per slot.
+# other half. Since the cap was removed (DRE-8618) no slot is counted: every
+# standing card is released on the pass, and the groomer card (DRE-8619)
+# removes the queue itself once nothing joins it.
 #
 # ONE repo releases — the one that starts waiting epics (DRE-5152) — because
 # the queue lives on one card's thread and every repo's sweep reading it would
 # be the fleet paying for one read many times over, and racing itself for the
-# same slots.
+# same cards.
 
 #: The lane a released card goes to. A module constant, so
 #: `ready_lane_writers.py` reads the destination at the call site.
@@ -4400,10 +4212,12 @@ def _repair_groom_queue(card: str, records: list[dict], board: dict) -> list[dic
     return posted
 
 
-def release_groom_queue(free: int) -> list[str]:
-    """Release the groom queue into the planner slots the line has left
-    (DRE-5435). Full sweeps only, right after `serve_planner_line`, and only
-    by the sweep whose repo is `epic_cap.START_OWNER_SLUG`.
+def release_groom_queue() -> list[str]:
+    """Release every standing card of the groom queue (DRE-5435), with no
+    free-slot count (DRE-8618): the planner cap is gone, so nothing rations
+    the release. Full sweeps only, right after `serve_planner_line`, and only
+    by the sweep whose repo is `epic_cap.START_OWNER_SLUG`. The groomer card
+    (DRE-8619) removes the queue itself once nothing joins it.
 
     WHAT IT READS. The standing card's WHOLE thread, once (`groomer.
     decision_records`, paginated — the proposal card outgrows the fifty-
@@ -4423,17 +4237,16 @@ def release_groom_queue(free: int) -> list[str]:
         out of the queue by that person, and is never released — read so
         only once its newest queued record is older than
         `GROOM_LABEL_FRESH_MINUTES` (DRE-6640). Inside that bound a missing
-        label may not be readable yet: the card is read directly when a slot
-        could take it, released if that read shows the label, and otherwise
-        keeps its place with nothing written;
-      * otherwise, while a slot is free, the card gets its `groomer.
+        label may not be readable yet: the card is read directly unless a
+        release has already failed this pass, released if that read shows
+        the label, and otherwise keeps its place with nothing written;
+      * otherwise the card gets its `groomer.
         moved_note` — the batch, its position off the proposal record on the
         same thread, this release and its queue place (DRE-3326) — then moves
         to Planning and its label comes off. A note that will not post is a
         write failure and moves nothing. Entering Planning starts its plan
-        run the way any Intake-to-Planning move does, and the card joins the
-        planner line there with a fresh wait (DRE-5378). A move that fails
-        is a write failure and ends the releases for this pass.
+        run the way any Intake-to-Planning move does. A move that fails is a
+        write failure and ends the releases for this pass.
 
     ONE `🧺 groom-released` comment per pass that changed the queue, a line
     per batch it touched — never one per card.
@@ -4442,13 +4255,15 @@ def release_groom_queue(free: int) -> list[str]:
     put back in the line (`_repair_groom_queue`, DRE-6640), so the walk reads
     the queue that repair restored.
 
-    A STALL — the queue is not empty, this pass had a free slot, released
-    nothing, and nothing has changed the queue for the planner line's own
-    bound (`planner_queue.waiting_max()`) — raises the `groom_stall` console
-    alert at WARN (DRE-7455), and a pass that read the queue and found no
-    stall resolves it. Waiting in the queue is never escalated to the CEO: a
-    queued card is in Intake, where no Planning watchdog, no planner line and
-    no age-out reads it, and a WARN never leaves the console.
+    A STALL — the queue is not empty, and this pass released nothing and
+    changed nothing, which can only mean every release write failed — is
+    handed to `_report_groom_stall`. It raises the `groom_stall` console
+    alert at WARN (DRE-7455) once nothing has changed the queue for its
+    bound, `planner_queue.waiting_max()`, and a pass that read the queue and
+    found no stall resolves it. Waiting in the queue is never escalated to
+    the CEO: a queued card is in Intake, where no Planning watchdog and no
+    age-out reads it, and a WARN never leaves the console. DRE-8619 deletes
+    the stall report with the queue.
 
     Returns the cards released. Raises whatever a Linear READ raises.
     """
@@ -4489,7 +4304,7 @@ def release_groom_queue(free: int) -> list[str]:
         return changes.setdefault(
             pid, {"id": pid, "released": [], "left": [], "unqueued": []})
 
-    slots, halted, remaining = free, False, []
+    halted, remaining = False, []
     for entry in standing:
         ident, pid = entry["identifier"], entry["id"]
         found = board.get(ident)
@@ -4513,9 +4328,10 @@ def release_groom_queue(free: int) -> list[str]:
                       f"'{groomer.QUEUED_LABEL}' — taken out of the queue by hand")
                 continue
             # Queued inside the bound: the label may not be readable yet
-            # (DRE-6640). With no slot free the card waits whatever a direct
-            # read would say, so it is read only when it could be released.
-            if halted or slots <= 0:
+            # (DRE-6640). Once a release has failed this pass the card waits
+            # whatever a direct read would say, so it is read only when it
+            # could be released.
+            if halted:
                 remaining.append(entry)
                 continue
             if not _groom_label_readable(ident):
@@ -4525,7 +4341,7 @@ def release_groom_queue(free: int) -> list[str]:
                       "after it was queued — kept in its place, read again "
                       "next pass")
                 continue
-        if halted or slots <= 0:
+        if halted:
             remaining.append(entry)
             continue
         if not _door_lane_still(found):
@@ -4564,7 +4380,6 @@ def release_groom_queue(free: int) -> list[str]:
             print(f"groom queue: {ident} left Intake since the door's read — not "
                   "released; the next pass reads where it went")
             continue
-        slots -= 1
         released.append(ident)
         change(pid)["released"].append(ident)
         try:
@@ -4585,9 +4400,8 @@ def release_groom_queue(free: int) -> list[str]:
             _write_failures.append(f"{card} groom-released row: {e}")
             print(f"ERROR: groom queue: the groom-released row did not post on "
                   f"{card}: {e}", file=sys.stderr)
-    print(f"groom queue: {len(released)} released, {len(remaining)} waiting, "
-          f"{free} slot(s) free at the start of the pass")
-    if remaining and free > 0 and not released and not changes:
+    print(f"groom queue: {len(released)} released, {len(remaining)} waiting")
+    if remaining and not released and not changes:
         _report_groom_stall(records, remaining)
     else:
         _clear_groom_stall()
@@ -8101,43 +7915,28 @@ def post_critic_hold_is_overdue(tag: str | None, green_lit_at: str | None,
     green light speaks too — unknown must not silence a refusal.
 
     `bodies` is the epic's own thread, and it changes WHEN the notice speaks,
-    never whether the hold holds (DRE-5177). An approved epic whose activate
-    run was not admitted waits in the planner line, and its review has not
-    started — so while its newest planner-slot receipt is in line the notice
-    is logged and not posted, since telling the CEO to re-run a review that is
-    merely queued is the wrong instruction. Once it is claimed, the grace runs
-    from the claim when that is newer than the green light, because the review
-    starts when the run is admitted. No receipt at all answers as before.
+    never whether the hold holds. An approved epic whose activate run is held
+    by the planners' Linear allowance (DRE-8616) has not started its review —
+    so while `planner_allowance.held` is true the notice is logged and not
+    posted, since telling the CEO to re-run a review that is merely held is
+    the wrong instruction. Only then (DRE-8618): a `started` planner-hold
+    receipt, an expired `held`, or none at all is timed from the green light
+    as before. The planner line's rule this replaces (DRE-5177) went with the
+    cap.
     """
     if tag != plan_critic.POST_UNREAD_TAG:
         return True
-    started_at = green_lit_at
-    if bodies:
-        try:
-            in_line = planner_queue.in_line(bodies)
-        except planner_queue.PlannerQueueError as e:
-            print(f"::warning::the planner line could not be read ({e}) — "
-                  "the hold notice is timed from the green light as before")
-            in_line = False
-        receipts = _slot_receipts(bodies)
-        if in_line:
-            epic = receipts[-1].card if receipts else "the epic"
-            print(
-                f"promotion: epic {epic} is waiting for a planner slot — the "
-                "second critic's review has not started, so the hold on its "
-                "children is logged and not posted"
-            )
-            return False
-        if green_lit_at and receipts and receipts[-1].state == "claimed":
-            try:
-                if age_minutes(receipts[-1].at) < age_minutes(green_lit_at):
-                    started_at = receipts[-1].at
-            except ValueError:
-                pass  # an unreadable claim time leaves the green light's clock
-    if not started_at:
+    if bodies and planner_allowance.held(bodies, datetime.now(UTC)):
+        print(
+            "promotion: the epic's activate run is held by the planners' Linear "
+            "allowance — the second critic's review has not started, so the "
+            "hold on its children is logged and not posted"
+        )
+        return False
+    if not green_lit_at:
         return True
     try:
-        return age_minutes(started_at) >= POST_CRITIC_GRACE_MINUTES
+        return age_minutes(green_lit_at) >= POST_CRITIC_GRACE_MINUTES
     except ValueError:
         return True
 
@@ -8178,8 +7977,10 @@ def ask_cap_for_released_epic(epic: str, green_lit_at: str | None,
         (`undecided_hold_is_overdue` is the caller's);
       * no `⏸️ epic-queued:` receipt follows the approval — a decision on
         record, whatever lane the epic is in now;
-      * its activate run is not waiting in the planner line, where it will
-        ask itself (DRE-5177).
+      * its activate run is not held by the planners' Linear allowance
+        (`planner_allowance.held`, DRE-8616): a held run asks the cap itself
+        when it starts. The planner line's rule this replaces (DRE-5177)
+        went with the cap (DRE-8618).
 
     Then the answer is written the way it is written at approval: on `start`
     the `▶️ epic-started:` receipt, which lifts the hold for every child on
@@ -8204,15 +8005,10 @@ def ask_cap_for_released_epic(epic: str, green_lit_at: str | None,
         print(f"epic-cap: {epic} was queued in line since its approval — that "
               "decision is on record, so the sweep does not ask again")
         return None
-    try:
-        in_line = planner_queue.in_line([r.get("body") or "" for r in thread or []])
-    except planner_queue.PlannerQueueError as e:
-        print(f"epic-cap: {epic}'s planner line could not be read ({e}) — the "
-              "sweep does not ask the cap for it this pass")
-        return None
-    if in_line:
-        print(f"epic-cap: {epic}'s activate run is waiting for a planner slot — "
-              "it asks the cap itself when it runs")
+    if planner_allowance.held([r.get("body") or "" for r in thread or []],
+                              datetime.now(UTC)):
+        print(f"epic-cap: {epic}'s activate run is held by the planners' Linear "
+              "allowance — it asks the cap itself when it starts")
         return None
     try:
         fleet = epic_cap.fleet_state()
@@ -8906,7 +8702,7 @@ def promote_ready(
                 if refusal is not None:
                     refusal_tag = plan_critic.refusal_tag(refusal)
                     # The epic's own thread, already in hand — whether its
-                    # review is still queued for a planner (DRE-5177).
+                    # review is held by the planners' allowance (DRE-8618).
                     surface_refusal = post_critic_hold_is_overdue(
                         refusal_tag, green_light[epic_id],
                         [r.get("body") or "" for r in post_critic[epic_id] or []])
@@ -13612,28 +13408,89 @@ def _hold_without_spending_the_retry(pr: dict) -> bool:
     return _hold_crashed_review(pr, card, linear_ops.comment_bodies(card))
 
 
-def _report_crashed_review_cap(pr: dict, receipts: int) -> None:
-    """The one automatic re-dispatch is spent: HOLD when the cause is the
-    runner's environment, `reviewer-down` when it is not.
+def _limit_recovery_owns(pr: dict, bodies: list[str], run_id: str) -> bool:
+    """Is this capped head's review a Claude limit death limit recovery is
+    still waiting on? Says so on one line when it is (DRE-8690).
 
-    ONE card read serves both questions. `_report_reviewer_down`'s
+    Yes when the card's live marker (`limit_recovery.waiting`) is `kind=claude
+    stage=review` and names `run_id`, the crashed review run at this head. On
+    2026-11-01 the `🚨 reviewer-down` this cap posted closed both such markers
+    — `🚨` is a receipt glyph — and limit recovery stopped watching the two
+    reviews it would have re-run. Posting nothing leaves the marker open,
+    which keeps its reset clock, the wall-down trigger (a later verdict in the
+    repository) and its six-hour stood clock, which reaches a console alert
+    on its own (DRE-8632)."""
+    marker = limit_recovery.waiting(bodies)
+    if (not run_id or marker is None or marker.get("kind") != "claude"
+            or marker.get("stage") != "review" or marker.get("run") != run_id):
+        return False
+    print(
+        f"crashed-review: PR #{pr['number']} head {pr['headRefOid'][:8]} — the "
+        f"review died on the Claude limit (run {run_id}); limit-recovery owns it "
+        "and re-runs it once the wall is down"
+    )
+    return True
+
+
+def _report_crashed_review_cap(pr: dict, receipts: int) -> crashed_review_alert.Capped | None:
+    """The one automatic re-dispatch is spent: HOLD when the cause is the
+    runner's environment, WAIT when it is a Claude limit death limit recovery
+    owns, `reviewer-down` when it is neither.
+
+    ONE card read serves every question. `_report_reviewer_down`'s
     idempotency check already fetched `linear_ops.comment_bodies(card)`, and
     the cause is read off the same bodies, so naming the cause costs nothing
     new: an evidence note for THIS head means the medic has already said this
     runner cannot run Claude here, and the report that named no cause and no
     check is replaced by the hold that names both.
 
-    With no evidence the existing path runs exactly as it did — the behaviour
+    The limit question (DRE-8690) costs one Actions run listing, the crashed
+    review run at this head (`_crashed_review_run_at_head`), which the medic's
+    marker has to name. The same run id goes into the head's console alert.
+
+    Returns the head's alert row when it reached `_report_reviewer_down` with
+    a card to name, else None. With no evidence and no live limit marker the
+    existing path runs exactly as it did — the behaviour
     `tests/test_crashed_review_recovery.py` holds unchanged.
     """
     card = branch_card(pr["headRefName"])
     if not card:
         _report_reviewer_down(pr, receipts)  # its own no-card warning
-        return
+        return None
     bodies = linear_ops.comment_bodies(card)
     if _hold_crashed_review(pr, card, bodies):
-        return
+        return None
+    run_id = _crashed_review_run_at_head(pr["headRefOid"])
+    if _limit_recovery_owns(pr, bodies, run_id):
+        return None
     _report_reviewer_down(pr, receipts, bodies=bodies)
+    return crashed_review_alert.Capped(card, pr["number"], pr["headRefOid"], run_id)
+
+
+def _read_pr_for_alert(number: int) -> dict:
+    """One pull request the open listing does not hold, for the reviewer-down
+    alert's resolve (DRE-8690): its state, head and comments. Raises when the
+    read fails, and the alert then stays open."""
+    pr = json.loads(gh_read(
+        "pr", "view", str(number), "--repo", REPO,
+        "--json", "number,state,headRefName,headRefOid,baseRefName,comments",
+    ))
+    if not isinstance(pr, dict):
+        raise ValueError(f"PR #{number} read back as {type(pr).__name__}")
+    return pr
+
+
+def _settle_reviewer_down_alerts(capped: list, prs: list[dict], unread: set) -> None:
+    """Hand this pass's capped heads to `crashed_review_alert.settle`
+    (DRE-8690). An alert never decides the sweep: a fault is one line."""
+    try:
+        crashed_review_alert.settle(
+            capped, REPO_SLUG, unread, repo=REPO, prs=prs,
+            read_pr=_read_pr_for_alert, bound=verdict_bound,
+        )
+    except Exception as e:  # noqa: BLE001 — an alert never fails the sweep
+        print(f"{crashed_review_alert.TAG} not settled this pass — "
+              f"{type(e).__name__}: {e}")
 
 
 def _report_stale_verdict(pr: dict) -> None:
@@ -13694,7 +13551,13 @@ def recover_crashed_reviews() -> None:
         the count lives in the sha-bound receipts, so repeated sweeps can
         never accumulate dispatches the way the DRE-1921 loop did.
       * cap spent → the outage is REPORTED, once per head, on the linked
-        card in plain English (_report_reviewer_down) — never looped on.
+        card in plain English (_report_reviewer_down) — never looped on —
+        and raised as a WARN console alert naming the card on every pass
+        (`crashed_review_alert`, DRE-8690), which resolves only on positive
+        evidence the review is no longer stuck.
+      * cap spent AND the card's live limit marker says the review died on
+        the Claude limit (DRE-8690) → nothing posted and nothing raised:
+        limit recovery re-runs it once the wall is down.
       * cap spent AND the medic's evidence note says the cause is the
         RUNNER'S ENVIRONMENT (DRE-3431) → a HOLD naming the cause and the one
         command that confirms it, instead of that report. A hold standing
@@ -13732,6 +13595,8 @@ def recover_crashed_reviews() -> None:
     holds = {p.get("number"): _hold_state(p, verdict) for p in prs}
     standing = any(h.held_at and not h.release for h in holds.values())
     released = []  # held heads whose signal arrived — they join `eligible`
+    capped = []  # heads that reached `_report_reviewer_down` (DRE-8690)
+    unread = set()  # PRs this pass holds only part of — their alert stays open
     for pr in prs:
         try:
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
@@ -13739,6 +13604,7 @@ def recover_crashed_reviews() -> None:
             if pr.get(THREAD_UNREADABLE):
                 # DRE-7510: the verdict or the receipt may sit past the page
                 # we hold — recorded by the listing, never acted on here.
+                unread.add(pr.get("number"))
                 print(
                     f"crashed-review: PR #{pr['number']} — its full comment "
                     "thread could not be read; nothing dispatched, nothing posted"
@@ -13803,7 +13669,9 @@ def recover_crashed_reviews() -> None:
                     pr, CRASHED_REVIEW_DISPATCH_TAG, by=is_worker_pool_comment
                 )
                 if receipts >= CRASHED_REVIEW_RETRY_CAP:
-                    _report_crashed_review_cap(pr, receipts)
+                    stuck = _report_crashed_review_cap(pr, receipts)
+                    if stuck is not None:
+                        capped.append(stuck)
                     continue
                 if standing and _hold_without_spending_the_retry(pr):
                     continue  # the crash next door already spent this retry
@@ -13819,6 +13687,7 @@ def recover_crashed_reviews() -> None:
                     continue  # a live dispatch may be posting the fresh verdict
                 _report_stale_verdict(pr)
         except Exception as e:  # noqa: BLE001 — isolate the one PR, sweep the rest
+            unread.add(pr.get("number"))
             _write_failures.append(
                 f"crashed-review recovery on PR #{pr.get('number')}: {e}"
             )
@@ -13863,6 +13732,10 @@ def recover_crashed_reviews() -> None:
             f"per-sweep dispatch cap ({CRASHED_REVIEW_SWEEP_CAP}) — the next "
             "sweep picks them up oldest-first (DRE-2049)"
         )
+    # DRE-8690: every capped head is a console alert naming its card, and an
+    # alert resolves only on positive evidence — never because a head was
+    # skipped this pass.
+    _settle_reviewer_down_alerts(capped, prs, unread)
 
 
 # The fleet-outage backstop (DRE-3435, the sweep half of epic DRE-3420).
@@ -14978,6 +14851,12 @@ def recover_limit_deaths() -> None:
     Every card it moves or posts a receipt on is recorded in
     `_limit_recovered` (DRE-5841), so the Planning watchdog later in this pass,
     reading the same snapshot and its old marker, leaves the card alone.
+
+    The wall-down trigger (DRE-8690) is the time of the newest critic verdict
+    in this repository, read by `_newest_repo_verdict` off the sweep's own
+    open-PR listing (`_open_pr_listing`) — the listing the crashed-review pass
+    reads later anyway, so it costs no GitHub call. An unreadable listing hands
+    over None, and the clock alone decides, as before.
     """
     def move(ident: str, lane: str) -> None:
         _limit_recovered.add(ident)
@@ -14987,6 +14866,7 @@ def recover_limit_deaths() -> None:
     try:
         cards = [c for c in active_cards(SWEPT_LANES) if card_repo(c) in (None, REPO_SLUG)]
         backfill_limit_records(cards)
+        wall_down_at = _wall_down_at(_open_pr_listing())
         # The lane each card is in NOW, as this pass knows it: the board's
         # reading, then each move this pass makes. A move decided on the read
         # door's facts is from-lane-conditional on it (item 33), and a refused
@@ -14999,7 +14879,7 @@ def recover_limit_deaths() -> None:
             MAX_WIP - wip_count(wip_base(active_cards())),
             rerun=lambda run_id: gh_dispatch(
                 "run", "rerun", run_id, "--failed", "--repo", REPO) is None,
-            move=move, dispatch=redispatch, cards=cards,
+            move=move, dispatch=redispatch, cards=cards, wall_down_at=wall_down_at,
         ):
             acted = True
             print(line)
@@ -15023,6 +14903,20 @@ def recover_limit_deaths() -> None:
     except Exception as e:  # noqa: BLE001 — a backstop never aborts the sweep
         _ledger_unread.append(f"recover_limit_deaths ({type(e).__name__})")
         print(f"limit-recovery: skipped this pass ({type(e).__name__}: {e})", file=sys.stderr)
+
+
+def _wall_down_at(prs: list[dict] | None) -> datetime | None:
+    """When the newest critic verdict in this repository landed, or None when
+    the listing is unreadable, holds no verdict, or names an unreadable time
+    (DRE-8690). A review that succeeded is the proof the Claude wall is down."""
+    newest = _newest_repo_verdict(prs) if prs is not None else None
+    if not newest:
+        return None
+    try:
+        at = datetime.fromisoformat(newest[0].replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
 
 
 def _post_limit_receipt(ident: str, receipt: str):
@@ -15569,7 +15463,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
     "repair_frozen_planning_holds":
         "escalated and un-held unlabeled Planning cards our watchdog froze",
     "serve_planner_line":
-        "released expired planner-slot claims on any repo's card",
+        "started the old planner line's waiting cards and released their places",
     "tend_epic_queue":
         "removed the epic-queued label from any repo's card that left the line",
     "start_queued_epics":
@@ -16097,7 +15991,6 @@ def main(
         # on the same board read: the cards it repairs are exactly the ones
         # that watchdog now skips as already held.
         repaired: set[str] = set()
-        line_left = 0
         if off_rail() and "repair_frozen_planning_holds" in OFF_RAIL_SKIPPED:
             print(off_rail_notice("repair_frozen_planning_holds",
                                   OFF_RAIL_SKIPPED["repair_frozen_planning_holds"]))
@@ -16111,8 +16004,8 @@ def main(
             except linear_ops.LinearError as e:
                 _read_failures.append(f"planning-repair: {e}")
                 print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
-        # The planner line's backstop (DRE-5178): dead claims released, free
-        # slots filled, the line's depth said. After the watchdog and the
+        # The one-way drain of the old planner line (DRE-8618): every card
+        # still waiting in it started at once. After the watchdog and the
         # repair, so a card either of them escalated this pass — still waiting
         # on this pass's board read — is not dispatched on its way out. Full
         # sweeps only: the event paths have returned or skip this block.
@@ -16122,7 +16015,7 @@ def main(
         else:
             try:
                 with _phase("serve_planner_line"):
-                    line_left = serve_planner_line(flagged | (repaired or set()))
+                    serve_planner_line(flagged | (repaired or set()))
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
@@ -16132,13 +16025,13 @@ def main(
             except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
                 _write_failures.append(f"planner-line: {e}")
                 print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
-        # The groom queue's release (DRE-5435), right after the line is served
-        # and into the slots it left — none when it could not be served. Its
+        # The groom queue's release (DRE-5435), right after the line is
+        # drained: every standing card, with no slot count (DRE-8618). Its
         # own try: a release that cannot read must not cost the sweep the rest
         # of its work, and an unreadable thread is a READ failure.
         try:
             with _phase("release_groom_queue"):
-                release_groom_queue(line_left)
+                release_groom_queue()
         except linear_ops.LinearError as e:
             _read_failures.append(f"groom queue: {e}")
             print(f"ERROR: release_groom_queue: {e}", file=sys.stderr)

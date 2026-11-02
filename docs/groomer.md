@@ -1332,8 +1332,10 @@ labelled card no record lists. The drained record is written whatever the slots 
 it and a second approval is `already drained`.
 
 The reconcile sweep releases the queue (`release_groom_queue`, right after the
-planner line's backstop, on full sweeps of bureau-pipeline only): one card per
-slot the line has left, oldest batch first and place order within a batch,
+drain of the old planner line, on full sweeps of bureau-pipeline only): since
+the planner cap was removed (DRE-8618, `architecture/decisions/
+adr-planner-cap-removed.md`) every standing card on the pass, with no slot
+count, oldest batch first and place order within a batch,
 given its `🧺 groom-moved` note — by `the sweep's queue release, place <p>`,
 its position read off the proposal record on the same thread — then moved to
 `Planning` with its label removed — and Planning entry starts its plan
@@ -1346,8 +1348,8 @@ queue's standing is readable off the thread alone: queued, less released, less
 left. `propose` never offers a card carrying `groom-queued`, and waiting in the
 queue is never escalated to the CEO — a queued card is in Intake, which no
 Planning watchdog or planner line reads. A queue that has stood still for the
-planner line's own bound with a slot free is ONE `no-code` card created in
-`Triage` for the operator.
+planner line's own bound because every release write failed is ONE `no-code`
+card created in `Triage` for the operator.
 
 **A label not yet readable is not a person's act** (DRE-6640). On 2026-10-09
 the drain queued twelve cards of batch `467bdb8ee5f7` and the sweep read the
@@ -1358,7 +1360,7 @@ naming the card is older than the freshness bound, `GROOM_LABEL_FRESH_MINUTES`
 in `scripts/reconcile.py` — longer than any lag seen, and no longer than one
 sweep interval, so a card held back is read again on the first pass past it.
 Inside the bound, a queued card whose label the board read did not show is
-read once more on its own, directly, when a slot could take it: if that read
+read once more on its own, directly, unless a release has failed this pass: if that read
 shows the label the card is released like any other; if not, it keeps its
 place, nothing is written about it, and the next pass reads again. A direct
 read can rescue a card, never take one out.

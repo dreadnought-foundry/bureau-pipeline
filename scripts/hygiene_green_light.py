@@ -97,8 +97,10 @@ DESTINATION = "Planning"
 STOP_HOURS = 6
 
 #: How the two stall parks' reasons open — `reconcile.stalled_planning_reason`
-#: and `reconcile.waiting_too_long_reason`, before and since DRE-5286. Pinned
-#: to those functions by the lane's tests.
+#: and the planner line's `waiting_too_long_reason`, before and since DRE-5286.
+#: The first is pinned to its function by the lane's tests. The second went
+#: with the planner cap (DRE-8618), and stays for the parks already written
+#: with it.
 STALL_OPENINGS = (
     "planning has produced nothing",
     "this card has been waiting in line for a planner",

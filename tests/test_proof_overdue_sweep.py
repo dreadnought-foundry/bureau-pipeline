@@ -12,7 +12,9 @@ that does, `scripts/proof_overdue_sweep.py`:
   * the note line on every pass, one WARN alert a day keyed on the PT day,
     the previous day's key resolved;
   * a dry run that writes nothing, and a card or write that fails turning the
-    step red only after every other card is handled;
+    step red only after every other card is handled — except a card read
+    GitHub refused for its rate limit, which is named, skipped and read on
+    the next pass (DRE-8696);
   * the `Proof overdue` step in `reconcile.yml`, and the two config entries.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_overdue_sweep.py -v
@@ -427,6 +429,84 @@ class FailureTest(unittest.TestCase):
         self.assertEqual(1, len(world.posted_on("DRE-2")))
         self.assertEqual([], world.posted_on("DRE-1"))
         self.assertTrue(world.raised)
+
+    def test_a_rate_limited_card_is_skipped_and_named_and_the_step_stays_green(self):
+        # DRE-8696: Foundry's Reconcile went red because GitHub throttled the
+        # shared installation while one proof record was read. The main sweep
+        # records that as degraded; this pass now does the same.
+        refused = RuntimeError("gh: API rate limit exceeded for installation ID 123249480")
+        world = World({"DRE-1": ("In Review", refused),
+                       "DRE-2": ("In Review", _diag("DRE-2"))})
+        err = io.StringIO()
+        with mock.patch.object(sys, "stderr", err):
+            status, out = world.run(NOON)
+        self.assertEqual(0, status, out + err.getvalue())
+        skipped = [line for line in _lines(out) if line.startswith("proof-overdue: DRE-1 · ")]
+        self.assertEqual(1, len(skipped), out)
+        self.assertIn("rate limit", skipped[0])
+        self.assertIn("next pass", skipped[0])
+        self.assertNotIn("ERROR:", err.getvalue())
+        self.assertNotIn("ERROR:", out)
+        self.assertEqual([], world.posted_on("DRE-1"))
+        self.assertEqual(1, len(world.posted_on("DRE-2")))
+        self.assertIn("proof-overdue: note · bureau-pipeline · 1 proof record(s) older than "
+                      "7 days · oldest DRE-2 (12.4 days, class=release) · not read (rate "
+                      "limit): DRE-1", _lines(out))
+
+    def test_a_lone_rate_limited_card_is_named_in_the_note_and_yesterdays_alert_stays(self):
+        # An unread card is not an absent one (standards/console-honesty.md):
+        # the note names it, and the previous day's alert is left open.
+        refused = RuntimeError("gh: API rate limit exceeded for installation ID 1")
+        world = World({"DRE-1": ("In Review", refused)})
+        world.open_keys.add("proof_overdue:bureau-pipeline:2026-10-31")
+        status, out = world.run(NOON)
+        self.assertEqual(0, status, out)
+        self.assertEqual([], world.resolved)
+        self.assertEqual({"proof_overdue:bureau-pipeline:2026-10-31"}, world.open_keys)
+        note = next(line for line in _lines(out) if line.startswith("proof-overdue: note"))
+        self.assertIn("not read (rate limit): DRE-1", note)
+        self.assertNotIn("proof-overdue: note · bureau-pipeline · 0 proof record(s) older "
+                         "than 7 days · oldest none", _lines(out))
+        # The next pass that reads every card resolves it as before.
+        world.cards["DRE-1"] = ("In Review", None)
+        world.run(NOON)
+        self.assertEqual(["proof_overdue:bureau-pipeline:2026-10-31"], world.resolved)
+
+    def test_a_rate_limited_card_beside_an_overdue_one_raises_but_resolves_nothing(self):
+        refused = RuntimeError("gh: API rate limit exceeded for installation ID 1")
+        world = World({"DRE-1": ("In Review", refused),
+                       "DRE-2": ("In Review", _diag("DRE-2"))})
+        world.open_keys.add("proof_overdue:bureau-pipeline:2026-10-31")
+        world.run(NOON)
+        self.assertEqual(["proof_overdue:bureau-pipeline:2026-11-01"],
+                         [k for k, _ in world.raised])
+        self.assertIn("not read (rate limit): DRE-1", world.raised[0][1]["body"])
+        self.assertEqual([], world.resolved)
+
+    def test_a_dry_pass_with_a_rate_limited_card_would_not_resolve(self):
+        refused = RuntimeError("gh: API rate limit exceeded for installation ID 1")
+        world = World({"DRE-1": ("In Review", refused)})
+        status, out = world.run(NOON, live=False)
+        self.assertEqual(0, status, out)
+        self.assertFalse(any(line.startswith("would: resolve") for line in _lines(out)), out)
+        note = next(line for line in _lines(out) if line.startswith("proof-overdue: note"))
+        self.assertIn("not read (rate limit): DRE-1", note)
+        self.assertEqual(([], [], []), (world.posted, world.raised, world.resolved))
+
+    def test_the_rate_limit_is_read_from_the_whole_error_not_the_trimmed_one(self):
+        # `_why` keeps 300 characters; GitHub's wording past them still counts.
+        refused = RuntimeError("x" * 400 + " API rate limit exceeded for installation ID 1")
+        world = World({"DRE-1": ("In Review", refused)})
+        status, out = world.run(NOON)
+        self.assertEqual(0, status, out)
+        self.assertNotIn("could not be read", out)
+
+    def test_a_permission_refusal_is_still_red(self):
+        world = World({"DRE-1": ("In Review",
+                                 RuntimeError("HTTP 403: Resource not accessible by integration"))})
+        status, out = world.run(NOON)
+        self.assertEqual(1, status)
+        self.assertIn("proof-overdue: DRE-1 · could not be read — HTTP 403", out)
 
     def test_a_thread_that_cannot_be_read_posts_nothing_and_is_red(self):
         world = World({"DRE-1": ("In Review", _diag("DRE-1")),

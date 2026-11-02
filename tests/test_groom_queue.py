@@ -12,13 +12,13 @@ THE RULE. One approval moves the whole batch into the line: the drain moves
 what the free slots take and QUEUES the rest — each card stays in Intake and
 gains the `groom-queued` label, and ONE `🧺 groom-queued: <id>` record on the
 proposal card lists them in place order (`tests/test_groomer_drain_slots.py`).
-This suite is the other half, `reconcile.release_groom_queue`, the planner
-line backstop's (DRE-5178) next phase:
+This suite is the other half, `reconcile.release_groom_queue`, the phase
+after the drain of the old planner line (`serve_planner_line`):
 
-  * per free slot `serve_planner_line` has left, ONE queued card moves to
-    Planning and loses its label — oldest batch first, place order within a
-    batch — and one `🧺 groom-released` row per pass says what moved and what
-    left the lane;
+  * every standing queued card moves to Planning and loses its label, with no
+    slot count since the planner cap was removed (DRE-8618) — oldest batch
+    first, place order within a batch — and one `🧺 groom-released` row per
+    pass says what moved and what left the lane;
   * a queued card that has left Intake is dropped with no state write, its
     place not held; one whose label a person removed is never released;
   * only the bureau-pipeline sweep releases (`epic_cap.START_OWNER_SLUG`),
@@ -26,10 +26,13 @@ line backstop's (DRE-5178) next phase:
   * the groomer never proposes a queued card again;
   * waiting in the groom queue is never escalated to the CEO: a queued card
     is in Intake, which no Planning watchdog and no planner line reads;
-  * a stalled queue — a free slot, nothing released, nothing changed for the
-    planner line's own bound — raises the `groom_stall` console alert at WARN
-    (DRE-7455), and a pass where it no longer holds resolves it. The alert's
-    one row per key is its dedupe; no card is filed by the sweep.
+  * a stalled queue — nothing released and nothing changed, so every release
+    write failed, for `_report_groom_stall`'s bound — raises the
+    `groom_stall` console alert at WARN (DRE-7455), and a pass where it no
+    longer holds resolves it. The alert's one row per key is its dedupe; no
+    card is filed by the sweep.
+
+The groomer card (DRE-8619) deletes the queue, and this suite with it.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_queue.py -v
 """
@@ -64,7 +67,7 @@ import planner_queue  # noqa: E402
 import ready_lane_writers  # noqa: E402
 import reconcile  # noqa: E402
 
-from test_planner_queue_sweep import Board, _claimed, _waiting  # noqa: E402
+from test_planner_queue_sweep import Board  # noqa: E402
 
 STANDING = "DRE-4541"
 OLDER, NEWER = "01d0ba7c4e11", "fe3e7ba7c422"
@@ -243,9 +246,9 @@ def _linear(queue: Queue):
     assert not advance.called and not add.called
 
 
-def _release(queue: Queue, free: int):
+def _release(queue: Queue):
     with _linear(queue):
-        return reconcile.release_groom_queue(free)
+        return reconcile.release_groom_queue()
 
 
 # --------------------------------------------------------------------------- #
@@ -253,19 +256,20 @@ def _release(queue: Queue, free: int):
 # --------------------------------------------------------------------------- #
 
 
-def test_one_card_per_free_slot_oldest_batch_first():
+def test_every_standing_card_is_released_oldest_batch_first():
     queue = Queue(
         [_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=120),
          _queued(NEWER, ["DRE-21", "DRE-22"], minutes_ago=60)],
         [_card(i) for i in ("DRE-11", "DRE-12", "DRE-21", "DRE-22")])
-    released = _release(queue, 3)
-    assert released == ["DRE-11", "DRE-12", "DRE-21"]
+    released = _release(queue)
+    assert released == ["DRE-11", "DRE-12", "DRE-21", "DRE-22"]
     assert queue.of("state") == [(i, "Planning") for i in released]
     assert queue.of("unlabel") == [(i, groomer.QUEUED_LABEL) for i in released]
     assert queue.rows() == [
         {"id": OLDER, "released": ["DRE-11", "DRE-12"], "left": [],
          "unqueued": []},
-        {"id": NEWER, "released": ["DRE-21"], "left": [], "unqueued": []}]
+        {"id": NEWER, "released": ["DRE-21", "DRE-22"], "left": [],
+         "unqueued": []}]
     # One read of the standing card's WHOLE thread — the proposal card
     # outgrows the fifty-comment window. (Each released card's own window is
     # read once too, for its groom-moved note — DRE-3326.)
@@ -276,7 +280,7 @@ def test_one_card_per_free_slot_oldest_batch_first():
 def test_place_order_within_a_batch_not_card_number():
     queue = Queue([_queued(OLDER, ["DRE-30", "DRE-10", "DRE-20"])],
                   [_card(i) for i in ("DRE-10", "DRE-20", "DRE-30")])
-    assert _release(queue, 2) == ["DRE-30", "DRE-10"]
+    assert _release(queue) == ["DRE-30", "DRE-10", "DRE-20"]
 
 
 def test_the_destination_is_a_module_constant_the_writer_check_reads():
@@ -292,18 +296,45 @@ def test_a_released_card_is_never_released_twice():
     queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=120),
                    _released(OLDER, released=["DRE-11"])],
                   [_card("DRE-11"), _card("DRE-12")])
-    assert _release(queue, 2) == ["DRE-12"]
+    assert _release(queue) == ["DRE-12"]
 
 
-def test_no_free_slot_releases_nothing_and_writes_nothing():
-    queue = Queue([_queued(OLDER, ["DRE-11"])], [_card("DRE-11")])
-    assert _release(queue, 0) == []
-    assert queue.writes == []
+FIVE = ["DRE-51", "DRE-52", "DRE-53", "DRE-54", "DRE-55"]
+
+
+def test_five_standing_cards_all_move_whatever_the_planner_line_holds(monkeypatch):
+    """No slot count (DRE-8618): the release never asks the cap or the
+    ledger, so a full line — or one that cannot be read at all — changes
+    nothing."""
+    def no_line(*a, **k):
+        raise AssertionError("the groom queue's release read the planner line")
+
+    for name in ("cap", "ledger", "ordered_ledger"):
+        monkeypatch.setattr(planner_queue, name, no_line)
+    monkeypatch.setattr(groomer, "free_planner_slots", no_line, raising=False)
+    queue = Queue([_queued(OLDER, FIVE[:3], minutes_ago=120),
+                   _queued(NEWER, FIVE[3:], minutes_ago=60)],
+                  [_card(i) for i in FIVE])
+    assert _release(queue) == FIVE
+    assert queue.of("state") == [(i, "Planning") for i in FIVE]
+    assert queue.of("unlabel") == [(i, groomer.QUEUED_LABEL) for i in FIVE]
+    notes = {i: groomer.parse_moved_note(b) for i, b in queue.of("comment")
+             if i in FIVE}
+    assert sorted(notes) == FIVE, "each with its moved note"
+    assert {i: n["id"] for i, n in notes.items()} == {
+        **{i: OLDER for i in FIVE[:3]}, **{i: NEWER for i in FIVE[3:]}}
+    assert _standing_after(queue.thread, [b for i, b in queue.of("comment")
+                                          if i == STANDING]) == []
+
+
+def test_the_release_takes_no_slot_count():
+    import inspect  # noqa: PLC0415
+    assert list(inspect.signature(reconcile.release_groom_queue).parameters) == []
 
 
 def test_an_empty_queue_reads_one_thread_and_writes_nothing():
     queue = Queue([], [_card("DRE-11", queued=False)])
-    assert _release(queue, 2) == []
+    assert _release(queue) == []
     assert queue.writes == []
 
 
@@ -313,7 +344,7 @@ def test_a_card_that_left_intake_is_dropped_with_no_state_write():
     Neither holds its place — the next card takes the slot."""
     queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12", "DRE-13"])],
                   [_card("DRE-11", lane="Planning"), _card("DRE-13")])
-    assert _release(queue, 1) == ["DRE-13"]
+    assert _release(queue) == ["DRE-13"]
     assert queue.of("state") == [("DRE-13", "Planning")]
     assert queue.of("unlabel") == [("DRE-11", groomer.QUEUED_LABEL),
                                    ("DRE-13", groomer.QUEUED_LABEL)]
@@ -324,9 +355,9 @@ def test_a_card_that_left_intake_is_dropped_with_no_state_write():
 def test_a_card_that_left_with_no_label_gets_no_label_write():
     queue = Queue([_queued(OLDER, ["DRE-11"])],
                   [_card("DRE-11", lane="Planning", queued=False)])
-    assert _release(queue, 0) == []
+    assert _release(queue) == []
     assert queue.of("unlabel") == [] and queue.of("state") == []
-    # Dropped from the line even with no slot free: the row says so.
+    # Dropped from the line: the row says so.
     assert queue.rows() == [{"id": OLDER, "released": [], "left": ["DRE-11"],
                              "unqueued": []}]
 
@@ -336,7 +367,7 @@ def test_a_card_whose_label_a_person_removed_is_never_released():
     the board alone (DRE-6640): no direct read is made."""
     queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=PAST)],
                   [_card("DRE-11", queued=False), _card("DRE-12")])
-    assert _release(queue, 1) == ["DRE-12"]
+    assert _release(queue) == ["DRE-12"]
     assert ("DRE-11", "Planning") not in queue.of("state")
     assert queue.rows() == [{"id": OLDER, "released": ["DRE-12"], "left": [],
                              "unqueued": ["DRE-11"]}]
@@ -433,7 +464,7 @@ def test_no_literal_number_of_minutes_for_the_bound_in_the_tests_or_the_doc():
 def test_inside_the_bound_a_missing_label_is_read_directly_and_released():
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
                   [_card("DRE-11", queued=False)], direct={"DRE-11": True})
-    assert _release(queue, 1) == ["DRE-11"]
+    assert _release(queue) == ["DRE-11"]
     assert queue.direct_reads == [("DRE-11", True)]
     assert queue.of("state") == [("DRE-11", "Planning")]
     assert queue.rows() == [{"id": OLDER, "released": ["DRE-11"], "left": [],
@@ -447,7 +478,7 @@ def test_the_same_card_inside_the_bound_is_held_not_taken_out():
     queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=INSIDE)],
                   [_card("DRE-11", queued=False), _card("DRE-12")],
                   direct={"DRE-11": False})
-    assert _release(queue, 1) == ["DRE-12"]
+    assert _release(queue) == ["DRE-12"]
     assert ("DRE-11", "Planning") not in queue.of("state")
     assert queue.rows() == [{"id": OLDER, "released": ["DRE-12"], "left": [],
                              "unqueued": []}]
@@ -459,7 +490,7 @@ def test_the_same_card_inside_the_bound_is_held_not_taken_out():
 def test_inside_the_bound_with_a_label_in_neither_read_nothing_is_written():
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
                   [_card("DRE-11", queued=False)], direct={"DRE-11": False})
-    assert _release(queue, 2) == []
+    assert _release(queue) == []
     assert queue.writes == []
 
 
@@ -469,7 +500,7 @@ def test_a_direct_read_that_fails_keeps_the_card_in_its_place():
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
                   [_card("DRE-11", queued=False)],
                   direct={"DRE-11": linear_ops.LinearError("Linear said no")})
-    assert _release(queue, 1) == []
+    assert _release(queue) == []
     assert queue.writes == []
     assert any("DRE-11" in f for f in reconcile._read_failures)
     assert _standing_after(queue.thread) == ["DRE-11"]
@@ -481,7 +512,7 @@ def test_the_direct_read_is_made_only_for_an_unlabelled_card_inside_the_bound():
                   [_card("DRE-11", queued=False), _card("DRE-21"),
                    _card("DRE-22", queued=False)],
                   direct={"DRE-22": True})
-    assert _release(queue, 3) == ["DRE-21", "DRE-22"]
+    assert _release(queue) == ["DRE-21", "DRE-22"]
     assert queue.direct_reads == [("DRE-22", True)]
     assert queue.rows() == [
         {"id": OLDER, "released": [], "left": [], "unqueued": ["DRE-11"]},
@@ -495,26 +526,26 @@ def test_the_age_is_the_newest_queued_record_naming_the_card():
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=PAST),
                    _queued(OLDER, ["DRE-11"], minutes_ago=INSIDE)],
                   [_card("DRE-11", queued=False)], direct={"DRE-11": False})
-    assert _release(queue, 1) == []
+    assert _release(queue) == []
     assert queue.writes == [] and queue.direct_reads == [("DRE-11", True)]
 
 
 @pytest.mark.parametrize("shown", [True, False])
 def test_the_2026_10_09_batch_replayed(shown):
     """Twelve queued, a sweep ten seconds later whose board read shows no
-    label, two free slots."""
+    label. With no slot count, every card the direct read rescues moves."""
     queue = Queue([_queued(BATCH_1009, TWELVE, minutes_ago=LAG)],
                   [_card(i, queued=False) for i in TWELVE],
                   direct={i: shown for i in TWELVE})
-    released = _release(queue, 2)
+    released = _release(queue)
     posted = [b for i, b in queue.of("comment") if i == STANDING]
     assert "taken out by hand" not in "".join(posted)
     if shown:
-        assert released == TWELVE[:2]
-        assert queue.of("state") == [(i, "Planning") for i in TWELVE[:2]]
-        assert queue.rows() == [{"id": BATCH_1009, "released": TWELVE[:2],
+        assert released == TWELVE
+        assert queue.of("state") == [(i, "Planning") for i in TWELVE]
+        assert queue.rows() == [{"id": BATCH_1009, "released": TWELVE,
                                  "left": [], "unqueued": []}]
-        assert _standing_after(queue.thread, posted) == TWELVE[2:]
+        assert _standing_after(queue.thread, posted) == []
     else:
         assert released == [] and queue.writes == []
         assert _standing_after(queue.thread) == TWELVE
@@ -535,9 +566,13 @@ def _incident_board() -> list[dict]:
             for i in TWELVE]
 
 
-def _repair(thread, cards, free=0) -> tuple[Queue, list[str]]:
+def _repair(thread, cards) -> tuple[Queue, list[str]]:
+    """The repair alone: every card's live lane read answers that it left
+    Intake, so the release half writes nothing and the pass shows the
+    repair's own writes (a later pass releases, below)."""
     queue = Queue(thread, cards)
-    _release(queue, free)
+    with mock.patch.object(reconcile, "_door_lane_still", return_value=False):
+        _release(queue)
     return queue, [b for i, b in queue.of("comment") if i == STANDING]
 
 
@@ -637,14 +672,15 @@ def test_a_repaired_card_is_released_on_a_later_pass_like_any_queued_card():
     later = [*thread, {"body": posted[0], "authored_by_pipeline": True,
                        "created_at": _iso(PAST)}]
     queue = Queue(later, [_card("DRE-11"), _card("DRE-12")])
-    assert _release(queue, 1) == ["DRE-11"]
+    assert _release(queue) == ["DRE-11", "DRE-12"]
     notes = [groomer.parse_moved_note(b) for i, b in queue.of("comment")
              if i == "DRE-11"]
     assert len(notes) == 1 and notes[0]["id"] == OLDER
-    assert queue.of("state") == [("DRE-11", "Planning")]
-    assert queue.of("unlabel") == [("DRE-11", groomer.QUEUED_LABEL)]
-    assert queue.rows() == [{"id": OLDER, "released": ["DRE-11"], "left": [],
-                             "unqueued": []}]
+    assert queue.of("state") == [("DRE-11", "Planning"), ("DRE-12", "Planning")]
+    assert queue.of("unlabel") == [("DRE-11", groomer.QUEUED_LABEL),
+                                   ("DRE-12", groomer.QUEUED_LABEL)]
+    assert queue.rows() == [{"id": OLDER, "released": ["DRE-11", "DRE-12"],
+                             "left": [], "unqueued": []}]
 
 
 def test_a_repaired_card_is_protected_by_the_bound_on_the_pass_that_releases_it():
@@ -657,21 +693,21 @@ def test_a_repaired_card_is_protected_by_the_bound_on_the_pass_that_releases_it(
                        "created_at": _iso(INSIDE)}]
     queue = Queue(later, [_card("DRE-11", queued=False)],
                   direct={"DRE-11": True})
-    assert _release(queue, 1) == ["DRE-11"]
+    assert _release(queue) == ["DRE-11"]
     assert "taken out by hand" not in "".join(b for _i, b in queue.of("comment"))
 
 
 def test_only_the_bureau_pipeline_sweep_releases(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     queue = Queue([_queued(OLDER, ["DRE-11"])], [_card("DRE-11")])
-    assert _release(queue, 2) == []
+    assert _release(queue) == []
     assert queue.writes == [] and queue.thread_reads == []
 
 
 def test_a_failed_release_is_a_write_failure_and_stops_the_pass():
     queue = Queue([_queued(OLDER, ["DRE-11", "DRE-12"])],
                   [_card("DRE-11"), _card("DRE-12")], fail_state={"DRE-11"})
-    assert _release(queue, 2) == []
+    assert _release(queue) == []
     assert queue.of("state") == [] and queue.of("unlabel") == []
     assert any("DRE-11" in f for f in reconcile._write_failures)
 
@@ -706,23 +742,12 @@ def test_main_releases_right_after_serving_the_line_on_full_sweeps_only():
     assert len(everywhere) == 1
 
 
-def test_serve_planner_line_says_how_many_slots_it_left():
-    """The cap less running, dispatched and waiting — `free_planner_slots`'s
-    arithmetic, after the line has been served."""
-    from test_planner_queue_sweep import _world
-    with mock.patch.object(planner_queue, "cap", lambda cfg=None, environ=None: 2):
-        with _world([]):
-            assert reconcile.serve_planner_line() == 2
-        reconcile.reset_sweep_cards()
-        with _world([_claimed("DRE-101", "9001")], runs={"9001": "in_progress"}):
-            assert reconcile.serve_planner_line() == 1
-        reconcile.reset_sweep_cards()
-        # Another repo's card waiting: not served here, and owed a slot.
-        with _world([_claimed("DRE-101", "9001"),
-                     _waiting("DRE-201", 5.0,
-                              repo="dreadnought-foundry/portico")],
-                    runs={"9001": "in_progress"}):
-            assert reconcile.serve_planner_line() == 0
+def test_main_hands_the_release_no_slot_count():
+    main = _main_source()
+    calls = [n for n in ast.walk(main) if isinstance(n, ast.Call)
+             and ast.unparse(n.func) == "release_groom_queue"]
+    assert [(len(c.args), c.keywords) for c in calls] == [(0, [])]
+    assert "line_left" not in ast.unparse(main)
 
 
 # --------------------------------------------------------------------------- #
@@ -767,24 +792,28 @@ def test_waiting_in_the_queue_is_never_escalated_and_gets_no_slot_receipt():
 # --------------------------------------------------------------------------- #
 
 
-def _stalled(**kw) -> Queue:
+STALLED = ["DRE-11", "DRE-12", "DRE-13"]
+
+
+def _stalled(fail=frozenset(STALLED), **kw) -> Queue:
+    """Three standing cards whose every lane write fails, the queue unchanged
+    for longer than `_report_groom_stall`'s bound."""
     bound = planner_queue.waiting_max()
-    return Queue([_queued(OLDER, ["DRE-11", "DRE-12"], minutes_ago=bound + 60),
+    return Queue([_queued(OLDER, STALLED, minutes_ago=bound + 60),
                   _released(OLDER, released=["DRE-10"], minutes_ago=bound + 30)],
-                 [_card("DRE-11"), _card("DRE-12")],
-                 fail_state={"DRE-11", "DRE-12"}, **kw)
+                 [_card(i) for i in STALLED], fail_state=set(fail), **kw)
 
 
 def test_a_stalled_queue_raises_the_groom_stall_alert_and_files_no_card():
     queue = _stalled()
-    _release(queue, 1)
+    _release(queue)
     assert queue.of("create") == [] and queue.of("find_open") == []
     (notice, severity, title, body, fallback), = queue.raised()
     assert (notice, severity) == ("groom_stall", "WARN")
     assert title == reconcile.GROOM_STALL_TITLE
     # The whole notice is in the body: which batch, how many, how long, and
     # what the last release wrote — so no comment is posted.
-    assert OLDER in body and "2 cards" in body
+    assert OLDER in body and "3 cards" in body
     assert "DRE-10" in body
     # The card the door cannot take is filed as before: Triage, its repo
     # label and `no-code`, no `agent:*` role.
@@ -802,8 +831,8 @@ def test_every_stalled_pass_raises_again_and_the_alert_dedupes():
     """No board read decides whether to file: the one-row-per-key alert is
     the dedupe, and a second raise while it is open is a repeat."""
     queue = _stalled(open_card="DRE-7777")
-    _release(queue, 1)
-    _release(queue, 1)
+    _release(queue)
+    _release(queue)
     assert [n[0] for n in queue.raised()] == ["groom_stall", "groom_stall"]
     assert queue.of("create") == [] and queue.of("find_open") == []
 
@@ -811,14 +840,16 @@ def test_every_stalled_pass_raises_again_and_the_alert_dedupes():
 def test_no_alert_and_a_resolve_when_the_queue_changed_inside_the_bound():
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=30)],
                   [_card("DRE-11")], fail_state={"DRE-11"})
-    _release(queue, 1)
+    _release(queue)
     assert queue.raised() == []
     assert queue.resolved() == [("groom_stall", None, None)]
 
 
-def test_no_alert_and_a_resolve_when_there_was_no_free_slot():
-    queue = _stalled()
-    _release(queue, 0)
+def test_a_pass_that_released_one_of_them_resolves_it():
+    """The first card's lane write lands: the queue moved, so the stall is
+    resolved and nothing is raised (the failure after it ends the pass)."""
+    queue = _stalled(fail={"DRE-12", "DRE-13"})
+    assert _release(queue) == ["DRE-11"]
     assert queue.raised() == []
     assert queue.resolved() == [("groom_stall", None, None)]
 
@@ -827,12 +858,12 @@ def test_the_bound_is_the_planner_lines_own(monkeypatch):
     """Read from `planner_queue.waiting_max()`, never restated."""
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=90)],
                   [_card("DRE-11")], fail_state={"DRE-11"})
-    _release(queue, 1)
+    _release(queue)
     assert queue.raised() == []
     monkeypatch.setattr(planner_queue, "waiting_max", lambda: 60)
     queue = Queue([_queued(OLDER, ["DRE-11"], minutes_ago=90)],
                   [_card("DRE-11")], fail_state={"DRE-11"})
-    _release(queue, 1)
+    _release(queue)
     assert len(queue.raised()) == 1
 
 

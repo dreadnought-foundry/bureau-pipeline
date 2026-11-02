@@ -642,7 +642,10 @@ class TestAStallPark:
 
     def test_the_openings_it_reads_are_the_watchdogs_own(self):
         assert reconcile.stalled_planning_reason().startswith(lane.STALL_OPENINGS[0])
-        assert reconcile.waiting_too_long_reason(180).startswith(lane.STALL_OPENINGS[1])
+        # The planner line's reason went with the cap (DRE-8618); its opening
+        # stays for the parks already written with it.
+        assert not hasattr(reconcile, "waiting_too_long_reason")
+        assert lane.STALL_OPENINGS[1] == "this card has been waiting in line for a planner"
 
     def test_a_second_park_inside_six_hours_is_left_naming_both(self):
         items, _ctx = plan()

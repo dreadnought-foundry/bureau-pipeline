@@ -334,22 +334,22 @@ def test_without_an_order_a_new_claimant_joins_at_the_back(board):
     assert "waiting for a planner: place 4 of 4" in body
 
 
-def test_the_sweeps_backstop_serves_the_card_the_order_names(monkeypatch):
+def test_the_sweeps_drain_starts_every_card_the_order_names_first(monkeypatch):
+    """The one-way drain (DRE-8618) starts every waiting card, open claims
+    or not, in the line's own order — the CEO's first."""
     cards = _four_running() + _three_waiting()
-    runs = {"101": "completed", "102": "in_progress", "103": "in_progress",
-            "104": "in_progress"}
     with door(monkeypatch, order_answer(["DRE-203"])) as fake:
-        world = _serve(cards, runs)
-    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-203"]
+        world = _serve(cards)
+    assert [c["identifier"] for c, _, _ in world.fires] == [
+        "DRE-203", "DRE-201", "DRE-202"]
     assert fake.asked("/planning-order")
 
 
-def test_the_sweeps_backstop_with_no_door_serves_the_first_arrival(monkeypatch, capsys):
+def test_the_sweeps_drain_with_no_door_starts_them_in_arrival_order(monkeypatch, capsys):
     cards = _four_running() + _three_waiting()
-    runs = {"101": "completed", "102": "in_progress", "103": "in_progress",
-            "104": "in_progress"}
-    world = _serve(cards, runs)
-    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-201"]
+    world = _serve(cards)
+    assert [c["identifier"] for c, _, _ in world.fires] == [
+        "DRE-201", "DRE-202", "DRE-203"]
     assert capsys.readouterr().err.count(FALLBACK) == 1
 
 

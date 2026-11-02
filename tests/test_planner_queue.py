@@ -1811,6 +1811,22 @@ class ParkEndsThePlace(_Base):
         self.assertFalse(pq.in_line(nodes, now=sep30("20:41:00")))
         self.assertIn("parked", pq.BECAUSE)
 
+    def test_a_card_the_drain_released_is_out_of_line(self):
+        """DRE-8618: the sweep's one-way drain posts `because cap-removed`
+        under its own run, which held no claim — about the CARD, as a park
+        is, so no pass serves it twice."""
+        card = self.board.add("DRE-DRAINED")
+        self.board.seed(card, "waiting", sep30("14:35:56"), run="r1")
+        self.board.seed(card, "released", sep30("20:40:48"), run="sweep",
+                        because="cap-removed")
+        nodes = self.board.nodes(card)
+        self.assertEqual(pq.state(nodes, now=sep30("20:41:00")), "released")
+        self.assertFalse(pq.in_line(nodes, now=sep30("20:41:00")))
+        self.assertEqual(pq.ledger([self.board.cards[card]],
+                                   now=sep30("20:41:00")).waiting, [])
+        self.assertIn("cap-removed", pq.BECAUSE)
+        self.assertEqual(pq.CARD_RELEASES, ("parked", "cap-removed"))
+
 
 # =========================================================================== #
 # DRE-6329 — a new arrival never takes a freed slot while cards wait In line  #
