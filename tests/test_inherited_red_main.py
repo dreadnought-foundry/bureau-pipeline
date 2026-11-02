@@ -68,6 +68,7 @@ import stale_merge_ref  # noqa: E402
 import test_reconcile_stale_merge_ref as smr  # noqa: E402 — its gh fakes
 import triage_repair  # noqa: E402
 from test_medic_acts_on_diagnosis import (  # noqa: E402
+    SHIM_PLANNING_ESCALATION,
     STUB_CARD_PR,
     STUB_HEAD,
     STUB_LINEAR_OPS,
@@ -309,7 +310,8 @@ else:
 
 STUBS = {"linear_ops.py": STUB_LINEAR_OPS, "card_pr.py": STUB_CARD_PR,
          "hold.py": STUB_HEAD + "\nsys.exit(int(os.environ.get('FAKE_HOLD_RC', '0')))\n",
-         "inherited_red_main.py": STUB_REAL, "medic_next_step.py": STUB_REAL}
+         "inherited_red_main.py": STUB_REAL, "medic_next_step.py": STUB_REAL,
+         "planning_escalation.py": SHIM_PLANNING_ESCALATION}
 
 RUN_URL = "https://github.com/dreadnought-foundry/foundry/actions/runs/24680"
 PR_URL = f"https://github.com/{REPO}/pull/{PR_NUMBER}"
@@ -650,7 +652,7 @@ def _is_return_note(body):
 class TestTheSweepReturnsTheCard:
     def test_the_1101_replay_lifts_moves_notes_and_refreshes(self, board):
         _held_1101(board)
-        state = _pass(board, smr._state([_pr()]))
+        state = _pass(board, _state_1101())
         writes = _card_writes(board)
         assert [k for k, _ in writes][:4] == ["label-off", "comment", "move", "comment"], writes
         assert writes[0] == ("label-off", "needs-human")
@@ -658,7 +660,7 @@ class TestTheSweepReturnsTheCard:
         assert writes[2] == ("move", reconcile.REVIEW_LANE)
         note = writes[3][1]
         assert _is_return_note(note)
-        assert G[:8] in note and CHECK.split(" ")[0] in note
+        assert G[:8] in note and CHECK in note and BASE[:8] in note
         # The same pass's refresh: one update-branch at the head read, and
         # its own receipt on the pull request and the card.
         assert len(state["puts"]) == 1
@@ -673,25 +675,25 @@ class TestTheSweepReturnsTheCard:
 
     def test_exactly_one_note(self, board):
         _held_1101(board)
-        _pass(board, smr._state([_pr()]))
+        _pass(board, _state_1101())
         notes = [d for k, d in _card_writes(board) if k == "comment" and _is_return_note(d)]
         assert len(notes) == 1
 
     def test_a_second_pass_writes_nothing_more(self, board):
         _held_1101(board)
-        _pass(board, smr._state([_pr()]))
+        _pass(board, _state_1101())
         before = list(board.events)
-        state = _pass(board, smr._state([_pr()]), refresh=False)
+        state = _pass(board, _state_1101(), refresh=False)
         assert board.events == before
         assert state["puts"] == []
 
     def test_a_second_pass_over_a_card_still_in_triage_reads_the_spent_stamp(self, board):
         _held_1101(board)
-        _pass(board, smr._state([_pr()]), refresh=False)
+        _pass(board, _state_1101(), refresh=False)
         board.cards[CARD]["lane"] = "Triage"           # a person puts it back
         board.cards[CARD]["labels"].append("needs-human")
         before = list(board.events)
-        _pass(board, smr._state([_pr()]), refresh=False)
+        _pass(board, _state_1101(), refresh=False)
         assert board.events == before
 
 
