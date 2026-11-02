@@ -47,6 +47,7 @@ import epic_cap  # noqa: E402
 import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import plan_critic  # noqa: E402
+import planner_allowance  # noqa: E402
 import promotion_stall  # noqa: E402
 import reconcile  # noqa: E402
 import review_rerun  # noqa: E402
@@ -101,6 +102,21 @@ BLOCKER_RECORD = {
 
 def _pipeline(body, at):
     return {"body": body, "authored_by_pipeline": True, "created_at": at}
+
+
+def _hold(state: str, until: datetime | None = None) -> str:
+    """A `🪫 planner-hold:` receipt on the epic, composed by the module that
+    owns the grammar (DRE-8616) and dated off the real clock, which is the
+    one `planner_allowance.held` reads."""
+    now = datetime.now(UTC)
+    if state == "held":
+        return planner_allowance.format_receipt(
+            "held", card=EPIC, run="38000000001", repo="dreadnought-foundry/atlas",
+            remaining=312, limit=5000, at=now, next_read=now + timedelta(minutes=5),
+            every=5, until=until or now + timedelta(minutes=65))
+    return planner_allowance.format_receipt(
+        "started", card=EPIC, run="38000000001", repo="dreadnought-foundry/atlas",
+        remaining=1400, limit=5000, at=now, because="allowance-ok")
 
 
 class Board:
@@ -449,11 +465,35 @@ class TestWhenTheSweepLeavesTheHold:
         assert board.sweep(ask_cap=True) == 0
         assert board.fleet_reads == 0
 
-    def test_while_its_activate_run_waits_for_a_planner_it_waits(self):
+    def test_while_its_activate_run_is_held_by_the_allowance_it_waits(self, capsys):
+        """DRE-8618: the planners' Linear allowance holds the activate run,
+        which asks the cap itself when it starts — the sweep asks nothing."""
         board = Board()
-        with patch.object(reconcile.planner_queue, "in_line", return_value=True):
-            assert board.sweep(ask_cap=True) == 0
+        board.thread.append(_pipeline(_hold("held"), _iso(datetime.now(UTC))))
+        assert board.sweep(ask_cap=True) == 0
         assert board.fleet_reads == 0
+        assert not [w for w in board.writes if w[1] == EPIC]
+        assert "held by the planners' Linear allowance" in capsys.readouterr().out
+
+    @pytest.mark.parametrize("receipts", [("started",), ("held", "started"), ()],
+                             ids=["started", "held-then-started", "none"])
+    def test_a_started_receipt_or_none_is_asked_as_before(self, receipts):
+        bare = Board()
+        bare_promoted = bare.sweep(ask_cap=True)
+        board = Board()
+        for state in receipts:
+            board.thread.append(_pipeline(_hold(state), _iso(datetime.now(UTC))))
+        assert board.sweep(ask_cap=True) == bare_promoted == 2
+        assert board.fleet_reads == bare.fleet_reads == 1
+        assert len(board.epic_receipts(STARTED)) == 1
+
+    def test_an_expired_hold_is_asked_as_before(self):
+        board = Board()
+        board.thread.append(_pipeline(
+            _hold("held", until=datetime.now(UTC) - timedelta(minutes=1)),
+            _iso(datetime.now(UTC) - timedelta(minutes=70))))
+        assert board.sweep(ask_cap=True) == 2
+        assert board.fleet_reads == 1
 
     def test_an_unreadable_fleet_holds_and_writes_nothing(self, capsys):
         board = Board()
