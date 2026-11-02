@@ -216,7 +216,8 @@ def test_an_excluded_card_and_a_held_repos_card_stay_in_intake_as_held_back(monk
     touched = {e[1] for e in ops.log}
     for kept in (EXCLUDED, SWITCHED_OFF):
         assert kept not in touched and f"uuid-{kept}" not in touched, kept
-    assert result["held_back"] == [EXCLUDED, SWITCHED_OFF]
+    # The Rewrite first card is held back too: nobody accepted its draft here.
+    assert result["held_back"] == [EXCLUDED, SWITCHED_OFF, REWRITE]
     body = _drained(ops)
     assert _cells(body, EXCLUDED)[2:] == [
         "held back", f"`{groomer.MARK} {groomer.EXCLUDE_TAG}` — design first"]
