@@ -622,16 +622,27 @@ class TheRows(unittest.TestCase):
         self.assertEqual([], pipeline_act.problems())
         self.assertEqual([], check_act_receipts.problems())
 
-    def test_both_fail_with_the_row_removed(self):
+    def test_the_receipt_guard_fails_with_the_row_removed(self):
+        """`check_act_receipts` binds the code to the registry, so it is the
+        check a missing row turns red: the module still composes the receipt.
+        `pipeline_act.problems` binds the rows that exist to the code and has
+        no row left to read."""
         doc = pipeline_act.load()
         stripped = {**doc, "acts": [a for a in doc["acts"]
                                     if a.get("name") != "failure-tally"]}
-        self.assertTrue(any("failure_tally.py" in p or "FAILURE_TALLY_TAG" in p
-                            for p in pipeline_act.problems(stripped)),
-                        pipeline_act.problems(stripped))
-        self.assertTrue(any("failure_tally.py" in p
-                            for p in check_act_receipts.problems(stripped)),
-                        check_act_receipts.problems(stripped))
+        found = check_act_receipts.problems(stripped)
+        self.assertTrue(any("failure_tally.py" in p and "failure-tally" in p
+                            for p in found), found)
+
+    def test_the_notice_writer_check_fails_with_its_row_removed(self):
+        rows = [r for r in notice_writers.load()
+                if r.get("file") != "scripts/failure_tally.py"]
+        out = io.StringIO()
+        with mock.patch.object(notice_writers, "load", return_value=rows), \
+                redirect_stdout(out):
+            self.assertEqual(1, notice_writers.check(None))
+        self.assertIn("undeclared bureau-pipeline:scripts/failure_tally.py",
+                      out.getvalue())
 
     def test_the_module_is_a_declared_card_writer(self):
         rows = notice_writers.load()

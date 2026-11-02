@@ -4288,10 +4288,15 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
     """Every DRE card carrying `repo:<repo_slug>` whose title STARTS WITH
     `prefix` and that was created at or after `since`, in ANY state.
 
-    `[{"identifier", "description", "state", "createdAt"}]`, `state` as its
-    name. The repair sweep's memory of earlier failures (DRE-6870): a repair
+    `[{"identifier", "title", "description", "state", "createdAt",
+    "completedAt"}]`, `state` as its name. The repair sweep's memory of
+    earlier failures (DRE-6870): a repair
     card lists the tests that failed, and a Canceled one is a failure main
     passed on its own — so every state on purpose, unlike `find_open_prefix`.
+
+    `title` and `completedAt` serve the failure tally (DRE-8635): it keeps
+    the cards whose title EQUALS its key, since a prefix also matches a longer
+    branch name, and names the day a Done card closed.
 
     Paged to exhaustion through `gql_paged`: measured 2026-10-06 to 10-10,
     the two busiest repos had 27 red mains between them in five days, so two
@@ -4308,7 +4313,8 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
                title: {startsWith: $prefix},
                labels: {name: {eqIgnoreCase: $label}},
                createdAt: {gte: $since}
-             }) { nodes { identifier description createdAt state { name } }
+             }) { nodes { identifier title description createdAt completedAt
+                          state { name } }
                   pageInfo { hasNextPage endCursor } } }""",
         {"prefix": prefix, "label": f"repo:{repo_slug}",
          "since": since.isoformat()},
@@ -4316,9 +4322,11 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
     return [
         {
             "identifier": node.get("identifier") or "",
+            "title": node.get("title") or "",
             "description": node.get("description") or "",
             "state": (node.get("state") or {}).get("name") or "",
             "createdAt": node.get("createdAt") or "",
+            "completedAt": node.get("completedAt") or "",
         }
         for node in nodes
     ]
