@@ -1,0 +1,171 @@
+[
+  {
+    "card": "DRE-7301",
+    "lane": "Hand-work",
+    "title": "portico: the content buckets' CORS rule has never been applied — run 60-content-bucket-cors.sh in both accounts, late at night",
+    "labels": [
+      "repo:portico",
+      "no-code",
+      "initiative:bureau",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The script was merged, but its rule has never been written to either bucket."
+      },
+      {
+        "from": "comment",
+        "created_at": "2026-11-02T01:02:46.058Z",
+        "text": "Decided 2026-11-01 4:57 PM PT: the studio host (DRE-8486) does this step once it is live, after DRE-8582."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8173",
+    "lane": "Hand-work",
+    "title": "OPERATOR: grant Members read-only to the five GitHub Apps and set NAME_GUARD_LIVE on bureau-pipeline",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The operator grants the GitHub App permission the roster reader needs and then turns the name guard on."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Each of the five Apps named above holds `Members: Read-only` under Organization permissions, and the organization's installation of each has accepted it (the operator records the five App slugs and the time in PT on this card)."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8623",
+    "lane": "Queued",
+    "title": "bureau-pipeline: delete the PLANNER_MAX_RUNNING repo variable from agent-bureau, bureau-pipeline, portico and agent-bureau-demo, and release any card the groom queue left in Intake (operator)",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Deleting a repo variable needs a person holding admin on each repo, so the operator deletes it, one repo at a time, once nothing that is running reads or writes it any more."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8090",
+    "lane": "Intake",
+    "title": "OPERATOR: the two-hour DeltaSolv data model session with the CEO, this week",
+    "labels": [
+      "no-code",
+      "agent:ops",
+      "initiative:foundry"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "DeltaSolv's data model and business rules are the CEO's to set, and every DeltaSolv build card waits on them."
+      }
+    ]
+  },
+  {
+    "card": "DRE-4541",
+    "lane": "Hand-work",
+    "title": "[OPERATOR] Daily groomer proposals",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The one standing card every morning's groomer proposal is posted to and approved on."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "It never closes; each proposal carries its own id and is approved or declined on its own in the console."
+      }
+    ]
+  },
+  {
+    "card": "DRE-5774",
+    "lane": "Hand-work",
+    "title": "Hygiene agent — hourly summary",
+    "labels": [
+      "repo:bureau-pipeline",
+      "agent:ops",
+      "no-code",
+      "initiative:bureau",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The hygiene agent's standing card."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Nothing else is posted to this card, and it is never built."
+      }
+    ]
+  },
+  {
+    "card": "DRE-5357",
+    "lane": "Hand-work",
+    "title": "PROOF: logs land for every kind of run including the dead ones and the repair run, planted secrets never survive, a plan run's kept log names its step and carries that step's effort, and the first weekly report is produced",
+    "labels": [
+      "agent:ops",
+      "no-code",
+      "repo:agent-bureau",
+      "size:M"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Written to `architecture/proofs/agent-working-logs.md` in agent-bureau so the record merges."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7979",
+    "lane": "Hand-work",
+    "title": "PROOF: seven mornings of the whole-Intake sweep, two Sundays of groomer scorecards under five percent removed, and a verify-step change that fails a replay case held unmerged",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:ops",
+      "no-code"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The proof of this epic: the whole-Intake sweep, the weekly scorecard and the replay gate observed running against the real board."
+      }
+    ]
+  }
+]
