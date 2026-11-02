@@ -169,11 +169,24 @@ class AssembleStepRunsAfterTheMoveTest(unittest.TestCase):
         script = td / "ctx.sh"
         # `bash -e` is what Actions gives a `run:` step with no `shell:`.
         script.write_text("set -e\n" + step_shell.step_shell(ctx))
+        # DRE-8721: the step reads the pull request's diff for the parts
+        # review. This `gh` refuses it, as GitHub does for a very large pull
+        # request, so the run is the same on every machine and the step must
+        # still succeed (tests/test_parts_review_wiring.py runs the rest).
+        bin_dir = td / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "gh").write_text("#!/usr/bin/env bash\necho refused >&2\nexit 1\n")
+        (bin_dir / "gh").chmod(0o755)
         env = dict(os.environ)
         env.update({
+            "PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
             "PIPELINE_DIR": str(pipeline_dir),
             "GITHUB_WORKSPACE": str(workspace),
             "RUNNER_TEMP": str(pipeline_dir.parent),
+            "PR": "4242",
+            "CARD": "",
+            "DIFF_FILE": "",
+            "SHADOW": "false",
         })
         proc = subprocess.run(["bash", str(script)], cwd=workspace, env=env,
                               capture_output=True, text=True)
@@ -195,6 +208,12 @@ class AssembleStepRunsAfterTheMoveTest(unittest.TestCase):
             self.assertIn("===== BEGIN briefs/critic.md =====", text)
             # DRE-3226's rule rides the brief; an empty context would lose it.
             self.assertIn("git stash -u", text)
+            # DRE-8721: the parts review and the design answer ride the same
+            # context, and the refused diff makes the review UNKNOWN, never a
+            # failed step.
+            self.assertRegex(text, r"(?m)^PARTS REVIEW: UNKNOWN — .+ is empty$")
+            self.assertIn("DESIGN ANSWER: none — this pull request's branch "
+                          "names no card", text.splitlines())
             durable = pipeline_dir / "agent-context.md"
             self.assertTrue(durable.exists(),
                             "the retry restores from this copy and it was never kept")
