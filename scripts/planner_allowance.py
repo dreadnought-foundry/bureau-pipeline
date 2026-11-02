@@ -36,8 +36,8 @@ inside the receipt's `until` (`at` + `hold_max_minutes` + `wait_minutes`).
 
 THE PLACE. The cards whose newest planner-hold receipt is a live `held`, this
 run's card among them, ordered by the CEO's Planning order (read through
-`bureau_read` exactly as `planner_queue.planning_order()` reads it, DRE-5807 —
-copied here, because `planner_queue.py` is deleted later in this epic), then
+`bureau_read`, DRE-5807 — the one reader left of it, since the old planner
+line's ledger was deleted with the cap, DRE-8622), then
 the oldest `held` first. The place is the number of cards ahead, so the head
 of the line sleeps 0. A door that cannot answer is arrival order, said in one
 line. A held-line read that Linear refuses or that fails gives the place
@@ -465,8 +465,8 @@ def planning_order() -> list:
     """The order the CEO set on the Overview (DRE-5807), read through the
     console's read door — or `[]`, arrival order, when it cannot be read.
 
-    Copied from `planner_queue.planning_order()`, which is deleted later in
-    this epic. It never raises and never blocks past the door client's own
+    Copied from the old planner line's ledger before DRE-8622 deleted it. It
+    never raises and never blocks past the door client's own
     bound, and it says exactly one line each time it is asked."""
     try:
         import bureau_read  # noqa: PLC0415 — `check` must run with this file alone

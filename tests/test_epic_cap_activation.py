@@ -51,6 +51,7 @@ import epic_cap  # noqa: E402
 import lane_contract  # noqa: E402
 import pipeline_act  # noqa: E402
 import plan_critic  # noqa: E402
+from test_no_planner_cap import PATTERN as PLANNER_CAP  # noqa: E402
 
 WF_REL = ".github/workflows/plan.yml"
 WF = ROOT / WF_REL
@@ -496,8 +497,9 @@ class NothingElseMoved(unittest.TestCase):
         self.assertFalse(any("mode == 'queued'" in g for g in gates.values()),
                          "a step gated on the queued answer — nothing runs while it waits")
 
-    def test_the_route_shell_names_no_planner_queue(self):
-        for word in ("planner_queue", "slot", "admitted"):
+    def test_the_route_shell_names_no_slot_ledger(self):
+        self.assertEqual(PLANNER_CAP.findall(route_run()), [])
+        for word in ("slot", "admitted"):
             self.assertNotIn(word, route_run())
 
     def test_the_green_light_write_follows_the_label_in_the_same_shell(self):

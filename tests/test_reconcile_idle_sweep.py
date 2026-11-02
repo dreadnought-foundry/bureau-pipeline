@@ -15,12 +15,12 @@ decides, before the board is read:
 
 Idle skips promotion and this repo's work-lane phases and says so in ONE
 line. The FLEET-WIDE phases still run — the Urgent fast path, the Planning
-stall watchdog, the frozen-holds repair and the planner line act on every
-repo's cards, and with most sweeps paused an idle repo may be the only one
-running them (the coordinator's decision, 2026-10-02 ~19:10 PT). So an idle
-pass costs the check plus their reads: the one board read and the planner
-line's Green Light read, three requests. The same `sweep-spend:` accounting
-applies.
+stall watchdog and the frozen-holds repair act on every repo's cards, and
+with most sweeps paused an idle repo may be the only one running them (the
+coordinator's decision, 2026-10-02 ~19:10 PT). So an idle pass costs the
+check plus their read: the one board read, two requests. It was three until
+DRE-8622 deleted the planner line's drain and its Green Light read with the
+cap. The same `sweep-spend:` accounting applies.
 
 The repo here is demo-shaped: `agent-bureau-demo`, on a team board busy with
 OTHER repos' cards — which must not make the demo's pass pay for them.
@@ -168,20 +168,20 @@ def _lane_reads(board: TeamBoard) -> list[tuple]:
     return [q for q in board.queries if q != reconcile.IDLE_QUERY]
 
 
-def test_an_idle_demo_pass_spends_three_requests_and_says_so_once(capsys):
+def test_an_idle_demo_pass_spends_two_requests_and_says_so_once(capsys):
     board = TeamBoard(*_busy_elsewhere())
     _pass(board)
     assert board.queries[0] == reconcile.IDLE_QUERY
-    assert board.requests == 3  # the check, the one board read, Green Light
+    assert board.requests == 2  # the check and the one board read
     assert not any(reconcile.QUEUE_STATE_FILTER in q for q in board.queries)  # no promotion read
     out = capsys.readouterr().out
     idle = [ln for ln in out.splitlines() if ln.startswith("idle:")]
     assert len(idle) == 1 and DEMO in idle[0]
     assert "the fleet-wide Planning and Intake phases still run" in idle[0]
     assert "sweep-spend: sweep_idle 1 request(s)" in out
-    assert "sweep-spend: total 3 request(s) over 3 phase(s)" in out
+    assert "sweep-spend: total 2 request(s) over 2 phase(s)" in out
     assert "promotion:" not in out
-    assert "planner line:" in out and "urgent-fast-path:" in out
+    assert "urgent-fast-path:" in out
 
 
 def test_an_idle_pass_runs_the_fleet_phases_and_skips_the_repo_ones():
@@ -190,7 +190,7 @@ def test_an_idle_pass_runs_the_fleet_phases_and_skips_the_repo_ones():
     # item 3): the stall watchdog, which is fleet-wide and runs, leaves this
     # repo's Planning epics with children to it (`_with_the_critics`).
     fleet = ("flag_stranded", "advance_urgent_intake", "repair_frozen_planning_holds",
-             "serve_planner_line", "rereview_watch_scope")
+             "rereview_watch_scope")
     repo_scoped = ("promote_ready", "move_hand_built_to_review", "report_break_glass")
     with contextlib.ExitStack() as stack:
         spies = {name: stack.enter_context(mock.patch.object(
@@ -209,7 +209,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
              "settle_repair_cards", "flag_stranded", "report_intake_depth",
-             "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
+             "advance_urgent_intake", "repair_frozen_planning_holds",
              "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
              "redeliver_rescued_work", "build_run_refusal", "redispatch")
@@ -247,7 +247,7 @@ def test_a_wip_cap_of_zero_is_idle_and_the_check_asks_nothing(monkeypatch, capsy
     """The check itself asks nothing at a cap of 0. The held repo's pass runs
     after it (DRE-7755) and costs one read when no epic of this repo is In
     Progress — DRE-90 is a one-off, not an epic — so the pass is the fleet
-    phases' board and Green Light reads plus that one: 2 -> 3. The cap comes
+    phases' board read plus that one: 1 -> 2. The cap comes
     in as the live sweep hands it in, the stub's literal as `MAX_WIP`."""
     monkeypatch.setattr(reconcile, "MAX_WIP", 0)
     monkeypatch.setenv("MAX_WIP", "0")
@@ -257,25 +257,25 @@ def test_a_wip_cap_of_zero_is_idle_and_the_check_asks_nothing(monkeypatch, capsy
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     _pass(board)
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 3  # the fleet phases' two reads, and hold_pass's one
+    assert board.requests == 2  # the fleet phases' read, and hold_pass's one
     out = capsys.readouterr().out
     assert "idle: agent-bureau-demo — the WIP cap is 0" in out
     assert "sweep-spend: sweep_idle" not in out
     assert "sweep-spend: post_repo_held_notice 1 request(s)" in out
     assert f"repo-held: no approved epic of {DEMO} is In Progress; nothing written" in out
-    assert "sweep-spend: total 3 request(s)" in out
+    assert "sweep-spend: total 2 request(s)" in out
     assert "promotion:" not in out
 
 
 def test_an_idle_pass_at_a_cap_above_zero_spends_nothing_on_the_lift(capsys):
     """An idle pass has no Queued card of this repo waiting, so none held for
     the cap to lift (DRE-7755): `lift_pass` is not called and the pass costs
-    what it did, three requests."""
+    what it did, two requests."""
     board = TeamBoard(*_busy_elsewhere())
     with mock.patch.object(reconcile.repo_held_epics, "lift_pass") as lift:
         _pass(board)
     assert lift.call_count == 0
-    assert board.requests == 3
+    assert board.requests == 2
     assert "sweep-spend: lift_wip_cap_holds" not in capsys.readouterr().out
 
 
@@ -286,7 +286,7 @@ def test_a_busy_pass_at_a_cap_above_zero_asks_the_lift_once(capsys):
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
              "settle_repair_cards", "flag_stranded", "report_intake_depth",
-             "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
+             "advance_urgent_intake", "repair_frozen_planning_holds",
              "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
              "redeliver_rescued_work", "build_run_refusal", "redispatch")
@@ -318,13 +318,13 @@ def test_with_the_door_on_the_idle_check_costs_no_linear_request(monkeypatch, ca
     # The check asked the door, not Linear. Linear answered only the fleet
     # phases' reads: the lanes this door declines at `scope=fleet` — it serves
     # the fleet to no repo while the console's PIPELINE_READ_UNROUTED is off
-    # (DRE-5848) — Planning and Intake and the planner line's Green Light, and
-    # the NO-ROUTE watchdog's start lanes, which the door cannot serve
-    # for cards no repo owns (the PR #687 critic's item 2). The outage alarm's
+    # (DRE-5848) — Planning and Intake, and the NO-ROUTE watchdog's start
+    # lanes, which the door cannot serve for cards no repo owns (the PR #687
+    # critic's item 2). The outage alarm's
     # open-card lookup (DRE-6576) is gone: the outage is a console alert since
     # DRE-7455, so there is no card to look up.
     assert reconcile.IDLE_QUERY not in board.queries
-    assert board.requests == 3
+    assert board.requests == 2
     assert "idle: agent-bureau-demo — no card of this repo is in motion" in capsys.readouterr().out
 
 

@@ -228,9 +228,6 @@ import pipeline_act  # noqa: E402
 import pipeline_notice  # noqa: E402
 from pipeline_notice import Fallback as NoticeFallback  # noqa: E402
 import planning_escalation  # noqa: E402 — the plain-English check for CEO-facing text
-# DRE-8618: the old planner line's ledger, read only by its one-way drain
-# (`serve_planner_line`) until DRE-8622 removes it.
-import planner_queue  # noqa: E402
 # DRE-8616: ONE reading of a planner held by the planners' Linear allowance —
 # the quiet notices stay quiet while it holds, and only then.
 import planner_allowance  # noqa: E402
@@ -1703,8 +1700,8 @@ BOARD_READ_LANES = tuple(
 # How the read door serves those lanes (Stage 2 #6a, DRE-5848). The work
 # lanes, where this repo's own cards are, are one `scope=repo` read. Intake and
 # Planning hold every repo's cards and the unlabeled ones — the Urgent fast
-# path, the Planning watchdog and the planner line read them on purpose — so
-# they are one `scope=fleet` read: the whole team's cards in those lanes, which
+# path and the Planning watchdog read them on purpose — so they are one
+# `scope=fleet` read: the whole team's cards in those lanes, which
 # the console has stored since AB-2b and serves to steward repos once its
 # `PIPELINE_READ_UNROUTED` is open. The pipeline keeps no list of which repos
 # those are; the door's answer decides. A repo it declines that scope to reads
@@ -1960,18 +1957,19 @@ _door_hold: list[str] = []
 # Intake and Planning (`DOOR_LINEAR_LANES`) when the work-lane read fell back
 # to Linear's whole-board read, which carries them too (DRE-5848).
 _linear_lane_cards: list[dict] | None = None
-# The `scope=fleet` reads this pass, one per lane group — Intake and Planning,
-# and the planner line's Green Light — each the door's answer or Linear's
-# (`_fleet_or_linear`, DRE-5848). A group the door said `linear-hold` for is
-# in `_fleet_hold` instead, and every ask of it this pass is skipped.
+# The `scope=fleet` reads this pass, one per lane group — Intake and Planning
+# today, and the old planner line's Green Light until DRE-8622 deleted its
+# drain — each the door's answer or Linear's (`_fleet_or_linear`, DRE-5848).
+# A group the door said `linear-hold` for is in `_fleet_hold` instead, and
+# every ask of it this pass is skipped.
 _fleet_lane_cards: dict[tuple[str, ...], list[dict]] = {}
 _fleet_hold: dict[tuple[str, ...], str] = {}
 # Set when this pass found the repo IDLE (`sweep_idle`): the repo-scoped phases
 # — this repo's slice of the board, promotion, the hand-built move, the
 # re-review watcher, the break-glass count — are skipped without a word (the
 # one `idle:` line already said why). The FLEET-WIDE phases still run: the
-# Urgent fast path, the Planning stall watchdog, the frozen-holds repair and
-# the planner line act on every repo's cards, and an idle sweep must not
+# Urgent fast path, the Planning stall watchdog and the frozen-holds repair
+# act on every repo's cards, and an idle sweep must not
 # leave them to nobody (coordinator's decision, 2026-10-02 ~19:10 PT).
 _idle_pass: list[str] = []
 # The cards `recover_limit_deaths` wrote to this pass — a re-entry's moves and
@@ -3993,112 +3991,6 @@ def repair_frozen_planning_holds() -> set[str]:
             f"'{HOLD_LABEL}' label removed"
         )
     return repaired
-
-
-def serve_planner_line(skip: set[str] | frozenset[str] = frozenset()) -> list[str]:
-    """The one-way drain of the old planner line (DRE-8618, epic DRE-8539).
-    Full sweeps only, until DRE-8622 removes it.
-
-    The fleet-wide planner cap is gone (`architecture/decisions/
-    adr-planner-cap-removed.md`): since DRE-8617 a plan run reads the
-    planners' Linear allowance and claims no slot, so nothing joins the line
-    any more. What the cap's line still holds is started at once, so no card
-    is stranded when the line stops being served. Nothing is counted: no cap,
-    no claim, no TTL and no free slot.
-
-    WHAT IT SERVES. Every card the ledger finds waiting — its newest
-    `🎟️ planner-slot:` receipt `waiting`, or a `dispatched` past its grace
-    (`planner_queue.ordered_ledger`, served in the line's own order) —
-    recorded against THIS repo. Each is fired through `plan_run.fire` with
-    the card record the board read returned, its recorded trigger and its
-    recorded reason, on the plan event whatever its labels (DRE-5366) — never
-    `sent_by_run`: the sweep is not the card's planner run. A confirmed
-    dispatch is followed by a `released … · because cap-removed` receipt,
-    which takes the card out of the line, so no pass serves it twice. A
-    failed dispatch goes on the write ledger, posts nothing, and ends the
-    drain for this pass: the card stays waiting for the next one. A card
-    escalated out of Planning earlier in this pass (`skip`) is still waiting
-    on this pass's board read, and is not served.
-
-    WHAT IT READS. The ledger's lanes (`planner_queue.LEDGER_LANES`), as the
-    backstop read them: the ones inside SWEPT_LANES off the board read this
-    sweep already paid for, and Green Light through `_fleet_or_linear`
-    (DRE-5848). Only Planning and In Progress hold a waiting card.
-
-    WHY ITS OWN REPO IS ENOUGH. A repo's sweep and its plan workflow ride
-    one channel — `@main` for agent-bureau and bureau-pipeline, and `@stable`
-    for every other repo, whose every consumer stub pins it with the paired
-    `pipeline_ref: stable` (`docs/self-hosting.md`). So this drain reaches a
-    repo whose plan workflow already carries DRE-8617, which posts no
-    `waiting`, and its first full pass there empties the line that repo's old
-    plan workflow left. A repo whose plan workflow still posts `waiting` is
-    still running the old sweep, which serves its own line as before. The one
-    card no pass of the drain reaches is one left `waiting` in a repo whose
-    single channel advance carries DRE-8617, DRE-8618 and DRE-8622 together:
-    the Planning stall clock parks it in Triage within the stall window, and
-    the operator's step (DRE-8623) moves it back to Planning by hand.
-
-    A queue config that cannot be read leaves the ledger unreadable: a
-    `::error::` and a read failure, and the sweep exits red for the medic.
-
-    Returns the cards dispatched this pass.
-    """
-    served: list[str] = []
-    swept = tuple(lane for lane in planner_queue.LEDGER_LANES if lane in SWEPT_LANES)
-    extra = tuple(lane for lane in planner_queue.LEDGER_LANES if lane not in SWEPT_LANES)
-    cards = active_cards(swept) + (
-        _fleet_or_linear(extra, "/".join(extra)) if extra else [])
-    records = {card["identifier"]: card for card in cards}
-    try:
-        line = planner_queue.ordered_ledger(cards, datetime.now(UTC))
-    except planner_queue.PlannerQueueError as e:
-        print(f"::error::planner line: the planner queue config could not be read "
-              f"— {e}. The old line's waiting cards are not started this pass.")
-        _read_failures.append(f"planner-line: {e}")
-        return served
-    halted = False
-    for stand in line.waiting:
-        ident = stand.card
-        if ident in skip:
-            why = "escalated out of Planning this pass"
-        elif stand.repo.lower() != REPO.lower():
-            why = f"recorded against {stand.repo} — that repo's sweep serves it"
-        elif halted:
-            why = "a dispatch failed this pass — it stays waiting for the next sweep"
-        elif ident not in records:
-            why = "not on this pass's board read"
-        else:
-            why = None
-        if why:
-            print(f"planner line: {ident} skipped — {why}")
-            continue
-        try:
-            ok, err = plan_run.fire(records[ident], REPO, trigger_state=stand.trigger,
-                                    reason=stand.reason, event=plan_run.PLAN_EVENT)
-        except Exception as e:  # noqa: BLE001 — a dispatch that raised did not happen
-            ok, err = False, f"redispatch {ident}: {e}"
-        if not ok:
-            _write_failures.append(err)
-            print(f"ERROR: {err}", file=sys.stderr)
-            print(f"planner line: {ident} skipped — its dispatch failed; it stays waiting")
-            halted = True
-            continue
-        served.append(ident)
-        try:
-            planner_queue.post_released(
-                linear_ops, ident, run_id=os.environ.get("GITHUB_RUN_ID") or "-",
-                repo=stand.repo, trigger_state=stand.trigger, because="cap-removed",
-            )
-        except (linear_ops.LinearError, planner_queue.PlannerQueueError) as e:
-            _write_failures.append(f"{ident} planner-slot cap-removed release: {e}")
-            print(f"ERROR: planner line: {ident} was dispatched but its release "
-                  f"did not post: {e}", file=sys.stderr)
-        print(f"planner line: {ident} started — dispatched at {REPO} "
-              f"(trigger {stand.trigger}, reason {stand.reason or 'none'}) and "
-              "released because cap-removed")
-    print(f"planner line: {len(served)} of {len(line.waiting)} waiting card(s) "
-          "started this pass — the cap is removed, and the line is only drained")
-    return served
 
 
 # Human-park dispatch gate (DRE-2024). The PR backstops below dispatch
@@ -8775,11 +8667,11 @@ def _built_out_follow_on(epic: str, record: dict) -> str | None:
 # The relay lives in agent-bureau and cannot be read from here, so
 # `tend_epic_queue` confirms instead of assuming: the label still on an In
 # Progress epic is an activation that has not run. Past the act's cadence,
-# with nothing the pipeline wrote since the start — a `🎟️ planner-slot:`
-# receipt from a run waiting for a planner is such a comment, and so is the
-# activate route's hand-back note — the epic's own repo's sweep asks for the
-# activate run itself, ONCE, and says so with `▶️ epic-start-redispatched:`. A
-# start carrying that receipt is never asked for again (DRE-2071: a receipt
+# with nothing the pipeline wrote since the start — the activation is such a
+# comment, and so is the activate route's hand-back note — the epic's own
+# repo's sweep asks for the activate run itself, ONCE, and says so with
+# `▶️ epic-start-redispatched:`. A start carrying that receipt is never asked
+# for again (DRE-2071: a receipt
 # that knows the outcome, a retry bounded per transition); the console shows
 # it overdue.
 #
@@ -8879,8 +8771,8 @@ def _confirm_epic_start(epic: dict, thread: list[dict], now: datetime) -> None:
         gate owns an epic moved to In Progress any other way;
       * an `epic-start-redispatched` receipt newer than it — asked for once
         already, and never again for this start;
-      * anything else the pipeline wrote newer than it — the route ran (a
-        planner-slot receipt, the activation, the hand-back note);
+      * anything else the pipeline wrote newer than it — the route ran (the
+        activation, the hand-back note);
       * younger than the act's cadence — still within its run's bound.
     Otherwise the relay never fired, and the activate run is asked for here.
     """
@@ -15060,7 +14952,7 @@ def off_rail() -> bool:
 OFF_RAIL_PREFIX = "off-rail"
 
 #: The fleet-wide board writers a sweep off the rail skips, in the order
-#: `main()` runs them, each with what it would have done. An eleventh joins
+#: `main()` runs them, each with what it would have done. A tenth joins
 #: here deliberately, by name; tests/test_off_rail_writers.py pins the set.
 OFF_RAIL_SKIPPED: dict[str, str] = {
     "drain_retiring_lanes":
@@ -15075,8 +14967,6 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
         "moved Urgent Intake cards to Planning board-wide",
     "repair_frozen_planning_holds":
         "escalated and un-held unlabeled Planning cards our watchdog froze",
-    "serve_planner_line":
-        "started the old planner line's waiting cards and released their places",
     "tend_epic_queue":
         "removed the epic-queued label from any repo's card that left the line",
     "start_queued_epics":
@@ -15096,10 +14986,10 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 #
 # The FLEET-WIDE phases still run on an idle pass (the coordinator's decision,
 # 2026-10-02 ~19:10 PT, the CEO may overrule): the Urgent fast path, the
-# Planning stall watchdog, the frozen-holds repair and the planner line act on
-# every repo's cards, and with most sweeps paused an idle repo may be the only
+# Planning stall watchdog and the frozen-holds repair act on every repo's
+# cards, and with most sweeps paused an idle repo may be the only
 # one running them. They read the board as they always have, so an idle pass
-# costs the check plus those reads (about three requests), not one. The
+# costs the check plus that read (about two requests), not one. The
 # GitHub-side backstops still run too: an open pull request is work whatever
 # the board says.
 #
@@ -15603,41 +15493,19 @@ def main(
         # a time. Immediately after the watchdog that stopped filling it, and
         # on the same board read: the cards it repairs are exactly the ones
         # that watchdog now skips as already held.
-        repaired: set[str] = set()
         if off_rail() and "repair_frozen_planning_holds" in OFF_RAIL_SKIPPED:
             print(off_rail_notice("repair_frozen_planning_holds",
                                   OFF_RAIL_SKIPPED["repair_frozen_planning_holds"]))
         else:
             try:
                 with _phase("repair_frozen_planning_holds"):
-                    repaired = repair_frozen_planning_holds()
+                    repair_frozen_planning_holds()
             except ReconcileWriteError as e:
                 _write_failures.append(str(e))
                 print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
             except linear_ops.LinearError as e:
                 _read_failures.append(f"planning-repair: {e}")
                 print(f"ERROR: repair_frozen_planning_holds: {e}", file=sys.stderr)
-        # The one-way drain of the old planner line (DRE-8618): every card
-        # still waiting in it started at once. After the watchdog and the
-        # repair, so a card either of them escalated this pass — still waiting
-        # on this pass's board read — is not dispatched on its way out. Full
-        # sweeps only: the event paths have returned or skip this block.
-        if off_rail() and "serve_planner_line" in OFF_RAIL_SKIPPED:
-            print(off_rail_notice("serve_planner_line",
-                                  OFF_RAIL_SKIPPED["serve_planner_line"]))
-        else:
-            try:
-                with _phase("serve_planner_line"):
-                    serve_planner_line(flagged | (repaired or set()))
-            except ReconcileWriteError as e:
-                _write_failures.append(str(e))
-                print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
-            except linear_ops.LinearError as e:
-                _read_failures.append(f"planner-line: {e}")
-                print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
-            except Exception as e:  # noqa: BLE001 — one phase must not stop the sweep
-                _write_failures.append(f"planner-line: {e}")
-                print(f"ERROR: serve_planner_line: {e}", file=sys.stderr)
     # Automation cards (DRE-3665) are out of `mine` — and `mine` is BOTH the
     # WIP base promotion is budgeted against and the list the nudge loop
     # walks. A dependabot card has no agent run to count and no `agent/`

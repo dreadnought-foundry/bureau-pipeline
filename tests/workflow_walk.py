@@ -1,7 +1,7 @@
 """A three-valued reading of a GitHub Actions `if:` expression, for the workflow tests.
 
-Moved here from `tests/test_planner_queue_wiring.py` when DRE-8617 deleted
-that file with the planner slot it tested. The tests that walk `plan.yml`'s
+Moved here from the planner slot's wiring tests when DRE-8617 deleted that
+file with the slot it tested. The tests that walk `plan.yml`'s
 gates import it from here: `test_planner_allowance_wiring.py`,
 `test_plan_critic_wiring.py`, `test_plan_critic_scenario.py` and
 `test_plan_escalation_reason_file.py`.

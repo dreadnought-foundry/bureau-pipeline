@@ -4672,7 +4672,7 @@ STOPPED_NAMING_TODO = (
 class TheseScriptsNoLongerNameTodo(unittest.TestCase):
     """DRE-7113. Every string constant in the eleven files — docstrings
     included — read as `lane_contract` reads the pipeline's vocabulary, the
-    same walk DRE-6747 runs for `Backlog` (`tests/test_planner_queue.py`). A
+    same walk DRE-6747 ran for `Backlog` in the planner ledger's tests. A
     `#` comment is not a constant, so one recording an incident keeps its
     wording."""
 
