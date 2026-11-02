@@ -142,8 +142,10 @@ class TestEveryActDeclaresItsCadence:
         marks an operator step in Hand-work as a machine's or a person's, and
         DRE-8633 the receipt of the Alarm Repair's one attempt on an alarm left
         open on a card; sixty-five since DRE-8635 added the count a failure
-        already filed as a card gains on that card."""
-        assert len(pipeline_act.acts()) == 65
+        already filed as a card gains on that card; sixty-six since DRE-8746
+        added the receipt of the operator agent's pass on a card waiting on a
+        person."""
+        assert len(pipeline_act.acts()) == 66
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
