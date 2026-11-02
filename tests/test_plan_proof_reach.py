@@ -632,6 +632,28 @@ INITIATIVES_PRESSES = (
     ("deleteInitiativeFile", "delete an initiative's file", "deleted an initiative's file",
      "deleting an initiative's file"),
 )
+#: The eight loop presses DRE-8727 added for the Loops 1 epic (DRE-8698), after
+#: the Initiatives twenty, in agent-bureau's order: each operation, its plain
+#: words as the standard's bullet gives them, and the press as a criterion
+#: writes it in the present, past and -ing.
+LOOP_PRESSES = (
+    ("recordLoop", "record a loop", "the run records a loop", "the run recorded a loop",
+     "recording a loop"),
+    ("answerLoop", "answer a loop", "the run answers a loop", "the run answered a loop",
+     "answering a loop"),
+    ("trackThis", "track an ask as a loop", "the run tracks an ask as a loop",
+     "the run tracked an ask as a loop", "tracking an ask as a loop"),
+    ("moveLoop", "move a loop to Later or Focus", "the run moves a loop to Later",
+     "the run moved a loop to Focus", "moving a loop to Later"),
+    ("snoozeLoop", "snooze a loop", "the run snoozes a loop", "the run snoozed a loop",
+     "snoozing a loop"),
+    ("nudgeLoop", "nudge a loop", "the run nudges a loop", "the run nudged a loop",
+     "nudging a loop"),
+    ("closeLoop", "close a loop with an ending", "the run closes a loop with an ending",
+     "the run closed a loop", "closing a loop with an ending"),
+    ("markNotALoop", "mark a loop not a loop", "the run marks a loop not a loop",
+     "the run marked a loop as not a loop", "marking a loop not a loop"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -720,7 +742,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(26, len(listed), listed)
+        self.assertEqual(34, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -766,7 +788,40 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_initiatives_presses_follow_the_six_in_order(self):
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual([op for op, *_ in INITIATIVES_PRESSES], ours[6:])
+        self.assertEqual([op for op, *_ in INITIATIVES_PRESSES], ours[6:26])
+
+    def test_the_loop_presses_follow_the_initiatives_in_order(self):
+        """DRE-8727: the eight loop presses, after `deleteInitiativeFile`."""
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual(["recordLoop", "answerLoop", "trackThis", "moveLoop", "snoozeLoop",
+                          "nudgeLoop", "closeLoop", "markNotALoop"], ours[26:])
+        self.assertEqual([op for op, *_ in LOOP_PRESSES], ours[26:])
+
+    def test_the_loop_presses_name_only_themselves(self):
+        """DRE-8727: each loop press's plain words, in a criterion and in its
+        forms, and its operation name only that press."""
+        for op, words, present, past, ing in LOOP_PRESSES:
+            for text in (words, present, past, ing, op,
+                         f"Sandbox press: on agent-bureau-demo, {present}"):
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_no_existing_pattern_matches_a_loop_press(self):
+        """DRE-8727: none of the twenty-six earlier patterns reads a loop
+        press's words, and each loop pattern reads its own."""
+        for op, *texts in LOOP_PRESSES:
+            for text in texts:
+                for other, pattern in ppr.SANDBOX_PRESSES:
+                    with self.subTest(op=op, text=text, pattern=other):
+                        self.assertEqual(other == op,
+                                         re.search(pattern, text, re.IGNORECASE) is not None)
+
+    def test_a_task_press_still_names_only_the_task_press(self):
+        """DRE-8727: `snoozeLoop` does not take a `snoozeTask` criterion."""
+        for text in ("the run snoozes a task", "snooze the fixture task", "snoozeTask",
+                     "Sandbox press: on agent-bureau-demo, the run snoozed a task"):
+            with self.subTest(text=text):
+                self.assertEqual(["snoozeTask"], ppr.sandbox_presses(text))
 
 
 class TheSandboxPressRule(_Cli):
