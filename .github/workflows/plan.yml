@@ -1073,7 +1073,7 @@ jobs:
               if [ "$SAID" -gt 0 ]; then
                 echo "$EPIC already carries this planning attempt's epic-queued receipt — not posted again"
               else
-                python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$(cat "$RUNNER_TEMP/epic-cap-receipt.md")" --act=epic-approval-queued
+                python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$RUNNER_TEMP/epic-cap-receipt.md" --act=epic-approval-queued
               fi
               python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
               echo "mode=queued" >> "$GITHUB_OUTPUT"
@@ -1628,9 +1628,9 @@ jobs:
           # comment — the record is only a credential while nothing else can be
           # written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "$(cat "${{ runner.temp }}/one-off-note.md")"
+            --body-file="${{ runner.temp }}/one-off-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "$(cat "${{ runner.temp }}/one-off-record.txt")"
+            --body-file="${{ runner.temp }}/one-off-record.txt"
 
       # THE TOMBSTONE, and it is what makes the raise above possible (DRE-4381).
       # The re-read is not a step in this job — it is the CEO answering and the
@@ -1672,7 +1672,7 @@ jobs:
           # nothing else can be written in the same comment beside it
           # (`plan_critic._sole_record`).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "$(cat "${{ runner.temp }}/one-off-ran-out-record.txt")"
+            --body-file="${{ runner.temp }}/one-off-ran-out-record.txt"
 
       # --- A critic that decided nothing is read ONCE more (DRE-7491) --------
       #
@@ -1964,10 +1964,12 @@ jobs:
             # check first. The rewrite may have dropped the CEO's answers
             # block: the writer puts it back before anyone reads the card
             # again (DRE-6360) — a no-op when the planner kept it.
-            python3 .bureau-pipeline/scripts/linear_ops.py set-description "$CARD" "$(cat "$DESC")"
+            python3 .bureau-pipeline/scripts/linear_ops.py set-description "$CARD" --body-file="$DESC"
             python3 .bureau-pipeline/scripts/answer_into_card.py write "$CARD"
+            printf '🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\n%s' \
+              "$(cat "$SUMMARY")" > "$RUNNER_TEMP/one-off-revision-comment.md"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-              "$(printf '🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\n%s' "$(cat "$SUMMARY")")"
+              --body-file="$RUNNER_TEMP/one-off-revision-comment.md"
           fi
 
       # Fresh App token for the dispatch (DRE-3940): the revision above is a
@@ -2088,7 +2090,7 @@ jobs:
             exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
           fi
           if [ -s "$PARK_NOTE" ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "$PARK_NOTE")"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" --body-file="$PARK_NOTE"
           fi
           python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage"
@@ -2829,7 +2831,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
               python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
             fi
             exit 1
@@ -3137,9 +3139,13 @@ jobs:
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
-          # byte-for-byte the list the model read.
+          # byte-for-byte the list the model read. From the file, never as one
+          # argument: a 138 KiB note was exit 126 here on 2026-11-01 (DRE-8758).
+          # The critic reads "$NOTE" itself, so a post Linear refuses costs the
+          # epic its copy of the list, never the critics' run.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE" \
+            || echo "::warning title=Mechanical note not posted::The list ($(wc -c < "$NOTE") bytes) could not be posted on $EPIC. The critic still reads it, and it is printed in this step's log above."
 
       # Fresh App token for round 1 (DRE-3940) — the incident step: the planner
       # above is a model run and passed the hour on 2026-09-14. The rule and its
@@ -3284,9 +3290,9 @@ jobs:
           # comment — the record is only a credential while nothing else can
           # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+            --body-file="${{ runner.temp }}/plan-critic-record.txt"
 
       # The re-plan's turn ceiling, sized from the plan (DRE-5288). Both of
       # this route's re-plan steps carried a literal ceiling of 60, and epic
@@ -3567,7 +3573,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
               python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
             fi
             exit 1
@@ -3653,8 +3659,10 @@ jobs:
               --epic-file "$EPIC_FILE" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # From the file, and a refused post never stops the critic (DRE-8758).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE" \
+            || echo "::warning title=Mechanical note not posted::The list ($(wc -c < "$NOTE") bytes) could not be posted on $EPIC. The critic still reads it, and it is printed in this step's log above."
 
       # Fresh App token for round 2 (DRE-3940): the re-plan above is a full
       # planner run. The rule and its reasons are on
@@ -3791,9 +3799,9 @@ jobs:
           # comment — the record is only a credential while nothing else can
           # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+            --body-file="${{ runner.temp }}/plan-critic-record.txt"
 
       # Hand the checked source to the publish job — jobs do not share a
       # workspace, and the portal is never written from this one. (The review
@@ -3920,7 +3928,7 @@ jobs:
           # about to be asked to approve rather than in a run log.
           if [ -s "$HELD" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$HELD")"
+              --body-file="$HELD"
           fi
 
       # --- The plan route's last move: the hand-off (DRE-5284) ---------------
@@ -4418,7 +4426,7 @@ jobs:
           # while nothing else can be written in the same comment beside it
           # (`plan_critic._sole_record`).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$RECEIPT")"
+            --body-file="$RECEIPT"
 
       # DID THE REVIEW DECIDE? (DRE-3501). One question, asked of the FILE the
       # critic was told to write, because the step outcome above answers a
@@ -4540,9 +4548,9 @@ jobs:
             --record-file "$RECORD"
           # The note, then the tombstone ALONE in its own comment.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-death-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-death-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$RECORD")"
+            --body-file="$RECORD"
           SUBTYPE=$(sed -n 's/.*[[:space:]]subtype=\([^[:space:]]*\).*/\1/p' "$RECORD")
           THREAD="${{ runner.temp }}/plan-critic-death-thread.json"
           PARK_NOTE="${{ runner.temp }}/plan-critic-death-park.md"
@@ -4575,7 +4583,7 @@ jobs:
             python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$PARK_NOTE")"
+              --body-file="$PARK_NOTE"
           fi
           exit 1
 
@@ -4613,9 +4621,9 @@ jobs:
           # comment — the record is only a credential while nothing else can
           # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+            --body-file="${{ runner.temp }}/plan-critic-record.txt"
 
       # --- REVIEW MODE: what the decision reached (DRE-5280) ------------------
       #
@@ -4674,7 +4682,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
             fi
             exit 1
           fi
@@ -4682,7 +4690,7 @@ jobs:
             --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
           if [ -s "$HELD" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$HELD")"
+              --body-file="$HELD"
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
             --with-authors > "$THREAD"
@@ -4755,7 +4763,7 @@ jobs:
             --with-authors > "$THREAD" || : > "$THREAD"
           python3 .bureau-pipeline/scripts/plan_critic.py held-park < "$THREAD" > "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE"
 
       # NO_RESULT: a crash is not a rejection, and it is not a pass. Below
       # `plan_critic.MAX_ROUNDS` no-result rounds on this attempt (read through
@@ -5304,7 +5312,7 @@ jobs:
               --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
             if [ -s "$HELD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$HELD")"
+                --body-file="$HELD"
             fi
             echo "ok=true" >> "$GITHUB_OUTPUT"
             echo "the revision passed the plan's own gates"
@@ -5324,7 +5332,7 @@ jobs:
           BOUNCED=""
           if [ -s "$BOUNCE_FILE" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$BOUNCE_FILE")"
+              --body-file="$BOUNCE_FILE"
             # The proof check's note is written for the plan route, where a
             # bounce goes back to Planning; on this route it parks, so the
             # note below says which lane is true.
@@ -5421,8 +5429,10 @@ jobs:
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --epic-file "$EPIC_FILE" \
               --note-file "$NOTE" < "$CHILDREN"
+          # From the file, and a refused post never stops the critic (DRE-8758).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE" \
+            || echo "::warning title=Mechanical note not posted::The list ($(wc -c < "$NOTE") bytes) could not be posted on $EPIC. The critic still reads it, and it is printed in this step's log above."
 
       # REVIEW MODE (DRE-5299): hand the re-checked revision to the publish
       # job, exactly as the plan route's `Plan artifact — upload source` does —
@@ -5670,7 +5680,7 @@ jobs:
               if [ -s "$BOUNCE_FILE" ]; then
                 printf '\n%s\n' "That says this epic is back in Planning, but it has not moved: the activation stopped here, before it wrote a lane or promoted a child, and this run is red." >> "$BOUNCE_FILE"
                 python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                  "$(cat "$BOUNCE_FILE")"
+                  --body-file="$BOUNCE_FILE"
               fi
               exit 1
             fi
@@ -5680,7 +5690,7 @@ jobs:
             # epic rather than in a run log nobody reads.
             if [ -s "$HELD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$HELD")"
+                --body-file="$HELD"
             fi
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "In Progress"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -6138,7 +6148,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
             fi
             exit 1
           fi

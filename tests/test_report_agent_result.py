@@ -146,6 +146,7 @@ class TheScriptFile(unittest.TestCase):
 
 LINEAR_STUB = '''#!/usr/bin/env python3
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 with open(os.environ["LINEAR_STUB_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps({"op": sys.argv[1], "args": sys.argv[2:]}) + "\\n")
 if sys.argv[1] == "count-comments":

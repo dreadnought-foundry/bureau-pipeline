@@ -245,7 +245,7 @@ PY
   fi
   echo "proof park: $PARK" >> "$GITHUB_STEP_SUMMARY"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat "${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md")"
+    --body-file="${RUNNER_TEMP:-/tmp}/proof-escalation-comment.md"
   # Out of either lane: the record's pull request opened before the
   # escalation file was written, and qa-review.yml may already have
   # carried the card to `In Review`. Never Triage — the card is not

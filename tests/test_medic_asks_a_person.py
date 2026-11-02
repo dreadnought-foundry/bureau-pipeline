@@ -351,7 +351,7 @@ class TheAskStepTest(unittest.TestCase):
 
     def test_the_question_posts_before_the_move_with_no_act(self):
         post = ('linear_ops.py comment "$TARGET" '
-                '"$(cat "$RUNNER_TEMP/medic-ask-comment.md")"')
+                '--body-file="$RUNNER_TEMP/medic-ask-comment.md"')
         self.assertIn(post, self.run_)
         line = next(ln for ln in self.step["run"].splitlines() if "linear_ops.py comment" in ln)
         self.assertNotIn("--act", line)

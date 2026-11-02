@@ -163,6 +163,7 @@ def _keyed(step_list: list[dict]) -> dict[tuple, dict]:
 # Every call is one JSON line in STUB_LOG: the script, then its argv.
 LINEAR_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as f:
     f.write(json.dumps(["linear_ops"] + args) + "\n")

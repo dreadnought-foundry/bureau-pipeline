@@ -649,6 +649,7 @@ if answer:
 
 _LINEAR_OPS_STUB = """\
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 open(os.environ["CALLS"], "a").write(json.dumps(["linear_ops"] + sys.argv[1:]) + "\\n")
 if sys.argv[1] == "state-of":
     if os.environ.get("FAKE_LANE") == "unreadable":

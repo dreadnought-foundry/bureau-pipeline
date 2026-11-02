@@ -423,6 +423,7 @@ with open(os.environ["STUB_LOG"], "a") as f:
 
 LINEAR_STUB = '''#!/usr/bin/env python3
 import os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 cmd, *args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as f:
     if cmd == "comment":
