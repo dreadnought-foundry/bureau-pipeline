@@ -241,32 +241,51 @@ def file_or_tally(title: str, body: str, *, occurrence: str, repo_slug: str,
 # --------------------------------------------------------------------------- #
 
 
-def _cmd_file(args) -> int:
+def _flag_values(flags, name: str) -> list:
+    """Every value given as `<name> <value>` in `flags`, in order."""
+    return [flags[i + 1] for i in range(len(flags) - 1) if flags[i] == name]
+
+
+def _file_parser() -> argparse.ArgumentParser:
+    f = argparse.ArgumentParser(prog="failure_tally.py file",
+                                description="file the card, or add a count to it")
+    f.add_argument("--title", required=True)
+    f.add_argument("--body-file", required=True)
+    f.add_argument("--occurrence", required=True)
+    f.add_argument("--repo", required=True, help="the repo slug")
+    f.add_argument("--label", action="append", default=[])
+    return f
+
+
+def cmd_file(*flags: str) -> int:
+    args = _file_parser().parse_args(flags)
+    # The labels are read off the flags themselves rather than argparse's
+    # namespace, so `label_writers.py` can follow each one from the script
+    # that names it to the card — `pipeline_notice.py`'s shape (DRE-6362).
+    labels = _flag_values(flags, "--label")
     try:
         with open(args.body_file, encoding="utf-8") as fh:
             body = fh.read()
         tally = file_or_tally(args.title, body, occurrence=args.occurrence,
-                              repo_slug=args.repo, labels=args.label)
+                              repo_slug=args.repo, labels=labels)
     except Exception as exc:  # noqa: BLE001 — say so; the caller names the finding
         print(f"ERROR: {LOG_PREFIX} {args.title!r} — {exc}", file=sys.stderr)
         return EXIT_FAILED
     return EXIT_FAILED if tally.outcome == UNREAD else EXIT_OK
 
 
+#: The command line, by subcommand. A dict of handlers, the shape
+#: `label_writers.py` reads a command line in.
+COMMANDS = {"file": cmd_file}
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="cmd", required=True)
-
-    f = sub.add_parser("file", help="file the card, or add a count to it")
-    f.add_argument("--title", required=True)
-    f.add_argument("--body-file", required=True)
-    f.add_argument("--occurrence", required=True)
-    f.add_argument("--repo", required=True, help="the repo slug")
-    f.add_argument("--label", action="append", default=[])
-    f.set_defaults(fn=_cmd_file)
-
-    args = parser.parse_args(argv)
-    return args.fn(args)
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if not argv or argv[0] not in COMMANDS:
+        print("usage: failure_tally.py file --title T --body-file F "
+              "--occurrence O --repo SLUG [--label L ...]", file=sys.stderr)
+        return 2
+    return COMMANDS[argv[0]](*argv[1:])
 
 
 if __name__ == "__main__":
