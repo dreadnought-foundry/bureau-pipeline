@@ -24,7 +24,9 @@ for the stranded-fix class, `<branch>@<sha8 of the newest stranded commit>`.
 3. **The newest match is open, Canceled or Duplicate:** if the occurrence is
    already on it — in its description or in a `🔢 failure-tally:` receipt the
    pipeline wrote — nothing is written and the answer is `already-tallied`.
-   Otherwise the tally receipt is posted on it, composed through the act
+   A card filed before this rule has no `Occurrence:` line, and names a
+   `<key>@<id>` occurrence when its description holds both halves as whole
+   tokens (`_description_names`). Otherwise the tally receipt is posted on it, composed through the act
    registry as the `failure-tally` act, its first line
    `🔢 failure-tally: <n> · <occurrence>`, where `<n>` counts every occurrence,
    the first filing included: 2 plus the receipts already on the card.
@@ -114,9 +116,28 @@ class Tally:
 
 def _names(text: str, occurrence: str) -> bool:
     """Does `text` carry `occurrence` as a whole token? Bounded, so a branch
-    that only ends the same way, or a longer sha, is not this occurrence."""
+    that only starts or ends the same way, or a longer sha, is not this
+    occurrence. A trailing period ends a sentence, not the token."""
     return bool(re.search(
-        rf"(?<![\w./-]){re.escape(occurrence)}(?![\w])", text or ""))
+        rf"(?<![\w./-]){re.escape(occurrence)}(?![\w/-]|\.\w)", text or ""))
+
+
+def _description_names(description: str, occurrence: str) -> bool:
+    """Does the card's description already name `occurrence`? A card the
+    tally filed says so on its `Occurrence:` line. A card filed before the
+    tally has no such line — `stranded_fix.card_body` lists the branch and
+    each commit's sha8 apart, never `<branch>@<sha8>` — so for that card a
+    `<key>@<id>` occurrence is named when both halves are there as whole
+    tokens. Read any other way, the first sweep over the commits an open
+    card already lists would count them as occurrence 2."""
+    description = description or ""
+    if _names(description, occurrence):
+        return True
+    if re.search(rf"^{re.escape(OCCURRENCE_LINE)}", description, re.MULTILINE):
+        return False
+    key, at, ident = occurrence.rpartition("@")
+    return bool(at and key and ident) and _names(description, key) and _names(
+        description, ident)
 
 
 def is_receipt(entry) -> bool:
@@ -220,7 +241,7 @@ def file_or_tally(title: str, body: str, *, occurrence: str, repo_slug: str,
         print(f"{LOG_PREFIX} {identifier}'s thread did not answer — {exc}")
         return _say(Tally(UNREAD, identifier), title)
 
-    if _names(card.get("description") or "", occurrence) or any(
+    if _description_names(card.get("description") or "", occurrence) or any(
             _names(r, occurrence) for r in receipts):
         return _say(Tally(ALREADY_TALLIED, identifier), title)
 
