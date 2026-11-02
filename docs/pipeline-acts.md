@@ -758,7 +758,7 @@ by its tag or its name.
 | act name | `alarm-repair` |
 | kind · state · next actor | `recovery` · `unchanged` · `reconcile.py` |
 | discharges | nothing |
-| cadence | `1500` — the full sweep runs every 15 minutes inside reconcile.yml's `timeout-minutes: 10`, and a repaired card is the sweep's again |
+| cadence | `null` — the receipt leaves the card's state unchanged with `reconcile.py` next, and the sweep reads the card again on its own schedule, so nothing is expected to speak on it and the console reads it as parked, not overdue |
 | emitted by | `scripts/alarm_repair.py`, at the `pipeline_act.receipt("alarm-repair", …)` call in `_post` |
 
 An open console alert that names a card, at `WARN` or `CRITICAL` and open for
