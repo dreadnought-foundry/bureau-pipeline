@@ -1959,8 +1959,9 @@ _door_hold: list[str] = []
 _linear_lane_cards: list[dict] | None = None
 # The `scope=fleet` reads this pass, one per lane group — Intake and Planning
 # today, and the old planner line's Green Light until DRE-8622 deleted its
-# drain — each the door's answer or Linear's (`_fleet_or_linear`, DRE-5848). A group the door said `linear-hold` for is
-# in `_fleet_hold` instead, and every ask of it this pass is skipped.
+# drain — each the door's answer or Linear's (`_fleet_or_linear`, DRE-5848).
+# A group the door said `linear-hold` for is in `_fleet_hold` instead, and
+# every ask of it this pass is skipped.
 _fleet_lane_cards: dict[tuple[str, ...], list[dict]] = {}
 _fleet_hold: dict[tuple[str, ...], str] = {}
 # Set when this pass found the repo IDLE (`sweep_idle`): the repo-scoped phases
@@ -14988,7 +14989,7 @@ OFF_RAIL_SKIPPED: dict[str, str] = {
 # Planning stall watchdog and the frozen-holds repair act on every repo's
 # cards, and with most sweeps paused an idle repo may be the only
 # one running them. They read the board as they always have, so an idle pass
-# costs the check plus those reads (about three requests), not one. The
+# costs the check plus that read (about two requests), not one. The
 # GitHub-side backstops still run too: an open pull request is work whatever
 # the board says.
 #
