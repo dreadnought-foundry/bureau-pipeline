@@ -368,6 +368,24 @@ def test_a_thread_the_door_cannot_prove_whole_is_left_to_linear(monkeypatch, lin
         ("busy-threads", "FRESH", "-")]
 
 
+def test_a_held_thread_read_is_not_asked_again_for_the_epic_threads(monkeypatch, linear,
+                                                                   capsys):
+    """The hold skips nothing the board read already served, but the same
+    pass never spends a second `/cards` request on a door that just said
+    `linear-hold`: the epic-thread read is held off the first answer."""
+    with door_at(monkeypatch, _busy("DRE-1"), *WORLD) as door:
+        door.routes["/cards"] = door.unknown("linear-hold")
+        assert len(reconcile._door_work_cards()) > 1
+        assert reconcile._door_hold == []
+        with pytest.raises(reconcile.BoardHeld, match="linear-hold"):
+            reconcile._door_epic_threads(["DRE-1"])
+    assert len(door.asked("/cards")) == 1
+    assert linear.reads == []
+    assert [(x["decision"], x["verdict"], x["reason"])
+            for x in _lines(capsys.readouterr().out)] == [
+        ("work-lanes", "FRESH", "-"), ("busy-threads", "UNKNOWN", "linear-hold")]
+
+
 def test_no_busy_card_asks_for_no_thread(monkeypatch, linear):
     with door_at(monkeypatch, *WORLD) as door:
         reconcile._door_work_cards()
