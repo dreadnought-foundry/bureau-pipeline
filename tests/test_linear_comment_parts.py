@@ -243,24 +243,22 @@ def test_a_200_kib_body_posts_through_body_file_and_reads_back_whole(tmp_path):
     assert _comment_lines(proc) == ["commented on DRE-1"]
     assert _thread(tmp_path) == [text.rstrip("\n")]
 
-
-def test_the_old_one_argument_form_meets_the_argument_wall(tmp_path):
-    """The mutation check for the test above: the same note through the
-    pre-DRE-8758 form never reaches Linear."""
-    note = tmp_path / "plan-mechanical.md"
-    note.write_text(_big_note(), encoding="utf-8")
-    work = tmp_path / "work"
-    work.mkdir()
+    # The mutation check: the same note through the pre-DRE-8758 form, run
+    # by bash into a fresh stub, never reaches Linear.
+    old = tmp_path / "old"
+    work = old / "work"
+    work.mkdir(parents=True)
     os.symlink(ROOT, work / ".bureau-pipeline")
     proc = subprocess.run(  # nosec B603 B607 - the pre-DRE-8758 shell form
         ["bash", "-c",
          'python3 .bureau-pipeline/scripts/linear_ops.py comment "$ID" "$(cat "$F")"'],
         cwd=work, capture_output=True, text=True, timeout=120, check=False,
-        env=_env(tmp_path, ID="DRE-1", F=str(note)),
+        env=_env(old, ID="DRE-1", F=str(note)),
     )
     assert proc.returncode == 126 or "Argument list too long" in proc.stderr, (
         proc.returncode, proc.stderr[-2000:])
-    assert not _mutations(tmp_path)
+    assert not _mutations(old)
+    assert _thread(old) == []
 
 
 def test_a_body_from_stdin_still_posts_whole(tmp_path):
