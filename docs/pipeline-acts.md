@@ -869,6 +869,49 @@ occurrence. The tag is `failure-tally-receipt`, never the bare act name, so a
 
 The console must learn this act before this row merges, as for every row.
 
+## The row that records an Operator Agent pass — `🛠️ operator-agent` (DRE-8746)
+
+| Field | Value |
+| -- | -- |
+| tag | `operator-agent` |
+| act name | `operator-agent` |
+| kind · state · next actor | `recovery` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | `null` — the receipt is followed in the same Operator Agent run by its apply, and after it the card is a person's: the CEO's in Green Light, the studio host's go-live for a blocked card, or a person's for a closed one. A pass that died between the receipt and its apply is finished by the next hourly pass, which reads the card back as `apply-only` |
+| emitted by | `scripts/operator_agent_apply.py`, at the `pipeline_act.receipt("operator-agent", …)` call in `_post` |
+
+The operator agent decides a card waiting on a person (epic DRE-8738), and a
+card it decides `studio`, `ceo` or `done-already` spends its pass under one
+receipt. `operator_agent_apply.py claim` posts it, written by
+`operator_decide.receipt_text`; `apply` acts only under it, re-reads the card
+live and makes the one write the outcome names:
+
+    🛠️ operator-agent: <outcome> — <reason> · <HH:MM> PT
+    fingerprint: <12 hex>
+    step: <step>
+
+then, for `studio`, one `as built, the studio host cannot: "<quote>"` line per
+quote and `waits on: DRE-8582` (`waits on: DRE-8582, DRE-8487` for a deploy
+step), and the apply adds a `blockedBy` relation to DRE-8582 — never to
+DRE-8486, to DRE-8487 or to any epic, and never on DRE-8582 itself; for `ceo`,
+`act: <act id>` and, for a business choice, `choices: <one line of JSON>`,
+and the apply asks the CEO one question in Green Light through
+`planning_escalation.escalate`, a business choice screened again first; for
+`done-already`, one `evidence: "<quote>"` line per quote and `close: done`,
+and the apply moves the card to Done from the lane it read.
+
+**The receipt key is live**: a pipeline-authored receipt carrying the card's
+fingerprint is its spent pass, so `claim` exits 3, and a pass that died before
+its write reads the card back as `apply-only` and tries the write again under
+the same receipt. A write that did not land posts nothing and prints
+`operator-agent: <CARD> write refused — <outcome> · <what did not land>`. No
+line opens `Outcome:` or `Released as`: a close the relay's lane guard returns
+(`🚧 lane-guard-returned`, DRE-7327) is never made a second time, and waits
+for a person. The tag is the bare act name, because this act lifts no hold
+and no lift line carries its name.
+
+The console must learn this act before this row merges, as for every row.
+
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
 
 | Field | Value |
