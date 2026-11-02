@@ -156,7 +156,7 @@ def test_load_rules_refuses_an_act_id_outside_the_six(tmp_path):
 def test_load_rules_refuses_an_act_named_twice(tmp_path):
     table = _table()
     table["ceo_acts"][1]["id"] = table["ceo_acts"][0]["id"]
-    _refused(tmp_path, table)
+    assert f"the act {table['ceo_acts'][0]['id']} is named twice" in _refused(tmp_path, table)
 
 
 @pytest.mark.parametrize("field", ["card", "why"])
@@ -454,6 +454,86 @@ def test_phrases_match_case_insensitively_and_whole():
     match = operator_rules.rule_outcome("OPERATOR", "The build applies no iam CHANGE here.")
     assert (match.act, match.phrase) == ("aws-access", "iam CHANGE")
     assert operator_rules.rule_outcome("OPERATOR", "a non-AWS roles list") is None
+
+
+#: A plural on a phrase's last word routes as the singular does: one card per
+#: kept act, plus the studio phrases — `(text, outcome, act, phrase quoted)`.
+PLURALS = [
+    ("Review the IAM changes first.", "ceo", "aws-access", "IAM changes"),
+    ("Create two AWS roles for the host.", "ceo", "aws-access", "AWS roles"),
+    ("Make AWS identities for the user.", "ceo", "aws-access", "AWS identities"),
+    ("Each team runs its own AWS accounts.", "ceo", "billing-and-account-settings",
+     "own AWS accounts"),
+    ("Buy two paid seats.", "ceo", "billing-and-account-settings", "paid seats"),
+    ("Update the GitHub App permissions.", "ceo", "github-org-membership",
+     "GitHub App permissions"),
+    ("Set up two throwaway orgs.", "ceo", "github-org-creation", "throwaway orgs"),
+    ("Lift the branch protections.", "ceo", "github-branch-protection",
+     "branch protections"),
+    ("Run it from the operator's AWS profiles.", "studio", "",
+     "the operator's AWS profiles"),
+    ("It waits on two production deploys.", "studio", "", "production deploys"),
+]
+
+
+@pytest.mark.parametrize("text, outcome, act, phrase", PLURALS)
+def test_a_plural_routes_as_the_singular_does(text, outcome, act, phrase):
+    match = operator_rules.rule_outcome("OPERATOR: a step", text)
+    assert (match.outcome, match.act, match.phrase) == (outcome, act, phrase)
+
+
+def test_a_plural_on_the_destructive_step_still_meets_the_go():
+    match = operator_rules.rule_outcome(
+        "OPERATOR: rewrite history",
+        "It needs his go again right before the force-pushes.")
+    assert (match.outcome, match.act, match.phrase) == (
+        "ceo", "destructive-go", "force-pushes … go again right before")
+
+
+def test_a_plural_phrase_matches_its_singular():
+    match = operator_rules.rule_outcome("OPERATOR", "Set the org-level secret first.")
+    assert (match.act, match.phrase) == ("github-secrets", "org-level secret")
+    match = operator_rules.rule_outcome("OPERATOR", "Grant the Organization permission.")
+    assert (match.act, match.phrase) == ("github-org-membership", "Organization permission")
+
+
+def test_every_kept_act_has_a_plural_case():
+    # `org-level secrets` is already plural: its singular case is above.
+    assert {act for _text, outcome, act, _phrase in PLURALS if outcome == "ceo"} \
+        == KEPT_ACTS - {"github-secrets"}
+
+
+@pytest.mark.parametrize("text", [
+    "Write the AWS roleplay guide.",
+    "Count the paid seating plan.",
+    "A throwaway organ donor.",
+    "The IAM changesets are listed.",
+])
+def test_a_longer_word_still_matches_nothing(text):
+    assert operator_rules.rule_outcome("OPERATOR: a step", text) is None
+
+
+def test_an_unclosed_fence_runs_to_the_end():
+    assert operator_rules.rule_outcome("OPERATOR", "```\nunclosed IAM change") is None
+    assert operator_rules.rule_outcome("OPERATOR", "~~~\nAWS role\n```\nIAM change") is None
+
+
+def test_the_cli_prints_the_route(capsys):
+    assert operator_rules.main(["OPERATOR: step", "Review the IAM change first."]) == 0
+    assert capsys.readouterr().out == "ceo aws-access — IAM change\n"
+    assert operator_rules.main(["OPERATOR: step", "It waits on a production deploy."]) == 0
+    assert capsys.readouterr().out == "studio - — production deploy (deploy)\n"
+
+
+def test_the_cli_says_when_no_rule_matches(capsys):
+    assert operator_rules.main(["OPERATOR: archive a sandbox"]) == 0
+    assert capsys.readouterr().out == "no rule — the model's to read\n"
+
+
+@pytest.mark.parametrize("argv", [[], ["a", "b", "c"]])
+def test_the_cli_prints_its_usage_and_exits_2(capsys, argv):
+    assert operator_rules.main(argv) == 2
+    assert capsys.readouterr().err.startswith("python3 scripts/operator_rules.py")
 
 
 def test_no_match_is_none_the_card_is_the_models_to_read():
