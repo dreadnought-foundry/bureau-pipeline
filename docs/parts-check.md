@@ -8,7 +8,8 @@ an initiatives page grew on 2026-10-30 beside the shared `Notice` molecule.
 
 `scripts/parts_check.py` (DRE-8841) finds them. It has two commands: `count`
 counts every copy in a checkout, and `check` judges a pull request's diff. The
-reusable workflow runs `check`; the one-time count runs `count`.
+reusable workflow runs `check` ([`parts-check-stub.md`](parts-check-stub.md));
+the one-time count runs `count`.
 
 **Nothing is kept.** The copies are computed from the checkout's files on every
 run, and no baseline file is written or read. A copy that is deleted is gone
