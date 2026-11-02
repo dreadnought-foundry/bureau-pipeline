@@ -398,7 +398,9 @@ mints (see `models.yaml` below).
   3,000,000. `plan.yml` — and since Stage 2 (fix #12) `agent-task.yml`,
   `agent-fix.yml`, `qa-review.yml`, `verify.yml` and `proof-task.yml` in a
   repo that sets the variable `LINEAR_AGENT_BUCKET=planner` (review item 29),
-  and no other workflow — reads it ahead of the fleet key, steps back onto the
+  and since DRE-8716 `reconcile.yml` in every repo whose variable
+  `LINEAR_SWEEP_BUCKET` is not `fleet` (an opt-out, where the agents' is an
+  opt-in), and no other workflow — reads it ahead of the fleet key, steps back onto the
   fleet key on a 401 — never on a rate limit — and its `linear-budget:` line names
   `budget: planner-oauth` while the token is what it spends, which is
   how `scripts/check_linear_budget.py` keeps that spend out of the fleet
