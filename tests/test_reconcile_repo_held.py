@@ -86,7 +86,7 @@ STOOD_DOWN = (
     "check_dependabot_capacity", "settle_repair_cards", "report_fix_concurrency",
     "report_evicted_fix_runs", "flag_stranded", "report_intake_depth",
     "advance_urgent_intake", "report_intake_blockers", "repair_frozen_planning_holds",
-    "serve_planner_line", "move_hand_built_to_review",
+    "move_hand_built_to_review",
     "carry_epics_out_of_todo", "report_break_glass", "report_epic_growth",
     "close_finished_epics", "tend_epic_queue", "start_queued_epics",
     "alarm_held_proofs", "return_waiting_epics", "pr_for", "agent_run_alive",

@@ -59,6 +59,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 
 import yaml
 
@@ -1650,20 +1651,21 @@ class CriticWalk(unittest.TestCase):
         self.assertEqual(pc.post_release(self._records(), EPIC)[0], pc.POST_HELD)
 
     def test_an_old_rule_epic_with_a_queued_review_takes_the_hand_back(self):
-        """DRE-4626's shape, with the re-review waiting behind the planner
-        slot: the waiting receipt is a planner-slot record, not a critic round,
-        so the epic still reads POST_HELD and the run that finally serves it
-        takes the hand-back like any other."""
-        import planner_queue
-        waiting = planner_queue.format_receipt(
-            "waiting", card=EPIC, run="34500000001", repo="dreadnought-foundry/bureau-pipeline",
-            trigger=rr.TRIGGER_STATE_ACTIVATE, reason=rr.REASON_RE_REVIEW,
-            at="2026-09-30T17:22:00Z", place=2, of=3)
+        """DRE-4626's shape, with the re-review held behind the planners'
+        Linear allowance (DRE-8616): the held receipt is a planner-hold record,
+        not a critic round, so the epic still reads POST_HELD and the run that
+        finally starts takes the hand-back like any other."""
+        import planner_allowance
+        at = datetime(2026, 9, 30, 17, 22, tzinfo=UTC)
+        held = planner_allowance.format_receipt(
+            "held", card=EPIC, run="34500000001", repo="dreadnought-foundry/bureau-pipeline",
+            remaining=40, limit=5000, at=at, next_read=at + timedelta(minutes=5),
+            every=5, until=at + timedelta(minutes=60))
         self._old_rule_attempt(
             pc.marker(pc.STAGE_POST, 1, pc.SEND_BACK, "DRE-9002 names no operator"),
             "🔁 The review is being run again by the pipeline, on its own, as round 2.",
-            waiting)
-        self.assertIsNotNone(planner_queue.parse_receipt(waiting))
+            held)
+        self.assertIsNotNone(planner_allowance.parse_receipt(held))
         self.assertEqual(pc.post_release(self._records(), EPIC)[0], pc.POST_HELD)
         self._activate()
         self._handed_back()
@@ -1786,7 +1788,7 @@ class CriticWalk(unittest.TestCase):
         """Which REVIEW-MODE outcome steps a decision reaches: every step gated
         on review mode that is not one of the second critic's own steps, whose
         `if:` the decision's own outputs make KNOWN true — read by the same
-        three-valued walker the planner-slot wiring tests use. A step the plan
+        three-valued walker the planner wiring tests use. A step the plan
         route runs too (the split-ledger derive, DRE-6055) is shared plumbing,
         not an outcome, and is skipped like an activate-route step."""
         class Gates(Walk):

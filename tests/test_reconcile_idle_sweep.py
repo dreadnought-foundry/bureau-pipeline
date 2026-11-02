@@ -190,7 +190,7 @@ def test_an_idle_pass_runs_the_fleet_phases_and_skips_the_repo_ones():
     # item 3): the stall watchdog, which is fleet-wide and runs, leaves this
     # repo's Planning epics with children to it (`_with_the_critics`).
     fleet = ("flag_stranded", "advance_urgent_intake", "repair_frozen_planning_holds",
-             "serve_planner_line", "rereview_watch_scope")
+             "rereview_watch_scope")
     repo_scoped = ("promote_ready", "move_hand_built_to_review", "report_break_glass")
     with contextlib.ExitStack() as stack:
         spies = {name: stack.enter_context(mock.patch.object(
@@ -209,7 +209,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
              "settle_repair_cards", "flag_stranded", "report_intake_depth",
-             "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
+             "advance_urgent_intake", "repair_frozen_planning_holds",
              "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
              "redeliver_rescued_work", "build_run_refusal", "redispatch")
@@ -286,7 +286,7 @@ def test_a_busy_pass_at_a_cap_above_zero_asks_the_lift_once(capsys):
                       card("DRE-90", "In Progress", labels=(f"repo:{DEMO}",)))
     stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
              "settle_repair_cards", "flag_stranded", "report_intake_depth",
-             "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
+             "advance_urgent_intake", "repair_frozen_planning_holds",
              "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
              "redeliver_rescued_work", "build_run_refusal", "redispatch")

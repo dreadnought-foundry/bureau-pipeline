@@ -39,6 +39,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_planning_stall_leaves_re
 from __future__ import annotations
 
 import inspect
+import json
 import os
 import re
 import sys
@@ -132,14 +133,21 @@ def _tombstone() -> str:
                                     "post", "error_max_turns", 141, 140)
 
 
+#: DRE-3698's thread as Linear held it (DRE-5644), old planner-line receipts
+#: and all — a recorded thread, so it may keep naming what the cap left.
+RECORDED_THREAD = ROOT / "tests" / "fixtures" / "dre5644_rereview_thread.json"
+
+
 def _waiting(minutes_ago: float, card: str = EPIC) -> str:
-    """The old planner line's `waiting` receipt, as its literal line: the
-    ledger's grammar is not this suite's to compose (DRE-8618), and the line
-    is what an old card still carries."""
-    return (f"🎟️ planner-slot: waiting · card {card} · run "
-            f"run-waiting-{int(minutes_ago)} · repo dreadnought-foundry/agent-bureau"
-            f" · trigger Planning · at {_iso(minutes_ago)}\n"
-            "waiting for a planner: place 2 of 5")
+    """The old planner line's `waiting` receipt, as an old card still carries
+    it: the first one on DRE-3698's recorded thread, with its card and its
+    `at` rewritten. The ledger that composed it is deleted (DRE-8622), so the
+    line is read off the record rather than restated."""
+    thread = json.loads(RECORDED_THREAD.read_text(encoding="utf-8"))["thread"]
+    body = next(c["body"] for c in thread
+                if c["body"].startswith("🎟️") and " waiting · card " in c["body"])
+    body = re.sub(r" · card DRE-\d+", f" · card {card}", body, count=1)
+    return _AT.sub(f" · at {_iso(minutes_ago)}", body, count=1)
 
 
 #: The `at` a receipt line carries, dating its comment the way Linear would.

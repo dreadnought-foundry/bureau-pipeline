@@ -48,10 +48,8 @@ from test_groomer_rewrite_drain import (  # noqa: E402
     _decision, _draft, _draft_comment, _drained, _thread)
 from test_groomer_two_lists import (  # noqa: E402
     LIKELY_DONE, SUPERSEDED, answer_for, lane)
-
-#: The slot read as the module shipped it, captured at collection — the drain
-#: must make no such read, so a test that finds one puts it back to prove it.
-_SLOT_READ = getattr(groomer, "free_planner_slots", None)
+from test_no_planner_cap import NAMES as PLANNER_CAP_NAMES  # noqa: E402
+from test_no_planner_cap import PATTERN as PLANNER_CAP  # noqa: E402
 
 ADDITIONS = ("DRE-950", "DRE-951")
 REWRITE = "DRE-901"
@@ -61,7 +59,7 @@ EXCLUDED, SWITCHED_OFF = "DRE-4", "DRE-7"
 
 class LedgerlessOps(_RewriteOps):
     """The rewrite drain's fixture, with every read the planner slot ledger
-    made refused: a paged read of the board (`planner_queue.read_board`) and
+    made refused: a paged read of the board (the ledger's board read) and
     any comment read of a card in Planning. A drain that rations by slots
     cannot get past either."""
 
@@ -140,13 +138,6 @@ def _morning():
     return proposal, ops
 
 
-def _restore_the_slot_read(monkeypatch):
-    """`tests/conftest.py` used to lift the slot read for every drain test.
-    Put the module's own back, so a drain that still makes it is caught."""
-    if _SLOT_READ is not None:
-        monkeypatch.setattr(groomer, "free_planner_slots", _SLOT_READ)
-
-
 def _notes(ops):
     return [(i, b) for i, b in ops.written
             if b.startswith(f"{groomer.MARK} {groomer.MOVED_TAG}:")]
@@ -155,8 +146,7 @@ def _notes(ops):
 # --------------------------------------------------------------------------
 # every approved card moves, in one call, in the record's order
 # --------------------------------------------------------------------------
-def test_all_twenty_eight_approved_cards_move_to_planning_in_one_call(monkeypatch):
-    _restore_the_slot_read(monkeypatch)
+def test_all_twenty_eight_approved_cards_move_to_planning_in_one_call():
     proposal, ops = _morning()
     result = groomer.drain(ops, card=PROPOSAL_CARD)
     expected = [*_planning(proposal), *ADDITIONS, REWRITE]
@@ -170,8 +160,7 @@ def test_all_twenty_eight_approved_cards_move_to_planning_in_one_call(monkeypatc
         f"the drain read the planner ledger: {ops.planning_reads[:2]}")
 
 
-def test_each_moved_card_carries_its_groom_moved_note_and_no_queue_label(monkeypatch):
-    _restore_the_slot_read(monkeypatch)
+def test_each_moved_card_carries_its_groom_moved_note_and_no_queue_label():
     proposal, ops = _morning()
     result = groomer.drain(ops, card=PROPOSAL_CARD)
     noted = [i for i, _ in _notes(ops)]
@@ -187,8 +176,7 @@ def test_each_moved_card_carries_its_groom_moved_note_and_no_queue_label(monkeyp
         "the drain wrote a queue record")
 
 
-def test_the_drained_record_says_every_card_moved_and_none_was_queued(monkeypatch):
-    _restore_the_slot_read(monkeypatch)
+def test_the_drained_record_says_every_card_moved_and_none_was_queued():
     proposal, ops = _morning()
     result = groomer.drain(ops, card=PROPOSAL_CARD)
     assert "queued" not in result and "slots" not in result
@@ -204,8 +192,7 @@ def test_the_drained_record_says_every_card_moved_and_none_was_queued(monkeypatc
 # --------------------------------------------------------------------------
 # held back exactly as before
 # --------------------------------------------------------------------------
-def test_an_excluded_card_and_a_held_repos_card_stay_in_intake_as_held_back(monkeypatch):
-    _restore_the_slot_read(monkeypatch)
+def test_an_excluded_card_and_a_held_repos_card_stay_in_intake_as_held_back():
     proposal = twenty_five(held_repo_card=SWITCHED_OFF)
     assert {EXCLUDED, SWITCHED_OFF} <= set(_planning(proposal))
     hold = {"body": f"{groomer.MARK} {groomer.REPO_HOLD_TAG}: {HELD_REPO}",
@@ -232,21 +219,20 @@ def test_an_excluded_card_and_a_held_repos_card_stay_in_intake_as_held_back(monk
 # --------------------------------------------------------------------------
 def test_the_slots_unknown_refusal_is_gone():
     assert not hasattr(groomer, "SlotsUnknown")
-    assert not hasattr(groomer, "free_planner_slots")
+    for name in PLANNER_CAP_NAMES:
+        assert not hasattr(groomer, name), f"groomer.{name} is still defined"
 
 
-def test_a_failing_linear_read_of_planning_does_not_refuse_the_drain(monkeypatch):
+def test_a_failing_linear_read_of_planning_does_not_refuse_the_drain():
     """What used to refuse as `SlotsUnknown` — the ledger read failing — is a
     read the drain no longer makes, so the batch drains."""
-    _restore_the_slot_read(monkeypatch)
     proposal, ops = _morning()
     groomer.drain(ops, card=PROPOSAL_CARD)
     assert not any(b.startswith(f"{groomer.MARK} {groomer.DRAIN_REFUSED_TAG}:")
                    for _, b in ops.written)
 
 
-def test_the_other_refusals_are_unchanged(monkeypatch):
-    _restore_the_slot_read(monkeypatch)
+def test_the_other_refusals_are_unchanged():
     proposal = twenty_five()
     # No approval.
     unapproved = LedgerlessOps([{"body": groomer.proposal_comment(proposal),
@@ -277,9 +263,8 @@ def test_the_other_refusals_are_unchanged(monkeypatch):
                                   ".github/workflows/groomer.yml"])
 def test_no_trace_of_the_slot_count_or_the_queue_is_left(path):
     text = (ROOT / path).read_text(encoding="utf-8")
-    found = re.findall(r"free_planner_slots|planner_queue|groom-queued|"
-                       r"queue_standing|SlotsUnknown|groom_stall|"
-                       r"PLANNER_MAX_RUNNING", text)
+    found = PLANNER_CAP.findall(text) + re.findall(
+        r"groom-queued|queue_standing|SlotsUnknown|groom_stall", text)
     assert found == [], f"{path} still names {sorted(set(found))}"
 
 
@@ -287,13 +272,13 @@ def test_no_trace_of_the_slot_count_or_the_queue_is_left(path):
     "scripts/reconcile.py", "config/notice-writers.json",
     "config/pipeline-acts.json", "config/lane-contract.json"])
 def test_the_sweep_and_the_declarations_name_no_queue(path):
-    """`planner_queue` is left out on purpose: the sweep's import and its
-    one-way drain of the old planner line, and the `planner-slot` act, are
-    DRE-8622's to delete."""
+    """The planner cap's own names included: the sweep's import and its
+    one-way drain of the old planner line, and the slot act, went with
+    DRE-8622."""
     text = (ROOT / path).read_text(encoding="utf-8")
-    found = re.findall(r"free_planner_slots|groom-queued|queue_standing|"
-                       r"SlotsUnknown|groom_stall|release_groom_queue|"
-                       r"waiting_max|PLANNER_MAX_RUNNING", text)
+    found = PLANNER_CAP.findall(text) + re.findall(
+        r"groom-queued|queue_standing|SlotsUnknown|groom_stall|"
+        r"release_groom_queue|waiting_max", text)
     assert found == [], f"{path} still names {sorted(set(found))}"
 
 
@@ -314,10 +299,11 @@ def test_the_sweeps_release_and_its_stall_alert_are_gone(name):
     assert not hasattr(reconcile, name), f"reconcile.{name} is still defined"
 
 
-def test_the_sweep_still_drains_the_old_planner_line():
-    """What this card does not touch: DRE-8622 deletes the line's drain."""
-    assert callable(getattr(reconcile, "serve_planner_line", None))
-    assert hasattr(reconcile, "planner_queue")
+def test_the_sweep_no_longer_drains_the_old_planner_line():
+    """DRE-8622 deleted the line's drain and the ledger the sweep read it by."""
+    assert not hasattr(reconcile, "serve_planner_line")
+    for name in PLANNER_CAP_NAMES:
+        assert not hasattr(reconcile, name), f"reconcile.{name} is still defined"
 
 
 @pytest.mark.parametrize("name", [
