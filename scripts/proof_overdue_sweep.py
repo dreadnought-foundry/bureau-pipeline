@@ -37,14 +37,17 @@ on it.
     proof-overdue: note · <slug> · <N> proof record(s) older than 7 days · oldest <DRE-n> (<age> days, class=<cls>)
 
 or `· oldest none` when N is 0, then ` · in Green Light: <DRE-n>, …` when an
-overdue card is there. The oldest is the card with the largest `age_days`,
-a tie going to the lower card number. The note is printed on every pass, live
+overdue card is there, then ` · not read (rate limit): <DRE-n>, …` when a
+card's read was skipped (below) — N counts only the cards read. The oldest
+is the card with the largest `age_days`, a tie going to the lower card number. The note is printed on every pass, live
 or dry. When N is more than 0 a live pass raises it as one WARN console alert
 keyed `proof_overdue:<slug>:<YYYY-MM-DD>` — the day is in the key, the console
 holds one alert per key, and a raise of a key already open is the door's
 `repeat`, which delivers nothing, so the alert is delivered once per PT day.
 Every live pass then resolves the previous day's key, and on a day N is 0 it
-raises nothing and resolves that key alone.
+raises nothing and resolves that key alone — but only a pass that read every
+card: one that skipped a card leaves the previous day's key open, since the
+card it was raised for may still be overdue (`standards/console-honesty.md`).
 
 ## Failures
 
@@ -53,6 +56,13 @@ named on its own line and gets nothing posted; a comment or an alert that
 does not land is named too. Each turns the step red, at the end of the pass,
 after every other card has been handled. A list of cards that cannot be read
 writes nothing at all.
+
+One read failure is not red (DRE-8696): a card whose read GitHub refused for
+its rate limit — `gh_read_retry.is_rate_limit_refusal` on the error's whole
+text — is named as skipped on its own line and read on the next pass, the way
+the main sweep records a throttled read as degraded. No retry: an empty hourly
+bucket does not refill in the minute a retry waits, and the next pass is the
+retry. The note names it as not read, and the previous day's alert stays open.
 
 CLI (the step's own call; reads `REPO` and `PROOF_DISPATCH_LIVE`):
 
@@ -69,6 +79,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gh_read_retry  # noqa: E402 — the one classifier of a rate-limit refusal
 import linear_ops  # noqa: E402 — the comment, and who wrote each one
 import pipeline_notice  # noqa: E402 — the console alert
 import proof_overdue  # noqa: E402 — the one reader of what an overdue proof waits on
@@ -165,7 +176,7 @@ def oldest(diagnoses):
     return max(diagnoses, key=lambda d: (d.age_days, -_number(d.card)), default=None)
 
 
-def note_line(slug: str, overdue: list, green: list) -> str:
+def note_line(slug: str, overdue: list, green: list, skipped=()) -> str:
     head = (f"{TAG} note · {slug} · {len(overdue)} proof record(s) older than "
             f"{proof_overdue.AGE_DAYS} days · ")
     top = oldest(overdue)
@@ -173,6 +184,8 @@ def note_line(slug: str, overdue: list, green: list) -> str:
              else "oldest none")
     if green:
         head += f" · in {GREEN_LIGHT}: {', '.join(green)}"
+    if skipped:
+        head += f" · not read (rate limit): {', '.join(skipped)}"
     return head
 
 
@@ -228,14 +241,17 @@ def _tell(d, day: str, live: bool) -> str | None:
     return None
 
 
-def _alert(slug: str, day: str, note: str, count: int, live: bool) -> str | None:
+def _alert(slug: str, day: str, note: str, count: int, live: bool,
+           skipped=()) -> str | None:
     """Raise the day's alert when anything is overdue, then resolve the
-    previous day's; the failure, or None."""
+    previous day's unless a card was not read; the failure, or None."""
     key, previous = note_key(slug, day), note_key(slug, previous_day(day))
+    kept = (f"{TAG} {previous} left open — {len(skipped)} card(s) not read"
+            if skipped else None)
     if not live:
         if count:
             print(f"would: raise {key} — {note}")
-        print(f"would: resolve {previous}")
+        print(kept or f"would: resolve {previous}")
         return None
     failure = None
     if count:
@@ -247,7 +263,10 @@ def _alert(slug: str, day: str, note: str, count: int, live: bool) -> str | None
         if outcome == "lost":
             print(f"{TAG} the alert {key} was not raised — the pipeline-notice line says why")
             failure = f"the alert {key} was not raised"
-    pipeline_notice.resolve_notice(previous)
+    if kept:
+        print(kept)
+    else:
+        pipeline_notice.resolve_notice(previous)
     return failure
 
 
@@ -266,11 +285,17 @@ def sweep(slug: str, *, now: datetime | None = None, live: bool | None = None,
     except Exception as error:  # noqa: BLE001 — nothing known, nothing written
         print(f"{TAG} the open PROOF cards of {slug} could not be read — {_why(error)}")
         return 1
-    failures, overdue = [], []
+    failures, overdue, skipped = [], [], []
     for card in cards:
         try:
             got = proof_overdue.reading(card, now=now, gh=gh, linear=lanes)
         except Exception as error:  # noqa: BLE001 — named on its own line
+            # The whole text, not `_why`'s first 300 characters (DRE-8696).
+            if gh_read_retry.is_rate_limit_refusal(str(error)):
+                print(f"{TAG} {card} · skipped — GitHub refused the read for its rate "
+                      "limit; it is read on the next pass")
+                skipped.append(card)
+                continue
             print(f"{TAG} {card} · could not be read — {_why(error)}")
             failures.append(f"{card} could not be read")
             continue
@@ -286,9 +311,9 @@ def sweep(slug: str, *, now: datetime | None = None, live: bool | None = None,
         failure = _tell(d, day, live)
         if failure:
             failures.append(failure)
-    note = note_line(slug, overdue, green)
+    note = note_line(slug, overdue, green, skipped)
     print(note)
-    failure = _alert(slug, day, note, len(overdue), live)
+    failure = _alert(slug, day, note, len(overdue), live, skipped)
     if failure:
         failures.append(failure)
     for failure in failures:
