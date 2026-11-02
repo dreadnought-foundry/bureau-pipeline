@@ -671,6 +671,21 @@ refusal is lifted on the epic, not the card. The full sweep asks the cap
 itself for an approved epic a blocker epic has released with no decision on
 record; the hold it does not settle that way is the one the clock reports.
 
+An epic in Planning that Queued cards wait on (`epic-not-active`) is clocked as
+ONE record for the epic, never one per child (DRE-8815), and only when its
+newest plan run is dead or none of the plan stub's newest 50 runs names it.
+The record is dated by the later of the children's oldest `🧾 promotion-wait:
+epic-not-active —` receipt and that run's end, and the receipt goes on the
+EPIC, once per newest run, from `clock_planning_epics` on the full sweep:
+
+    🚨 promotion-stalled: <epic> [run <id>|no-run] has stood in Planning with its plan run dead — <n> children wait on it in Queued.
+
+Its `promotion-stalled <epic>: …` ledger entry is what
+`standing_defect_alert.settle` raises one console alert for. Green Light,
+Triage and every other lane are never clocked, nor is an epic carrying
+`needs-human` or `hand-built`, one inside a limit-death wait, or one whose
+`repo:` label names another repo.
+
 The holds (`HELD_TAGS` — the hold label, an open agent-blocker, a stale
 verdict, a refused live re-check) are never clocked per card, but they count
 toward the **idle board**: a sweep at WIP 0 that dispatched nothing while cards

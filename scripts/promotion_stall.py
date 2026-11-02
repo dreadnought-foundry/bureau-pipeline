@@ -35,10 +35,29 @@ already runs for an epic's prose defect, generalized.
   was already told once; these are counted for the idle-board alarm and never
   clocked per card. `first_seen` is the receipt the hold left where one exists,
   and None for a label a person applied by hand.
-* Everything else is a declared wait — a `blockedBy` relation, an epic not In
-  Progress, the WIP budget, a PARKED card, `wave-not-green-lit`,
-  `prose-blocker-no-relation` and the rest — and the caller builds no record
-  for it: each already says what it waits for, and that thing is scheduled.
+* Everything else is a declared wait — a `blockedBy` relation, the WIP
+  budget, a PARKED card, `wave-not-green-lit`, `prose-blocker-no-relation` and
+  the rest — and the caller builds no record for it: each already says what
+  it waits for, and that thing is scheduled.
+
+## An epic that is not In Progress (DRE-8815)
+
+`epic-not-active` is a declared wait, with one exception, and the exception
+is clocked. On 2026-11-01 epic DRE-8698's plan run died in a shell step after
+posting the plan, nothing moved the epic on, and its nine children waited
+five hours behind their ordinary `🧾 promotion-wait: epic-not-active —`
+receipts with nothing else said. So the full sweep builds ONE `EpicWait` per
+epic in Planning — never one per child — and the record is clocked only when
+the epic's newest plan run is dead or was never found (`run_dead`). Every
+other lane is never clocked: Green Light is the CEO's approval and the epic
+cap's queue, Triage the operator's, and the rest owe nothing of the planner.
+No child is clocked under the tag; the children are counted into the epic's
+record.
+
+The clock is the later of two recorded times: the oldest child receipt and
+the newest plan run's `updatedAt` (`epic_first_seen`), so the medic's one
+re-run restarts it from the attempt's end. No child receipt, no date —
+unknown is never stale, as below.
 
 ## Unknown age is never stale
 
@@ -65,13 +84,25 @@ import dead_run  # noqa: E402 — after the path insert, by design
 # nothing else.
 import lane_contract  # noqa: E402
 
+#: `promotion_wait.EPIC_NOT_ACTIVE`, spelled for the reason below;
+#: `tests/test_epic_not_active_clock.py` holds the two the same.
+EPIC_NOT_ACTIVE_TAG = "epic-not-active"
+
 #: Refusals the gate surfaces on a card and no sweep can clear on its own.
-#: The last is `epic_cap.UNDECIDED_TAG`, spelled because this module imports
+#: The sixth is `epic_cap.UNDECIDED_TAG`, spelled because this module imports
 #: neither `reconcile` nor `linear_ops`, and `epic_cap` imports the second;
-#: `tests/test_promotion_stall.py` holds the two the same.
+#: `tests/test_promotion_stall.py` holds the two the same. The seventh is
+#: clocked only as an epic's record, under the rule in the docstring.
 CLOCKED_TAGS = ("routing-no-verdict", "mid-epic-no-verdict",
                 "plan-critic-post-unread", "plan-critic-post-sent-back",
-                "plan-critic-post-died", "epic-cap-undecided")
+                "plan-critic-post-died", "epic-cap-undecided", EPIC_NOT_ACTIVE_TAG)
+
+#: The one lane an epic its children wait on is clocked in.
+EPIC_CLOCKED_LANE = "Planning"
+#: How many of the plan stub's newest runs are searched for the epic's.
+PLAN_RUNS_PAGE = 50
+#: A finished plan run that says Planning is working, not dead.
+LIVE_CONCLUSIONS = ("success", "neutral", "skipped")
 
 #: Holds counted for the idle-board alarm and never clocked per card. The first
 #: is the hold label itself, named through its one definition: this tuple reads
@@ -182,6 +213,128 @@ def ledger_line(refused: Refused, age_minutes: float) -> str:
         f"{refused.tag}{_for_epic(refused)} for {_hours(age_minutes)}h, which no "
         "sweep will clear — "
         "a person must act"
+    )
+
+
+class PlanRun(NamedTuple):
+    """The newest plan run whose jobs name the epic, as `gh run list` read it."""
+
+    id: str
+    status: str
+    conclusion: str
+    updated_at: str | None   # when GitHub last touched the run — its end, once completed
+
+
+class EpicWait(NamedTuple):
+    """One epic its Queued children wait on, and what the record reads (DRE-8815)."""
+
+    epic: str
+    lane: str
+    children: int            # its children standing in the queue, every repo's
+    receipt_at: str | None   # the oldest `epic-not-active` wait receipt among them; None = unknown
+    run: PlanRun | None      # None = no plan run among the newest PLAN_RUNS_PAGE names it
+
+
+def oldest(times) -> str | None:
+    """The earliest readable time among `times`, as written, or None."""
+    dated = [(at, iso) for iso in times if (at := _when(iso)) is not None]
+    return min(dated)[1] if dated else None
+
+
+def run_dead(run: PlanRun | None) -> bool:
+    """Is the epic's newest plan run dead, or absent? A run still going — any
+    status but `completed`, the in-flight ones and any GitHub adds — is not:
+    its own timeout ends it. Neither is one that finished well."""
+    if run is None:
+        return True
+    if run.status != "completed":
+        return False
+    return run.conclusion not in LIVE_CONCLUSIONS
+
+
+def epic_first_seen(wait: EpicWait) -> str | None:
+    """The record's date: the later of the oldest child receipt and the run's
+    end. None when no child carries the receipt — undated, never stale."""
+    receipt = _when(wait.receipt_at)
+    if receipt is None:
+        return None
+    ended = _when(wait.run.updated_at) if wait.run is not None else None
+    return wait.run.updated_at if ended is not None and ended > receipt else wait.receipt_at
+
+
+def receipt_aged(wait: EpicWait, now: str) -> bool:
+    """The free gate, asked before anything is read for the epic: in Planning,
+    and its oldest child receipt has stood STALL_MINUTES. The record's own date
+    is never earlier, so an epic this answers False for cannot be stale."""
+    if wait.lane != EPIC_CLOCKED_LANE:
+        return False
+    age = _age(wait.receipt_at, now)
+    return age is not None and age >= STALL_MINUTES
+
+
+def epic_stalled(wait: EpicWait, now: str) -> float | None:
+    """The record's age in minutes once it has stood STALL_MINUTES, else None.
+    None out of Planning, for a plan run that is not dead, and undated."""
+    if wait.lane != EPIC_CLOCKED_LANE or not run_dead(wait.run):
+        return None
+    age = _age(epic_first_seen(wait), now)
+    if age is None or age < STALL_MINUTES:
+        return None
+    return age
+
+
+def epic_once_key(wait: EpicWait) -> str:
+    """The receipt's once-only key, the head of its first line: the epic and
+    the run, so a later dead run on the same epic is said again."""
+    token = f"run {wait.run.id}" if wait.run is not None else "no-run"
+    return f"{STALL_MARK} {wait.epic} [{token}]"
+
+
+def _children(count: int) -> str:
+    return f"{count} child" if count == 1 else f"{count} children"
+
+
+def _waits(count: int) -> str:
+    return "waits" if count == 1 else "wait"
+
+
+def epic_notice(wait: EpicWait, now: str) -> str:
+    """The `🚨 promotion-stalled:` receipt body posted on the EPIC."""
+    kids = (f"{_children(wait.children)} {_waits(wait.children)} on it in "
+            f"{lane_contract.QUEUE_LANE}")
+    run = wait.run
+    if run is None:
+        head = f"has stood in {wait.lane} with no plan run found — {kids}."
+        receipt = _when(wait.receipt_at)
+        since = (f" Its children's oldest wait receipt was posted at "
+                 f"{dead_run.pacific(receipt)}, {_hours(_age(wait.receipt_at, now))} "
+                 "hours ago." if receipt is not None else "")
+        detail = (f"No plan run for it was found among the newest {PLAN_RUNS_PAGE} "
+                  "runs of the plan workflow: the run never started, or its dispatch "
+                  f"never arrived.{since} No sweep or recovery will start one: a "
+                  "person must plan it again or send the epic on.")
+    else:
+        head = f"has stood in {wait.lane} with its plan run dead — {kids}."
+        ended = _when(run.updated_at)
+        when = (f" at {dead_run.pacific(ended)}, {_hours(_age(run.updated_at, now))} "
+                "hours ago" if ended is not None else "")
+        detail = (f"Its newest plan run, {run.id}, ended {run.conclusion or 'unknown'}"
+                  f"{when}. No sweep or recovery will start another: a person must "
+                  "re-run it or send the epic on.")
+    return f"{epic_once_key(wait)} {head}\n\n{detail}"
+
+
+def epic_ledger_line(wait: EpicWait, age_minutes: float) -> str:
+    """The epic's one-line entry on the red-run ledger, naming the epic where
+    `standing_defect_alert` reads a card off it."""
+    run = (f"its newest plan run {wait.run.id} ended {wait.run.conclusion or 'unknown'}"
+           if wait.run is not None
+           else f"no plan run found among the newest {PLAN_RUNS_PAGE}")
+    return (
+        f"{LEDGER_STALL_OPENER}{wait.epic}: {_children(wait.children)} "
+        f"{_waits(wait.children)} on it in {lane_contract.QUEUE_LANE} while it "
+        f"stands in {wait.lane} with {run}, for {_hours(age_minutes)}h, which no "
+        "sweep will clear — a person must act"
     )
 
 
