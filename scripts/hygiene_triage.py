@@ -4,12 +4,12 @@ its mechanical defects fixed.
 
 Discovered by the core's glob (`scripts/hygiene.py`), registered nowhere. It
 reads the cards in `Triage` and fixes the defects the standard already names,
-returning a card to the queue — never the dispatch lane,
-`lane_contract.DISPATCH_LANE`, whose entry dispatches a build, nor a start lane
-waiting to retire into it — with the cause named. The queue is
-`lane_contract.QUEUE_LANE` (DRE-6748), read at each write, so it follows the
-planning exit to Queued when DRE-6742 flips it. One action per card, the first
-of these that applies:
+returning a card to the queue, or to Planning when its verdict is stale — never
+the dispatch lane, `lane_contract.DISPATCH_LANE`, whose entry dispatches a
+build, nor a start lane waiting to retire into it — with the cause named. The
+queue is `lane_contract.QUEUE_LANE` (DRE-6748), read at each write, so it
+follows the planning exit to Queued when DRE-6742 flips it. One action per
+card, the first of these that applies:
 
 1. **A moot card.** Its parent epic is `Canceled` or `Duplicate` on the board
    read: the person decided on the parent, and the card is canceled with that
@@ -77,21 +77,36 @@ of these that applies:
    names the ids a declaring line claims with no `blockedBy` behind them. Each
    id that resolves — on the board read, or by one `ctx.linear` read per pass —
    gets the relation, which makes the sentence true (a relation to a Done card
-   is met and harmless). Cause: `relation added, blocked by <DRE-N[, DRE-M]>`.
-   The card returns to Queued only when every claim resolved AND it carries a
-   routing verdict (`routing_verdict.verdict_on`): an id that resolves nowhere
-   is a sentence only its author can reword, and a card with no verdict has
+   is met and harmless). Cause: `relation added, blocked by <DRE-N[, DRE-M]>,
+   returned to <lane>` on a return, and without the lane when nothing moves.
+   The card returns only when every claim resolved AND it carries a routing
+   verdict (`routing_verdict.verdict_on`): an id that resolves nowhere is a
+   sentence only its author can reword, and a card with no verdict has
    nothing for Queued to route on. Then the relation is still added, under a
    `hyg-cause-named` receipt, and a `Left` row says what is missing. Nothing
    rewrites a description.
+
+   Where it returns to (DRE-8862): Queued, unless the card has been in Triage
+   since its newest routing verdict — then Planning. The promotion sweep
+   refuses such a card `stale-verdict` in Queued forever, because a verdict
+   approves one trip through Planning (DRE-4962), and Planning's exit retires
+   the old verdict and stamps a fresh one (DRE-4884), so the card reaches
+   Queued carrying a verdict the sweep accepts. The question is the sweep's
+   own `routing_verdict.stale_verdict_refusal`, asked over the card's lane
+   history (one `ctx.linear` read, through the reader the sweep uses) and its
+   epic's green light off the board read — never a copy of the rule here. The
+   cause ends `returned to <lane>`, and a Planning return's evidence names the
+   stale verdict. Before this, DRE-8709 sat in Queued refused `stale-verdict`
+   from one afternoon to the next morning.
 7. **A dependency loop.** The card's `blockedBy` chain returns to itself
    through the relations on the board read — every card's inverse `blocks`
    relations, and its own `blocks` relations read the other way round, so a
    Done card off the board still closes a loop. When a card in the loop is met
    (`prose_blockers.TERMINAL` — the gate's own reading of a blocker that holds
-   nothing) the card returns to Queued, under the same verdict rule as (6).
-   Cause: `loop <A → B → A> broken, <DRE-N> is <state>`. When every card in it
-   is open, which edge to cut is a person's call.
+   nothing) the card returns, under the same verdict rule as (6) and to the
+   same lane — Planning when its verdict is stale, else Queued. Cause: `loop
+   <A → B → A> broken, <DRE-N> is <state>, returned to <lane>`. When every
+   card in it is open, which edge to cut is a person's call.
 
 Everything else — a plan parked with `needs-human`, a card with no `repo:`
 label, a proof whose pull request is not open yet — is a `Left` row naming
@@ -122,6 +137,7 @@ import hold
 import hygiene
 import lane_contract
 import linear_ops
+import mid_epic
 import prose_blockers
 import routing_verdict
 import triage_repair
@@ -134,8 +150,15 @@ def return_lane() -> str:
     dependency gate and the routing verdict re-evaluate it in — never the
     dispatch lane, or any of `lane_contract.START_LANES`.
     `lane_contract.QUEUE_LANE`, read at the write so it follows the planning
-    exit (DRE-6748)."""
+    exit (DRE-6748). Cases (6) and (7) go to `PLANNING` instead when the
+    card's verdict is stale (`back_to`, DRE-8862)."""
     return lane_contract.QUEUE_LANE
+
+
+#: Where (6) and (7) send a card the sweep would refuse `stale-verdict` in the
+#: queue: Planning's exit retires the old verdict and stamps a fresh one
+#: (DRE-4884).
+PLANNING = routing_verdict.PLANNING_LANE
 
 
 #: The parent states that make a child moot.
@@ -209,6 +232,17 @@ class _Pass:
         self.resolved: dict = {}
         self.archived: dict = {}
         self.me: str | None = None
+
+    def green_light(self, card: dict) -> str | None:
+        """When the card's parent epic was last green-lit, off the epic's own
+        record on the board read — the approval the sweep hands
+        `stale_verdict_refusal` as `approved_at` — or None, with no epic or
+        none on the board read."""
+        parent = (card.get("parent") or {}).get("identifier")
+        epic = self.cards.get(parent) if parent else None
+        if epic is None:
+            return None
+        return mid_epic.green_light_from((epic.get("history") or {}).get("nodes"))
 
     def pipeline_user(self) -> str:
         """The pipeline's own Linear user — one `ctx.linear` read a pass, made
@@ -564,6 +598,31 @@ def _no_verdict(card: dict, what: str) -> hygiene.Left:
                  "a person moves it to Planning, where the planning exit routes it afresh")
 
 
+def back_to(card: dict, seen: _Pass) -> tuple:
+    """Where (6) or (7) returns a card that carries a verdict, and the
+    evidence for it: `return_lane()`, or `PLANNING` when the promotion sweep
+    would refuse it `stale-verdict` there (DRE-8862) — which is what a card
+    that has been in Triage since its newest verdict is. Read by the sweep's
+    own `routing_verdict.stale_verdict_refusal` (DRE-4962), never a copy of
+    its rule, over the card's whole lane history: one `ctx.linear` read
+    through the reader the sweep uses, asked only when the card carries a
+    dated verdict, as the sweep asks it. A history Linear cannot return
+    raises, and the card is skipped this pass."""
+    nodes = (card.get("comments") or {}).get("nodes") or []
+    verdict_at = routing_verdict.newest_verdict_at(nodes)
+    if verdict_at is None:
+        return return_lane(), []
+    moves = routing_verdict.lane_moves(card["identifier"], gql=seen.ctx.linear)
+    if moves is None:
+        raise RuntimeError("its lane history could not be read")
+    stale = routing_verdict.stale_verdict_refusal(card["identifier"], nodes, moves,
+                                                  approved_at=seen.green_light(card))
+    if stale is None:
+        return return_lane(), []
+    return PLANNING, [f"{routing_verdict.STALE_VERDICT_TAG}: {_verdict(card)} verdict of "
+                      f"{verdict_at[:10]}"]
+
+
 def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
     claims = sorted(prose_blockers.undeclared_claims(card))
     if not claims:
@@ -588,8 +647,10 @@ def prose_blocker(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
                 rows.append(_no_verdict(card, f"its blocker line is now true — blocked by "
                                               f"{', '.join(found)}"))
         else:
-            out.append(_action(card, "hygiene-triage-return", cause, evidence, ctx, relations,
-                               [hygiene.linear_state(card, return_lane())]))
+            to, why = back_to(card, seen)
+            out.append(_action(card, "hygiene-triage-return", f"{cause}, returned to {to}",
+                               evidence + why, ctx, relations,
+                               [hygiene.linear_state(card, to)]))
     return out + rows
 
 
@@ -655,10 +716,12 @@ def loop(card: dict, ctx: hygiene.Context, seen: _Pass) -> list | None:
     if _verdict(card) is None:
         return [_no_verdict(card, f"its loop {named} is broken — {met} is "
                                   f"{seen.states[met]}")]
-    cause = f"loop {named} broken, {met} is {seen.states[met]}"
+    to, why = back_to(card, seen)
+    cause = f"loop {named} broken, {met} is {seen.states[met]}, returned to {to}"
     evidence = [f"relation {a} blocked by {b}" for a, b in zip(cycle, cycle[1:] + cycle[:1])]
-    return [_action(card, "hygiene-triage-return", cause, evidence + [f"{met} {seen.states[met]}"],
-                    ctx, [], [hygiene.linear_state(card, return_lane())])]
+    return [_action(card, "hygiene-triage-return", cause,
+                    evidence + [f"{met} {seen.states[met]}", *why],
+                    ctx, [], [hygiene.linear_state(card, to)])]
 
 
 # --------------------------------------------------------------------------- #

@@ -987,20 +987,23 @@ def _instant(iso: str | None) -> datetime | None:
     return at if at.tzinfo else at.replace(tzinfo=UTC)
 
 
-def _state_history(identifier: str) -> list[dict]:
+def _state_history(identifier: str, gql=None) -> list[dict]:
     """Every LANE MOVE on the card, as `{"at": iso, "from": name, "to": name}`.
 
     Linear's history carries every change — a label, an assignee, an estimate —
     and records `fromState`/`toState` only on the ones that moved the lane, so
     an entry naming no `toState` is dropped here rather than carried into the
     derivation as a move to nowhere.
+
+    `gql` is the read to page through, `linear_ops.gql` when None — the
+    hygiene agent passes its own counted, read-only `ctx.linear` (DRE-8862).
     """
+    gql = gql or linear_ops.gql
     moves: list[dict] = []
     after: str | None = None
     seen: set[str] = set()
     while True:
-        data = linear_ops.gql(_HISTORY_QUERY,
-                              {"id": identifier, "after": after}) or {}
+        data = gql(_HISTORY_QUERY, {"id": identifier, "after": after}) or {}
         history = ((data.get("issue") or {}).get("history")) or {}
         for node in history.get("nodes") or []:
             to = ((node.get("toState") or {}).get("name"))
