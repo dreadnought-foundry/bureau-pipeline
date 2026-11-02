@@ -179,6 +179,24 @@ DOCUMENTED_EXCEPTIONS = {
         "its card writes in a separate job for the same reason. Pinned by "
         "tests/test_triage_repair_workflow.py."
     ),
+    (
+        "alarm-repair.yml",
+        "Repair the alarm",
+    ): (
+        "The Alarm Repair agent is denied Linear ON PURPOSE (DRE-8634 + "
+        "DRE-2696). It runs a model over untrusted card text, and every "
+        "Linear read and write of the run is made by the `select`, `claim` "
+        "and `apply` steps of scripts/alarm_repair.py and the context step, "
+        "each holding the key on its own step's env. Its tool set is "
+        "\"Read,Glob,Grep,Write\" with no Bash, so it cannot move a card, "
+        "edit text or file a card: it writes one decision.json to one "
+        "directory, which `apply` reads and checks against the live card. "
+        "Its Write still reaches the workspace, so no step holding the key "
+        "runs a script from there: each runs from a read-only copy of "
+        "bureau-pipeline taken before any model runs, outside the workspace "
+        "and outside the agent's `--add-dir`, as triage-repair.yml's do. "
+        "Pinned by tests/test_alarm_repair_workflow.py."
+    ),
 }
 
 # The eight agent steps counted in the DRE-2696 sweep. More is fine (new
