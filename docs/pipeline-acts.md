@@ -644,7 +644,7 @@ writes nothing.
 | kind · state · next actor | `hold` · `unchanged` · `operator` |
 | discharges | nothing |
 | cadence | null — the hold ends with a person, and nothing bounds how long one takes |
-| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready` |
+| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready`, and for an epic at the `promotion_stall.epic_notice(` call in `clock_planning_epics` (DRE-8815) |
 
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
@@ -661,9 +661,11 @@ stood `PROMOTION_STALL_MINUTES` (120), the card gets the receipt ONCE:
 
 and a `promotion-stalled <card>: …` entry joins the red-run ledger on every
 sweep it still stands, so the run stays red until a person acts. A PARKED card,
-an epic, a card with an unresolved `blockedBy`, a card sent to Planning and any
-card waiting on the WIP budget are never clocked: each already says what it
-waits for, and that thing is scheduled.
+a card waiting on its epic's approval, a card with an unresolved `blockedBy`, a
+card sent to Planning and any card waiting on the WIP budget are never clocked:
+each already says what it waits for, and that thing is scheduled. The one
+exception is the epic itself when it stands in Planning with its plan run dead
+or never found — clocked once, as the epic's own record, below.
 
 The epic cap's hold, `epic-cap-undecided`, is clocked too (DRE-6618), and its
 receipt and ledger entry add `for its epic <epic>` after the tag, because that

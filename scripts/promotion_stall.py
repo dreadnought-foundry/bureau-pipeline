@@ -51,8 +51,8 @@ epic in Planning — never one per child — and the record is clocked only when
 the epic's newest plan run is dead or was never found (`run_dead`). Every
 other lane is never clocked: Green Light is the CEO's approval and the epic
 cap's queue, Triage the operator's, and the rest owe nothing of the planner.
-No child is clocked under the tag; the children are counted into the epic's
-record.
+No child is clocked under the tag (`EPIC_CLOCKED_TAGS`, never
+`CLOCKED_TAGS`); the children are counted into the epic's record.
 
 The clock is the later of two recorded times: the oldest child receipt and
 the newest plan run's `updatedAt` (`epic_first_seen`), so the medic's one
@@ -89,13 +89,16 @@ import lane_contract  # noqa: E402
 EPIC_NOT_ACTIVE_TAG = "epic-not-active"
 
 #: Refusals the gate surfaces on a card and no sweep can clear on its own.
-#: The sixth is `epic_cap.UNDECIDED_TAG`, spelled because this module imports
+#: The last is `epic_cap.UNDECIDED_TAG`, spelled because this module imports
 #: neither `reconcile` nor `linear_ops`, and `epic_cap` imports the second;
-#: `tests/test_promotion_stall.py` holds the two the same. The seventh is
-#: clocked only as an epic's record, under the rule in the docstring.
+#: `tests/test_promotion_stall.py` holds the two the same.
 CLOCKED_TAGS = ("routing-no-verdict", "mid-epic-no-verdict",
                 "plan-critic-post-unread", "plan-critic-post-sent-back",
-                "plan-critic-post-died", "epic-cap-undecided", EPIC_NOT_ACTIVE_TAG)
+                "plan-critic-post-died", "epic-cap-undecided")
+
+#: Clocked only as an epic's record, under the rule in the docstring, and
+#: kept out of CLOCKED_TAGS so `clocked()` never clocks a child under it.
+EPIC_CLOCKED_TAGS = (EPIC_NOT_ACTIVE_TAG,)
 
 #: The one lane an epic its children wait on is clocked in.
 EPIC_CLOCKED_LANE = "Planning"
