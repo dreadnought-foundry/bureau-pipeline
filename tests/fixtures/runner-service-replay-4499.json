@@ -1,0 +1,66 @@
+{
+  "_readme": "Hand-written from DRE-8817's 'What happened' (2026-11-01, PT), not read from GitHub: this repository's tokens cannot read agent-bureau's runs or files. Source: dreadnought-foundry/agent-bureau PR #4499 (feat(DRE-8757), retire groom-queued), CI run 41379620566. Attempt 1: `Console backend shard 3` hung to its 40-minute cap on a RunsOn runner, 6:48-7:33 PM PT. The canceled-check re-run sent it to studio-1 runner `bureau-studio-sDcV8SdrTXe9n` (attempt 2, job 125088332790, 8:05-8:50 PM PT), where it hung for another 40 minutes; the console's order had put agent-bureau's CI column back on mac-studio at 7:47 PM PT. PLACEHOLDERS, each a value the card does not give: `head_sha`; attempt 1's job id and `runner_name`; both entries of `columns` (the shape of a mac-studio and a RunsOn value, not the console's exact text); and `workflow_text`, written with every `runs-on:` line on the `ci` chain, which is what the card says agent-bureau's CI reads. Times are UTC: 2026-11-01 evening is PST (UTC-8).",
+  "repo": "dreadnought-foundry/agent-bureau",
+  "pr": 4499,
+  "head_branch": "agent/DRE-8757-retire-groom-queued",
+  "head_sha": "4499aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "workflow_path": ".github/workflows/ci.yml",
+  "workflow_text": "name: CI\non:\n  pull_request:\njobs:\n  backend-shard:\n    name: Console backend shard ${{ matrix.shard }}\n    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]') }}\n    timeout-minutes: 40\n    strategy:\n      matrix:\n        shard: [1, 2, 3, 4]\n    steps:\n      - uses: actions/checkout@v7\n      - run: make backend-shard SHARD=${{ matrix.shard }}\n  backend:\n    name: Console backend (pytest)\n    needs: backend-shard\n    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]') }}\n    steps:\n      - run: echo summed\n",
+  "columns": {
+    "mac_studio": "[\"self-hosted\", \"mac-studio\"]",
+    "runs_on": "[\"runs-on=41379620566/runner=4cpu-linux-x64\"]"
+  },
+  "run": {
+    "id": 41379620566,
+    "name": "CI",
+    "path": ".github/workflows/ci.yml",
+    "event": "pull_request",
+    "status": "completed",
+    "conclusion": "cancelled",
+    "run_attempt": 1
+  },
+  "attempts": {
+    "1": {
+      "jobs": [
+        {
+          "id": 125080000003,
+          "name": "Console backend shard 3",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "started_at": "2026-11-02T02:48:00Z",
+          "completed_at": "2026-11-02T03:33:00Z",
+          "runner_name": "runs-on-41379620566-backend-shard-3",
+          "runner_group_name": "RunsOn",
+          "labels": ["runs-on=41379620566/runner=4cpu-linux-x64"]
+        }
+      ],
+      "annotations": {
+        "125080000003": [
+          {"annotation_level": "failure", "message": "The job has exceeded the maximum execution time of 40m0s"}
+        ]
+      },
+      "log": "2026-11-02T02:48:10.0000000Z Run make backend-shard SHARD=3\n2026-11-02T02:49:00.0000000Z ============================= test session starts ==============================\n2026-11-02T03:33:00.0000000Z ##[error]The operation was canceled.\n"
+    },
+    "2": {
+      "jobs": [
+        {
+          "id": 125088332790,
+          "name": "Console backend shard 3",
+          "status": "completed",
+          "conclusion": "cancelled",
+          "started_at": "2026-11-02T04:05:00Z",
+          "completed_at": "2026-11-02T04:50:00Z",
+          "runner_name": "bureau-studio-sDcV8SdrTXe9n",
+          "runner_group_name": "Default",
+          "labels": ["self-hosted", "mac-studio"]
+        }
+      ],
+      "annotations": {
+        "125088332790": [
+          {"annotation_level": "failure", "message": "The job has exceeded the maximum execution time of 40m0s"}
+        ]
+      },
+      "log": "2026-11-02T04:05:10.0000000Z Run make backend-shard SHARD=3\n2026-11-02T04:06:00.0000000Z ============================= test session starts ==============================\n2026-11-02T04:50:00.0000000Z ##[error]The operation was canceled.\n"
+    }
+  }
+}

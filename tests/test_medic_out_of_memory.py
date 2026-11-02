@@ -195,16 +195,29 @@ def jobs_reading(runner: str = SHARD_RUNNER, label: str = "bureau-heavy") -> str
 
 def decide_cli(log_text: str, attempt: str, *, prior: str | None = None,
                prior_missing: bool = False, jobs: str | None = None,
-               branch: str = "agent/DRE-4847-oom") -> tuple:
+               branch: str = "agent/DRE-4847-oom", workflow: str | None = None,
+               annotations: str | None = None, columns: dict | None = None) -> tuple:
     """`medic_retry.py decide`, as medic.yml calls it, with the card read
     faked. `prior` is attempt 1's failed log; `prior_missing` names a file
     that is not there, the shape an attempt-1 read that failed leaves.
+    `workflow`, `annotations` and `columns` are the runner-service gate's
+    reads (DRE-8817): None leaves the flag off, "" names a missing file.
     Returns the four printed keys and what was said on stderr."""
     with tempfile.TemporaryDirectory() as raw:
         path = Path(raw) / "medic-log.txt"
         path.write_text(log_text, encoding="utf-8")
         argv = ["decide", "--branch", branch, "--log", str(path),
                 "--run-id", "40616890320", "--run-attempt", attempt]
+        for flag, text, name in (("--workflow-file", workflow, "workflow.yml"),
+                                 ("--annotations", annotations, "annotations.json")):
+            if text is None:
+                continue
+            target = Path(raw) / name
+            if text:
+                target.write_text(text, encoding="utf-8")
+            argv += [flag, str(target)]
+        for key, value in (columns or {}).items():
+            argv += [f"--{key}-runs-on", value]
         if prior is not None or prior_missing:
             earlier = Path(raw) / "medic-log-attempt1.txt"
             if prior is not None:
@@ -678,7 +691,8 @@ def _rules() -> tuple:
     return ("", medic_retry.RULE_NONE, medic_retry.RULE_PARKED,
             medic_retry.RULE_TURN_EXHAUSTION, medic_retry.RULE_STALLED_REPEAT,
             medic_retry.RULE_OUT_OF_MEMORY, medic_retry.RULE_OUT_OF_MEMORY_FIRST,
-            medic_retry.RULE_REFUSED_BY_DESIGN, medic_retry.RULE_SUPERSEDED)
+            medic_retry.RULE_REFUSED_BY_DESIGN, medic_retry.RULE_SUPERSEDED,
+            medic_retry.RULE_FAILED_SERVICE)
 
 
 _CLASSES = ("normal", "out_of_memory", "stalled_no_stream", "environment_crash",
@@ -804,7 +818,12 @@ class GateReplayTest(unittest.TestCase):
 GH_SHIM = r"""#!/bin/bash
 printf '%s\n' "$*" >> "$SHIM_LOG"
 case "$1" in
-  api) [ "${FAKE_JOBS_RC:-0}" = 0 ] || exit "$FAKE_JOBS_RC"; cat "$FAKE_JOBS" ;;
+  api)
+    case "$*" in
+      *contents/*) [ "${FAKE_WORKFLOW_RC:-0}" = 0 ] || exit "$FAKE_WORKFLOW_RC"; cat "$FAKE_WORKFLOW" ;;
+      *annotations*) [ "${FAKE_NOTES_RC:-0}" = 0 ] || exit "$FAKE_NOTES_RC"; cat "$FAKE_NOTES" ;;
+      *) [ "${FAKE_JOBS_RC:-0}" = 0 ] || exit "$FAKE_JOBS_RC"; cat "$FAKE_JOBS" ;;
+    esac ;;
   run)
     case "$*" in
       *--attempt*) [ "${FAKE_PRIOR_RC:-0}" = 0 ] || exit "$FAKE_PRIOR_RC"; cat "$FAKE_PRIOR" ;;
@@ -827,11 +846,24 @@ def _render(text: str, values: dict) -> str:
     return re.sub(r"\$\{\{\s*([^}]+?)\s*\}\}", sub, text)
 
 
+#: The three column expressions the gate step hands `decide` (DRE-8817), as
+#: GitHub evaluates them at re-run time.
+CI_EXPR = "vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'"
+SHORT_EXPR = "vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'"
+LONG_EXPR = "vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'"
+
+
 def run_gate_step(log_text: str, *, attempt: str, prior: str = "",
-                  prior_rc: int = 0, jobs: str = "", jobs_rc: int = 0) -> tuple:
+                  prior_rc: int = 0, jobs: str = "", jobs_rc: int = 0,
+                  workflow: str = "", workflow_rc: int = 0, notes: str = "[]",
+                  notes_rc: int = 0, ci: str = '["ubuntu-latest"]',
+                  short: str = '["ubuntu-latest"]',
+                  long: str = '["ubuntu-latest"]') -> tuple:
     """Execute the classify job's gate step under the workflow's shell flags,
     with a fake `gh` and the real scripts. Returns the process, the `gh`
-    calls it made and the `$GITHUB_OUTPUT` it wrote."""
+    calls it made and the `$GITHUB_OUTPUT` it wrote. `workflow` is the run's
+    workflow file, `notes` every job's annotations, and `ci`/`short`/`long`
+    the three columns as the step's env evaluates them (DRE-8817)."""
     step = next(s for s in yaml.safe_load(MEDIC.read_text(encoding="utf-8"))
                 ["jobs"]["classify"]["steps"] if s.get("id") == "r")
     values = {
@@ -846,6 +878,8 @@ def run_gate_step(log_text: str, *, attempt: str, prior: str = "",
         "github.event.workflow_run.head_sha": "a" * 40,
         "github.event.repository.default_branch": "main",
         "github.token": "test-token",
+        "github.event.workflow_run.path": ".github/workflows/ci.yml",
+        CI_EXPR: ci, SHORT_EXPR: short, LONG_EXPR: long,
     }
     env = {k: _render(str(v), values) for k, v in (step.get("env") or {}).items()}
     with tempfile.TemporaryDirectory() as raw:
@@ -858,6 +892,8 @@ def run_gate_step(log_text: str, *, attempt: str, prior: str = "",
         log.write_text(log_text)
         (td / "prior.txt").write_text(prior)
         (td / "jobs.json").write_text(jobs)
+        (td / "workflow.yml").write_text(workflow)
+        (td / "notes.json").write_text(notes)
         calls = td / "calls.log"
         calls.touch()
         output = td / "output"
@@ -870,6 +906,9 @@ def run_gate_step(log_text: str, *, attempt: str, prior: str = "",
                  "SHIM_LOG": str(calls),
                  "FAKE_PRIOR": str(td / "prior.txt"), "FAKE_PRIOR_RC": str(prior_rc),
                  "FAKE_JOBS": str(td / "jobs.json"), "FAKE_JOBS_RC": str(jobs_rc),
+                 "FAKE_WORKFLOW": str(td / "workflow.yml"),
+                 "FAKE_WORKFLOW_RC": str(workflow_rc),
+                 "FAKE_NOTES": str(td / "notes.json"), "FAKE_NOTES_RC": str(notes_rc),
                  "GITHUB_REPOSITORY": "o/r", "GITHUB_OUTPUT": str(output),
                  "RUNNER_TEMP": str(td)},
         )
@@ -916,12 +955,237 @@ class TheGateStepReadsTest(unittest.TestCase):
         self.assertFalse(any("--attempt" in c for c in calls), calls)
         self.assertEqual("true", out["retry"])
 
-    def test_a_failure_with_no_kill_makes_neither_read(self):
+    def test_a_failure_with_no_kill_reads_the_jobs_api_and_no_earlier_log(self):
+        # DRE-8817: the Jobs API is read for every failed run, because the
+        # runner-service gate names each failed job's service off it.
         proc, calls, out = run_gate_step(cancelled_log(), attempt="2")
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertFalse(any(c.startswith("api ") for c in calls), calls)
+        self.assertTrue(any(c.startswith(JOBS_READ + "2/jobs") for c in calls), calls)
         self.assertFalse(any("--attempt" in c for c in calls), calls)
         self.assertEqual(medic_retry.RULE_NONE, out["rule"])
+
+
+# ── 6. never back onto the service it just failed on (DRE-8817) ──────────────
+#: A workflow file every job of which reads the `ci` chain, and one on `short`.
+CI_WORKFLOW = (
+    "name: CI\non: [pull_request]\njobs:\n  shard:\n    runs-on: ${{ fromJSON("
+    "vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]') }}\n"
+    "    steps:\n      - run: pytest\n")
+SHORT_WORKFLOW = CI_WORKFLOW.replace("BUREAU_CI_RUNS_ON", "BUREAU_SHORT_RUNS_ON")
+STUB_WORKFLOW = ("name: Agent Task\non: [repository_dispatch]\njobs:\n  call:\n"
+                 "    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/"
+                 "agent-task.yml@main\n")
+HUNG_ID = 125088332790
+HUNG_RUNNER = "bureau-studio-sDcV8SdrTXe9n"
+ON_STUDIO = '["self-hosted", "mac-studio"]'
+ON_MINI = '["self-hosted", "mac-mini"]'
+ON_RUNS_ON = '["runs-on=1/runner=4cpu-linux-x64"]'
+
+
+def hung_jobs(runner: str = HUNG_RUNNER) -> str:
+    """A run whose shard hung to its 40-minute cap and whose summary failed
+    because of it."""
+    return json.dumps({"total_count": 2, "jobs": [
+        {"id": HUNG_ID, "name": "Console backend shard 3", "conclusion": "cancelled",
+         "runner_name": runner, "labels": ["self-hosted", "bureau-light"]},
+        {"id": HUNG_ID + 1, "name": "Console backend", "conclusion": "failure",
+         "runner_name": "GitHub Actions 7", "labels": ["ubuntu-latest"]},
+    ]})
+
+
+def hung_notes(limit: bool = True) -> str:
+    """The annotations file the gate step writes: one object per failed job."""
+    shard = ([{"message": "The job has exceeded the maximum execution time of 40m0s"}]
+             if limit else [{"message": "The operation was canceled."}])
+    return (json.dumps({"id": HUNG_ID, "annotations": shard}) + "\n"
+            + json.dumps({"id": HUNG_ID + 1, "annotations": [
+                {"message": "Process completed with exit code 1."}]}) + "\n")
+
+
+def hung(attempt="1", *, ci=ON_STUDIO, short=ON_RUNS_ON, long='["ubuntu-latest"]',
+         workflow=CI_WORKFLOW, jobs=None, notes=None, log=None) -> tuple:
+    return decide_cli(
+        cancelled_log() if log is None else log, attempt,
+        jobs=hung_jobs() if jobs is None else jobs,
+        workflow=workflow, annotations=hung_notes() if notes is None else notes,
+        columns={"ci": ci, "short": short, "long": long})
+
+
+class TheFailedServiceRuleTest(unittest.TestCase):
+    def test_the_rule_is_named(self):
+        self.assertEqual("failed-service-still-named", medic_retry.RULE_FAILED_SERVICE)
+
+    def test_it_declines(self):
+        decision = medic_retry.decide(failed_service="why")
+        self.assertFalse(decision.retry)
+        self.assertEqual(medic_retry.RULE_FAILED_SERVICE, decision.rule)
+        self.assertEqual("why", decision.detail)
+
+    def test_every_existing_refusal_outranks_it(self):
+        turned = {"subtype": "error_max_turns", "is_error": True, "num_turns": 61}
+        for kwargs, rule in (
+                ({"parked_because": "x"}, medic_retry.RULE_PARKED),
+                ({"refused_by_design": "x"}, medic_retry.RULE_REFUSED_BY_DESIGN),
+                ({"superseded": "x"}, medic_retry.RULE_SUPERSEDED),
+                ({"repeat_stall": "x"}, medic_retry.RULE_STALLED_REPEAT),
+                ({"out_of_memory": "x"}, medic_retry.RULE_OUT_OF_MEMORY),
+                ({"execution": turned}, medic_retry.RULE_TURN_EXHAUSTION),
+                ({"turn_receipt": "x"}, medic_retry.RULE_TURN_EXHAUSTION)):
+            with self.subTest(rule=rule):
+                self.assertEqual(rule, medic_retry.decide(
+                    failed_service="held", **kwargs).rule)
+
+    def test_it_outranks_a_first_kills_retry(self):
+        decision = medic_retry.decide(failed_service="held", first_kill=True)
+        self.assertEqual(medic_retry.RULE_FAILED_SERVICE, decision.rule)
+        self.assertFalse(decision.retry)
+
+    def test_its_receipt_says_the_operator_re_runs_it(self):
+        body = medic_retry.declined_comment(medic_retry.decide(failed_service="held"))
+        self.assertIn("operator", body)
+        self.assertIn(f"Rule applied: {medic_retry.RULE_FAILED_SERVICE}.", body)
+
+
+class TheGateReadsTheRunnerServiceTest(unittest.TestCase):
+    def test_a_hang_on_the_service_its_column_still_names_is_declined(self):
+        out, _ = hung()
+        self.assertEqual("false", out["retry"])
+        self.assertEqual(medic_retry.RULE_FAILED_SERVICE, out["rule"])
+        for part in ("Console backend shard 3", HUNG_RUNNER, "mac-studio", "`ci`",
+                     ON_STUDIO, "operator"):
+            self.assertIn(part, out["detail"])
+
+    def test_a_column_naming_another_service_keeps_the_retry(self):
+        out, _ = hung(ci=ON_RUNS_ON)
+        self.assertEqual("true", out["retry"])
+        self.assertEqual(medic_retry.RULE_NONE, out["rule"])
+
+    def test_the_runs_own_column_is_compared_not_ci(self):
+        mini = hung_jobs(runner="bureau-mini-light-1")
+        out, _ = hung(workflow=SHORT_WORKFLOW, short=ON_RUNS_ON, ci=ON_MINI, jobs=mini)
+        self.assertEqual("true", out["retry"])
+        out, _ = hung(workflow=SHORT_WORKFLOW, short=ON_MINI, ci=ON_RUNS_ON, jobs=mini)
+        self.assertEqual("false", out["retry"])
+        self.assertIn("`short`", out["detail"])
+
+    def test_no_bad_end_keeps_the_retry(self):
+        out, _ = hung(notes=hung_notes(limit=False))
+        self.assertEqual("true", out["retry"])
+
+    def test_a_run_reading_no_single_column_keeps_the_retry_and_says_why(self):
+        out, err = hung(workflow=STUB_WORKFLOW)
+        self.assertEqual("true", out["retry"])
+        self.assertIn("reusable", err)
+        self.assertNotIn("::warning::", err)
+
+    def test_an_unknown_runner_declines(self):
+        out, _ = hung(ci=ON_RUNS_ON, jobs=hung_jobs(runner=""))
+        self.assertEqual("false", out["retry"])
+        self.assertIn("unknown", out["detail"])
+
+    def test_a_first_kill_on_the_service_its_column_names_is_declined(self):
+        reading = json.loads(jobs_reading())
+        for n, job in enumerate(reading["jobs"]):
+            job["id"] = 900 + n
+        notes = "".join(json.dumps({"id": job["id"], "annotations": []}) + "\n"
+                        for job in reading["jobs"] if job["conclusion"] == "failure")
+        out, _ = hung(log=shard_log(), jobs=json.dumps(reading), notes=notes,
+                      ci=ON_MINI)
+        self.assertEqual("false", out["retry"])
+        self.assertEqual(medic_retry.RULE_FAILED_SERVICE, out["rule"])
+        self.assertIn(SHARD_RUNNER, out["detail"])
+
+    def test_attempt_3_is_not_asked(self):
+        out, _ = hung(attempt="3")
+        self.assertNotEqual(medic_retry.RULE_FAILED_SERVICE, out["rule"])
+
+    def test_an_unreadable_read_keeps_the_retry_out_loud(self):
+        for kwargs, read in (({"workflow": ""}, "workflow file"),
+                             ({"jobs": ""}, "Jobs API"),
+                             ({"notes": ""}, "annotations")):
+            with self.subTest(read=read):
+                out, err = hung(**kwargs)
+                self.assertEqual("true", out["retry"])
+                self.assertIn("::warning::", err)
+                self.assertIn(read, err)
+
+    def test_with_no_workflow_file_flag_the_gate_is_not_asked_and_says_nothing(self):
+        out, err = decide_cli(cancelled_log(), "1", jobs=hung_jobs())
+        self.assertEqual("true", out["retry"])
+        self.assertNotIn("::warning::", err)
+
+
+class TheMedicHoldsTheFailedServiceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.jobs = yaml.safe_load(MEDIC.read_text(encoding="utf-8"))["jobs"]
+
+    def test_retry_declined_admits_the_rule_on_attempt_2(self):
+        self.assertIn(f"rule == '{medic_retry.RULE_FAILED_SERVICE}'",
+                      self.jobs["retry_declined"]["if"])
+
+    def test_a_held_retry_is_said_on_attempts_1_and_2_and_never_retried(self):
+        for attempt in (1, 2):
+            with self.subTest(attempt=attempt):
+                fired, _ = fired_jobs(
+                    workflow_name="CI", log_text=cancelled_log(), attempt=attempt,
+                    card="DRE-8817", retry="false",
+                    rule=medic_retry.RULE_FAILED_SERVICE)
+                self.assertIn("retry_declined", fired)
+                self.assertNotIn("retry", fired)
+
+    def test_the_resume_is_gated_on_the_same_answer(self):
+        (resume,) = [s for s in self.jobs["diagnose"]["steps"]
+                     if s.get("id") == "resume"]
+        self.assertIn("needs.classify.outputs.retry != 'false'", resume["if"])
+
+    def test_the_gate_step_hands_the_three_columns_and_the_workflow_path(self):
+        step = next(s for s in self.jobs["classify"]["steps"] if s.get("id") == "r")
+        env = step["env"]
+        self.assertEqual("${{ " + CI_EXPR + " }}", env["CI_RUNS_ON"])
+        self.assertEqual("${{ " + SHORT_EXPR + " }}", env["SHORT_RUNS_ON"])
+        self.assertEqual("${{ " + LONG_EXPR + " }}", env["LONG_RUNS_ON"])
+        self.assertEqual("${{ github.event.workflow_run.path }}", env["WORKFLOW_PATH"])
+        for flag in ("--ci-runs-on", "--short-runs-on", "--long-runs-on",
+                     "--annotations", "--workflow-file"):
+            self.assertIn(flag, step["run"])
+        self.assertNotIn("${{", step["run"])
+
+
+class TheGateStepHoldsTest(unittest.TestCase):
+    def test_a_hang_on_the_column_s_service_is_declined(self):
+        proc, calls, out = run_gate_step(
+            cancelled_log(), attempt="1", jobs=hung_jobs(), workflow=CI_WORKFLOW,
+            notes=json.dumps([{"message": "The job has exceeded the maximum "
+                                          "execution time of 40m0s"}]),
+            ci=ON_STUDIO)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertTrue(any("contents/.github/workflows/ci.yml?ref=" + "a" * 40 in c
+                            for c in calls), calls)
+        self.assertTrue(any(f"check-runs/{HUNG_ID}/annotations" in c for c in calls), calls)
+        self.assertEqual("false", out["retry"])
+        self.assertEqual(medic_retry.RULE_FAILED_SERVICE, out["rule"])
+
+    def test_the_same_hang_with_the_column_moved_is_retried(self):
+        proc, _calls, out = run_gate_step(
+            cancelled_log(), attempt="1", jobs=hung_jobs(), workflow=CI_WORKFLOW,
+            notes=json.dumps([{"message": "The job has exceeded the maximum "
+                                          "execution time of 40m0s"}]),
+            ci=ON_RUNS_ON)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual("true", out["retry"])
+
+    def test_reads_that_fail_keep_the_retry_and_never_fail_the_step(self):
+        for kwargs in ({"workflow_rc": 1}, {"notes_rc": 1}, {"jobs_rc": 1}):
+            with self.subTest(**kwargs):
+                proc, _calls, out = run_gate_step(
+                    cancelled_log(), attempt="1",
+                    **{"jobs": hung_jobs(), "workflow": CI_WORKFLOW,
+                       "notes": "[]", "ci": ON_STUDIO, **kwargs})
+                self.assertEqual(0, proc.returncode, proc.stderr)
+                self.assertEqual("true", out["retry"])
+                self.assertIn("::warning::", proc.stderr)
+
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -249,14 +249,21 @@ def test_both_receipts_are_registry_rows():
 WORKER = "agent-bureau-bot"
 
 
+#: The workflow file a re-run's gate reads (DRE-8817) when a test names none:
+#: a literal label, which reads no column, so the run re-runs as before.
+NO_COLUMN_WORKFLOW = "name: CI\non: [pull_request]\njobs:\n  x:\n    runs-on: ubuntu-latest\n"
+
+
 class FakeGh:
     """`gh` as `fix_approved_but_red` calls it, answering off the fixture."""
 
-    def __init__(self, check_runs, run, annotations, prs):
+    def __init__(self, check_runs, run, annotations, prs, workflow_text=NO_COLUMN_WORKFLOW):
         self.check_runs = check_runs
-        self.run = run
+        # The run's own workflow file: GitHub's run record always names it.
+        self.run = None if run is None else {"path": ".github/workflows/ci.yml", **run}
         self.annotations = annotations
         self.prs = prs
+        self.workflow_text = workflow_text
         self.calls: list = []
 
     def __call__(self, *args):
@@ -264,6 +271,8 @@ class FakeGh:
         if args[:2] == ("pr", "list"):
             return json.dumps(self.prs)
         joined = " ".join(args)
+        if "/contents/" in joined:
+            return self.workflow_text or ""
         if "/annotations" in joined:
             for job, notes in self.annotations.items():
                 if f"check-runs/{job}/annotations" in joined:
@@ -970,3 +979,330 @@ def test_replay_a3fa0c44_reads_the_shards_log_and_stays_unknown():
     reads = [" ".join(a) for a in sweep.fake.calls if "/logs" in " ".join(a)]
     assert len(reads) == 1 and f"actions/jobs/{SHARD_JOB}/logs" in reads[0]
     assert sweep.fixes == [] and len(sweep.reruns) == 1
+
+
+# --------------------------------------------------------------------------
+# 5. Never back onto the runner service it just failed on (DRE-8817)
+# --------------------------------------------------------------------------
+#
+# The CEO's rule of 2026-11-01: a re-run of a job that hung, was killed out of
+# memory or lost its runner never goes back onto the runner service it just
+# failed on. The sweep reads the run's workflow file (which `runs-on:` column
+# its jobs read), its attempt-1 jobs (which service each ran on), their
+# annotations and the failed jobs' logs (the bad end), and holds the re-run
+# while that column's value still names the service. A held run is said once
+# with a `canceled-check-again … held:` receipt and re-run on a later pass
+# inside `HELD_HOURS` once the column has moved; after that it is an
+# operator's.
+
+import runner_service  # noqa: E402
+
+STUDIO_RUNNER = "bureau-studio-light-1"
+CI_FILE = ("name: CI\non: [pull_request]\njobs:\n  shard:\n    runs-on: "
+           "${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || "
+           "'[\"ubuntu-latest\"]') }}\n    steps:\n      - run: pytest\n")
+SHORT_FILE = CI_FILE.replace("BUREAU_CI_RUNS_ON", "BUREAU_SHORT_RUNS_ON")
+REUSABLE_FILE = ("name: CI\non: [pull_request]\njobs:\n  call:\n"
+                 "    uses: ./.github/workflows/ci-reusable.yml\n")
+ON_STUDIO = '["self-hosted", "mac-studio"]'
+ON_MINI = '["self-hosted", "mac-mini"]'
+ON_RUNS_ON = '["runs-on=1/runner=4cpu-linux-x64"]'
+PYTEST_JOB = 114131786651
+
+
+def _jobs(shard_runner=STUDIO_RUNNER, pytest_runner="bureau-studio-light-2"):
+    return [
+        {"id": SHARD_JOB, "name": SHARD, "conclusion": "cancelled",
+         "runner_name": shard_runner, "labels": ["self-hosted", "bureau-light"]},
+        {"id": PYTEST_JOB, "name": PYTEST, "conclusion": "failure",
+         "runner_name": pytest_runner, "labels": ["self-hosted", "bureau-light"]},
+        {"id": 114129034601, "name": "Console backend shard 2", "conclusion": "success",
+         "runner_name": "bureau-studio-light-3"},
+    ]
+
+
+class FakeGhGate(FakeGh):
+    """`FakeGh` that also answers the gate's reads: the attempt-1 jobs, the
+    failed jobs' logs, and any read named in `unreadable` (a substring of
+    the call) answering nothing."""
+
+    def __init__(self, *args, jobs, logs, unreadable=()):
+        super().__init__(*args)
+        self.jobs = jobs
+        self.logs = {str(k): v for k, v in logs.items()}
+        self.unreadable = tuple(unreadable)
+
+    def __call__(self, *args):
+        joined = " ".join(args)
+        if any(part in joined for part in self.unreadable):
+            self.calls.append(args)
+            return ""
+        if "/attempts/1/jobs" in joined:
+            self.calls.append(args)
+            return json.dumps({"total_count": len(self.jobs), "jobs": self.jobs})
+        if "/logs" in joined:
+            self.calls.append(args)
+            for job, text in self.logs.items():
+                if f"actions/jobs/{job}/logs" in joined:
+                    return text
+            return ""
+        return super().__call__(*args)
+
+
+def gated_pr(fx: dict, notes=()) -> dict:
+    """`approved_pr`, with each note a (body, createdAt) pair."""
+    pr = approved_pr(fx)
+    pr["comments"] += [{"author": {"login": WORKER}, "body": body, "createdAt": at}
+                       for body, at in notes]
+    return pr
+
+
+class GateSweep(Sweep):
+    """One pass of `fix_approved_but_red` over a3fa0c44's run with the gate's
+    reads answered: the run's file, its jobs and their logs, and the three
+    columns as the sweep step hands them."""
+
+    def __init__(self, *, workflow=CI_FILE, ci=ON_STUDIO, short=ON_RUNS_ON,
+                 long='["ubuntu-latest"]', jobs=None, annotations=None, logs=None,
+                 notes=(), attempt=1, unreadable=()):
+        fx = fixture()
+        self.fake = FakeGhGate(
+            fx["check_runs"], _attempt(fx, attempt),
+            fx["annotations"] if annotations is None else annotations,
+            [gated_pr(fx, notes)], workflow,
+            jobs=_jobs() if jobs is None else jobs,
+            logs={PYTEST_JOB: "2026-10-09T10:00:00.0000000Z ##[error]Process "
+                              "completed with exit code 1.\n"} if logs is None else logs,
+            unreadable=unreadable)
+        self.columns = {"CI_RUNS_ON": ci, "SHORT_RUNS_ON": short, "LONG_RUNS_ON": long}
+        self.refuse = False
+        self.reruns: list = []
+        self.fixes: list = []
+        self.posted: list = []
+
+    def run(self) -> GateSweep:
+        with mock.patch.dict(os.environ, self.columns):
+            return super().run()
+
+
+def _gate(allow, service="mac-studio", why="`Console backend shard 1` hung on "
+          "runner `bureau-studio-light-1` (mac-studio); the `ci` column reads "
+          '`["self-hosted", "mac-studio"]`'):
+    return lambda: runner_service.Gate(allow, service, why)
+
+
+def _never():
+    raise AssertionError("the gate was asked")
+
+
+def _held(fx, hours_ago: float) -> tuple:
+    from datetime import UTC, datetime, timedelta
+    posted = datetime.now(UTC) - timedelta(hours=hours_ago)
+    body = canceled_check.held_receipt(fx["pr"], fx["head_sha"], RUN_ID, "why", posted)
+    return body, posted.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _now():
+    from datetime import UTC, datetime
+    return datetime.now(UTC)
+
+
+# --- the pure decision -------------------------------------------------------
+
+def test_held_held_receipt_hours_is_six_as_hung_job_watches():
+    assert canceled_check.HELD_HOURS == 6
+
+
+def test_a_held_run_with_no_held_receipt_is_held():
+    fx = fixture()
+    step = canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"], [],
+                                 gate=_gate(False), now=_now())
+    assert step.action == "held"
+    assert "bureau-studio-light-1" in step.why
+
+
+def test_a_held_run_whose_held_receipt_is_fresh_waits():
+    fx = fixture()
+    body, at = _held(fx, 1)
+    step = canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"],
+                                 [{"body": body, "createdAt": at}],
+                                 gate=_gate(False), now=_now())
+    assert step.action == "wait"
+
+
+def test_a_column_that_moved_inside_six_hours_is_re_run():
+    fx = fixture()
+    body, at = _held(fx, 5.5)
+    step = canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"],
+                                 [{"body": body, "createdAt": at}],
+                                 gate=_gate(True, why="moved"), now=_now())
+    assert step.action == "rerun"
+
+
+def test_six_hours_after_the_held_receipt_the_run_is_done_and_the_gate_not_asked():
+    fx = fixture()
+    for hours in (6, 7, 30):
+        body, at = _held(fx, hours)
+        step = canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"],
+                                     [{"body": body, "createdAt": at}],
+                                     gate=_never, now=_now())
+        assert step.action == "done", hours
+
+
+def test_an_unread_gate_reads_unread_and_says_which_read():
+    fx = fixture()
+    gate = lambda: runner_service.unread("the jobs of attempt 1 could not be read")  # noqa: E731
+    step = canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"], [],
+                                 gate=gate, now=_now())
+    assert step.action == "unread" and "jobs of attempt 1" in step.why
+
+
+def test_the_gate_is_asked_only_for_a_run_that_would_be_re_run():
+    fx = fixture()
+    said = [canceled_check.rerun_receipt(3502, fx["head_sha"], RUN_ID, [SHARD], None)]
+    assert canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"], said,
+                                 gate=_never, now=_now()).action == "wait"
+    assert canceled_check.decide(RUN_ID, _attempt(fx, 2), fx["head_sha"], [],
+                                 gate=_never, now=_now()).action == "tell"
+    assert canceled_check.decide(
+        RUN_ID, _attempt(fx, 1, status="in_progress"), fx["head_sha"], [],
+        gate=_never, now=_now()).action == "wait"
+
+
+def test_with_no_gate_the_decision_is_todays():
+    fx = fixture()
+    assert canceled_check.decide(RUN_ID, _attempt(fx, 1), fx["head_sha"], []).action == "rerun"
+
+
+def test_the_told_once_read_ignores_a_held_receipt():
+    """A run held, later re-run, and canceled again on attempt 2 is still
+    told once: the held receipt carries the same tag, and is not the
+    told-once receipt."""
+    fx = fixture()
+    body, at = _held(fx, 2)
+    step = canceled_check.decide(RUN_ID, _attempt(fx, 2), fx["head_sha"],
+                                 [{"body": body, "createdAt": at}], now=_now())
+    assert step.action == "tell"
+
+
+def test_the_held_receipt_names_everything_and_the_bound():
+    from datetime import UTC, datetime
+    fx = fixture()
+    why = ("`Console backend shard 1` hung on runner `bureau-studio-light-1` "
+           "(service mac-studio); the `ci` column reads `[\"self-hosted\", "
+           "\"mac-studio\"]`, which names mac-studio")
+    body = canceled_check.held_receipt(
+        fx["pr"], fx["head_sha"], RUN_ID, why, datetime(2026, 11, 2, 4, 50, tzinfo=UTC))
+    assert body.startswith(
+        f"🛑 {canceled_check.AGAIN_TAG} @{fx['head_sha']} run {RUN_ID} held:")
+    for part in (SHARD, "bureau-studio-light-1", "mac-studio", "`ci`",
+                 '["self-hosted", "mac-studio"]', "six hours", "operator",
+                 "2:50 AM PT"):
+        assert part in body, part
+    assert canceled_check.said([body], canceled_check.AGAIN_TAG, fx["head_sha"], RUN_ID) is False
+
+
+# --- the sweep, replayed -----------------------------------------------------
+
+def _act(body: str) -> str:
+    return (pipeline_act.read_trailer(body) or {}).get("act")
+
+
+def test_a_hang_on_the_service_its_column_still_names_is_held_and_said_once():
+    sweep = GateSweep().run()
+    assert sweep.reruns == [] and sweep.fixes == []
+    assert len(sweep.posted) == 1
+    body = sweep.posted[0][1]
+    assert _act(body) == canceled_check.AGAIN_ACT
+    assert " held:" in body.split("\n")[0]
+    for part in (SHARD, STUDIO_RUNNER, "mac-studio", "`ci`", ON_STUDIO):
+        assert part in body, part
+
+
+def test_a_second_pass_inside_six_hours_still_held_posts_nothing():
+    fx = fixture()
+    sweep = GateSweep(notes=[_held(fx, 1)]).run()
+    assert sweep.reruns == [] and sweep.posted == [] and sweep.fixes == []
+
+
+def test_a_pass_inside_six_hours_after_the_column_moved_re_runs():
+    fx = fixture()
+    sweep = GateSweep(ci=ON_RUNS_ON, notes=[_held(fx, 3)]).run()
+    assert sweep.reruns == [("run", "rerun", str(RUN_ID), "--failed", "--repo", reconcile.REPO)]
+    assert len(sweep.posted) == 1
+    assert _act(sweep.posted[0][1]) == canceled_check.RERUN_ACT
+
+
+def test_six_hours_after_the_held_receipt_nothing_is_re_run_or_posted():
+    fx = fixture()
+    for ci in (ON_STUDIO, ON_RUNS_ON):
+        sweep = GateSweep(ci=ci, notes=[_held(fx, 7)]).run()
+        assert sweep.reruns == [] and sweep.posted == [] and sweep.fixes == [], ci
+
+
+def test_the_runs_own_column_is_compared_not_ci():
+    """A hang on mac-mini in a run whose file reads the `short` chain."""
+    on_mini = _jobs(shard_runner="bureau-mini-light-1", pytest_runner="bureau-mini-light-2")
+    moved = GateSweep(workflow=SHORT_FILE, short=ON_RUNS_ON, ci=ON_MINI, jobs=on_mini).run()
+    assert len(moved.reruns) == 1
+    held = GateSweep(workflow=SHORT_FILE, short=ON_MINI, ci=ON_RUNS_ON, jobs=on_mini).run()
+    assert held.reruns == [] and len(held.posted) == 1
+    assert "`short`" in held.posted[0][1]
+
+
+def test_a_column_naming_a_different_service_re_runs_as_today():
+    sweep = GateSweep(ci=ON_RUNS_ON).run()
+    assert len(sweep.reruns) == 1 and sweep.fixes == []
+    assert _act(sweep.posted[0][1]) == canceled_check.RERUN_ACT
+
+
+def test_no_bad_end_re_runs_as_today_wherever_it_ran():
+    notes = {str(PYTEST_JOB): [{"message": "Process completed with exit code 1."}]}
+    sweep = GateSweep(annotations=notes).run()  # the shard names no limit
+    assert len(sweep.reruns) == 1
+
+
+def test_a_run_whose_file_reads_no_column_re_runs_as_today_and_says_why(capsys):
+    sweep = GateSweep(workflow=REUSABLE_FILE).run()
+    assert len(sweep.reruns) == 1
+    out = capsys.readouterr().out
+    assert ".github/workflows/ci.yml" in out and "reusable" in out
+    assert not [a for a in sweep.fake.calls if "/attempts/1/jobs" in " ".join(a)]
+
+
+@pytest.mark.parametrize("unreadable, named", [
+    ("/contents/", "workflow file"),
+    ("/attempts/1/jobs", "jobs"),
+    (f"check-runs/{SHARD_JOB}/annotations", "annotations"),
+    (f"actions/jobs/{PYTEST_JOB}/logs", "log"),
+])
+def test_an_unreadable_read_re_runs_nothing_posts_nothing_and_says_which(
+        unreadable, named, capsys):
+    sweep = GateSweep(ci=ON_RUNS_ON, unreadable=[unreadable]).run()
+    assert sweep.reruns == [] and sweep.posted == [] and sweep.fixes == []
+    out = capsys.readouterr().out
+    line = next(x for x in out.splitlines() if "canceled-check:" in x and " unread " in x)
+    assert named in line
+
+
+def test_a_job_canceled_again_after_a_held_run_was_re_run_is_told_once():
+    fx = fixture()
+    sweep = GateSweep(attempt=2, notes=[_held(fx, 2)]).run()
+    assert sweep.reruns == [] and len(sweep.posted) == 1
+    body = sweep.posted[0][1]
+    assert _act(body) == canceled_check.AGAIN_ACT and " held:" not in body.split("\n")[0]
+
+
+def test_the_sweep_step_hands_the_three_columns():
+    import yaml  # noqa: PLC0415
+
+    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "reconcile.yml")
+                         .read_text(encoding="utf-8"))
+    (step,) = [s for job in doc["jobs"].values() for s in job.get("steps", ())
+               if "scripts/reconcile.py" in str(s.get("run") or "")]
+    env = step["env"]
+    assert env["CI_RUNS_ON"] == (
+        "${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]' }}")
+    assert env["SHORT_RUNS_ON"] == (
+        "${{ vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]' }}")
+    assert env["LONG_RUNS_ON"] == "${{ vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]' }}"
