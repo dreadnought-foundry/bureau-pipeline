@@ -23,7 +23,12 @@ map (workflow, job and step level), and reports each SITE:
    directly, nested inside another substitution, or through a variable
    assigned from such a read earlier in the same `run:` block, followed
    transitively. Backslash-continued lines are one command.
-2. A multi-line step output in a command argument or an `env:` value.
+2. A file's contents in a command's environment. The same read, directly or
+   through a variable, as a prefix assignment `VAR=$(cat F) cmd` to a
+   command bash `execve`s, or in a variable exported (`export VAR=…`,
+   `export VAR`, `declare -x VAR`) before such a command runs — the first
+   command after the export is named, since every later one inherits it too.
+3. A multi-line step output in a command argument or an `env:` value.
    `${{ steps.<id>.outputs.<name> }}` in a command's argument in `run:` text
    (directly or through a variable, as above), or in an `env:` value, where
    the step with id `<id>` writes `<name>` to `$GITHUB_OUTPUT` in the heredoc
@@ -43,6 +48,13 @@ What it cannot see:
 * a generator's stdout captured with `$(python3 …)` (or any other command):
   the check knows a file read by its spelling, never the size of what a
   program prints;
+* a file read by any spelling but `cat`, `<` and `head` — `$(tail F)`,
+  `$(sed … F)`, `$(jq … F)`, `$(base64 F)` and the like are read as a
+  program's stdout, above;
+* a command `eval` builds from text: `eval` is a builtin, so its arguments
+  are never followed into the command they spell;
+* a variable exported by `set -a`, or written to `$GITHUB_ENV` for the steps
+  after: only `export` and `declare -x` mark a variable exported;
 * `with:` inputs to an action — they are handed to the action, not to a
   shell, and are not read at all.
 
@@ -115,6 +127,7 @@ DECLARERS = frozenset("declare export local readonly typeset".split())
 PASS_THROUGH = frozenset("command exec".split())
 
 _ASSIGN = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)(?:\[[^\]]*\])?\+?=")
+_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _EXPR = re.compile(r"\$\{\{(.*?)\}\}", re.S)
 _EXPR_TOKEN = "__ARGV_BODIES_EXPR_{}__"
 _EXPR_TOKEN_RE = re.compile(r"__ARGV_BODIES_EXPR_(\d+)__")
@@ -460,6 +473,8 @@ class _Script:
         self.exprs = exprs              # token number -> expression text
         self.heredoc_outputs = heredoc_outputs
         self.tainted: dict = {}         # variable -> what it holds
+        self.exported: set = set()      # variables in every command's environment
+        self.inherited: set = set()     # exported variables already reported
         self.found: list = []           # (line, what)
 
     def _multi_line_output(self, text: str):
@@ -537,14 +552,42 @@ class _Script:
                 m = _ASSIGN.match(w.text)
                 if m and not w.redirect:
                     assigns.append((m.group(1), Word(w.text[m.end():], w.line)))
+            exports = []
             if k is not None and not whole:
                 name = _unquoted(words[k].text)
                 if name in DECLARERS:
+                    flags = [w.text for w in words[k + 1:]
+                             if not w.redirect and w.text.startswith("-")]
+                    exporting = ((name == "export" and not any("n" in f for f in flags))
+                                 or any("x" in f for f in flags))
                     for w in words[k + 1:]:
+                        if w.redirect:
+                            continue
                         m = _ASSIGN.match(w.text)
-                        if m and not w.redirect:
+                        if m:
                             assigns.append((m.group(1), Word(w.text[m.end():], w.line)))
+                        if exporting and (m or _NAME.match(w.text)):
+                            exports.append(m.group(1) if m else w.text)
                 elif name not in BUILTINS:
+                    # `VAR=value cmd` hands VAR to cmd's environment.
+                    for w in words[:k]:
+                        m = _ASSIGN.match(w.text)
+                        if not m or w.redirect:
+                            continue
+                        what = self.holds(Word(w.text[m.end():], w.line))
+                        if what:
+                            self.found.append(
+                                (cmd.line, f"`{name}` is handed {what} as the "
+                                           f"environment string {m.group(1)}"))
+                    # An exported variable reaches every command after it;
+                    # the first is named.
+                    for var in sorted(self.exported):
+                        if var in self.tainted and var not in self.inherited:
+                            self.inherited.add(var)
+                            self.found.append(
+                                (cmd.line, f"`{name}` inherits the exported ${var}, "
+                                           f"which holds {self.tainted[var]}, as one "
+                                           f"environment string"))
                     for w in words[k + 1:]:
                         if w.redirect:
                             continue
@@ -559,6 +602,7 @@ class _Script:
                 what = self.holds(value)
                 if what:
                     self.tainted[var] = what
+            self.exported.update(exports)
 
 
 def _without_single_quotes(text: str) -> str:
