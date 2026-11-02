@@ -86,6 +86,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           APPLY: ${{ vars.HUNG_JOB_WATCH != 'off' }}
+          # The `ci` column's effective value (DRE-8817), the expression GitHub
+          # evaluates for the re-run: every job in tests.yml reads it. A hung
+          # job is never re-run while it still names the service it hung on.
+          CI_RUNS_ON: ${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
         run: |
           if [ "$APPLY" = "true" ]; then
             python3 scripts/hung_job.py watch --repo "$GITHUB_REPOSITORY" --apply

@@ -647,6 +647,29 @@ def _drive_alarm_repair(mp):
     alarm_repair.claim("DRE-1", "pipeline_stuck:DRE-1", "2026-11-01T10:00:00Z")
 
 
+@site("failure-tally", "failure-tally")
+def _drive_failure_tally(mp):
+    """The failure tally's count (DRE-8635): a stranded-fix card a person
+    canceled, found again with a new commit on the same branch. Frozen from
+    its first render: there was no earlier wording to read it off."""
+    import failure_tally  # noqa: PLC0415 — only this driver needs it
+
+    title = "bureau-pipeline: a fix commit is stranded on the merged branch agent/DRE-2-x"
+    mp.setattr(failure_tally.linear_ops, "repo_cards_by_title_prefix",
+               lambda *_a, **_k: [{
+                   "identifier": "DRE-1", "title": title,
+                   "description": "Occurrence: agent/DRE-2-x@aaaaaaaa",
+                   "state": "Canceled", "createdAt": "2026-11-01T10:00:00.000Z",
+                   "completedAt": ""}])
+    mp.setattr(failure_tally.linear_ops, "comment_records", lambda *_a, **_k: [])
+    _card_recorder(mp)
+    failure_tally.file_or_tally(
+        title, "the card's body", occurrence="agent/DRE-2-x@bbbbbbbb",
+        repo_slug="bureau-pipeline",
+        labels=["repo:bureau-pipeline", "agent:engineer"],
+        now=datetime(2026, 11, 2, 18, 0, tzinfo=UTC))
+
+
 @site("promotion-stalled", "promotion-stalled")
 def _drive_promotion_stalled(mp):
     """The promotion stall clock (DRE-4210): a parentless card refused for

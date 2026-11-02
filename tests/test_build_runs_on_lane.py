@@ -111,11 +111,15 @@ def test_the_build_lane_is_exactly_three_jobs() -> None:
     }
     # Among the reusables only: this repo's own workflows read the same
     # chains from its own variables (DRE-5948), pinned in
-    # tests/test_own_runs_on_lane.py.
+    # tests/test_own_runs_on_lane.py. A `CI_RUNS_ON:` env line is not a job on
+    # the lane: it hands the column's value to a re-run gate (DRE-8817) and
+    # runs nothing there.
     mentions = {
         path.name
         for path in sorted(WORKFLOWS.glob("*.yml"))
-        if _is_reusable(_load(path)) and BUILD_VAR in path.read_text()
+        if _is_reusable(_load(path)) and any(
+            BUILD_VAR in line and not line.lstrip().startswith("CI_RUNS_ON:")
+            for line in path.read_text().splitlines())
     }
     assert mentions == set(BUILD_JOBS), (
         f"only {sorted(BUILD_JOBS)} may name {BUILD_VAR}; found {sorted(mentions)}"

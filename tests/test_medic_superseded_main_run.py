@@ -343,6 +343,13 @@ def _gate(*, event="push", branch=DEFAULT, tip=TIP_SHA, tip_rc=0):
         "github.event.workflow_run.head_sha": HEAD_SHA,
         "github.event.repository.default_branch": DEFAULT,
         "github.token": "test-token",
+        # DRE-8817: the runner-service gate's facts. The shim answers its
+        # reads with the tip, which reads as no workflow file, so the gate
+        # keeps the retry and the superseded rule alone decides here.
+        "github.event.workflow_run.path": ".github/workflows/tests.yml",
+        "vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'": '["ubuntu-latest"]',
+        "vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'": '["ubuntu-latest"]',
+        "vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'": '["ubuntu-latest"]',
     }
     env = {k: _render(str(v), values) for k, v in (step.get("env") or {}).items()}
     with tempfile.TemporaryDirectory() as raw:
@@ -372,7 +379,9 @@ def _gate(*, event="push", branch=DEFAULT, tip=TIP_SHA, tip_rc=0):
 
 
 def _tip_reads(calls):
-    return [c for c in calls if c.startswith("api ")]
+    # The default branch's tip only: since DRE-8817 the step also reads the
+    # Jobs API and the run's workflow file on every failed run.
+    return [c for c in calls if c.startswith("api ") and "/git/ref/heads/" in c]
 
 
 class TheGateStepTest(unittest.TestCase):
@@ -431,10 +440,12 @@ def _flat(text: str) -> str:
 
 class TheRuleIsWrittenDownTest(unittest.TestCase):
     def test_the_module_docstring_lists_it_as_rule_4(self):
-        # Rule 5 until DRE-8021 deleted rule 4, the refused change set.
+        # Rule 5 until DRE-8021 deleted rule 4, the refused change set; rule 5
+        # is the runner service's since DRE-8817.
         doc = medic_retry.__doc__
         self.assertIn("4. **", doc)
-        self.assertNotIn("5. **", doc)
+        self.assertNotIn("6. **", doc)
+        self.assertIn("DRE-8817", doc.split("5. **", 1)[1].split("\n\n", 1)[0])
         rule = doc.split("4. **", 1)[1].split("\n\n", 1)[0]
         flat = " ".join(rule.split())
         self.assertIn("DRE-6882", flat)
