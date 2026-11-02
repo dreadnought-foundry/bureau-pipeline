@@ -1866,7 +1866,7 @@ jobs:
             echo "inherited-red-main: ${DECISION:-ask} — the medic asks a person as before"
             exit 0
           fi
-          FROM_LANES=$(python3 "$S/medic_next_step.py" from-lanes) || true
+          FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
           if [ -z "$FROM_LANES" ]; then
             echo "::warning title=Card not held::The lanes the medic moves a card out of could not be read, so ${TARGET} was not held on the red main and a person is asked instead. Failed run: ${RUN_URL}"
             exit 0

@@ -43,16 +43,16 @@ pipeline-authored park note or hold stamp (`arrival_note`) — a `🛑` note, a
 straight into Triage with neither, its own description. So no card is skipped.
 One action per card:
 
+  * `spent` — a pipeline-authored comment opening `RECEIPT_KEY` stands
+    anywhere on the thread. Once per card, never once per arrival. A
+    receipt-shaped comment from any other author grants nothing, by
+    `plan_critic.trusted_bodies`' rule, as `plan_bound._is_receipt` reads its own.
   * `wait` — the row's repair is `wait` (DRE-8849): the card waits on
     something a sweep lifts. The medic's `inherited-red-main` hold waits on
     `main`'s red checks, and the sweep returns the card to In Review once
     they are green, so rewriting it changes nothing. Nothing is claimed and
     nothing is written — not even an `unrepairable` receipt, which would
     page a person over a card that needs none.
-  * `spent` — a pipeline-authored comment opening `RECEIPT_KEY` stands
-    anywhere on the thread. Once per card, never once per arrival. A
-    receipt-shaped comment from any other author grants nothing, by
-    `plan_critic.trusted_bodies`' rule, as `plan_bound._is_receipt` reads its own.
   * `none` — the row's repair is `none`: rewriting the card changes nothing
     that holds it (a red check, a spent fix budget, a blocker line naming a
     card the board does not hold, which only its author may reword — nothing
@@ -666,12 +666,12 @@ def decide(card: dict, records, table: dict | None = None) -> dict:
     found = findings_of(card, records, row)
     picked = decisions(found) if kind in (REWRITE, REPLAN) else []
     spent = receipts(records)
-    if kind == WAIT:
-        action, why = WAIT, row.get("why") or "it waits on something a sweep lifts"
-    elif spent:
+    if spent:
         word = outcome_of(spent[-1]) or "unreadable"
         action, why = SPENT, (f"the card has had its one automatic repair — a "
                               f"`{word}` receipt stands on its thread")
+    elif kind == WAIT:
+        action, why = WAIT, row.get("why") or "it waits on something a sweep lifts"
     elif kind == NONE:
         action, why = NONE, _unrepairable_why(row, card, records)
     elif kind == RELABEL:
