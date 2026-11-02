@@ -716,8 +716,8 @@ Spot pressure, is used as it stands, and any other value (`ubuntu-latest`, the
 Mac pool, nothing set) renders exactly what the plain chain renders. The chain
 inside it is still the exact string above, so the grep still finds the site;
 `tests/test_build_runs_on_lane.py` evaluates the whole expression. The product
-repos reach it only through `stable`, so it takes effect there once
-`promote-channel.yml` advances the tag past it.
+repos reach it only through `stable`, so it takes effect there once the
+channel's promotion (the `stable` section below) advances the tag past it.
 
 **Setting the variable is the consuming repo's operator step**, never this
 repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
