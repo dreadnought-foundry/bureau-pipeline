@@ -213,7 +213,9 @@ jobs:
           # Derived, not hardcoded (DRE-2680): the card needs a repo:<slug>
           # label or the readiness gate cannot route it out of Planning.
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-          TITLE="$(cat "$RUNNER_TEMP/alarm-title.txt")"
+          # Read bounded (DRE-8819): 256 bytes is GitHub's own title limit, and
+          # `nightly_watch.py` writes a title far under it.
+          TITLE="$(head -c 256 "$RUNNER_TEMP/alarm-title.txt")"
           case "$RAISE" in
             did_not_run) NOTICE="nightly_watch:$OWNER:did_not_run" ;;
             cannot_read) NOTICE="nightly_watch:$OWNER:cannot_read" ;;
