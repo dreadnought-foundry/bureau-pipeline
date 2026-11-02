@@ -161,9 +161,32 @@ class FakeLinear:
                            "pageInfo": {"hasNextPage": False, "endCursor": None}}}
 
 
-def plan(cards, nodes, *, owner=HOME, raises=None, now=NOW):
+class PagedLinear(FakeLinear):
+    """`FakeLinear` answering `PAGE` cards a request, as Linear does, the
+    cursor naming where the next page starts — or no cursor at all when
+    `cursor` is False. Each call records the `$after` it carried."""
+
+    def __init__(self, nodes, *, cursor=True):
+        super().__init__(nodes)
+        self.afters: list = []
+        self.cursor = cursor
+
+    def __call__(self, query, variables=None):
+        assert len(self.afters) < 20, "the read did not stop"
+        after = (variables or {}).get("after")
+        self.afters.append(after)
+        found = super().__call__(query, variables)["issues"]["nodes"]
+        start = int(after) if after else 0
+        more = start + lane.PAGE < len(found)
+        return {"issues": {"nodes": found[start:start + lane.PAGE],
+                           "pageInfo": {"hasNextPage": more,
+                                        "endCursor": (str(start + lane.PAGE)
+                                                      if more and self.cursor else None)}}}
+
+
+def plan(cards, nodes, *, owner=HOME, raises=None, now=NOW, fake=None):
     assert lane is not None, f"{MODULE_PATH.name} does not exist yet"
-    fake = FakeLinear(nodes, raises=raises)
+    fake = fake or FakeLinear(nodes, raises=raises)
     ctx = hygiene.make_context(owner, gh=lambda argv: "[]",
                                linear=hygiene.read_only_linear(fake),
                                now=now, summary_card="DRE-900")
@@ -249,6 +272,13 @@ class TestTheMainCase:
         assert "Decide the rollout" in held_line(body, "DRE-303")
         assert MAY_BE_SHORT not in body
         assert not lefts(items)
+
+    def test_a_card_held_through_a_chain_names_the_card_it_is_held_through(self):
+        cards, nodes, _ = main_case()
+        _action, body = the_notice(plan(cards, nodes)[0], "DRE-100")
+        assert held_line(body, "DRE-303").endswith(", held through DRE-202")
+        for direct in ("DRE-201", "DRE-202"):
+            assert "held through" not in held_line(body, direct)
 
     def test_it_says_the_two_ways_on(self):
         cards, nodes, _ = main_case()
@@ -350,6 +380,45 @@ class TestAnIncompleteRead:
             assert f"- {ident} " not in body
         assert text_of(body).splitlines()[-1] == MAY_BE_SHORT
 
+    @staticmethod
+    def wide_case():
+        """DRE-100 blocks ten cards, and each of those blocks six more: sixty
+        cards on the third level, more than one page of `CARDS_QUERY`."""
+        entered = ago(60)
+        middle = [f"DRE-{201 + i}" for i in range(10)]
+        cards = [board_card("DRE-100", "Intake", blocks=middle, entered=entered)]
+        nodes = [node("DRE-100", "Intake", blocks=middle, entered=entered, assignee=DANA)]
+        deep: list = []
+        for i, ident in enumerate(middle):
+            mine = [f"DRE-{301 + 6 * i + j}" for j in range(6)]
+            deep += mine
+            nodes.append(node(ident, "Queued", blocks=mine, entered=ago(10)))
+        nodes += [node(ident, "Queued", entered=ago(10)) for ident in deep]
+        return cards, nodes, middle, deep
+
+    def test_a_level_of_more_than_one_page_is_read_to_its_last_page(self):
+        cards, nodes, middle, deep = self.wide_case()
+        assert len(deep) > lane.PAGE
+        fake = PagedLinear(nodes)
+        _action, body = the_notice(plan(cards, nodes, fake=fake)[0], "DRE-100")
+        assert fake.afters == [None, None, None, str(lane.PAGE)]
+        assert fake.asked[3] == fake.asked[2]  # the second page asks the same cards
+        assert "holds up 70 open cards:" in text_of(body)
+        for ident in middle + deep:
+            held_line(body, ident)
+        assert MAY_BE_SHORT not in body
+
+    def test_a_page_that_says_there_is_more_but_gives_no_cursor_ends_the_read(self):
+        cards, nodes, middle, deep = self.wide_case()
+        fake = PagedLinear(nodes, cursor=False)
+        _action, body = the_notice(plan(cards, nodes, fake=fake)[0], "DRE-100")
+        assert fake.afters == [None, None, None]
+        for ident in middle + deep[:lane.PAGE]:
+            held_line(body, ident)
+        for ident in deep[lane.PAGE:]:
+            assert f"- {ident} " not in body
+        assert text_of(body).splitlines()[-1] == MAY_BE_SHORT
+
     def test_a_read_that_raises_plans_nothing_that_pass(self, capsys):
         cards, nodes, _ = main_case()
         items, fake, _ctx, _board = plan(cards, nodes, raises=RuntimeError("Linear 502"))
@@ -408,6 +477,30 @@ class TestWhatDoesNotQualify:
                  node("DRE-303", "Queued")]
         items, _fake, _ctx, _board = plan(cards, nodes)
         assert items == []
+
+    @pytest.mark.parametrize("assignee", [DANA, None])
+    def test_a_closed_card_beside_an_open_one_is_not_listed_and_ends_its_chain(self, assignee):
+        entered = ago(100)
+        cards = [board_card("DRE-100", "Intake", blocks=("DRE-201", "DRE-202"),
+                            entered=entered)]
+        nodes = [node("DRE-100", "Intake", blocks=("DRE-201", "DRE-202"), entered=entered,
+                      assignee=assignee),
+                 node("DRE-201", "Queued", entered=ago(10)),
+                 node("DRE-202", "Done", blocks=("DRE-303",)),
+                 node("DRE-303", "Queued", entered=ago(10))]
+        items, fake, _ctx, _board = plan(cards, nodes)
+        _action, body = the_notice(items, "DRE-100")
+        assert "holds up 1 open card:" in text_of(body)
+        held_line(body, "DRE-201")
+        for ident in ("DRE-202", "DRE-303"):
+            assert f"- {ident} " not in body
+        assert fake.asked == [["DRE-100"], ["DRE-201", "DRE-202"]]
+        assert MAY_BE_SHORT not in body
+        rows = lefts(items)
+        if assignee is None:
+            assert len(rows) == 1 and "holds up 1 open card(s)" in rows[0].recommendation
+        else:
+            assert rows == []
 
     def test_a_card_with_no_blocks_relation_is_never_read(self):
         cards = [board_card("DRE-100", "Intake", entered=ago(100))]
