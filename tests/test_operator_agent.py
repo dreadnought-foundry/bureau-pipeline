@@ -32,10 +32,12 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import board_snapshot  # noqa: E402
+import dead_run  # noqa: E402
 import linear_ops  # noqa: E402
 import operator_agent  # noqa: E402
 import operator_decide  # noqa: E402
 import operator_rules  # noqa: E402
+import routing_verdict  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "operator-agent-select-board.json"
 MODULE = ROOT / "scripts" / "operator_agent.py"
@@ -287,6 +289,17 @@ def test_a_hand_built_card_is_left_alone(tmp_path, monkeypatch):
     board.add("DRE-9001", labels=("repo:agent-bureau", "hand-built"))
     board.add("DRE-9002", labels=("repo:agent-bureau",))
     assert [row["card"] for row in _select(tmp_path)] == ["DRE-9002"]
+
+
+def test_the_labels_are_read_from_their_owners_and_never_spelled_here():
+    # The hold registry reads a spelled `needs-human` as a hold write, and the
+    # CEO's mark lives only at its definition (DRE-6225).
+    assert operator_agent.TAKE_LABELS == (dead_run.HOLD_LABEL,
+                                          routing_verdict.OPERATOR_STEP_LABEL)
+    assert operator_agent.HAND_BUILT == routing_verdict.HAND_BUILT_LABEL
+    source = Path(operator_agent.__file__).read_text(encoding="utf-8")
+    for literal in ('"needs-human"', '"operator-step"', '"hand-built"'):
+        assert literal not in source, literal
 
 
 def test_the_standing_cards_are_read_from_their_file(tmp_path, monkeypatch):
