@@ -384,6 +384,16 @@ jobs:
           # pass.
           SWEEP_REASON: ${{ inputs.sweep_reason }}
           SWEEP_CARD: ${{ inputs.sweep_card }}
+          # The three runner columns' effective values (DRE-8817), the very
+          # expressions GitHub evaluates for a re-run in this repository — a
+          # reusable's `vars` are its caller's. The canceled-check sweep holds
+          # a re-run while the column its job reads still names the runner
+          # service the job just hung, was killed or lost its runner on
+          # (scripts/runner_service.py). Read when this job starts, so a
+          # console move in the minutes since is not seen.
+          CI_RUNS_ON: ${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
+          SHORT_RUNS_ON: ${{ vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
+          LONG_RUNS_ON: ${{ vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
         run: |
           # Cards carry `**Repo:** <slug>` — reconcile.py compares against the
           # lowercase repo basename.

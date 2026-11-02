@@ -64,6 +64,26 @@ WHAT HAPPENS TO AN UNKNOWN RUN (`decide`):
   * a later attempt — never re-run again, and no fix agent. A person is told
     once, naming the job, bound to the head and the run.
 
+NEVER BACK ONTO THE SERVICE IT FAILED ON (DRE-8817). Between "attempt 1, no
+re-run receipt" and the re-run, the caller's `gate` is asked — the reads it
+needs (the run's workflow file, its attempt-1 jobs, their annotations and the
+failed jobs' logs) are the caller's, made only for a run that reaches this
+step, and the rule is `runner_service.gate`. Held:
+
+  * no held receipt yet for this head and run — `held`: the caller posts one
+    (act `canceled-check-again`, opening `… run <id> held:`) and re-runs
+    nothing;
+  * a held receipt under `HELD_HOURS` old — waited on, nothing posted;
+  * a held receipt `HELD_HOURS` or more old — done, and this run is never
+    re-run automatically: the receipt already named the operator and the
+    deadline. The gate is not asked.
+
+Allowed on a later pass inside `HELD_HOURS`, because the column moved, it is
+re-run as above. A gate whose reads did not all answer is `unread`: nothing
+is re-run or posted on this pass, and the next pass reads again. The told-once
+read on a later attempt ignores a held receipt, so a job canceled again after
+a held run was re-run is still told once.
+
 "Once" is read off the run's own attempt number, as `runner_lost` reads it, and
 off a worker-bot receipt bound to the head sha and the run id. After a re-run
 the run is on attempt 2: a canceled job that passes and leaves something red
@@ -75,8 +95,9 @@ rule, and a run it re-ran is on attempt 2 here, so it is never re-run twice.
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import NamedTuple
+from zoneinfo import ZoneInfo
 
 #: What the sweep has always counted as red on an approved head.
 RED_CONCLUSIONS = ("failure", "timed_out", "cancelled")
@@ -90,6 +111,15 @@ RERUN_ACT = "canceled-check-rerun"
 RERUN_TAG = "canceled-check-rerun"
 AGAIN_ACT = "canceled-check-again"
 AGAIN_TAG = "canceled-check-again"
+
+#: How long a held re-run waits for its column to name another service
+#: (DRE-8817) — `hung_job.RECENT_HOURS`, so both paths stop asking at the
+#: same age.
+HELD_HOURS = 6
+#: What follows the run id on a held receipt, and only on one.
+HELD_MARK = "held:"
+
+_PT = ZoneInfo("America/Los_Angeles")
 
 _RUN_URL = re.compile(r"/actions/runs/(\d+)/job/\d+")
 
@@ -131,7 +161,7 @@ class Split(NamedTuple):
 
 
 class Step(NamedTuple):
-    """`rerun` · `tell` · `wait` · `done` · `unread`, and why."""
+    """`rerun` · `held` · `tell` · `wait` · `done` · `unread`, and why."""
 
     action: str
     why: str = ""
@@ -286,7 +316,22 @@ def limit(annotations) -> str | None:
 
 
 def _marker(tag: str, sha: str, run_id) -> re.Pattern:
-    return re.compile(rf"{re.escape(tag)} @{re.escape(sha)} run {run_id}\b")
+    # A held receipt carries the same tag, and is never the receipt `said`
+    # counts (DRE-8817): `held_at` reads it.
+    return re.compile(rf"{re.escape(tag)} @{re.escape(sha)} run {run_id}\b"
+                      rf"(?! {re.escape(HELD_MARK)})")
+
+
+def _texts(bodies) -> list:
+    """(body, createdAt) for each comment, given as a body or as a comment
+    record carrying `body` and `createdAt`."""
+    found = []
+    for item in bodies or ():
+        if isinstance(item, dict):
+            found.append((str(item.get("body") or ""), item.get("createdAt")))
+        else:
+            found.append((str(item or ""), None))
+    return found
 
 
 def said(bodies, tag: str, sha: str, run_id) -> bool:
@@ -295,13 +340,42 @@ def said(bodies, tag: str, sha: str, run_id) -> bool:
     if not sha:
         return False
     marker = _marker(tag, sha, run_id)
-    return any(marker.search(body or "") for body in bodies or ())
+    return any(marker.search(body) for body, _at in _texts(bodies))
 
 
-def decide(run_id, run: dict | None, sha: str, bodies) -> Step:
+def held_at(bodies, sha: str, run_id):
+    """When the newest held receipt for this head and run was posted: an
+    instant, `HELD_UNTIMED` when one was posted at a time that does not
+    read, or None when there is none."""
+    if not sha:
+        return None
+    marker = re.compile(rf"{re.escape(AGAIN_TAG)} @{re.escape(sha)} run {run_id} "
+                        rf"{re.escape(HELD_MARK)}")
+    newest = None
+    for body, at in _texts(bodies):
+        if not marker.search(body):
+            continue
+        when = _finished({"completed_at": at})
+        if when is None:
+            newest = newest or HELD_UNTIMED
+        elif newest in (None, HELD_UNTIMED) or when > newest:
+            newest = when
+    return newest
+
+
+#: `held_at`'s answer for a held receipt whose time does not read: it is
+#: waited on, never taken as past its deadline.
+HELD_UNTIMED = object()
+
+
+def decide(run_id, run: dict | None, sha: str, bodies, gate=None, now=None) -> Step:
     """What to do about one unknown run. `run` is GitHub's record of it (None
     when it could not be read); `bodies` the worker bot's comments on the
-    pull request."""
+    pull request, as bodies or as records with `createdAt`.
+
+    `gate` (DRE-8817) is asked only for a run that would be re-run: a
+    callable answering `runner_service.Gate`. `now` is the instant a held
+    receipt's age is read against. With no `gate` the decision is as before."""
     if run_id is None:
         return Step("unread", "a canceled check with no workflow run to re-run")
     if not isinstance(run, dict):
@@ -312,7 +386,20 @@ def decide(run_id, run: dict | None, sha: str, bodies) -> Step:
     if attempt <= 1:
         if said(bodies, RERUN_TAG, sha, run_id):
             return Step("wait", f"run {run_id} was re-run once already for this head")
-        return Step("rerun", f"run {run_id} attempt 1 holds a canceled check")
+        held = held_at(bodies, sha, run_id)
+        if (held not in (None, HELD_UNTIMED) and now is not None
+                and now - held >= timedelta(hours=HELD_HOURS)):
+            return Step("done", f"run {run_id} was held {HELD_HOURS} or more hours ago "
+                                "and is an operator's now")
+        answer = gate() if gate is not None else None
+        if answer is not None and answer.allow is None:
+            return Step("unread", answer.why)
+        if answer is not None and not answer.allow:
+            if held is not None:
+                return Step("wait", f"run {run_id} is held: {answer.why}")
+            return Step("held", answer.why)
+        why = f"run {run_id} attempt 1 holds a canceled check"
+        return Step("rerun", f"{why}; {answer.why}" if answer is not None else why)
     if said(bodies, AGAIN_TAG, sha, run_id):
         return Step("done", f"run {run_id} attempt {attempt} was told once already")
     return Step("tell", f"run {run_id} attempt {attempt} holds a canceled check again")
@@ -353,4 +440,23 @@ def again_receipt(number, sha: str, run: dict, jobs) -> str:
         f"A job canceled twice is usually stopping at its own time limit: a "
         f"person should look at why, and re-run it or change the limit. Said "
         f"once per commit and run (DRE-3072)."
+    )
+
+
+def held_receipt(number, sha: str, run_id, why: str, now: datetime) -> str:
+    """The told-once hold for a re-run held because its column still names
+    the service the job just failed on (act `canceled-check-again`, DRE-8817).
+    `why` is `runner_service.gate`'s, naming the job, its runner, its service,
+    the column and its value; `now` is when it is posted, so the receipt can
+    name the moment the sweep stops asking."""
+    deadline = (now + timedelta(hours=HELD_HOURS)).astimezone(_PT)
+    until = deadline.strftime("%I:%M %p").lstrip("0") + " PT"
+    return (
+        f"🛑 {AGAIN_TAG} @{sha} run {run_id} {HELD_MARK} {why}.\n\n"
+        f"The sweep never re-runs a job onto the runner service it just failed "
+        f"on, so it re-ran nothing for PR #{number} and sent no fix agent. If "
+        f"that column names another service within six hours — until {until} "
+        f"— the sweep re-runs workflow run {run_id} then, once. After that "
+        f"nothing automatic is coming: an operator re-runs it. Said once per "
+        f"commit and run (DRE-8817)."
     )

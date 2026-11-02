@@ -58,6 +58,22 @@ this module is where the medic asks them:
      (said as a warning), and every `pull_request`, `schedule` or
      `workflow_dispatch` run keep the retry.
 
+  5. **THE RETRY WOULD GO BACK ONTO THE SERVICE THAT FAILED IT** (DRE-8817).
+     A failed or canceled job that had a hang (canceled at its own time
+     limit), an out-of-memory kill or a lost runner is not retried while the
+     column its run's workflow file reads (`runner_service.column_of`) still
+     names the runner service it ran on, or while either is unknown —
+     `RULE_FAILED_SERVICE`, asked after every refusal above and before a
+     first kill's retry is admitted on attempt 2. GitHub evaluates `runs-on`
+     again at re-run time, so a retry lands wherever the console's order
+     rests; the medic asks once per failed attempt and never again, so its
+     hold is final and the receipt says an operator re-runs it once the
+     column names another service. medic.yml reads the run's workflow file,
+     the Jobs API's answer for this attempt and each failed job's
+     annotations; a read that fails keeps the retry with a `::warning::`,
+     the way an unreadable card does, and a file that reads no single column
+     keeps it too, saying why.
+
 Rule 1 is for runs that START WORK (Stage 2 fix #23). A build, a fix or a plan
 rerun is new agent work on a card a person has said stop to. A Linear Sync
 rerun starts no agent: it finishes bookkeeping for work that already merged.
@@ -122,7 +138,11 @@ CLI:
         [--event <event>] [--head-sha <sha>] [--default-branch <name>] \
         [--tip-sha <the default branch's tip>] \
         [--jobs <the Jobs API's answer for this attempt>] \
-        [--prior-log <attempt 1's failed log>]
+        [--prior-log <attempt 1's failed log>] \
+        [--workflow-file <the run's workflow file at its head>] \
+        [--annotations <each failed job's annotations>] \
+        [--ci-runs-on <value>] [--short-runs-on <value>] [--long-runs-on <value>]
+    python3 medic_retry.py failed-jobs --jobs <the Jobs API's answer>
     python3 medic_retry.py post --card <DRE-N> --rule <rule> --detail <text> \
         [--run-url <url>]
     python3 medic_retry.py diagnosis-target --branch <head-ref> \
@@ -169,6 +189,7 @@ import execution_result  # noqa: E402
 import hold  # noqa: E402
 import out_of_memory  # noqa: E402
 import pipeline_act  # noqa: E402
+import runner_service  # noqa: E402
 import stream_watchdog  # noqa: E402
 
 # The act this decision is announced as, and its idempotency key. The tag is
@@ -212,6 +233,11 @@ RULE_REFUSED_BY_DESIGN = "refused-by-design"
 # commit says nothing about the branch, red or green; medic.yml says the skip
 # in its own run summary, because a run on the default branch has no card.
 RULE_SUPERSEDED = "superseded-on-default"
+
+# DRE-8817. The SEVENTH rule: a job hung, was killed out of memory or lost its
+# runner on a service the column its run reads still names, so a retry would
+# land back on it — GitHub evaluates `runs-on` again at re-run time.
+RULE_FAILED_SERVICE = "failed-service-still-named"
 
 # The one event the superseded rule reads. A `pull_request` run's commit is the
 # PR's own, and a `schedule` or `workflow_dispatch` run asks about the branch
@@ -437,6 +463,7 @@ def decide(
     refused_by_design: str = "",
     superseded: str = "",
     first_kill: bool = False,
+    failed_service: str = "",
 ) -> Decision:
     """Retry this failed run, or decline and say why.
 
@@ -449,6 +476,9 @@ def decide(
     out-of-memory kill is named `RULE_OUT_OF_MEMORY_FIRST` rather than
     `RULE_NONE`, because medic.yml's `retry` job admits that rule on attempt
     2. Every refusal above still outranks it.
+
+    `failed_service` (DRE-8817) is `failed_service_refusal`'s sentence: asked
+    after every refusal above and before a first kill's retry is admitted.
     """
     if parked_because:
         return Decision(
@@ -487,6 +517,8 @@ def decide(
             f"'{dead_run.TURN_TAG}' receipt from this run says so, and a "
             f"budget ceiling is not a flake to retry into",
         )
+    if failed_service:
+        return Decision(DECLINE, RULE_FAILED_SERVICE, failed_service)
     return Decision(RETRY, RULE_OUT_OF_MEMORY_FIRST if first_kill else RULE_NONE)
 
 
@@ -540,7 +572,103 @@ _WHY_NOT = {
         "is a bigger machine or a smaller card, and neither of those is a "
         "retry."
     ),
+    RULE_FAILED_SERVICE: (
+        "The medic never re-runs a job onto the runner service it just failed "
+        "on, and it asks once per failed attempt, never again — so nothing "
+        "automatic is coming. An operator re-runs this run once that column "
+        "names another service."
+    ),
 }
+
+
+# --------------------------------------------------------------------------- #
+# the runner service (DRE-8817)                                                #
+# --------------------------------------------------------------------------- #
+
+
+def failed_jobs(jobs_text) -> list:
+    """The failed, canceled and timed-out jobs of a Jobs API answer, or [] for
+    an answer that does not read."""
+    try:
+        payload = json.loads(jobs_text or "")
+    except (TypeError, ValueError):
+        return []
+    jobs = payload.get("jobs") if isinstance(payload, dict) else None
+    return [j for j in jobs or () if isinstance(j, dict)
+            and j.get("conclusion") in runner_service.FAILED]
+
+
+def read_annotations(text) -> dict:
+    """The annotations file medic.yml writes — one `{"id": …, "annotations":
+    […]}` object after another — as job id (a string) → its annotations. A
+    job whose read failed is missing; reading stops at the first object that
+    does not parse, so a torn file loses only what follows it."""
+    found: dict = {}
+    decoder = json.JSONDecoder()
+    text = str(text or "")
+    at = 0
+    while True:
+        while at < len(text) and text[at].isspace():
+            at += 1
+        if at >= len(text):
+            return found
+        try:
+            value, at = decoder.raw_decode(text, at)
+        except ValueError:
+            return found
+        if (isinstance(value, dict) and value.get("id") is not None
+                and isinstance(value.get("annotations"), list)):
+            found[str(value["id"])] = value["annotations"]
+
+
+def failed_service_refusal(*, workflow_text, jobs_text, annotations, log_text,
+                           columns: dict) -> tuple:
+    """(the refusal sentence or "", the read that failed or "", a note).
+
+    The first is `decide`'s `failed_service`. A read that failed — the
+    workflow file, the Jobs API's answer, `annotations` None or missing a
+    failed job — is the second, and the gate is not asked: the caller keeps
+    the retry and says so (DRE-8817 section 3). A file that reads no single
+    column is the note, and the retry is kept. An out-of-memory kill in the
+    failed log is the job it names, else the first failed job that names a
+    runner (`out_of_memory.machine_from_jobs`'s choice)."""
+    if not str(workflow_text or "").strip():
+        return "", "the run's workflow file could not be read", ""
+    column, why = runner_service.read_column(workflow_text)
+    if column is None:
+        return "", "", f"the run's workflow file reads no single runner column ({why})"
+    try:
+        payload = json.loads(jobs_text or "")
+    except (TypeError, ValueError):
+        payload = None
+    if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+        return "", "the Jobs API's answer for this attempt could not be read", ""
+    if annotations is None:
+        return "", "the failed jobs' annotations could not be read", ""
+    jobs = failed_jobs(jobs_text)
+    kill = out_of_memory.from_log(log_text)
+    killed = None
+    if kill is not None:
+        killed = next((j for j in jobs if kill.job and j.get("name") == kill.job), None) \
+            or next((j for j in jobs if j.get("conclusion") == "failure"
+                     and str(j.get("runner_name") or "").strip()), None)
+    pairs = []
+    for job in jobs:
+        notes = annotations.get(str(job.get("id")))
+        if notes is None:
+            name = job.get("name") or f"job {job.get('id')}"
+            return "", f"the annotations of {name!r} could not be read", ""
+        end = runner_service.bad_end(job, notes)
+        if end is None and job is killed:
+            end = runner_service.OUT_OF_MEMORY
+        pairs.append((job, end))
+    answer = runner_service.gate(pairs, column, columns)
+    if answer.allow:
+        return "", "", answer.why
+    return (f"{answer.why}: GitHub re-runs a job wherever that column points, so "
+            f"the retry would land back on the service that just failed it, and "
+            f"the medic does not ask again — an operator re-runs it once the "
+            f"`{column}` column names another service"), "", ""
 
 
 # --------------------------------------------------------------------------- #
@@ -1168,6 +1296,25 @@ def _decide_cli(args) -> int:
             f"read — counted as the run's first kill, so the retry was taken.",
             file=sys.stderr,
         )
+    # DRE-8817: never back onto the runner service the run just failed on.
+    # Asked only where the medic would still retry (attempt 1, or a first
+    # kill on attempt 2) and only when medic.yml handed the workflow file.
+    failed_service = ""
+    if args.workflow_file and _attempt(args.run_attempt) <= 2:
+        notes = (read_annotations(_read(args.annotations))
+                 if args.annotations and os.path.exists(args.annotations) else None)
+        failed_service, unreadable, note = failed_service_refusal(
+            workflow_text=_read(args.workflow_file), jobs_text=_read(args.jobs),
+            annotations=notes, log_text=log_text,
+            columns={"ci": args.ci_runs_on, "short": args.short_runs_on,
+                     "long": args.long_runs_on})
+        if unreadable:
+            print(f"::warning::medic retry gate: run {args.run_id or '?'} — "
+                  f"{unreadable}, so the runner-service gate was not asked and "
+                  f"the retry was taken as before.", file=sys.stderr)
+        elif note:
+            print(f"medic retry gate: {note}, so the retry is taken as before.",
+                  file=sys.stderr)
     decision = decide(
         parked_because=parked,
         execution=execution_from_log(log_text),
@@ -1181,6 +1328,7 @@ def _decide_cli(args) -> int:
             args.event, args.branch, args.default_branch, args.head_sha,
             args.tip_sha, run_id=args.run_id,
         ),
+        failed_service=failed_service,
     )
     if (decision.retry
             and reads_the_tip(args.event, args.branch, args.default_branch)
@@ -1244,6 +1392,18 @@ def main(argv=None) -> int:
     # the run's first kill. A missing or empty file is a read that failed.
     gate.add_argument("--jobs", default="")
     gate.add_argument("--prior-log", default="")
+    # DRE-8817. The runner-service gate's reads: the run's workflow file at its
+    # head, each failed job's annotations (`read_annotations`), and the three
+    # columns' effective values. With no workflow file the gate is not asked.
+    gate.add_argument("--workflow-file", default="")
+    gate.add_argument("--annotations", default="")
+    gate.add_argument("--ci-runs-on", default="")
+    gate.add_argument("--short-runs-on", default="")
+    gate.add_argument("--long-runs-on", default="")
+
+    # DRE-8817: the ids whose annotations medic.yml reads, one per line.
+    failed = sub.add_parser("failed-jobs")
+    failed.add_argument("--jobs", default="")
 
     # Stage 2 fix #23: the diagnosis agent's card, read before it starts.
     target = sub.add_parser("diagnosis-target")
@@ -1285,6 +1445,11 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
     if args.command == "decide":
         return _decide_cli(args)
+    if args.command == "failed-jobs":
+        for job in failed_jobs(_read(args.jobs)):
+            if isinstance(job.get("id"), int):
+                print(job["id"])
+        return 0
     if args.command == "diagnosis-target":
         found = diagnosis_target(args.branch, args.workflow, args.snapshot,
                                  head_sha=args.head_sha,
