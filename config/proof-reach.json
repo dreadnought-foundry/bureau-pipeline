@@ -227,6 +227,24 @@
       "printed_by": "scripts/triage_unrepaired.py",
       "constant": "TAG",
       "when": "every Triage Repair run since DRE-8649, on stdout: one line per Triage card the repair could not fix (its card, its receipt word and when it arrived in Triage), then one closing line — the cards listed, whether every thread was read, and the console door's outcome, or unread when the door was not called"
+    },
+    {
+      "tag": "read-fallback:",
+      "printed_by": "scripts/bureau_read.py",
+      "constant": "FALLBACK_TAG",
+      "when": "every read of the board, cards, dependents, workflow states or search that falls back to Linear in `BUREAU_READ=on`, since DRE-8794: one line on stderr per fallback, naming the reader (workflow, job and script), the read and the reason; never in `off` or `shadow`, and never for a `linear-hold` skip"
+    },
+    {
+      "tag": "read-door:",
+      "printed_by": "scripts/bureau_read.py",
+      "constant": null,
+      "when": "every process that reads the door's mode, on stderr: the `read-door: mode <off|shadow|on>` line once when the mode is first read, and in `shadow` or `on` the `read-door: served …` line at exit"
+    },
+    {
+      "tag": "linear-calls:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": null,
+      "when": "every process that sent Linear a request through `linear_ops.py`, at exit on stderr: one line per budget bucket it spent, with the request count this run, the process token and the bucket; a process that never called Linear prints none"
     }
   ],
   "causes": [

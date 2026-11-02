@@ -44,6 +44,22 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   mints one or asks (BP-8). Nearly every QA Review, Verify and Linear Sync run
   is one; they read Linear exactly as before.
 
+Every read that falls back to Linear in mode `on` is named by the client
+itself, once, on stderr (DRE-8794):
+
+    read-fallback: reader="<workflow> / <job> / <script>" read=<read> reason=<reason>
+
+`<workflow>` is `GITHUB_WORKFLOW` (`local` when unset), `<job>` is
+`GITHUB_JOB` (`-` when unset) and `<script>` is the basename of `sys.argv[0]`.
+`<read>` is `board`, `cards`, `dependents`, `workflow-states` or `search` — the
+five reads with a Linear copy behind them — and `<reason>` is the
+`ReadUnknown.reason`, except that a `pull_request` run's refusal reads
+`pull-request`. `fallbacks()` keeps the same `(reader, read, reason)` in order
+for the sweep's alert. Mode `off` never asks the door and mode `shadow` reads
+Linear by design, so neither prints it; a skip (below) is not a fallback; and
+`planning_order()`, `split_history()`, `groom_removals()` and `open_alerts()`
+have no Linear copy to fall back to, so they never print it.
+
 ## The one UNKNOWN that is not a fallback
 
 `reason=linear-hold` means the console's Linear key is rate-limited — the same
@@ -129,6 +145,7 @@ from __future__ import annotations
 
 import atexit
 import base64
+import functools
 import http.client
 import json
 import os
@@ -197,6 +214,14 @@ CONNECT_TIMEOUT = 1.0
 TOTAL_TIMEOUT = 8.0
 
 LINEAR_HOLD = "linear-hold"
+
+#: The line a read that falls back to Linear prints (DRE-8794), one per
+#: fallback: `read-fallback: reader="<workflow> / <job> / <script>"
+#: read=<read> reason=<reason>`. The sweep's alert counts it.
+FALLBACK_TAG = "read-fallback:"
+#: A `pull_request` run's refusal, as the line spells it.
+EVENT_REFUSED = "event-refused"
+PULL_REQUEST_REASON = "pull-request"
 
 # ── The node shape (design §3, byte-compatible with Linear's GraphQL) ───────
 # A nested dict of the field PATHS a node must carry: `None` is a leaf, a dict
@@ -293,6 +318,7 @@ def reset_for_tests() -> None:
         door_ms=0.0,
         disabled=None,  # the reason the door stopped being asked, or None
         reported=False,
+        fallbacks=[],  # (reader, read, reason), one per `read-fallback:` line
     )
 
 
@@ -338,6 +364,52 @@ def note_skip(what: str, reason: str) -> None:
     _state["skipped"] += 1
     _say(f"read-door: skipped {what} this pass — the door says {reason}; "
          "no Linear fallback (it would spend the held bucket)")
+
+
+def _reader() -> str:
+    """`<workflow> / <job> / <script>`: which run fell back, in one value."""
+    workflow = os.environ.get("GITHUB_WORKFLOW") or "local"
+    job = os.environ.get("GITHUB_JOB") or "-"
+    script = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "-"
+    return f"{workflow} / {job} / {script}"
+
+
+def note_fallback(read: str, reason: str) -> None:
+    """The one line a read that falls back to Linear prints (DRE-8794).
+
+    Mode `on` only: in `off` the door is never asked, and in `shadow` Linear
+    is the source by design, so neither is a fallback."""
+    if mode() != "on":
+        return
+    if reason == EVENT_REFUSED:
+        reason = PULL_REQUEST_REASON
+    reader = _reader()
+    _state["fallbacks"].append((reader, read, reason))
+    _say(f'{FALLBACK_TAG} reader="{reader}" read={read} reason={reason}')
+
+
+def fallbacks() -> list[tuple[str, str, str]]:
+    """Every `(reader, read, reason)` this process noted, in order."""
+    return list(_state["fallbacks"])
+
+
+def _falls_back(read: str):
+    """Wrap a read with a Linear copy behind it: each `ReadUnknown` it raises
+    that is not a skip is one fallback, named once. A pull_request run's
+    later reads find the door stopped by the event, and say so too."""
+    def wrap(func):
+        @functools.wraps(func)
+        def reading(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except ReadUnknown as e:
+                if not e.skip:
+                    stopped_by_event = (e.reason == "unavailable"
+                                        and _state["disabled"] == EVENT_REFUSED)
+                    note_fallback(read, EVENT_REFUSED if stopped_by_event else e.reason)
+                raise
+        return reading
+    return wrap
 
 
 def exit_line() -> str:
@@ -564,8 +636,8 @@ def _get(endpoint: str, query: dict, *, max_age: int,
     event = os.environ.get(EVENT_ENV, "")
     if event in REFUSED_EVENTS:
         _state["unavailable"] += 1
-        _disable("event-refused", f"a {event} run's token is refused by the door")
-        raise ReadUnknown("event-refused", f"a {event} run's token is refused by the door",
+        _disable(EVENT_REFUSED, f"a {event} run's token is refused by the door")
+        raise ReadUnknown(EVENT_REFUSED, f"a {event} run's token is refused by the door",
                           unavailable=True)
     started = time.monotonic()
     try:
@@ -711,6 +783,7 @@ def _card_shape(relations: bool) -> dict:
 # ── The four reads ──────────────────────────────────────────────────────────
 
 
+@_falls_back("board")
 def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
           relations: bool = False, relations_max_age: int | None = None) -> DoorRead:
     """Every card in `lanes`, for this repo's tenant (`scope=repo`) or the
@@ -745,6 +818,7 @@ def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
     return read
 
 
+@_falls_back("cards")
 def cards(ids, *, max_age: int, comments: int | str = 50, relations: bool = True,
           relations_max_age: int | None = None) -> DoorRead:
     """Exactly the cards named — every one of them, or ReadUnknown.
@@ -785,6 +859,7 @@ def cards(ids, *, max_age: int, comments: int | str = 50, relations: bool = True
     return read
 
 
+@_falls_back("dependents")
 def dependents(identifier: str, *, max_age: int, lanes=None, comments: int = 50,
                relations_max_age: int | None = None) -> DoorRead:
     """The cards `identifier` blocks — every card whose relations name it as a
@@ -815,6 +890,7 @@ def dependents(identifier: str, *, max_age: int, lanes=None, comments: int = 50,
     return read
 
 
+@_falls_back("workflow-states")
 def workflow_states(*, max_age: int) -> DoorRead:
     """The team's workflow states (`id name type`), for BP-3's state cache."""
     envelope = _get("/workflow-states", {}, max_age=max_age)
@@ -857,6 +933,7 @@ def _extra_paths(value, shape, path: str = "") -> list[str]:
     return out
 
 
+@_falls_back("search")
 def search(term: str, *, first: int = SEARCH_FIRST, scope: str = "fleet") -> DoorRead:
     """The cards the door's search finds for `term` — the whole answer, or
     ReadUnknown. Never part of one.
