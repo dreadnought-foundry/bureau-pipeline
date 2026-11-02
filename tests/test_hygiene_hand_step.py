@@ -93,11 +93,27 @@ def board_card(ident, lane_name="Hand-work", *, title=VARIABLE_TITLE,
     }
 
 
-def context(owner=HOME):
-    def no_linear(query, variables=None):  # the lane reads nothing for itself
-        raise AssertionError(f"the lane read Linear: {query[:60]}")
+def whole(cards):
+    """Each card's full description as `issue(id:)` answers it: the board's own
+    text, for a card shorter than the list API's cut."""
+    return {c["identifier"]: c["description"] for c in cards}
+
+
+def context(owner=HOME, full=None, reads=None):
+    """`full` is each card's whole description, the one read the lane makes for
+    itself; a card it does not hold fails that read. `reads` collects the ids
+    read."""
+    full = dict(full or {})
+
+    def issue(query, variables=None):
+        ident = (variables or {}).get("id")
+        if reads is not None:
+            reads.append(ident)
+        if ident not in full:
+            raise hygiene.linear_ops.LinearError(f"synthetic: {ident} could not be read")
+        return {"issue": {"identifier": ident, "description": full[ident]}}
     return hygiene.make_context(owner, gh=lambda argv: "[]",
-                                linear=hygiene.read_only_linear(no_linear),
+                                linear=hygiene.read_only_linear(issue),
                                 now=NOW, summary_card="DRE-900")
 
 
@@ -108,9 +124,11 @@ def board_of(cards):
     return hygiene.Board(lanes=lanes, prs={})
 
 
-def plan(cards, owner=HOME):
+def plan(cards, owner=HOME, full=None, reads=None):
     assert lane is not None, f"{MODULE_PATH.name} does not exist yet"
-    return lane.plan(board_of(cards), context(owner))
+    return lane.plan(board_of(cards),
+                     context(owner, full=whole(cards) if full is None else full,
+                             reads=reads))
 
 
 def actions(items):
@@ -179,8 +197,9 @@ class TestTheMainCase:
         assert action.writes[0].label == MACHINE
 
     def test_every_writer_and_guard_accepts_it(self):
-        ctx = context()
-        action = the_action(plan([board_card("DRE-7328")]), "DRE-7328")
+        card = board_card("DRE-7328")
+        ctx = context(full=whole([card]))
+        action = the_action(plan([card]), "DRE-7328")
         for write in action.writes:
             hygiene.guard(write, ctx)
 
@@ -203,6 +222,68 @@ class TestTheEvidenceLine:
         action = the_action(plan([board_card("DRE-503")]), "DRE-503")
         assert action.writes[1].body.splitlines()[1] == "evidence: run it"
         assert "·" not in action.cause
+
+
+# --------------------------------------------------------------------------- #
+# the card read whole                                                          #
+# --------------------------------------------------------------------------- #
+
+#: Linear's list API cuts `description` here (`board_snapshot`).
+LIST_CUT = 500
+#: Prose that names no phrase of either side, to push a phrase past the cut.
+FILLER = "The relay keeps its records for a month and the console reads them. " * 9
+
+
+def cut(full: dict) -> list:
+    """Board cards whose description is the list API's, cut at `LIST_CUT`."""
+    return [board_card(ident, title="synthetic", description=text[:LIST_CUT])
+            for ident, text in full.items()]
+
+
+class TestTheCardIsReadWhole:
+    def test_a_machine_phrase_past_the_cut_is_read_from_the_whole_card(self):
+        full = {"DRE-510": FILLER + "Then set the relay environment variable."}
+        assert len(FILLER) > LIST_CUT
+        action = the_action(plan(cut(full), full=full), "DRE-510")
+        assert action.writes[0].label == MACHINE
+        assert action.cause == "machine, kind variable"
+        assert action.evidence == ["environment variable"]
+
+    def test_a_person_phrase_past_the_cut_wins_over_a_machine_phrase_before_it(self):
+        full = {"DRE-511": ("Run bash infra/rotate.sh first. " + FILLER
+                            + "The operator does it from their own signed-in session.")}
+        action = the_action(plan(cut(full), full=full), "DRE-511")
+        assert action.writes[0].label == PERSON
+        assert action.cause == "person, kind person"
+        assert action.evidence == ["own signed-in session"]
+
+    def test_a_card_whose_whole_read_fails_is_skipped_never_classed_from_the_cut(
+            self, capsys):
+        cards = cut({"DRE-512": "Run bash infra/rotate.sh first. " + FILLER})
+        assert plan(cards, full={}) == []
+        assert "DRE-512" in capsys.readouterr().err
+
+    def test_one_failed_read_does_not_skip_the_card_beside_it(self):
+        full = {"DRE-513": "Run bash infra/rotate.sh first."}
+        cards = cut(full) + cut({"DRE-514": "Run bash infra/rotate.sh first."})
+        the_action(plan(cards, full=full), "DRE-513")
+
+    def test_only_a_card_that_qualifies_is_read(self):
+        reads: list = []
+        cards = [board_card("DRE-7328"),
+                 board_card("DRE-515", labels=("operator-step", MACHINE)),
+                 board_card("DRE-516", "Queued")]
+        the_action(plan(cards, reads=reads), "DRE-7328")
+        assert reads == ["DRE-7328"]
+
+    def test_the_read_is_the_cards_own_description_and_reads_only(self):
+        reads: list = []
+        ctx = context(full=whole([board_card("DRE-7328")]), reads=reads)
+        lane.plan(board_of([board_card("DRE-7328")]), ctx)
+        assert reads == ["DRE-7328"]
+        assert len(ctx.linear.calls) == 1
+        assert "description" in ctx.linear.calls[0]
+        assert "mutation" not in ctx.linear.calls[0]
 
 
 # --------------------------------------------------------------------------- #
@@ -312,6 +393,10 @@ class Recorder:
             raise AssertionError(f"the lane sent a {write.kind} write")
 
 
+def leg_context(board_doc):
+    return context(full=whole(board_doc["lanes"]["Hand-work"]))
+
+
 def only_this_lane(monkeypatch):
     monkeypatch.setattr(hygiene, "discover", lambda lane_dir=None: [lane])
 
@@ -322,10 +407,10 @@ class TestThroughTheCore:
         board_doc = {"lanes": {"Hand-work": [board_card("DRE-7328")]}}
         recorder = Recorder(board_doc)
         monkeypatch.setattr(hygiene, "send", recorder)
-        first = hygiene.run_leg(board_doc, context())
+        first = hygiene.run_leg(board_doc, leg_context(board_doc))
         assert [a["outcome"] for a in first["actions"]] == ["executed"]
         assert [w.kind for w in recorder.sent] == ["linear_label", "linear_comment"]
-        second = hygiene.run_leg(board_doc, context())
+        second = hygiene.run_leg(board_doc, leg_context(board_doc))
         assert second["actions"] == [] and second["left"] == []
         assert len(recorder.sent) == 2
 
@@ -336,7 +421,7 @@ class TestThroughTheCore:
         board_doc = {"lanes": {"Hand-work": [board_card("DRE-7328", comments=[receipt])]}}
         recorder = Recorder(board_doc)
         monkeypatch.setattr(hygiene, "send", recorder)
-        ledger = hygiene.run_leg(board_doc, context())
+        ledger = hygiene.run_leg(board_doc, leg_context(board_doc))
         assert [a["outcome"] for a in ledger["actions"]] == ["suppressed"]
         assert recorder.sent == []
 
@@ -347,7 +432,7 @@ class TestThroughTheCore:
         board_doc = {"lanes": {"Hand-work": cards}}
         recorder = Recorder(board_doc)
         monkeypatch.setattr(hygiene, "send", recorder)
-        hygiene.run_leg(board_doc, context())
+        hygiene.run_leg(board_doc, leg_context(board_doc))
         assert {w.kind for w in recorder.sent} == {"linear_label", "linear_comment"}
         assert all(c["state"]["name"] == "Hand-work" for c in board_doc["lanes"]["Hand-work"])
 

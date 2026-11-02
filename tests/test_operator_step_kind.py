@@ -214,16 +214,20 @@ class TestPrecedence:
 
 
 class TestWholePhrases:
-    @pytest.mark.parametrize("text", [
-        "Restamp the sign-in pages",
-        "the sign-in page is broken",
-        "after sign in, nothing",
-        "a signed-in session",
+    @pytest.mark.parametrize("text, expected", [
+        ("Restamp the sign-in pages", ("machine", "deploy", "Restamp")),
+        ("the sign-in page is broken", ("person", "person", "no machine kind matched")),
+        ("after sign in, nothing", ("person", "person", "no machine kind matched")),
+        ("a signed-in session", ("person", "person", "no machine kind matched")),
     ])
-    def test_a_mention_of_signing_in_is_not_a_person(self, text):
-        cls, _kind, evidence = classify("synthetic", text)
-        if cls == "person":
-            assert evidence == "no machine kind matched"
+    def test_a_mention_of_signing_in_is_not_a_person(self, text, expected):
+        assert classify("synthetic", text) == expected
+
+    @pytest.mark.parametrize("text", ["Lambda deploys", "the relay was deployed",
+                                      "deploying now"])
+    def test_an_inflection_the_list_does_not_hold_is_not_a_match(self, text):
+        # Erring toward a person: a phrase matches only as it is written.
+        assert classify("synthetic", text) == ("person", "person", "no machine kind matched")
 
     def test_case_does_not_matter(self):
         assert classify("synthetic", "done on THE OPERATOR'S MAC")[0] == "person"
