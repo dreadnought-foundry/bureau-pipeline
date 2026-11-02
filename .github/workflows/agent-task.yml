@@ -400,7 +400,9 @@ jobs:
       # ran twenty minutes after its own PR #700 merged and rebuilt the card
       # onto the merged branch). Fail-open: unreadable answers proceed.
       # EVERY step below honors the skip — the Report step especially, or a
-      # skipped dup would read as a dead run and requeue.
+      # skipped dup would read as a dead run and requeue. The one exception
+      # is the design answer's hand-back right after it, which runs only on
+      # the open-PR skip (DRE-8720).
       - name: Duplicate-dispatch guard
         id: dedupe
         if: steps.gate.outputs.bounced != 'true'
@@ -414,6 +416,32 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/dedupe_dispatch.py gate \
             "${{ github.event.client_payload.identifier }}"
+
+      # The one step that runs BECAUSE the guard skipped (DRE-8720, DRE-8708
+      # rule 4c). When the CEO answers the critic's design question, the card
+      # returns to In Progress, that move dispatches this workflow, and the
+      # guard skips the build because the card's pull request is open. Only
+      # that skip is his answer coming back: the merged, live-run and
+      # past-building skips run nothing here, and the answer stays `answered`
+      # on the card for the next open-PR dispatch or the fix loop's `answered`
+      # branch (DRE-8735). `handback` (DRE-8722) dispatches one re-review when
+      # a verified answer follows the question and writes nothing otherwise,
+      # so a skip on a card the CEO did not answer is unchanged. The dispatch
+      # rides the workflow's own token — the App token holds no Actions
+      # permission (DRE-1254) — and a failure here never fails the job.
+      - name: Hand an answered design question back to the critic
+        id: handback
+        # Quoted whole: unquoted, YAML reads ` #` as the start of a comment.
+        if: "steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip == 'true' && startsWith(steps.dedupe.outputs.reason, 'open agent PR #')"
+        continue-on-error: true
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/design_answer.py handback "$CARD" --repo "$REPO"
 
       # Model selection: the shared WORKHORSE ladder with runtime availability
       # detection (DRE-1490). Build roles are classified `workhorse` in
@@ -617,6 +645,13 @@ jobs:
       # behind it. The renderer always exits 0 (an unreadable thread renders
       # `SPOKEN STATUS: UNKNOWN`); the card and the key come through env, so
       # the line adds nothing to the compiled expression (DRE-3484).
+      #
+      # Then, for the two UI-building roles, the repo's parts catalog
+      # (DRE-8720, DRE-8708 rule 7): every shared part and the file it ships
+      # at, read from the checkout at run time by design_parts.py, so the
+      # builder picks from it first. The script always exits 0 and prints its
+      # one `design-parts:` line to this step's log; the fallback is for a
+      # checkout with no catalog script, so the step never fails on it.
       - name: Assemble agent context
         id: ctx
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -632,6 +667,13 @@ jobs:
             > .bureau-pipeline/agent-context.md
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
+          case "$ROLE" in
+            engineer|frontend)
+              python3 .bureau-pipeline/scripts/design_parts.py catalog >> .bureau-pipeline/agent-context.md \
+                || echo "PARTS CATALOG: UNKNOWN — design_parts.py catalog could not run, so the repo's parts were not listed" >> .bureau-pipeline/agent-context.md
+              grep -E '^PARTS CATALOG:' .bureau-pipeline/agent-context.md || echo "no PARTS CATALOG: line in the assembled context"
+              ;;
+          esac
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of context for role: $ROLE"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Card title and
