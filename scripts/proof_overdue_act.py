@@ -173,6 +173,14 @@ class LinearReads(proof_overdue.LinearReads):
         return issue
 
 
+class DoorReads(proof_overdue.DoorReads, LinearReads):
+    """`proof_overdue.DoorReads` (DRE-8909), each read it does not serve off
+    the door made by `LinearReads` above — so a card read through Linear
+    carries the `id` the fire sends. The door's node carries `id` too, and
+    its epic's children are read only where the release reading needs them
+    (`proof_overdue.with_children`)."""
+
+
 def _dispatch():
     """`proof_dispatch`, imported on first use: it imports `reconcile`, which
     reads `REPO` when it is imported."""
@@ -361,7 +369,8 @@ class _Pass:
                     return RELEASE_REASON.format(waits_on=waits_on), None
                 return None, (f"{waits_on} is {state or 'not read'}, not {shipped} "
                               "(Canceled is not shipped)")
-            got = self.released(issue, ident, proof_overdue._slug(issue), self.repo)
+            got = self.released(proof_overdue.with_children(issue, self.linear), ident,
+                                proof_overdue._slug(issue), self.repo)
             if got.state == "ready":
                 return RELEASE_REASON.format(waits_on=waits_on), None
             return None, f"the release of {waits_on} reads {got.state} — {'; '.join(got.lines)}"
@@ -432,7 +441,7 @@ def sweep(repo: str, slug: str, *, live: bool | None = None, now: datetime | Non
     gh = gh or proof_record._gh
     read = read or (lambda path: _dispatch().github_read(path))
     one = _Pass(
-        repo, slug, live=live, now=now, linear=linear or LinearReads(),
+        repo, slug, live=live, now=now, linear=linear or DoorReads(),
         run_state=run_state or proof_run_state.reading, fire=fire or plan_run.fire,
         read=read,
         released=released or (lambda issue, ident, s, full: _released(issue, ident, s, full, gh)),
