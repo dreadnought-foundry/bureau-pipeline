@@ -143,7 +143,11 @@ def parse_diff(text: str) -> list:
     line is counted against the hunk header. `DiffError` names the first
     thing wrong.
     """
-    lines = text.splitlines()
+    # `\n` alone, as git counts hunk lines: `splitlines` also breaks on a
+    # form feed or a Unicode line separator inside a line.
+    lines = [line[:-1] if line.endswith("\r") else line for line in text.split("\n")]
+    if lines and lines[-1] == "":
+        lines.pop()
     files = []
     i = 0
     current = None
@@ -235,12 +239,21 @@ def _strip_comments(text: str) -> str:
 
 def _braced(text: str, start: int) -> str | None:
     """The text inside the `{…}` that opens at `start`, or None when it
-    never closes."""
+    never closes. A comment is passed over, so its apostrophe opens no
+    string."""
     depth, i = 0, start
     while i < len(text):
         char = text[i]
         if char in "\"'`":
             i = _skip_string(text, i)
+            continue
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            i = len(text) if end < 0 else end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            i = len(text) if end < 0 else end + 2
             continue
         if char == "{":
             depth += 1
