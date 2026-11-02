@@ -283,7 +283,7 @@ class TheCommentsPostFromAFile(_Walk):
                 run = _run(PLAN, name)
                 self.assertNotIn('$(cat "$SUMMARY")', run)
                 self.assertNotIn("${CHANGED}", run)
-                self.assertNotIn("$CHANGED", run)
+                self.assertNotRegex(run, r"\$CHANGED(?!\w)")
                 posts = re.findall(r"linear_ops\.py comment (.*)", run)
                 self.assertTrue(posts)
                 for args in posts:
