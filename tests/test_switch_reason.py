@@ -73,6 +73,8 @@ ON_MAIN = {
     "TRIAGE_REPAIR_LIVE": (".github/workflows/triage-repair.yml", "Decide dry run"),
     # DRE-8634: the Alarm Repair run, read the way triage-repair.yml reads its own.
     "ALARM_REPAIR_LIVE": (".github/workflows/alarm-repair.yml", "Decide dry run"),
+    # DRE-8747: the Operator Agent run, read the way triage-repair.yml reads its own.
+    "OPERATOR_AGENT_LIVE": (".github/workflows/operator-agent.yml", "Decide dry run"),
     # DRE-8168: the proof run's name guard, read where it installs the hook.
     "NAME_GUARD_LIVE": (".github/workflows/proof-task.yml", "Install the name guard"),
 }
@@ -114,7 +116,7 @@ class TestCatalog:
     def test_it_declares_exactly_the_switches_on_main(self):
         rows = switch_reason.load()["switches"]
         assert {r["name"]: (r["reader"], r["step"]) for r in rows} == ON_MAIN
-        assert len(rows) == 6
+        assert len(rows) == 7
         for row in rows:
             assert set(row) == {"name", "reader", "step", "means"}
             assert row["means"].strip().endswith(".")
@@ -132,7 +134,7 @@ class TestCatalog:
             [sys.executable, str(ROOT / "scripts" / "switch_reason.py"), "check"],
             capture_output=True, text=True, cwd=ROOT)
         assert done.returncode == 0, done.stdout + done.stderr
-        assert "18 switch read(s), 6 row(s), 0 problem(s)" in done.stdout
+        assert "20 switch read(s), 7 row(s), 0 problem(s)" in done.stdout
 
     def test_reads_are_discovered_from_the_workflows(self):
         # Each switch is read where it acts, and once more by the sweep's
@@ -573,7 +575,8 @@ class TestStep:
         assert _unplumbed(_read_step(), switch_reason.load()["switches"]) == []
         env = _read_step()["env"]
         for name in ("PROOF_DISPATCH_LIVE", "GREEN_LIGHT_REPLY_LIVE", "HYGIENE_LIVE",
-                     "TRIAGE_REPAIR_LIVE", "ALARM_REPAIR_LIVE", "NAME_GUARD_LIVE"):
+                     "TRIAGE_REPAIR_LIVE", "ALARM_REPAIR_LIVE", "OPERATOR_AGENT_LIVE",
+                     "NAME_GUARD_LIVE"):
             assert env[name] == f"${{{{ vars.{name} }}}}"
             assert env[f"{name}_OFF_UNTIL"] == f"${{{{ vars.{name}_OFF_UNTIL }}}}"
 
