@@ -413,10 +413,6 @@ STDOUT_WRITERS = {
     # `supports` writes one `github_output.render` block of three values, and
     # its one human line goes to stderr; it calls no module that talks.
     "claude_code_pin.py": "safe",
-    # `branch` writes one `github_output.render` block of two values — an
-    # `agent/` branch name and its hex digest — and every refusal goes to
-    # stderr; it calls no module that talks (DRE-6624).
-    "model_config_change.py": "safe",
     # `decide` prints `go=true|false` and a reason from a fixed vocabulary;
     # its one human line goes to stderr, and it imports nothing that talks
     # (DRE-7454).

@@ -1,7 +1,8 @@
 """RED-first: the drain executes both lists the CEO agreed (DRE-4733).
 
-Since DRE-4727 a proposal is two lists drawn from the same twenty: the Planning
-list, and the Cancel list with a one-line reason on every row. The drain moved
+Since DRE-4727 a proposal is two lists: the Planning list, and the Cancel
+list with a one-line reason on every row (drawn from the whole lane since
+DRE-7973). The drain moved
 the first and ignored the second, so a card the CEO agreed should be cancelled
 stayed in Intake until somebody cancelled it by hand. Now:
 
@@ -46,7 +47,8 @@ import ready_lane_writers  # noqa: E402
 
 from test_groomer_approval_gate import FakeOps as _GateOps  # noqa: E402
 from test_groomer import CYCLES, NOW, card  # noqa: E402
-from test_groomer_two_lists import TWO_LISTS_RENDER, two_lists  # noqa: E402
+from test_groomer_two_lists import (  # noqa: E402
+    TWO_LISTS_RENDER, fifteen_and_five_morning, two_lists)
 
 PROPOSAL_CARD = "DRE-2683"
 
@@ -162,7 +164,7 @@ KEEP_PLANNING, KEEP_CANCEL = "DRE-2", "DRE-8"
 
 
 def _fifteen_and_five(**lanes):
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     assert len(_planning(proposal)) == 15 and len(_cancel(proposal)) == 5, (
         "the fixture must be the fifteen-and-five morning for this to prove "
         "anything")
@@ -236,7 +238,7 @@ def test_a_proposal_with_no_cancel_section_reads_an_empty_cancel_list():
 
 
 def test_the_cancel_table_round_trips_from_the_render():
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     record = groomer.parse_proposal_comment(groomer.proposal_comment(proposal))
     assert [r["identifier"] for r in record["cancel"]] == _cancel(proposal)
     assert [r["position"] for r in record["cancel"]] == [1, 2, 3, 4, 5]

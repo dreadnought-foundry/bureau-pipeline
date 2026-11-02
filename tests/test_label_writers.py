@@ -104,12 +104,13 @@ class TheDiscoveryActuallyFindsSomething(unittest.TestCase):
         for expected in (
             "needs-human",     # the hold, through dead_run's injected writer
             "epic-queued",     # plan.yml's add-label on a queued epic
-            "groom-queued",    # the groomer's queued card
             "operator-step",   # the vocabulary's OPERATOR mark, and Triage's
             "agent:devops",    # model-adoption.yml's create --label
             "break-glass:used",
         ):
             self.assertIn(expected, labels)
+        # The groom queue's label went with the queue (DRE-8619).
+        self.assertNotIn("groom-queued", labels)
 
     def test_the_seam_is_read_out_of_the_write_layer(self):
         seam = lw.seam_functions()
@@ -353,7 +354,7 @@ class EveryDoorIsWatched(unittest.TestCase):
             "    steps:\n"
             "      - name: Notice\n"
             "        run: |\n"
-            "          python3 scripts/pipeline_notice.py raise --notice groom_stall \\\n"
+            "          python3 scripts/pipeline_notice.py raise --notice reviewer_outage:fleet \\\n"
             "            --severity WARN --title \"$T\" --body-file body.md \\\n"
             "            --fallback-title \"$T\" --fallback-lane Planning \\\n"
             "            --fallback-label no-code --fallback-label hand-built\n",
@@ -371,7 +372,7 @@ class EveryDoorIsWatched(unittest.TestCase):
             "    runs-on: ubuntu-latest\n"
             "    steps:\n"
             "      - run: |\n"
-            "          python3 scripts/pipeline_notice.py raise --notice groom_stall \\\n"
+            "          python3 scripts/pipeline_notice.py raise --notice reviewer_outage:fleet \\\n"
             "            --severity WARN --title t --body-file b \\\n"
             "            --fallback-title t --fallback-label no-code\n",
         )

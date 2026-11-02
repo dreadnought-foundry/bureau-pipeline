@@ -1505,17 +1505,21 @@ jobs:
                nothing else, write that to ${{ steps.handoff.outputs.blocker }} and stop (step
                6) rather than editing code to chase a failure you did not cause.
                No such file means every red check here is this PR's own.
-            2b. Check for a merge conflict with the default branch
+            2b. Check for a merge conflict with the pull request's own base
+               branch, ${{ steps.pr.outputs.base_ref }}
                (gh pr view ${{ steps.pr.outputs.number }} --json mergeStateStatus).
-               If DIRTY: git fetch origin && git merge origin/<default-branch>,
-               resolve conflicts preserving BOTH sides' intent (if the conflict
-               is an alembic migration number, renumber THIS branch's migration
-               to main's-head + 1 and chain down_revision accordingly), and
-               include the resolution in your commit. A generated lockfile in
-               conflict (package-lock.json, yarn.lock, pnpm-lock.yaml,
-               poetry.lock, Cargo.lock) must never be resolved hunk-by-hunk:
-               take the default branch's copy
-               (git checkout origin/<default-branch> -- <lockfile>) and
+               If DIRTY: git fetch origin && git merge origin/${{ steps.pr.outputs.base_ref }},
+               never the default branch unless it IS the base: a stacked pull
+               request's base is another agent branch, and merging the default
+               branch into it puts the default branch's own work into this pull
+               request's diff (DRE-8503). Resolve conflicts preserving BOTH
+               sides' intent (if the conflict is an alembic migration number,
+               renumber THIS branch's migration to the base's head + 1 and chain
+               down_revision accordingly), and include the resolution in your
+               commit. A generated lockfile in conflict (package-lock.json,
+               yarn.lock, pnpm-lock.yaml, poetry.lock, Cargo.lock) must never
+               be resolved hunk-by-hunk: take the base branch's copy
+               (git checkout origin/${{ steps.pr.outputs.base_ref }} -- <lockfile>) and
                regenerate it from this branch's manifest with the package
                manager (e.g. npm install) so it matches both.
                If you end without a push — the merge would not go green,

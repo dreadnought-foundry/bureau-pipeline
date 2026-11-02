@@ -14,7 +14,8 @@ grepped:
     the same steps, the same `if:`s, the same Select model command, the same
     `--model` on all three agent attempts, the same prompt and the job name
     `bureau-card: <CARD>` — compared to a snapshot of the pre-change job taken
-    from `main` at 16becdd2;
+    from `main` at 16becdd2, re-taken by DRE-8441 so the record pull request's
+    decision step and the prompt's push-only step 3 are the baseline;
   * that a shadow run is named `bureau-shadow: <CARD>`, which none of the
     three readers of the card's own run (`dedupe_dispatch`, the sweep through
     it, and the medic's `card_from_log`) reads as the card's run;
@@ -24,7 +25,9 @@ grepped:
   * that a bad request is refused before any agent step, by running the two
     refusing steps and walking the job after the failure;
   * that no writing step can run in shadow mode, with the writers discovered
-    by what their `run:` calls — never by a list of names — and a planted,
+    by what their `run:` calls — never by a list of names, and
+    `proof_record_pr.py decide`, the one step that can open a pull request,
+    among them — and a planted,
     unguarded writer in a copy of the workflow turning the check red;
   * that `Push the shadow record`, the one writer a shadow runs, runs after
     every agent attempt whatever their outcome, never after a refused model,
@@ -159,6 +162,10 @@ PRE_CHANGE_STEPS = [
     ('Stand up a local run of the released commit', "steps.local_decl.outputs.declared == 'true' || steps.local_decl.outcome == 'failure'"),
     ('Install Claude Code (asserted)', None),
     ('Set the git identity every proof run commits as', None),
+    # DRE-8168: the name guard, written as a pre-push hook before the agent.
+    ('Install the name guard', None),
+    # DRE-8259: the record file's blob as the run found it, read before the agent.
+    ('Read the record as the run found it', None),
     ('Implement proof card', "steps.install_claude.outcome == 'success'"),
     ('Retry decision (attempt 1)', 'always()'),
     ('Back off before the agent retry (attempt 1)', "always() && steps.install_claude.outcome == 'success' && steps.retry1.outputs.retry == 'true'"),
@@ -176,6 +183,8 @@ PRE_CHANGE_STEPS = [
     ('Mint rescue retry token', 'always()'),
     ('Push rescue', 'always()'),
     ('Upload rescued work', "always() && steps.rescue.outputs.patch != ''"),
+    # DRE-8441: the record pull request opens only when the record can merge.
+    ('Open the record pull request only when it can merge', 'always()'),
     # DRE-7813: the record pull request's body rebuilt from the record.
     ("Refresh the record pull request's body", 'always()'),
     ('Report proof result to Linear', 'always()'),
@@ -231,9 +240,12 @@ PRE_CHANGE_AGENT_ENV = {
     "PROOF_PYTHON": "${{ steps.local.outputs.python || '' }}",
     "PROOF_LOGIN_FILE": "${{ runner.temp }}/proof-login.json",
     "PROOF_SESSION_SECONDS": "${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}",
+    # DRE-8258: background tasks off, so a live run never ends its turn on one.
+    "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
 }
 
-# PRE_CHANGE_PROMPT — the agent's prompt on main at 16becdd2, byte for byte. It
+# PRE_CHANGE_PROMPT — the agent's prompt on main at 16becdd2, byte for byte,
+# re-taken by DRE-8441 with step 3 pushing and never opening a pull request. It
 # lives in a fixture, not here: it names the agent's fixed escalation path,
 # which no test source may name outside an assertion (test_agent_notes_dir.py).
 PRE_CHANGE_PROMPT = (TESTS / "fixtures" / "proof-task-prompt-16becdd2.txt").read_text(encoding="utf-8")
@@ -433,6 +445,15 @@ class ShadowAgentTest(unittest.TestCase):
                 # An empty read-only token is never replaced by the worker's.
                 empty = dict(_shadow(), **{"steps.shadow_token.outputs.token": ""})
                 self.assertEqual(_render(token, empty), "")
+
+    def test_the_name_guards_hook_holds_no_write_token_in_a_shadow(self):
+        # DRE-8168: the hook is written before the agent, where the shadow's
+        # agent can read it, so a shadow bakes no token — never the worker's.
+        token = _step(name="Install the name guard")["env"]["GH_TOKEN"]
+        known = dict(_shadow(), **{"steps.worker.outputs.token": "ghs_worker"})
+        self.assertEqual(_render(token, known), "")
+        live = dict(LIVE, **{"steps.worker.outputs.token": "ghs_worker"})
+        self.assertEqual(_render(token, live), "ghs_worker")
 
     def test_the_read_only_token_comes_from_the_workers_pool_app(self):
         mint, worker = _step(id="shadow_token"), _step(id="worker")
@@ -692,6 +713,7 @@ def _writer_pattern() -> re.Pattern:
       | \bgh\s+pr\s+create\b
       | proof_shadow\.py["']?\s+push\b
       | push_rescue\.py
+      | proof_record_pr\.py["']?\s+(?:decide|sweep)\b
     """, re.X)
 
 
@@ -700,6 +722,8 @@ _GH_API_WRITE = re.compile(
     r"|\s(?:-f|-F|--field|--raw-field|--input)\s)", re.I)
 
 SHADOW_PUSH = "Push the shadow record"
+#: The step that opens, reopens or closes the record's pull request (DRE-8441).
+DECIDE_STEP = "Open the record pull request only when it can merge"
 
 
 def _writers(doc: dict | None = None) -> list[dict]:
@@ -754,6 +778,7 @@ PLANTED = {
     "a gh api POST": "gh api -X POST repos/o/r/issues/1/comments -f body=x",
     "a gh api field": "gh api repos/o/r/issues/1/labels -f labels[]=x",
     "a push rescue": "python3 .bureau-pipeline/scripts/push_rescue.py rescue --card X",
+    "a record pull request": 'python3 .bureau-pipeline/scripts/proof_record_pr.py decide --card "$CARD"',
 }
 
 
@@ -771,6 +796,7 @@ class ShadowWritesNothingButItsBranchTest(unittest.TestCase):
         for name in ("Record the model attempt",
                      "Return from Green Light on the CEO's answer",
                      "Push rescue",
+                     DECIDE_STEP,
                      "Report proof result to Linear",
                      SHADOW_PUSH):
             self.assertIn(name, found)
@@ -797,7 +823,7 @@ class ShadowWritesNothingButItsBranchTest(unittest.TestCase):
 
     def test_a_shadow_guard_dropped_from_a_real_writer_turns_the_check_red(self):
         for name in ("Report proof result to Linear", "Push rescue",
-                     "Record the model attempt"):
+                     DECIDE_STEP, "Record the model attempt"):
             with self.subTest(step=name):
                 doc = copy.deepcopy(_doc())
                 step = next(s for s in _steps(doc) if s.get("name") == name)
@@ -886,6 +912,8 @@ class ShadowPushTest(unittest.TestCase):
         "steps.shadow_model.outputs.model": SHADOW_MODEL,
         "steps.pushtoken.outputs.token": "ghs_fresh",
         "steps.worker.outputs.token": "ghs_worker",
+        # The name guard's switch (DRE-8168), off as the repository holds it.
+        "vars.NAME_GUARD_LIVE": "",
     })
 
     def _push(self, record: str | None):

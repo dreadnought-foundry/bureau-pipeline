@@ -44,9 +44,11 @@ Four answers, and nothing else is a valid one:
   thing that has to happen before it is reconsidered. "Later" with no trigger is
   just "no" wearing a softer word.
 * `likely-done` — the work already happened, or the card no longer applies.
-  This is the **Cancel recommendation**: when the card is among the morning's
-  twenty it goes on the Cancel list the CEO reads beside the Planning list, and
-  he agrees with it or not. Name the **evidence** in plain words — the
+  This is the **Cancel recommendation**: wherever the card stands in the
+  order it goes on the Cancel list the CEO reads beside the Planning list,
+  taking no Planning slot, and he agrees with it or not. Since DRE-6648 this
+  is asked of every card on offer — DRE-4727 asked it only of the twenty cards
+  the batch reached, and dead cards waited in Intake for weeks. Name the **evidence** in plain words — the
   superseding card, the merged pull request or the decision it points at —
   because that field is shown as the card's reason on the Cancel list and
   written onto the card when he agrees. A recommendation nobody can check is

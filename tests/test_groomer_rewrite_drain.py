@@ -13,7 +13,8 @@ cancelled the Cancel list and knew no third list. Now:
     `body=` digest is the digest of the card's current description, posts
     `🧺 groom-rewritten: <id> from draft <draft id>` carrying the old body,
     writes the draft as the description, and moves the card to Planning —
-    in that order, rationed by the free planner slots like any other card;
+    in that order, like any other approved card (no slot count since
+    DRE-8619);
   * a draft-shaped comment from any other account is data, never a draft;
   * a Rewrite first card with no acceptance is held back and not written to;
   * the page tells the CEO what to type, because the console has no control
@@ -48,7 +49,7 @@ import ready_lane_writers  # noqa: E402
 
 from test_groomer_approval_gate import FakeOps as _GateOps  # noqa: E402
 from test_groomer_console_receipt import OPENSSL, receipted  # noqa: E402
-from test_groomer_two_lists import two_lists  # noqa: E402
+from test_groomer_two_lists import fifteen_and_five_morning  # noqa: E402
 
 PROPOSAL_CARD = "DRE-2683"
 DOC = ROOT / "docs" / "groomer.md"
@@ -75,7 +76,7 @@ def _draft(identifier: str) -> str:
 
 def rewrite_proposal() -> dict:
     """The fifteen-and-five morning, plus two cards on Rewrite first."""
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     proposal["outcomes"][groomer.REWRITE] = [
         {"identifier": identifier, "title": f"Rewrite {identifier}",
          "repo": "agent-bureau", "epic": None, "band": 2, "position": n,
@@ -469,31 +470,22 @@ def test_an_accepted_card_that_left_intake_is_already_gone_and_untouched():
 
 
 # --------------------------------------------------------------------------
-# criterion 7 — rationed with the rest, queued with its new body
+# criterion 7 — moved with the rest: no slot count and no queue (DRE-8619)
 # --------------------------------------------------------------------------
-def test_an_accepted_card_past_the_free_slots_is_queued_with_its_new_body(monkeypatch):
+def test_an_accepted_card_moves_with_its_new_body_whatever_the_batch_size():
     proposal = rewrite_proposal()
-    batch = len(proposal["outcomes"]["now"])
-    monkeypatch.setattr(groomer, "free_planner_slots",
-                        lambda lops: (batch, batch + 1))
     ops = _ops(proposal, _accept(proposal, FIRST),
                threads={FIRST: [_draft_comment(FIRST)]})
     result = groomer.drain(ops, card=PROPOSAL_CARD)
     writes = _writes_to(ops, FIRST)
-    assert [e[0] for e in writes] == ["comment", "description", "label"]
+    assert [e[0] for e in writes] == ["comment", "description", "comment",
+                                      "cycle", "state"]
     assert writes[1][2] == _draft(FIRST)
-    assert writes[2][2] == groomer.QUEUED_LABEL
-    assert result["queued"] == [FIRST]
+    assert ("label", FIRST) not in {e[:2] for e in ops.log}
     assert result["rewritten"] == [FIRST]
-    assert FIRST not in result["moved"]
-    queued = [b for t, b in ops.written if t == PROPOSAL_CARD
-              and b.startswith(f"{groomer.MARK} {groomer.QUEUED_TAG}:")]
-    assert len(queued) == 1
-    listed = groomer.parse_queued_record(queued[0])["cards"]
-    assert [c["identifier"] for c in listed] == [FIRST]
-    cells = _cells(_drained(ops), FIRST)
-    assert cells[2] == "held back"
-    assert cells[3].startswith("groom-queued: place 1 of 1")
+    assert result["moved"][-1] == FIRST
+    assert "queued" not in result
+    assert _cells(_drained(ops), FIRST)[2] == "rewritten"
 
 
 # --------------------------------------------------------------------------
@@ -615,7 +607,7 @@ def test_the_rewrite_first_table_carries_the_accept_line_under_it():
 
 
 def test_a_page_with_no_rewrite_first_table_has_the_clause_and_not_the_line():
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     text = groomer.render_proposal(proposal)
     assert "groom-rewrite-accepted" in _say_more(text)
     assert "To accept a draft:" not in text

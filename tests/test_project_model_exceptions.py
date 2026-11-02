@@ -14,11 +14,12 @@ never on the choices in a tree's `config/models.yaml`. So the scenario is a
 home document: the frozen one (`model_fixture.fixture_home()`, DRE-6972) with
 `with_project(doc, "atlas", "workhorse", <a build rung below the top>)` and
 nothing for `portico`, handed to a `model_fixture.fixture_tree` — today's
-`scripts/` on the FROZEN model files (DRE-6859) — through `home_env`. The
+`scripts/` on the FROZEN model files (DRE-6859), built without the generator
+(DRE-8018) — through `home_env`. The
 console's saves change the home, so a rule proved on today's choices went red
 when the CEO moved a role or led a group with another model (DRE-6863). The
 code-side facts the scenarios lean on — `review_separation`, `effort`,
-`ungrouped` — are read off the frozen `models.yaml`. The probe is stubbed
+`session_agents` — are read off the frozen `models.yaml`. The probe is stubbed
 (`BUREAU_FAKE_AVAILABLE`), so nothing reaches the network, and every model is
 available.
 
@@ -59,11 +60,13 @@ EXCEPTION = ladder(HOME, "advisory")[0]
 DOC = with_project(HOME, "atlas", "workhorse", EXCEPTION)
 
 # The roles the scenarios run, read off the frozen document's `agents:` and
-# the frozen `ungrouped:` and `review_separation` (code-side facts).
+# the frozen `session_agents` and `review_separation` (code-side facts): a
+# session agent the document puts in no group is a name in no group
+# (DRE-8018).
 BUILDER = next(r for r, k in HOME["agents"].items()
                if k == "workhorse" and r not in (FIXTURE.get("session_agents") or []))
 REVIEWER = FIXTURE["review_separation"]["roles"][0]
-NO_GROUP = FIXTURE["ungrouped"][0]
+NO_GROUP = next(name for name in FIXTURE["session_agents"] if name not in HOME["agents"])
 
 # How every note on a document the reader accepted ends.
 READ = model_home.status_clause({"state": model_home.READ})
@@ -107,7 +110,7 @@ def py(tree: Path, code: str, doc: dict = DOC):
 
 @pytest.fixture(scope="module")
 def tree(tmp_path_factory) -> Path:
-    return model_fixture.fixture_tree(tmp_path_factory.mktemp("dre6634"))
+    return model_fixture.fixture_tree(tmp_path_factory.mktemp("dre6634"), regenerate=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -202,7 +205,7 @@ def test_separation_is_applied_to_an_advisory_exception_too(tmp_path):
     """The project walk is what separation narrows: an advisory exception on
     the Reviewers' top still loses that rung to a build on it."""
     doc = with_project(HOME, "atlas", "advisory", EXCEPTION)
-    tree = model_fixture.fixture_tree(tmp_path / "t")
+    tree = model_fixture.fixture_tree(tmp_path / "t", regenerate=False)
     model, note = select(tree, REVIEWER, "--repo", "atlas", "--built-on",
                          EXCEPTION, tmp=tmp_path, doc=doc)
     assert model != EXCEPTION
@@ -218,7 +221,7 @@ def test_a_reviewers_model_for_atlas_leads_the_critic_on_the_owner_name(tmp_path
     chosen = ladder(HOME, "advisory")[1]
     doc = with_project(HOME, "atlas", "advisory", chosen)
     assert ladder(doc, "advisory")[0] != chosen
-    tree = model_fixture.fixture_tree(tmp_path / "t")
+    tree = model_fixture.fixture_tree(tmp_path / "t", regenerate=False)
     model, note = select(tree, "critic", "--repo", "EveryBite/atlas",
                          tmp=tmp_path, doc=doc)
     assert model == chosen
@@ -234,7 +237,7 @@ def test_an_exception_off_its_kinds_ladder_leads_the_walk(tmp_path):
     Builders' group — through the CLI, `ladder_for` and `--fallback-file`."""
     off = ladder(HOME, "judgement")[-1]
     doc = with_project(HOME, "atlas", "workhorse", off)
-    tree = model_fixture.fixture_tree(tmp_path / "t")
+    tree = model_fixture.fixture_tree(tmp_path / "t", regenerate=False)
     fleet = ladder(doc, "workhorse")
     assert off not in fleet
     model, note = select(tree, "engineer", "--repo", "atlas", tmp=tmp_path, doc=doc)
@@ -286,7 +289,7 @@ def test_no_project_walks_the_fleet_ladder(tree, tmp_path, args):
 
 def test_a_role_in_no_group_keeps_the_default_ladder_on_every_project(tree, tmp_path):
     # The defaults' Builders are the default walk, on a home as in the code.
-    assert NO_GROUP in FIXTURE["ungrouped"]
+    assert NO_GROUP in FIXTURE["session_agents"]
     assert NO_GROUP not in DOC["agents"]
     default_top = ladder(DOC, "workhorse")[0]
     for repo in ("atlas", "EveryBite/atlas", "portico"):

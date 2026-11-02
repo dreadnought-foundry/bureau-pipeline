@@ -362,7 +362,7 @@ def test_a_mixed_request_takes_each_lane_from_its_own_source(monkeypatch):
 def _nudge_stubs(stack, *, dead=0):
     for name in ("flag_stranded", "report_intake_depth", "advance_urgent_intake",
                  "repair_frozen_planning_holds", "serve_planner_line",
-                 "release_groom_queue", "move_hand_built_to_review",
+                 "move_hand_built_to_review",
                  "close_finished_epics", "carry_epics_out_of_todo",
                  "report_break_glass", "report_epic_growth", "report_fix_concurrency",
                  "report_evicted_fix_runs", "drain_retiring_lanes", "unstick_conflicts",
@@ -500,7 +500,7 @@ def test_limit_recovery_moves_on_door_data_are_conditional(monkeypatch):
     linear = Linear(_c("DRE-501", "In Review"))
     seen = {}
 
-    def recover(lops, now, account, room, *, rerun, move, dispatch, cards):
+    def recover(lops, now, account, room, *, rerun, move, dispatch, cards, wall_down_at=None):
         try:
             move("DRE-501", "Todo")
         except Exception as e:  # noqa: BLE001
@@ -728,7 +728,7 @@ def test_a_repo_served_the_fleet_spends_no_linear_request_on_these_lanes(monkeyp
         assert _fleet_asks(door) == ["Planning,Intake"]
     reconcile.reset_sweep_cards()
     with door_at(monkeypatch, *board, repository=repository) as door, wired(linear):
-        assert reconcile.serve_planner_line() >= 0  # an empty line
+        assert reconcile.serve_planner_line() == []  # an empty line
         assert linear_ops.requests_made() == 0
         assert _fleet_asks(door) == ["Planning,Intake", "Green Light"]
     assert {"DRE-11", "DRE-12", "DRE-13", "DRE-14"} <= reconcile._door_sourced
@@ -874,7 +874,7 @@ def test_limit_recovery_of_a_fleet_served_planning_card_is_conditional(monkeypat
     linear = Linear(_c("DRE-511", "Triage"))
     seen = {}
 
-    def recover(lops, now, account, room, *, rerun, move, dispatch, cards):
+    def recover(lops, now, account, room, *, rerun, move, dispatch, cards, wall_down_at=None):
         assert "DRE-511" in {c["identifier"] for c in cards}
         try:
             move("DRE-511", "Intake")
@@ -953,40 +953,6 @@ def test_the_urgent_fast_path_leaves_a_card_that_moved_since_the_fleet_read(monk
         assert reconcile.advance_urgent_intake() == set()
     assert linear.comments == []  # the receipt is a claim: never for a card that left
     assert linear.writes == [] and linear.refused == []
-
-
-def _queued(lane):
-    return _c("DRE-541", lane, labels=(REPO_LABEL, reconcile.groomer.QUEUED_LABEL))
-
-
-def _groom_queue(monkeypatch):
-    monkeypatch.setattr(reconcile, "REPO_SLUG", reconcile.epic_cap.START_OWNER_SLUG)
-    monkeypatch.setenv(reconcile.GROOM_CARD_ENV, "DRE-9")
-    monkeypatch.setattr(reconcile.groomer, "decision_records", lambda *a, **k: [])
-    monkeypatch.setattr(reconcile.groomer, "queue_standing", lambda records: [
-        {"identifier": "DRE-541", "id": "p1", "place": 1}])
-    monkeypatch.setattr(reconcile.groomer, "released_record", lambda changes: "released")
-
-
-def test_a_groom_release_of_a_fleet_served_card_is_conditional(monkeypatch):
-    """The release writes in two halves since DRE-3326 — the card's
-    groom-moved note, then its lane — so a door-decided card is re-read live
-    before the first half, and one that has left Intake gets neither."""
-    _groom_queue(monkeypatch)
-    linear = Linear(_queued("Canceled"))
-    with door_at(monkeypatch, _queued("Intake")), wired(linear):
-        assert reconcile.release_groom_queue(1) == []
-    assert linear.writes == [] and linear.comments == []
-    assert "get_issue DRE-541" in linear.queries
-
-
-def test_a_groom_release_of_a_fleet_served_card_still_in_intake_lands(monkeypatch):
-    _groom_queue(monkeypatch)
-    linear = Linear(_queued("Intake"))
-    with door_at(monkeypatch, _queued("Intake")), wired(linear):
-        assert reconcile.release_groom_queue(1) == ["DRE-541"]
-    assert linear.writes == [("state", "DRE-541", reconcile.GROOM_RELEASE_TO, (),
-                              ("Intake",), ())]
 
 
 # ── E-O7: off is the sweep before the door ──────────────────────────────────

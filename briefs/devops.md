@@ -144,6 +144,28 @@ At each phase boundary post one line to the card (LINEAR_API_KEY is in env):
 30 chars; never skip 1/5 (it is also your "agent is alive" signal). If a
 comment fails to post, keep working — progress reporting must never block.
 
+## Reading another repository: `GH_READ_TOKEN` (DRE-8240)
+
+Your worker token — `GH_TOKEN`, the one `git push` and `gh pr create` use —
+reaches only the repository this run is in. A card whose criteria read
+another repository in the same organization (a sibling's release record, a
+tag, a merged pull request) needs a second token, and the run hands you one:
+`GH_READ_TOKEN`, the read-only identity proof runs hold under the same name.
+It reaches every repository in the caller's organization that the App's
+installation covers, and none in another organization.
+
+Make every such read as it, never with the worker token:
+
+    GH_TOKEN=$GH_READ_TOKEN gh api repos/<owner>/<repo>/releases/latest
+    GH_TOKEN=$GH_READ_TOKEN python3 .bureau-pipeline/scripts/proof_release.py check --repo <owner>/<repo> --merge <CARD>:<pr>:<merge sha>
+
+It can only read, and you use it never to write: no push, no comment, no
+pull request, no label — those stay on the worker token, in this repository.
+When `GH_READ_TOKEN` is empty the mint was refused, and a read the card needs
+is still a blocker, exactly as it was before this token existed: name the read
+and the empty token in the blocker note, and do not retry it with `GH_TOKEN`.
+It is minted at the top of the job, so the 60-minute expiry applies to it too.
+
 ## The lanes you work in (DRE-2727)
 
 The board is `Intake` → `Planning` → `Green Light` → `Queued` →

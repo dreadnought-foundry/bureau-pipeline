@@ -26,7 +26,8 @@ trigger. What these pin, in the card's order:
   6. the client: what it sends, that it is asked whatever `BUREAU_READ` says,
      and that a failed order read never stops the door for the run's other
      reads (the endpoint is new, and answers 404 until DRE-5782 deploys);
-  7. plan.yml's claim and next steps carry the door's address.
+  7. reconcile.yml's sweep step carries the door's address (plan.yml's claim
+     and next steps did too, until DRE-8617 took them out).
 
 No test here reaches the console, GitHub or Linear: the door and the issuer
 are `tests/bureau_read_fakes.py` on 127.0.0.1, Linear is the fake board of
@@ -122,7 +123,7 @@ def arrivals(b: Board, running: int = 1) -> None:
 
 
 def next_card() -> tuple[str, str]:
-    """plan.yml's `Planner slot — next in line` step: (card, stderr)."""
+    """`next`, as the CLI answers it: (card, stderr)."""
     rc, out, _, err = run_cli(["next"])
     assert rc == 0
     return out["card"], err
@@ -333,35 +334,36 @@ def test_without_an_order_a_new_claimant_joins_at_the_back(board):
     assert "waiting for a planner: place 4 of 4" in body
 
 
-def test_the_sweeps_backstop_serves_the_card_the_order_names(monkeypatch):
+def test_the_sweeps_drain_starts_every_card_the_order_names_first(monkeypatch):
+    """The one-way drain (DRE-8618) starts every waiting card, open claims
+    or not, in the line's own order — the CEO's first."""
     cards = _four_running() + _three_waiting()
-    runs = {"101": "completed", "102": "in_progress", "103": "in_progress",
-            "104": "in_progress"}
     with door(monkeypatch, order_answer(["DRE-203"])) as fake:
-        world = _serve(cards, runs)
-    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-203"]
+        world = _serve(cards)
+    assert [c["identifier"] for c, _, _ in world.fires] == [
+        "DRE-203", "DRE-201", "DRE-202"]
     assert fake.asked("/planning-order")
 
 
-def test_the_sweeps_backstop_with_no_door_serves_the_first_arrival(monkeypatch, capsys):
+def test_the_sweeps_drain_with_no_door_starts_them_in_arrival_order(monkeypatch, capsys):
     cards = _four_running() + _three_waiting()
-    runs = {"101": "completed", "102": "in_progress", "103": "in_progress",
-            "104": "in_progress"}
-    world = _serve(cards, runs)
-    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-201"]
+    world = _serve(cards)
+    assert [c["identifier"] for c, _, _ in world.fires] == [
+        "DRE-201", "DRE-202", "DRE-203"]
     assert capsys.readouterr().err.count(FALLBACK) == 1
 
 
 def test_every_caller_orders_through_the_one_reader():
     """`settle_claim`, `next` and the sweep's backstop each read the order
     through `planner_queue`'s one wrapper; nothing else calls the door's
-    order endpoint."""
+    order endpoint but the copy of that wrapper in `planner_allowance`
+    (DRE-8616), which outlives `planner_queue.py` later in epic DRE-8539."""
     for path, needle in ((ROOT / "scripts" / "reconcile.py", "planner_queue.ordered_ledger("),
                          (ROOT / "scripts" / "planner_queue.py", "ordered_ledger(")):
         assert needle in path.read_text(encoding="utf-8"), path
     callers = [p.name for p in (ROOT / "scripts").glob("*.py")
                if "bureau_read.planning_order(" in p.read_text(encoding="utf-8")]
-    assert callers == ["planner_queue.py"]
+    assert sorted(callers) == ["planner_allowance.py", "planner_queue.py"]
 
 
 # --------------------------------------------------------------------------- #
@@ -422,22 +424,8 @@ def test_a_pull_request_run_never_asks(monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
-# 7. plan.yml hands the claim and next steps the door's address               #
+# 7. reconcile.yml's sweep step carries the door's address                   #
 # --------------------------------------------------------------------------- #
-
-
-def _plan_step(ident: str) -> dict:
-    doc = yaml.safe_load((ROOT / ".github" / "workflows" / "plan.yml").read_text(
-        encoding="utf-8"))
-    return next(s for s in doc["jobs"]["plan"]["steps"] if s.get("id") == ident)
-
-
-@pytest.mark.parametrize("ident", ["slot", "next"])
-def test_the_claim_and_next_steps_carry_the_doors_address(ident):
-    env = _plan_step(ident).get("env") or {}
-    assert env.get("BUREAU_READ_URL") == "${{ vars.BUREAU_READ_URL }}"
-    assert env.get("BUREAU_READ_AUDIENCE") == "${{ vars.BUREAU_READ_AUDIENCE }}"
-    assert env.get("BUREAU_PIPELINE_REF") == "${{ inputs.pipeline_ref }}"
 
 
 def test_reconciles_sweep_step_already_carries_it():

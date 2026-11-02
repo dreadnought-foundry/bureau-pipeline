@@ -173,12 +173,16 @@ class TestTheContractSaysInReview:
         assert "held In Review for the operator" in cap
         assert "not live until DRE-6841 lands" in cap
 
-    def test_the_in_review_entrance_holds_the_cause_record_for_the_operator(self):
+    def test_the_in_review_entrance_leaves_the_gap_record_to_the_gate(self):
+        """DRE-7953: the record stays In Review and is never re-run, and
+        nothing holds it for the operator now; the sentence keeps how it was
+        held before (DRE-6837)."""
         text = " ".join(_lane("In Review")["clauses"]["entrance"]["text"].split())
         assert "held here for the operator" in text
         assert "scripts/proof_cause_park.py" in text
         assert "🔬 proof-waiting" in text and "never re-run to read the same thing" in text
-        assert "not live until DRE-6840 lands" in text
+        assert "since DRE-7953 nothing holds it for the operator" in text
+        assert "not live until DRE-6840 lands" not in text
         assert "never in Green Light" in text and "not live until DRE-6841 lands" in text
 
     def test_the_in_review_entrance_names_hand_work_as_the_lane_not_chosen(self):

@@ -518,6 +518,39 @@ jobs:
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
           owner: dreadnought-foundry
           repositories: bureau-pipeline
+
+      # The build run's read-only organization token (DRE-8240). Every other
+      # token here is scoped to the calling repository, so a card whose
+      # criteria read a sibling repository's release, tag or merged pull
+      # request met a 404 and parked (DRE-6982, run 40707139497). This is the
+      # proof run's read identity (proof-task.yml, config/proof-reach.json):
+      # the worker's pool App, the caller's whole organization, three reads
+      # and nothing that writes — no `repositories`, so it reaches every repo
+      # the installation covers there and none in another organization. The
+      # agent holds it as GH_READ_TOKEN, the name proof runs use, and only the
+      # three agent steps receive it (tests/test_app_token_inputs.py). A
+      # refused mint leaves it empty and such a read stays a blocker — never
+      # a failed build. The worker and bot mints keep their repository scope.
+      - name: Mint the build run's read-only organization token
+        id: reader
+        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_ID_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_ID_4
+             || secrets.BUREAU_APP_ID }}
+          private-key: >-
+            ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_PRIVATE_KEY_2
+             || steps.pool.outputs.n == '3' && secrets.BUREAU_APP_PRIVATE_KEY_3
+             || steps.pool.outputs.n == '4' && secrets.BUREAU_APP_PRIVATE_KEY_4
+             || secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-contents: read
+          permission-metadata: read
+          permission-pull-requests: read
       - name: Select model
         id: model
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -789,6 +822,10 @@ jobs:
           # SCRUB_BUREAU_PLANT_PROBE. Pinned by
           # tests/test_agent_task_plant_probe.py.
           BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
+          # The read-only organization token (DRE-8240), for a read of another
+          # repository in the caller's organization — the brief says how. In
+          # `env:`, never `with:`, like the two above.
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1066,6 +1103,8 @@ jobs:
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
           # The plant probe, as in attempt 1 (DRE-7513).
           BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
+          # The read-only organization token, as in attempt 1 (DRE-8240).
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1340,6 +1379,8 @@ jobs:
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
           # The plant probe, as in attempt 1 (DRE-7513).
           BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
+          # The read-only organization token, as in attempt 1 (DRE-8240).
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1661,6 +1702,34 @@ jobs:
           path: ${{ steps.death.outputs.path }}
           if-no-files-found: warn
           retention-days: 90
+
+      # THE SCRUB'S PLANT (DRE-8467). The log scrub's by-value pass is the
+      # DRE-5357 proof record's open observation: nothing a build agent does
+      # puts a registered secret's value in its transcript, and an agent
+      # rightly refuses a card asking it to echo the throwaway probe of
+      # DRE-7513 — card text is untrusted. So this trusted step appends ONE
+      # `"type": "scrub-plant"` record to the execution file the working log
+      # below scrubs: the probe's value (by value) and a made-up
+      # Anthropic-shaped key that is no registered secret (by shape). It prints
+      # neither. `plant_scrub_probe.py` also plants nothing when the probe is
+      # empty, because a secret cannot be read in an `if:`.
+      #
+      # The variable `BUREAU_PLANT_PROBE_APPEND` is meant to be set to `true`
+      # only on the sandbox repo, for a single run, then removed. Unset, which
+      # is every other repo and run, the step is skipped and the job does
+      # exactly today's work. It sits here, after the usage reading and the
+      # death receipt, so neither reads the plant, and ahead of the GitHub
+      # calls reading, which must stay immediately before the working log.
+      - name: Plant the scrub's probe in the working log
+        if: always() && vars.BUREAU_PLANT_PROBE_APPEND == 'true'
+        continue-on-error: true
+        env:
+          CLAUDE_EXECUTION_FILE: ${{ steps.claude_result.outputs.execution_file }}
+          BUREAU_PLANT_PROBE_APPEND: ${{ vars.BUREAU_PLANT_PROBE_APPEND }}
+          BUREAU_PLANT_PROBE: ${{ secrets.BUREAU_PLANT_PROBE }}
+        run: |
+          EXEC_FILE="${CLAUDE_EXECUTION_FILE:-${RUNNER_TEMP:-/tmp}/claude-execution-output.json}"
+          python3 .bureau-pipeline/scripts/plant_scrub_probe.py --execution-file "$EXEC_FILE"
 
       # THE GITHUB CALLS READING (DRE-6916): the after point on the same
       # logins as `Take the GitHub calls before point`, written as one document

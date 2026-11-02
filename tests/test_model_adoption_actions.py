@@ -68,17 +68,17 @@ CONFIG_PATH = ROOT / "config" / "models.yaml"
 PRICES_PATH = ROOT / "config" / "model-prices.yaml"
 SNAPSHOT_PATH = ROOT / "models.json"
 
-#: The frozen model config (DRE-6864) and its home document (DRE-6943). The
-#: Decisions below are classified against the home's groups, never the
-#: committed file: a console save that put Sonnet 4.6 at the Planners' top
-#: turned every adoption here into a refusal. The ids it holds are read off
-#: its ladders, never spelled.
-FROZEN = model_fixture.fixture_config()
-SONNET5 = model_fixture.ladder(FROZEN, "workhorse")[-1]   # the Builders' last rung
-SONNET46 = model_fixture.ladder(FROZEN, "judgement")[-1]  # the Planners' last rung
-OPUS55 = model_fixture.ladder(FROZEN, "workhorse")[0]     # the Builders' top
-OPUS5 = model_fixture.ladder(FROZEN, "workhorse")[1]      # the Builders' second rung
-SONNET55 = model_fixture.ladder(FROZEN, "workhorse")[2]   # the Builders' first Sonnet
+#: The frozen home document (DRE-6943). The Decisions below are classified
+#: against its groups, never the committed file: a console save that put
+#: Sonnet 4.6 at the Planners' top turned every adoption here into a refusal.
+#: The ids it holds are read off its groups, never spelled — and never off the
+#: frozen `models.yaml`, whose choices DRE-6983 takes out (DRE-8018).
+HOME = model_fixture.fixture_home()
+SONNET5 = model_fixture.ladder(HOME, "workhorse")[-1]   # the Builders' last rung
+SONNET46 = model_fixture.ladder(HOME, "judgement")[-1]  # the Planners' last rung
+OPUS55 = model_fixture.ladder(HOME, "workhorse")[0]     # the Builders' top
+OPUS5 = model_fixture.ladder(HOME, "workhorse")[1]      # the Builders' second rung
+SONNET55 = model_fixture.ladder(HOME, "workhorse")[2]   # the Builders' first Sonnet
 
 SONNET6 = "claude-sonnet-6"
 OPUS6 = "claude-opus-6"
@@ -354,8 +354,8 @@ class TestApply:
         sentence = maa.not_retired_sentence(OPUS55)
         assert sentence == (
             f"{OPUS55} is on no group and no project of the home and is not "
-            "retired; retiring it is a code change a person makes once part 3 "
-            "has taken the choices out of config/models.yaml")
+            "retired; retiring it is a code change a person makes in "
+            "config/models.yaml")
         assert sentence in out.out
         result = json.loads((tmp_path / "applied.json").read_text())
         assert sentence in result["sentences"]
@@ -519,20 +519,20 @@ class TestApply:
 
 
 class TestApplyEditsNoFile:
-    """In a tree whose `config/models.yaml` still names Opus 5.5 on its
-    ladders, as the committed file will until part 3, an adoption that takes
-    Opus 5.5 off every group and project of the home leaves that file — and
-    every other file of the tree — byte for byte as it was."""
+    """In a tree whose defaults in the code still name Opus 5.5 on their
+    ladders — `config/models.yaml` carries none since DRE-6983 — an adoption
+    that takes Opus 5.5 off every group and project of the home leaves that
+    file, and every other file of the tree, byte for byte as it was."""
 
     def test_the_tree_is_untouched_and_still_validates(self, tmp_path, monkeypatch,
                                                        capsys):
-        tree = model_fixture.fixture_tree(tmp_path / "tree")
+        tree = model_fixture.fixture_tree(tmp_path / "tree", regenerate=False)
         actions = model_fixture.fixture_module(tree, "model_adoption_actions")
         config = tree / "config" / "models.yaml"
         text = config.read_text()
         cfg = yaml.safe_load(text)
-        assert OPUS55 in {m for kind in ("workhorse", "advisory", "judgement")
-                          for m in model_fixture.ladder(cfg, kind)}
+        defaults = actions.mf.code_defaults()
+        assert OPUS55 in {m for rungs in defaults["ladders"].values() for m in rungs}
         retired_before = model_catalog_ids(cfg.get("retired"))
         assert OPUS55 not in retired_before
 

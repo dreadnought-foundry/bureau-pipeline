@@ -29,18 +29,19 @@ freshest token per installation. The pool probe tokens are never listed.
 THE PLAN JOB'S FRESHEST TOKEN. `tests/test_plan_token_remint.py` forbids every
 step after the planner to read the start-of-job token, and forbids any step to
 read a token across a model step — GitHub gives an installation token sixty
-minutes, and this job runs for up to 115. Every re-mint in the file is spent by
+minutes, and this job runs for up to 180. Every re-mint in the file is spent by
 the model step after it, so none of them can be handed to `emit`; the portal
 mint is pinned to its one checkout. So the plan job re-mints the READER's pool
 map once more, directly before `emit` (`app_calls`) — the reader's installation
 again. The plan job's `before` carries the reader's own gate (a bounced,
-refused or unadmitted dispatch does no work and records nothing; and
+refused or unstarted dispatch does no work and records nothing; and
 tests/test_plan_dispatch_dedupe.py lets no step after the guard run
 ungated), and the reading's mint and `emit` run only where `before` did.
-The slot-1 bot is also handed `next_token` — the end-of-run mint for the
-next card's owner — but only when GitHub says that mint reached the SAME
-installation, so another account's installation is never recorded as a meter
-this job read before.
+The slot-1 bot is handed no second token: no step after the last model step
+mints it. It was handed `next_token`, the end-of-run mint for the next card's
+owner, until DRE-8617 took the planner slot's end-of-run steps out, so when the
+pool chose another app the slot-1 bot's second point is recorded unread, never
+as 0 — as it already was on every run that named no next card.
 
 Run: python3 -m pytest tests/test_github_calls_wiring_planning.py -v
 """
@@ -103,6 +104,9 @@ class Wired:
     handed: tuple[tuple[str, str | None], ...]
     #: A condition both steps carry beside `always()`, or None.
     gate: str | None = None
+    #: Listed mints whose installation no handed token reaches: `emit` records
+    #: their second point unread.
+    unread: tuple[str, ...] = ()
 
 
 WIRED = {
@@ -110,7 +114,8 @@ WIRED = {
         follows="reader",
         listed=("app", "reader"),
         emit_precedes=KEEP_LOG,
-        handed=(("app_calls", None), ("next_token", "app"))),
+        handed=(("app_calls", None),),
+        unread=("app",)),
     ("plan.yml", "publish"): Wired(
         follows=PIPELINE_CHECKOUT,
         listed=("app",),
@@ -347,7 +352,11 @@ class TheEmitStepHandsTheFreshestTokenPerInstallation(unittest.TestCase):
                 for mint, guard in wired.handed:
                     covered.add(_installation(steps[_by_id(steps, guard or mint)]))
                 for mint in wired.listed:
-                    self.assertIn(_installation(steps[_by_id(steps, mint)]), covered, mint)
+                    key = _installation(steps[_by_id(steps, mint)])
+                    if mint in wired.unread:
+                        self.assertNotIn(key, covered, f"{mint} is handed after all")
+                    else:
+                        self.assertIn(key, covered, mint)
 
     def test_each_handed_token_is_its_installations_last_mint_before_the_emit(self):
         for (name, job), wired in WIRED.items():
@@ -491,30 +500,16 @@ class TheStepsRecordAReading(unittest.TestCase):
         bot = self._mint("agent-bureau-bot", 11, "tok-bot")
         pool = self._mint("agent-bureau-bot-3", 33, "tok-pool")
         outputs = {"app": bot, "reader": pool,
-                   PLAN_READING_MINT: self._mint("agent-bureau-bot-3", 33, "tok-fresh"),
-                   "next_token": self._mint("agent-bureau-bot", 11, "tok-next")}
+                   PLAN_READING_MINT: self._mint("agent-bureau-bot-3", 33, "tok-fresh")}
         b_bot, b_pool = self._token_envs("plan.yml", "plan", BEFORE_CMD)
-        a_pool, a_next = self._token_envs("plan.yml", "plan", EMIT_CMD)
+        (a_pool,) = self._token_envs("plan.yml", "plan", EMIT_CMD)
         doc = self._reading("plan.yml", "plan", outputs,
-                            {b_bot: 100, b_pool: 500}, {a_pool: 900, a_next: 140})
+                            {b_bot: 100, b_pool: 500}, {a_pool: 900})
         rows = {r["installation_id"]: r for r in doc["logins"]}
         self.assertEqual(sorted(rows), [11, 33])
         self.assertEqual(rows[33]["rise"], 900 - 500 - 1)
-        self.assertEqual(rows[11]["rise"], 140 - 100 - 1)
-        self.assertEqual(doc["workflow"], "plan.yml")
-
-    def test_plan_never_hands_another_accounts_installation(self):
-        outputs = {"app": self._mint("agent-bureau-bot", 11, "tok-bot"),
-                   "reader": self._mint("agent-bureau-bot-3", 33, "tok-pool"),
-                   PLAN_READING_MINT: self._mint("agent-bureau-bot-3", 33, "tok-fresh"),
-                   "next_token": self._mint("agent-bureau-bot", 77, "tok-next")}
-        b_bot, b_pool = self._token_envs("plan.yml", "plan", BEFORE_CMD)
-        a_pool, a_next = self._token_envs("plan.yml", "plan", EMIT_CMD)
-        doc = self._reading("plan.yml", "plan", outputs,
-                            {b_bot: 100, b_pool: 500}, {a_pool: 900, a_next: 140})
-        rows = {r["installation_id"]: r for r in doc["logins"]}
-        self.assertEqual(sorted(rows), [11, 33], "installation 77 was never read before")
         self.assertIsNone(rows[11]["after"], "slot 1 had no fresh token this run")
+        self.assertEqual(doc["workflow"], "plan.yml")
 
     def test_plan_on_one_app_reads_one_installation_on_the_fresh_token(self):
         # A single-app pool: the reader, and the reading's re-mint, fall
@@ -522,9 +517,9 @@ class TheStepsRecordAReading(unittest.TestCase):
         same = self._mint("agent-bureau-bot", 11, "tok")
         outputs = {"app": same, "reader": same, PLAN_READING_MINT: same}
         b_bot, b_pool = self._token_envs("plan.yml", "plan", BEFORE_CMD)
-        a_pool, a_next = self._token_envs("plan.yml", "plan", EMIT_CMD)
+        (a_pool,) = self._token_envs("plan.yml", "plan", EMIT_CMD)
         doc = self._reading("plan.yml", "plan", outputs,
-                            {b_bot: 100, b_pool: 100}, {a_pool: 300, a_next: 999})
+                            {b_bot: 100, b_pool: 100}, {a_pool: 300})
         self.assertEqual([r["installation_id"] for r in doc["logins"]], [11])
         self.assertEqual(doc["logins"][0]["rise"], 300 - 100 - 1)
 

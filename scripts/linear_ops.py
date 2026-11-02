@@ -706,7 +706,9 @@ def _reset_budget_state() -> None:
         last=None,  # last `remaining` seen
         reset_ms=None,  # last reset epoch seen, ms
         refilled=False,  # `remaining` rose at some point mid-run (DRE-3224)
-        refused_after=None,  # calls sent before the stop armed; None = not armed
+        refused_after=None,  # calls sent before the FIRST refusal; None = never refused
+        stopped_after=None,  # calls sent before the stop now armed; None = disarmed
+        lifted=0,  # times the stop was lifted (DRE-8616) — never resets the count
         condition=None,  # the named condition the stop was armed with
         reported=False,  # the exit line was printed
         limit=None,  # last bucket size seen (DRE-5589)
@@ -715,6 +717,10 @@ def _reset_budget_state() -> None:
         # the remainder of `calls` is the current bucket's (Stage 2 item 28)
         calls_by_bucket={},
         expiry_unreadable_said=False,  # an unreadable published expiry was named
+        # The rate-limit headers of the LAST response, whole (DRE-8616): a
+        # header that response did not carry is None here, never the one an
+        # earlier response sent. `call` is the request that answered.
+        reading={"remaining": None, "limit": None, "reset_ms": None, "call": 0},
     )
 
 
@@ -738,6 +744,8 @@ def _note_response_headers(headers) -> None:
     remaining = _int_header(headers, _REMAINING_HEADER)
     reset_ms = _int_header(headers, _RESET_HEADER)
     limit = _int_header(headers, _LIMIT_HEADER)
+    _budget["reading"] = {"remaining": remaining, "limit": limit, "reset_ms": reset_ms,
+                          "call": _budget["calls"]}
     if limit is not None:
         _budget["limit"] = limit
     if remaining is not None:
@@ -770,10 +778,53 @@ def _reset_clock() -> str:
 def _arm_rate_limit_stop(condition: str) -> None:
     """The first RATELIMITED arms the stop: every later `gql` in this process
     raises without sending. Idempotent — the count is the calls BEFORE the
-    first limit, and a second arming must not move it."""
+    first limit, and a second arming must not move it.
+
+    `refused_after` is the process's FIRST refusal and is never cleared: the
+    budget line, the sweep and the read door read it as "this process was
+    refused". The stop itself is `stopped_after`, which only
+    `lift_rate_limit_stop` clears (DRE-8616) — so a lifted stop that is armed
+    again says when it was armed again, and the first refusal still stands."""
+    if _budget["stopped_after"] is None:
+        _budget["stopped_after"] = _budget["calls"]
+        _budget["condition"] = condition
     if _budget["refused_after"] is None:
         _budget["refused_after"] = _budget["calls"]
-        _budget["condition"] = condition
+
+
+def rate_reading() -> dict:
+    """The rate-limit headers of the last response this process received, as
+    `_note_response_headers` recorded them (DRE-8616):
+
+        {"remaining": int|None, "limit": int|None, "reset_ms": int|None, "call": int}
+
+    A RATELIMITED answer is a response too, so its headers are here when
+    Linear sent them. `call` is `requests_made()` as it stood when that
+    response arrived: a caller comparing it with the count before its own
+    request knows whether these headers are its answer's. A copy — nothing
+    outside this module reads or writes `_budget`."""
+    return dict(_budget["reading"])
+
+
+def lift_rate_limit_stop(why: str) -> bool:
+    """Disarm the stop, so the next `gql` is sent (DRE-8616). False when no
+    stop was armed, and then nothing is said.
+
+    The stop is right for every caller that would ask again at once. ONE
+    caller has already backed off: `planner_allowance.wait` sleeps to the
+    next `wait_minutes` boundary before it reads again, and lifts the stop
+    then, and only then — a test fails on any other caller under `scripts/`.
+    `requests_made()` is untouched, and the budget line still says
+    `refused after <n> calls` for the FIRST refusal, with `stop lifted <k>×`
+    after it, so the fleet's budget log still shows the refusal."""
+    if _budget["stopped_after"] is None:
+        return False
+    _budget["stopped_after"] = None
+    _budget["lifted"] += 1
+    why = " ".join(str(why).split())
+    print(f"linear-stop: lifted after {_budget['calls']} calls ({why})",
+          file=sys.stderr, flush=True)
+    return True
 
 
 def _refusal() -> LinearRateLimited:
@@ -786,7 +837,7 @@ def _refusal() -> LinearRateLimited:
     them."""
     return LinearRateLimited(
         f"linear error from {API}: {_budget['condition']} — refused after "
-        f"{_budget['refused_after']} calls, no request sent; window resets "
+        f"{_budget['stopped_after']} calls, no request sent; window resets "
         f"{_reset_clock()} PT; {_budget_part()}"
     )
 
@@ -825,6 +876,8 @@ def budget_line() -> str:
     parts = [spent, f"window resets {_reset_clock()} PT"]
     if _budget["refused_after"] is not None:
         parts.append(f"refused after {_budget['refused_after']} calls")
+        if _budget["lifted"]:
+            parts.append(f"stop lifted {_budget['lifted']}×")
     if _budget["limit"] is not None:
         parts.append(f"limit {_budget['limit']}")
     # LAST, always: every other part keeps the place it has always had, so the
@@ -1216,7 +1269,7 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # `LinearSearchTooFast`, a fact about searching that fast, not about the
     # hour, so the next request is still sent — every other RATELIMITED arms
     # it exactly as before.
-    if _budget["refused_after"] is not None:
+    if _budget["stopped_after"] is not None:
         raise _refusal()
     # A token the console has already said is dead is never sent (review item
     # 30): every agent call is its own process, so without this each one would
@@ -2866,6 +2919,17 @@ def merged_not_closed_comment(
 # close names each such row and links that verdict comment. The line in any
 # comment the qa-bot did not write accepts nothing — the proof run posts as
 # the main bureau App, so it cannot accept its own reading.
+#
+# A record whose every unmet row is a GAP row closes too (DRE-7952): a
+# `Not observed. cause: <word> — …` row naming one of the four cause words, or
+# a `Not met. history: …` row (`proof_record.gap_rows`) — rows a re-run reads
+# the same again. The ruling files their ONE fix card in Intake through
+# `proof_gap.file_fix_card` before it returns the note, and the note names
+# each gap row with its kind and what the gap is. The fix card's
+# `🩹 proof-gap-card:` receipt on the PROOF card is what a second ask reads,
+# so card-done and the reconcile backstop never file twice. A plain
+# `Not met.`, a `Not observed.` with no cause, an unlinked acceptance or a
+# waiting row beside the gaps still holds the card, and files nothing.
 
 #: What `read_merged_pr` asks GitHub for, and all `proof_evidence_gap` reads.
 #: `files` names the record the pull request added (DRE-6141).
@@ -3046,7 +3110,7 @@ def _other_comments(pr: dict | None) -> list:
 
 def proof_close_note(
     identifier: str, title: str, pr_url: str, pr: dict | None,
-    record=None, voices: list | None = None,
+    record=None, voices: list | None = None, fix: dict | None = None,
 ) -> str | None:
     """The Done comment for a `PROOF:` card whose record merged approved, or
     None when the card is not one or the evidence falls short
@@ -3058,7 +3122,9 @@ def proof_close_note(
     table held — the rows met, and every row the operator accepted by
     decision, by its criterion (`proof_record.summary`, DRE-6244), and every
     row the checker accepted, by its criterion with the verdict comment that
-    accepted it (DRE-7949). It never
+    accepted it (DRE-7949); then each gap row it closed with — its
+    criterion, its kind and what the gap is — and `fix`, the card
+    `proof_gap.file_fix_card` filed for them (DRE-7952). It never
     wears a verdict marker itself (standards/untrusted-content.md), and the
     criteria it quotes are the record's untrusted text, so neither do they.
     """
@@ -3067,18 +3133,21 @@ def proof_close_note(
     if proof_evidence_gap(identifier, pr, record, voices) is not None:
         return None
     import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+    import proof_gap  # lazy: it imports this module
     import proof_record  # lazy: the leaf the merge gate reads too
 
-    table = merge_gate.without_verdict_markers(
-        proof_record.summary(proof_record.reading(record.text, _bound_verdict(pr))))
+    read = proof_record.reading(record.text, _bound_verdict(pr), _other_comments(pr))
+    table = merge_gate.without_verdict_markers(proof_record.summary(read))
+    gaps = proof_gap.gaps_of(read)
     merged = datetime.fromisoformat(pr["mergedAt"].replace("Z", "+00:00"))
-    return (
+    note = (
         f"✅ Merged: {pr_url}\n\n"
         f"This proof record merged {dead_run.pacific(merged)} with the critic's "
         f"APPROVE at the merged head `{pr['headRefOid']}`. Its criterion table: "
         f"{table}. A PROOF card's deliverable is its merged record, so the card "
         "closes itself (DRE-5919)."
     )
+    return f"{note}\n\n{proof_gap.close_lines(gaps, fix)}" if gaps else note
 
 
 def merge_close_ruling(
@@ -3097,6 +3166,14 @@ def merge_close_ruling(
     on its evidence. `(None, None)`: close it with the caller's ordinary
     receipt. GitHub is asked only for a `PROOF:` card the guard refused, and
     never for an epic.
+
+    A PROOF record that closes with gap rows (`proof_record.gap_rows`) has its
+    ONE fix card filed here, before `note` is returned and so before either
+    caller moves the card (DRE-7952): a filing Linear refuses is a
+    `(reason, None)` naming the failure, never a raise, and the card stays
+    open for the backstop to ask again. Both callers ask this
+    ruling, and `proof_gap.file_fix_card` reads its own receipt off the
+    thread first, so a second ask files nothing.
     """
     reason = auto_done_skip_reason(title, labels, has_children)
     if (
@@ -3122,6 +3199,26 @@ def merge_close_ruling(
         print(f"PROOF card {identifier} stays open: {gap}.")
         # The hold and the branch name are untrusted text, posted on the card.
         return merge_gate.without_verdict_markers(gap), None
+    import proof_gap  # lazy: it imports this module
+    import proof_record  # lazy: the leaf the merge gate reads too
+
+    gaps = proof_gap.gaps_of(
+        proof_record.reading(record.text, _bound_verdict(pr), _other_comments(pr)))
+    if gaps:
+        try:
+            fix = proof_gap.file_fix_card(
+                identifier, proof_gap.epic_of(identifier), pr_url, gaps,
+                repo_slug=proof_gap.repo_slug_of(labels, pr_url))
+        except Exception as exc:  # noqa: BLE001 — a failed filing is a refusal, never a crash
+            # The reconcile backstop asks this ruling inside its sweep, so a
+            # raise here would end the pass for every other card.
+            import merge_gate  # lazy: code_owner_hold, which merge_gate loads, imports this module
+
+            gap = (f"its record closes with {len(gaps)} gap row(s), and their fix card "
+                   f"could not be filed: {' '.join(str(exc).split())[:300]}")
+            print(f"PROOF card {identifier} stays open: {gap}.")
+            return merge_gate.without_verdict_markers(gap), None
+        note = proof_close_note(identifier, title, pr_url, pr, record, voices, fix=fix)
     return None, note
 
 
@@ -3165,7 +3262,9 @@ def cmd_card_done(identifier: str, pr_url: str) -> None:
     the job log. A `PROOF:` card is the one `no-code` card a merge may close
     (DRE-5919): → Done when its record merged on its own branch with the
     critic's APPROVE at the merged head, every judged row of the record met
-    and no `🔬 proof-waiting` hold standing (`merge_close_ruling`, DRE-6141).
+    — or every unmet row a gap row, filed as one fix card in Intake
+    (DRE-7952) — and no `🔬 proof-waiting` hold standing
+    (`merge_close_ruling`, DRE-6141).
 
     Break-glass cards (DRE-2737) are a class of their own: the fix has shipped, so
     the debt comes due — the card returns to Planning for the classification

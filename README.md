@@ -218,6 +218,19 @@ passes `secrets: inherit`: it already holds the token, so without the variable
 it would change buckets the moment `stable` advanced, with nobody deciding.
 `==` in a GitHub expression ignores case, so `PLANNER` opts in too.
 
+**The Reconcile sweep is the exception: it spends the token by default
+(DRE-8716).** On 2026-11-01 the sweep sent about three of every four requests
+on the fleet key, which ran down to about 840 of 2,500 while the planner's
+bucket sat near full. So every key-holding step in `reconcile.yml`'s `sweep`
+job reads `LINEAR_PLANNER_KEY` ahead of the fleet key, with the fleet key as
+its 401 fallback, in every repo that holds the token, `secrets: inherit` stubs
+included. A repo puts its sweep back on the fleet key by setting the variable
+`LINEAR_SWEEP_BUCKET` to `fleet` (`!=` ignores case too, so `FLEET` works). It
+takes no code change and no wait for `stable`. Set it when the planner's bucket
+runs short: planners posting `🪫 planner-hold: held`, or `planner-oauth`
+budget lines reading under about 2,000. Set it on agent-bureau and
+bureau-pipeline first, since they send most of the sweep's requests.
+
 **Before setting it on any repo, measure what that repo's agents would spend.**
 The OAuth bucket allows 5,000 requests an hour against the API key's 2,500, but
 only 2,000,000 complexity points an hour against the API key's 3,000,000, and
@@ -229,7 +242,8 @@ both buckets.
 **A token already known to be dead is never sent (Stage 2 #30).** The repository
 variable `LINEAR_PLANNER_KEY_EXPIRES_AT` holds the published token's expiry in
 epoch seconds. Every job that can hold the token (the four above, plus
-plan.yml's `plan` and `publish`) passes it to `scripts/linear_ops.py`. When the
+plan.yml's `plan` and `publish` and reconcile.yml's `sweep`) passes it to
+`scripts/linear_ops.py`. When the
 expiry has passed, or is less than a minute away, each process goes straight to
 the fleet key and prints one `linear-key: planner-oauth not sent (...)` line,
 rather than spending a 401 first. When the variable is absent, nothing changes.
@@ -753,7 +767,13 @@ person can name. Merge → Done through that path (the sweep backstops it);
 closed unmerged → the sweep cancels the card with the reason on it; a re-opened
 pull request keeps the same card (idempotent on the pull request URL, looked up
 in Linear across every state, so a body dependabot regenerated is re-stamped,
-never re-filed). An `automation` card is out of the WIP base and out of the
+never re-filed). A pull request that merges or closes after dependabot wiped
+the line, before the sweep re-stamped it, is looked up by its URL the same way
+and its card goes Done or Canceled as a marked one's does (DRE-8394) — looked
+up only while the board holds a live `automation` card no line in the listed
+pull requests names, so a settled board costs no Linear request (an unsettled
+one costs at most one lookup per closed, unmarked pull request in the 30-item
+listing, per sweep). An `automation` card is out of the WIP base and out of the
 nudge loop — it has no agent run to count and no `agent/` head for the loop to
 find. Filing is paced at `DEPENDABOT_CARD_CAP` per sweep, oldest first, and a
 repo off the repo map (the harness sandbox) files nothing. The console's own
@@ -770,6 +790,16 @@ into `agent/DRE-4534-record-reads` and DRE-4535 and DRE-4536 went Done, while
 the parent (#2690) and its own parent (#2688) sat open as drafts until
 2026-09-22 09:57 PT. **A card is Done only when its code is on the default
 branch**, and the cloud era has no auto-revert.
+
+**And the merge gate no longer makes such a merge (DRE-8503).** On 2026-10-30
+at 4:01 PM PT agent-bureau's gate merged #4373 into
+`agent/DRE-8273-initiatives-contract-pr`, a branch that then merged on and was
+deleted, so #4373's work never reached the stack and was re-filed as #4383.
+The gate's condition B (`merge_gate.evaluate_base`) now holds a pull request
+whose base is not the default branch, with one note per head saying it waits
+to be retargeted, and the fix agent's conflict step merges the pull request's
+own base (`origin/<base_ref>`), never the default branch. A merge into a side
+branch now comes only from a person, and the two steps below still handle it.
 
 The `Card → Done` step now reads `base.ref` against the repository's own
 `default_branch` — through step env, never interpolated, the rule `PR_BODY`
@@ -903,6 +933,16 @@ re-triggers nothing, holds nothing — not even a draft already at the cap — a
 says so once per head with a `review-nudge-draft` comment on the card. Only the
 receipts after that comment count, so once the pull request is marked ready the
 budget for the same head starts again from zero.
+
+A stacked pull request held on its base spends neither budget either
+(DRE-8503). When the gate's newest hold note at the head is condition B's —
+the base is another branch, waiting to be retargeted — and the pull request is
+still based on the branch the note names, the sweep re-triggers nothing,
+writes nothing and never parks it, however long the parent takes. Once the
+base moves (GitHub retargets the child when the parent merges with
+`--delete-branch`, and the head does not move), the note names a base the pull
+request no longer has, and the next stale sweep re-triggers the gate at the
+head's unspent budget.
 
 ## The plan artifact (DRE-2720)
 

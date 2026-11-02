@@ -543,26 +543,26 @@ def test_a_resolve_posts_the_all_clear_when_given(monkeypatch, capsys, issuer, b
 def test_a_resolve_without_the_all_clear_sends_none(monkeypatch, capsys, issuer, board):
     with FakeNoticeDoor(outcome="not-open") as door:
         _point(monkeypatch, door, issuer)
-        assert pipeline_notice.resolve_notice("groom_stall") == "not-open"
-    assert door.requests[0]["body"] == {"action": "resolve", "notice": "groom_stall"}
+        assert pipeline_notice.resolve_notice("reviewer_outage:fleet") == "not-open"
+    assert door.requests[0]["body"] == {"action": "resolve", "notice": "reviewer_outage:fleet"}
     assert _lines(capsys.readouterr().out) == [
-        "pipeline-notice: not-open kind=pipeline_notice:groom_stall"]
+        "pipeline-notice: not-open kind=pipeline_notice:reviewer_outage:fleet"]
 
 
 @pytest.mark.parametrize("status", [400, 401, 403, 503])
 def test_a_refused_resolve_is_logged_and_nothing_else(monkeypatch, capsys, issuer, board, status):
     with FakeNoticeDoor(status=status) as door:
         _point(monkeypatch, door, issuer)
-        got = pipeline_notice.resolve_notice("groom_stall")
+        got = pipeline_notice.resolve_notice("reviewer_outage:fleet")
     assert got == "resolve-refused"
     assert board.calls == 0
     assert _lines(capsys.readouterr().out) == [
-        f"pipeline-notice: resolve-refused http-{status} kind=pipeline_notice:groom_stall"]
+        f"pipeline-notice: resolve-refused http-{status} kind=pipeline_notice:reviewer_outage:fleet"]
 
 
 def test_a_recovery_body_without_a_recovery_title_is_refused(issuer, board):
     with pytest.raises(ValueError):
-        pipeline_notice.resolve_notice("groom_stall", recovery_body="cleared")
+        pipeline_notice.resolve_notice("reviewer_outage:fleet", recovery_body="cleared")
 
 
 # ── refused before any request ──────────────────────────────────────────────
@@ -591,7 +591,7 @@ def test_a_bad_severity_is_refused_before_any_request(monkeypatch, issuer, board
     with FakeNoticeDoor() as door:
         _point(monkeypatch, door, issuer)
         with pytest.raises(ValueError):
-            pipeline_notice.raise_notice("groom_stall", severity="INFO", title="t", body="b")
+            pipeline_notice.raise_notice("reviewer_outage:fleet", severity="INFO", title="t", body="b")
     assert door.requests == []
 
 
@@ -604,17 +604,17 @@ def test_cli_raise_with_a_body_file(monkeypatch, capsys, tmp_path, issuer, board
     with FakeNoticeDoor() as door:
         _point(monkeypatch, door, issuer)
         code = pipeline_notice.main([
-            "raise", "--notice", "groom_stall", "--severity", "WARN",
-            "--title", "Groom queue stalled", "--body-file", str(body),
+            "raise", "--notice", "reviewer_outage:fleet", "--severity", "WARN",
+            "--title", "Reviewer down", "--body-file", str(body),
             "--action-url", "https://github.com/x", "--action-label", "Open"])
     assert code == 0
     assert door.requests[0]["body"] == {
-        "action": "raise", "notice": "groom_stall", "severity": "WARN",
-        "title": "Groom queue stalled", "body": "the run list\n",
+        "action": "raise", "notice": "reviewer_outage:fleet", "severity": "WARN",
+        "title": "Reviewer down", "body": "the run list\n",
         "action_url": "https://github.com/x", "action_label": "Open",
     }
     assert _lines(capsys.readouterr().out) == [
-        "pipeline-notice: raised kind=pipeline_notice:groom_stall"]
+        "pipeline-notice: raised kind=pipeline_notice:reviewer_outage:fleet"]
 
 
 def test_cli_raise_falls_back_with_the_given_card(monkeypatch, capsys, tmp_path, issuer, board):
@@ -623,16 +623,16 @@ def test_cli_raise_falls_back_with_the_given_card(monkeypatch, capsys, tmp_path,
     with FakeNoticeDoor(status=401) as door:
         _point(monkeypatch, door, issuer)
         code = pipeline_notice.main([
-            "raise", "--notice", "groom_stall", "--severity", "WARN",
-            "--title", "Groom queue stalled", "--body-file", str(body),
-            "--fallback-title", "Groom queue stalled", "--fallback-lane", "Triage",
+            "raise", "--notice", "reviewer_outage:fleet", "--severity", "WARN",
+            "--title", "Reviewer down", "--body-file", str(body),
+            "--fallback-title", "Reviewer down", "--fallback-lane", "Triage",
             "--fallback-label", "groomer", "--fallback-label", "no-code"])
     assert code == 0
-    assert board.created[0]["title"] == "Groom queue stalled"
+    assert board.created[0]["title"] == "Reviewer down"
     assert board.created[0]["lane"] == "Triage"
     assert board.created[0]["labels"] == ["groomer", "no-code"]
     assert _lines(capsys.readouterr().out) == [
-        "pipeline-notice: fallback-card http-401 kind=pipeline_notice:groom_stall card=DRE-9001"]
+        "pipeline-notice: fallback-card http-401 kind=pipeline_notice:reviewer_outage:fleet card=DRE-9001"]
 
 
 def test_cli_raise_with_no_fallback_the_door_refused_exits_non_zero(
@@ -658,7 +658,7 @@ def test_cli_raise_whose_fallback_search_fails_exits_non_zero(
     with FakeNoticeDoor(status=503) as door:
         _point(monkeypatch, door, issuer)
         code = pipeline_notice.main([
-            "raise", "--notice", "groom_stall", "--severity", "WARN",
+            "raise", "--notice", "reviewer_outage:fleet", "--severity", "WARN",
             "--title", "t", "--body-file", str(body), "--fallback-title", "t",
             "--fallback-lane", "Planning"])
     assert code != 0
@@ -686,15 +686,15 @@ def test_cli_resolve_with_the_all_clear(monkeypatch, capsys, tmp_path, issuer, b
 def test_cli_resolve_without_the_all_clear(monkeypatch, capsys, issuer, board):
     with FakeNoticeDoor(outcome="not-open") as door:
         _point(monkeypatch, door, issuer)
-        code = pipeline_notice.main(["resolve", "--notice", "groom_stall"])
+        code = pipeline_notice.main(["resolve", "--notice", "reviewer_outage:fleet"])
     assert code == 0
-    assert door.requests[0]["body"] == {"action": "resolve", "notice": "groom_stall"}
+    assert door.requests[0]["body"] == {"action": "resolve", "notice": "reviewer_outage:fleet"}
 
 
 def test_cli_refused_resolve_exits_zero_and_files_nothing(monkeypatch, capsys, issuer, board):
     with FakeNoticeDoor(status=503) as door:
         _point(monkeypatch, door, issuer)
-        code = pipeline_notice.main(["resolve", "--notice", "groom_stall"])
+        code = pipeline_notice.main(["resolve", "--notice", "reviewer_outage:fleet"])
     assert code == 0
     assert board.calls == 0
 

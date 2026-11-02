@@ -43,7 +43,7 @@ is the floor. Every rule here exists because its violation shipped a bug.
   GENERATED region — every differing line strictly between a `BEGIN generated`
   and an `END generated` marker, markers untouched (DRE-3896). That last one is
   safe only because the region's content is proved elsewhere: `python3
-  scripts/sync_model_config.py --check` goes red in CI when a generated region
+  scripts/sync_fallback_map.py --check` goes red in CI when a generated region
   does not match its canonical render, so code cannot hide in one. The proof is
   the condition, not a claim about it — the exemption applies **only to the
   handful of paths a generator's `--check` actually covers**, listed in
@@ -203,7 +203,11 @@ the shape that buys it, and they apply to every repo in the fleet.
   (`briefs/planner.md`). The plan critic reads the same question before the
   plan reaches the CEO. As a builder you inherit the answer: if you find
   yourself editing a file a sibling card also owns, that is a planning defect —
-  say so rather than racing for it.
+  say so rather than racing for it. The reverse holds too: a blocker between
+  two cards whose footprints share no file, or share only a declared ledger
+  (`config/ledger-files.json`) where their lines are apart, needs
+  `because <reason>` on its `**Blocked by:**` line, naming no card id, or
+  `scripts/plan_blocker_footprint.py` sends the plan back (DRE-8688).
 - A shared barrel, registry, route table, or gallery index edited by two open
   PRs conflicts every sibling. If registration would touch a shared file, make
   discovery convention-based (glob) so later work only ADDS files — or

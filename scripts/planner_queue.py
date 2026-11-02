@@ -16,7 +16,7 @@ receipt carries a second line, `waiting for a planner: place <k> of <n>`. A
 `claimed` receipt may carry `· from run <sender>` (the handover), a `waiting`
 or `dispatched` one `· reason <word>` (the `client_payload.reason` the run
 arrived with); both sit after `trigger` and before `at`. A `released` receipt
-may end `· because <finished|expired|run-gone|duplicate|parked>`.
+may end `· because <finished|expired|run-gone|duplicate|parked|cap-removed>`.
 
 This module owns the grammar, the pure decision logic and the four writes.
 Nothing here touches a workflow: the `plan.yml` and `reconcile.py` cards of the
@@ -65,9 +65,9 @@ a minute. Since 2026-10-02 09:37 PT the planners spend their own 5,000-an-hour
 OAuth bucket instead of that key (DRE-5589, the token renewed by the console,
 DRE-5587), so planners no longer starve the sweeps, and the CEO raised the
 file's number to three (DRE-5634). Nobody has yet measured that bucket with
-four planners running, which is why the ceiling is four. The groom drain reads
-this ledger too, and releases no more cards than there are free slots
-(`groomer.free_planner_slots`).
+four planners running, which is why the ceiling is four. The groom drain read
+this ledger too, and released no more cards than there were free slots, until
+DRE-8619 removed that read with the groom queue.
 
 THE RULES, in the order the ledger applies them.
 
@@ -82,6 +82,11 @@ THE RULES, in the order the ledger applies them.
     out of Planning: the card leaves the line, and a re-send starts a fresh
     wait. Without it DRE-5213, parked at 13:40 PT on 2026-09-30 and re-sent
     at 14:00, came back 411 minutes "waited" and was parked again at 14:26.
+  * A `because cap-removed` release is about the CARD the same way
+    (DRE-8618). The cap is gone, and the sweep's one-way drain of the line
+    (`reconcile.serve_planner_line`) posts it after the plan dispatch that
+    starts a waiting card: the card leaves the line, so no pass serves it
+    twice.
   * A card's OPEN CLAIM is its newest `claimed` receipt inside
     `claim_ttl_minutes` that no later receipt closes. A claim older than the
     TTL counts as released — the TTL is at least `plan.yml`'s
@@ -264,7 +269,9 @@ LEDGER_LANES = ("Planning", "In Progress", "Green Light")
 #: claim only — it is in the CEO's queue, not in line.
 WAITING_LANES = ("Planning", "In Progress")
 STATES = ("claimed", "waiting", "dispatched", "released")
-BECAUSE = ("finished", "expired", "run-gone", "duplicate", "parked")
+BECAUSE = ("finished", "expired", "run-gone", "duplicate", "parked", "cap-removed")
+#: The releases about the CARD rather than a run: each takes it out of the line.
+CARD_RELEASES = ("parked", "cap-removed")
 #: The trigger that sorts to the front of the line: the activate route.
 FRONT_TRIGGER = "in progress"
 PLACE_LINE = "waiting for a planner: place {place} of {of}"
@@ -593,10 +600,10 @@ class _View:
         self.open = [i for i in self.unclosed if not self._expired(rs[i])]
         self.expired = [i for i in self.unclosed if self._expired(rs[i])]
         # Releases that are about the CARD: they close a claim, and not as a
-        # duplicate, or they are a park. Any other release is about a run and
-        # moves nothing.
+        # duplicate, or they are a park or the drain's (DRE-8618). Any other
+        # release is about a run and moves nothing.
         self.ignored = {j for j, r in enumerate(rs) if r.state == "released"
-                        and r.because != "parked"
+                        and r.because not in CARD_RELEASES
                         and (j not in closing or r.because == "duplicate")}
         release_points = [j for j, r in enumerate(rs)
                           if r.state == "released" and j not in self.ignored]

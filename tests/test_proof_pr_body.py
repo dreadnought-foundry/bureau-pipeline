@@ -296,3 +296,147 @@ class BriefTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# --------------------------------------------------------------------------- #
+# The body through the redaction seam (DRE-8169)                               #
+# --------------------------------------------------------------------------- #
+#
+# Every name below is synthetic and carries the marker `synth`, the way
+# `board_snapshot.synthetic()` invents its board: no real person's name.
+
+import io  # noqa: E402
+from contextlib import redirect_stderr, redirect_stdout  # noqa: E402
+
+import name_redact  # noqa: E402
+import name_roster  # noqa: E402
+
+OWNER = "acme"
+SYNTH_CEO = {"name": "Synthora Synthbridge", "displayName": "Synthora",
+             "email": "synthora.synthbridge@synthetic.invalid", "admin": True, "active": True}
+SYNTH_CEO_LOGIN = "synthbridge-synth"
+SYNTH_PERSON = {"name": "Synthia Synthwood", "displayName": "synthia",
+                "email": "synthia.synthwood@synthetic.invalid", "admin": False, "active": True}
+SYNTH_PERSON_LOGIN = "synthwood-synth"
+SYNTH_PROFILES = {SYNTH_CEO_LOGIN: SYNTH_CEO["name"], SYNTH_PERSON_LOGIN: SYNTH_PERSON["name"]}
+SYNTH_SECRETS = (SYNTH_CEO["name"], "Synthora", "Synthbridge", SYNTH_CEO["email"], SYNTH_CEO_LOGIN,
+                 SYNTH_PERSON["name"], "synthia", "Synthwood", SYNTH_PERSON["email"],
+                 SYNTH_PERSON_LOGIN)
+
+LIVE = {"NAME_GUARD_LIVE": "true"}
+DRY = {"NAME_GUARD_LIVE": "false"}
+
+NAMED_STATUS = "**Status: PASS.** Synthora Synthbridge pressed it."
+REDACTED_STATUS = "**Status: PASS.** [the CEO] pressed it."
+NAMED_TABLE = [
+    "| Criterion | Result |",
+    "| --- | --- |",
+    f"| The removal is stored with its reason | Met. synthia pressed it as `{SYNTH_PERSON_LOGIN}` |",
+    f"| The console shows the reason | Met. mailed {SYNTH_CEO['email']}, reply from Synthbridge |",
+]
+REDACTED_TABLE = [
+    "| Criterion | Result |",
+    "| --- | --- |",
+    "| The removal is stored with its reason | Met. [a person] pressed it as `[a person]` |",
+    "| The console shows the reason | Met. mailed [the CEO], reply from [the CEO] |",
+]
+NAMED = _record(NAMED_STATUS, NAMED_TABLE)
+
+
+def synth_reader(seen=None):
+    """`name_roster.read` over the synthetic Linear users and GitHub members."""
+    def gql(query, variables=None):
+        return {"users": {"nodes": [SYNTH_CEO, SYNTH_PERSON],
+                          "pageInfo": {"hasNextPage": False, "endCursor": None}}}
+
+    def gh(path):
+        if path.startswith(f"orgs/{OWNER}/members"):
+            return ([{"login": m} for m in SYNTH_PROFILES]
+                    if path.endswith("&page=1") else [])
+        if path.startswith("users/"):
+            return {"name": SYNTH_PROFILES.get(path[len("users/"):])}
+        raise AssertionError("unexpected gh path")
+
+    def read(**kw):
+        if seen is not None:
+            seen.append(kw)
+        return name_roster.read(gql=gql, gh=gh, **kw)
+    return read
+
+
+def unreadable_reader(seen=None):
+    def read(**kw):
+        if seen is not None:
+            seen.append(kw)
+        raise name_roster.RosterUnreadable("github members")
+    return read
+
+
+class RedactTest(unittest.TestCase):
+    """`refresh` hands `gh pr edit` the body only after the redaction seam."""
+
+    def _refresh(self, gh, **kw):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = proof_pr_body.refresh(REPO, CARD, CARD_URL, gh=gh, **kw)
+        return code, out.getvalue() + err.getvalue()
+
+    def _no_name(self, text):
+        low = text.casefold()
+        for s in SYNTH_SECRETS:
+            self.assertNotIn(s.casefold(), low, "a synthetic name reached the text")
+
+    def test_live_with_a_roster_every_form_reads_as_its_role(self):
+        gh = FakeGh(record=NAMED)
+        roster = synth_reader()(owner=OWNER, extra_logins=())
+        code, out = self._refresh(gh, roster=roster, env=LIVE, reader=unreadable_reader())
+        self.assertEqual(0, code, out)
+        self.assertEqual(1, len(gh.bodies))
+        body = gh.bodies[0]
+        self._no_name(body)
+        self._no_name(out)
+        self.assertIn(REDACTED_STATUS, body.splitlines())
+        self.assertEqual(REDACTED_TABLE, _table_in(body))
+        rendered = proof_pr_body.render(CARD, CARD_URL, NAMED)
+        expected = rendered.replace(NAMED_STATUS, REDACTED_STATUS).replace(
+            "\n".join(NAMED_TABLE), "\n".join(REDACTED_TABLE))
+        self.assertEqual(expected, body, "otherwise byte-identical to render's output")
+        self.assertIn(f"{name_redact.TAG} ok", out)
+
+    def test_live_with_no_roster_reads_it_once_for_the_repositorys_owner(self):
+        gh = FakeGh(record=NAMED)
+        seen = []
+        env = {**LIVE, "GITHUB_ACTOR": "synthactor"}
+        code, out = self._refresh(gh, env=env, reader=synth_reader(seen))
+        self.assertEqual(0, code, out)
+        self.assertEqual(1, len(seen))
+        self.assertEqual(OWNER, seen[0]["owner"])
+        self.assertIn("synthactor", seen[0]["extra_logins"])
+        self.assertEqual(REDACTED_TABLE, _table_in(gh.bodies[0]))
+
+    def test_live_with_an_unreadable_roster_fails_and_writes_no_body(self):
+        gh = FakeGh(record=NAMED)
+        code, out = self._refresh(gh, env=LIVE, reader=unreadable_reader())
+        self.assertEqual(1, code)
+        self.assertEqual([], gh.bodies)
+        self.assertFalse([c for c in gh.calls if c[:2] == ["pr", "edit"]])
+        self.assertIn("::error::proof_pr_body: #3589: name-guard: refused — "
+                      "roster unreadable: github members", out)
+        self._no_name(out)
+
+    def test_not_live_writes_renders_output_unchanged_and_prints_the_dry_line(self):
+        gh = FakeGh(record=NAMED)
+        seen = []
+        code, out = self._refresh(gh, env=DRY, reader=unreadable_reader(seen))
+        self.assertEqual(0, code, out)
+        self.assertEqual([], seen, "not live, the roster is never read")
+        self.assertEqual([proof_pr_body.render(CARD, CARD_URL, NAMED)], gh.bodies)
+        dry = [l for l in out.splitlines() if l.startswith(f"{name_redact.TAG} dry — ")]
+        self.assertEqual(1, len(dry), out)
+        self._no_name(out)
+
+    def test_no_open_pull_request_reads_no_roster(self):
+        seen = []
+        code, _ = self._refresh(FakeGh(prs=[]), env=LIVE, reader=unreadable_reader(seen))
+        self.assertEqual(0, code)
+        self.assertEqual([], seen)

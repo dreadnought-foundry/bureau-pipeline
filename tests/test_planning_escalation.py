@@ -1344,7 +1344,7 @@ class TestNoLabelFlagOrLaneSkipsPlanning:
         assert route["if"].strip() == (
             "steps.gate.outputs.bounced != 'true' && "
             "steps.dedupe.outputs.skip != 'true' && "
-            "steps.slot.outputs.admitted == 'true' && "
+            "steps.allowance.outputs.start == 'true' && "
             "steps.classify.outputs.escalate != 'true' && "
             "steps.classify.outputs.requeue != 'true'"
         )

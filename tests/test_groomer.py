@@ -476,9 +476,11 @@ def test_the_rendered_proposal_names_no_ranked_read_without_a_judgement():
 # may retire a CEO approval of the same batch. Re-pinned by DRE-4725, and
 # again by DRE-4965, which moved the batch itself to newest first — and since
 # the ranked read no longer orders the batch, a read that ranks every card
-# `now` proposes the rules' batch, so the two ids are one.
-FIXTURE_RULES_ONLY_ID = "a85999f18b18"
-FIXTURE_JUDGED_ID = "a85999f18b18"
+# `now` proposes the rules' batch, so the two ids are one. Re-pinned by
+# DRE-7973: DRE-107's `Superseded by:` line puts it on the Cancel list from
+# outside the batch, and the Cancel list is in the digest.
+FIXTURE_RULES_ONLY_ID = "991592d78894"
+FIXTURE_JUDGED_ID = "991592d78894"
 
 
 def _fixture_proposal(judgement=None):
@@ -847,15 +849,18 @@ def test_an_epic_whose_children_are_all_closed_is_refused_off_its_own_line():
     assert row["open_children"] == 0 and row["children"] == 3
 
 
-def test_a_refused_card_outside_the_batch_stays_not_now_and_is_not_listed():
-    """A writer's Cancel is acted on only inside the morning's set: outside
-    it the card was never going on the Cancel list, so nothing was refused."""
+def test_a_refused_card_outside_the_batch_stays_not_now_and_is_listed():
+    """Since DRE-7973 a writer's Cancel is acted on wherever the card stands,
+    so outside the batch it is refused too: the card keeps its place,
+    `not-now`, and the refusal is said."""
     cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)] + [
         epic(days=9, description="Superseded by: DRE-4700")]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
     later = {r["identifier"] for r in proposal["outcomes"]["not-now"]}
     assert EPIC in later
-    assert proposal["cancels_refused"] == []
+    assert [(r["identifier"], r["source"]) for r in
+            proposal["cancels_refused"]] == [(EPIC, groomer.DEAD_FROM_LINE)]
+    assert proposal["outcomes"]["dead"] == []
 
 
 def test_the_page_lists_each_refused_cancel_after_the_cancel_table():

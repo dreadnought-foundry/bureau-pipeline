@@ -609,6 +609,189 @@ class OnePredicateTest(unittest.TestCase):
         self.assertEqual(sweep.dispatched, [])
 
 
+# --------------------------------------------------------------------------
+# DRE-8177 — a run that failed only because one of its parts was canceled
+# --------------------------------------------------------------------------
+#: bureau-pipeline #1235 (DRE-7827) on 2026-10-27: part 4 stopped at its
+#: 30-minute limit, and `scripts unit tests`, the job that waits on every part
+#: and every walk, read `failure` after it. One `tests.yml` run holds them all.
+UNIT_RUN = 18900412345
+CANCELED_PART = "scripts unit tests (part 4)"
+WALK_SHARD = "scripts unit tests (walk scripts shard 2 of 3)"
+SUMMARY = "scripts unit tests"
+CANCELED_AT = "2026-10-27T15:30:41Z"
+SUMMED_AT = "2026-10-27T15:31:09Z"
+FAILED_TEST = "tests/test_reconcile.py::test_sweep_holds"
+
+
+def _job(name, conclusion, at, *, job, run=UNIT_RUN) -> dict:
+    """One REST check run of workflow run `run`, finished at `at`."""
+    return {"id": job, "name": name, "status": "completed", "conclusion": conclusion,
+            "completed_at": at,
+            "details_url": ("https://github.com/dreadnought-foundry/bureau-pipeline"
+                            f"/actions/runs/{run}/job/{job}")}
+
+
+def _canceled_only(canceled=CANCELED_PART, **override) -> list:
+    """The head's check runs: one part canceled, the summary red after it, a
+    review check in a run of its own. `override` sets a job's
+    (conclusion, completed_at) by name."""
+    jobs = [("scripts unit tests (part 1)", "success", "2026-10-27T15:12:03Z", 101),
+            (canceled, "cancelled", CANCELED_AT, 104),
+            (SUMMARY, "failure", SUMMED_AT, 109)]
+    runs = [_job(name, *override.get(name, (conclusion, at)), job=job)
+            for name, conclusion, at, job in jobs]
+    return runs + [_job("call / review", "success", "2026-10-27T15:02:00Z",
+                        job=201, run=UNIT_RUN + 1)]
+
+
+def _as_rollup(runs) -> list:
+    """The same checks as `statusCheckRollup` nodes: `detailsUrl`,
+    `completedAt`, and the status and conclusion in capitals."""
+    return [{"__typename": "CheckRun", "name": run["name"],
+             "status": run["status"].upper(), "conclusion": run["conclusion"].upper(),
+             "completedAt": run["completed_at"], "detailsUrl": run["details_url"]}
+            for run in runs]
+
+
+def _log(*failed) -> str:
+    """A canceled job's log: the tests that failed before the cancel line."""
+    lines = [f"2026-10-27T15:20:00.0000000Z FAILED {test} - assert 1 == 2" for test in failed]
+    return "\n".join([*lines, "2026-10-27T15:30:40.0000000Z ##[error]The operation was canceled."])
+
+
+class ACanceledOnlyRunIsNotRedTest(unittest.TestCase):
+    """DRE-8177: `record_red_checks` reads a workflow run red only because a
+    part of it was canceled as not red, matched by run and never by name."""
+
+    PR = {"headRefName": REPLAY_BRANCH, "headRefOid": REPLAY_HEAD, "comments": []}
+
+    def _read(self, runs, **kw):
+        import proof_dispatch
+        return proof_dispatch.record_red_checks(self.PR, runs, **kw)
+
+    def test_a_canceled_part_and_its_summary_are_not_red_in_both_shapes(self):
+        for canceled in (CANCELED_PART, WALK_SHARD):
+            runs = _canceled_only(canceled)
+            with self.subTest(canceled=canceled, shape="REST"):
+                self.assertEqual(self._read(runs), [])
+            with self.subTest(canceled=canceled, shape="statusCheckRollup"):
+                self.assertEqual(self._read(_as_rollup(runs)), [])
+
+    def test_a_part_that_really_failed_is_red_as_today(self):
+        runs = _canceled_only(**{CANCELED_PART: ("failure", CANCELED_AT)})
+        self.assertEqual(self._read(runs), [CANCELED_PART, SUMMARY])
+        self.assertEqual(self._read(_as_rollup(runs)), [CANCELED_PART, SUMMARY])
+
+    def test_a_failure_that_finished_before_a_cancellation_is_red(self):
+        # A real failure, or DRE-6780's fail-fast collateral: the part failed
+        # first, so the cancellation is not what made the run red.
+        runs = _canceled_only() + [_job(RED, "failure", "2026-10-27T15:18:30Z", job=102)]
+        for shape in (runs, _as_rollup(runs)):
+            self.assertEqual(self._read(shape), [SUMMARY, RED])
+
+    def test_a_finish_time_that_cannot_be_read_keeps_the_run_red(self):
+        for name in (CANCELED_PART, SUMMARY):
+            conclusion = "cancelled" if name == CANCELED_PART else "failure"
+            for at in (None, "", "not a time"):
+                runs = _canceled_only(**{name: (conclusion, at)})
+                with self.subTest(missing=name, at=at):
+                    self.assertEqual(self._read(runs), [SUMMARY])
+                    self.assertEqual(self._read(_as_rollup(runs)), [SUMMARY])
+
+    def test_a_red_check_with_no_run_id_stays_red(self):
+        runs = _canceled_only()
+        runs[2] = dict(runs[2], details_url="https://example.com/checks/9")
+        self.assertEqual(self._read(runs), [SUMMARY])
+
+    def test_a_run_with_no_cancelled_check_is_red_as_today(self):
+        runs = _canceled_only(**{CANCELED_PART: ("success", CANCELED_AT)})
+        self.assertEqual(self._read(runs), [SUMMARY])
+
+    def test_a_cancellation_in_another_run_does_not_clear_this_one(self):
+        runs = _canceled_only()
+        runs[1] = _job(CANCELED_PART, "cancelled", CANCELED_AT, job=104, run=UNIT_RUN + 7)
+        self.assertEqual(self._read(runs), [SUMMARY])
+
+    def test_a_canceled_part_whose_log_shows_a_failed_test_is_red(self):
+        # DRE-7018: the same check id → failed tests map `canceled_check.split` reads.
+        runs = _canceled_only()
+        self.assertEqual(self._read(runs, failed_inside={104: [FAILED_TEST]}),
+                         [CANCELED_PART, SUMMARY])
+        # A log that shows no failed test changes nothing.
+        self.assertEqual(self._read(runs, failed_inside={104: []}), [])
+
+    def test_a_canceled_part_whose_log_could_not_be_read_keeps_the_run_red(self):
+        # The caller read the logs and this one is absent from the map: a test
+        # may have failed inside it (DRE-7018), so the run is not cleared.
+        runs = _canceled_only()
+        self.assertEqual(self._read(runs, failed_inside={}), [SUMMARY])
+        self.assertEqual(self._read(runs, failed_inside={999: []}), [SUMMARY])
+        # No map at all is `_declined`'s case: no log was read, none is owed.
+        self.assertEqual(self._read(runs, failed_inside=None), [])
+
+
+class ACanceledPartWithAFailedTestStaysTheFixAgentsTest(unittest.TestCase):
+    """DRE-8177 keeps DRE-7018: a canceled part whose log already shows a
+    failed test is still sent the fix agent, by the sweep and the Resolve step."""
+
+    def test_the_sweep_still_dispatches_the_fix_agent_at_the_record(self):
+        sweep = _Sweep(runs=_canceled_only())
+        with mock.patch.object(reconcile, "_read_job_log",
+                               return_value=(_log(FAILED_TEST), None)):
+            log = sweep.run()
+        self.assertEqual(len(sweep.dispatched), 1, log)
+        self.assertIn("pr_number=896", sweep.dispatched[0])
+        self.assertEqual(len(sweep.thread), 1, log)
+        self.assertIn(CANCELED_PART, sweep.thread[0][1])
+
+    def _read(self, runs, log=None, *, seam=None):
+        """The Resolve reader over `runs`, with the job log answered by
+        `_read_job_log` returning `log`, or by `seam` patched in below it."""
+        import proof_dispatch
+        out = io.StringIO()
+        if seam is None:
+            seam = mock.patch.object(reconcile, "_read_job_log", return_value=log)
+        with tempfile.TemporaryDirectory() as raw, seam, redirect_stdout(out):
+            checks, thread = Path(raw) / "c.json", Path(raw) / "t.json"
+            checks.write_text(json.dumps([{"total_count": len(runs), "check_runs": runs}]))
+            thread.write_text(json.dumps([[rest(QA_BOT_REST, APPROVE)]]))
+            got = proof_dispatch.record_red_checks_read(REPLAY_BRANCH, REPLAY_HEAD,
+                                                        str(checks), str(thread))
+        return got, out.getvalue()
+
+    def test_the_resolve_reader_names_the_check(self):
+        got, stdout = self._read(_canceled_only(), (_log(FAILED_TEST), None))
+        self.assertEqual(got, [CANCELED_PART, SUMMARY])
+        # The Resolve step reads this reader's stdout as the run's note, so
+        # the log line goes anywhere but there.
+        self.assertEqual(stdout, "")
+
+    def test_the_resolve_reader_reads_a_plain_cancellation_as_not_red(self):
+        got, stdout = self._read(_canceled_only(), (_log(), None))
+        self.assertEqual(got, [])
+        self.assertEqual(stdout, "")
+
+    def test_the_resolve_reader_keeps_an_unreadable_log_red(self):
+        # The Resolve step reads on its App token, which can refuse
+        # `actions: read`. The real `_read_job_log` runs here, below it the
+        # loud token path refusing and the quiet `gh()` path answering
+        # nothing; either way the canceled part is not read as a plain
+        # cancellation, so the run the sweep sent stays admitted.
+        env = {k: v for k, v in os.environ.items() if k != "GH_DISPATCH_TOKEN"}
+        seams = {
+            "token refused": mock.patch.object(
+                reconcile, "_actions_read", return_value=(None, "rc=1: HTTP 403")),
+            "quiet gh() answers nothing": mock.patch.multiple(
+                reconcile, gh=mock.Mock(return_value="")),
+        }
+        for why, seam in seams.items():
+            with self.subTest(why=why), mock.patch.dict(os.environ, env, clear=True):
+                got, stdout = self._read(_canceled_only(), seam=seam)
+                self.assertEqual(got, [SUMMARY])
+                self.assertEqual(stdout, "")
+
+
 def _report(touch: str, *, told: str | None = REPLAY_RECORD) -> list:
     """Run the real report_fix_result.sh after a fix run on a record branch
     whose one commit changes `touch`, delivered to the pull request. `told`

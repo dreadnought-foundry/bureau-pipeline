@@ -753,7 +753,8 @@ def test_the_registry_declares_the_site_beside_the_groomers_other_rows():
     assert "proposal" in row["why"].lower()
     before = rows[at[0] - 1]
     assert before["file"] == "scripts/groomer.py"
-    assert before["anchor"] == 'queued_record(record["id"], plan["queued"])'
+    # The groom queue's record stood here until DRE-8619 removed the queue.
+    assert before["anchor"] == 'moved_note(record["id"], position=row["position"]'
 
 
 def test_the_receipt_guard_passes_and_fails_naming_the_site_without_the_row():

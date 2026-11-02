@@ -282,8 +282,16 @@ def test_a_swept_card_with_every_source_read_and_nothing_found_is_clean():
 def _scenarios():
     """Every fixture shape `tests/test_groom_verify.py` checks a proposal
     with, by name: `(proposal, linear, gh, owners)`."""
-    def lane(cards=LANE):
-        return groomer.propose(cards, cycles=CYCLES, capacity=3, now=NOW)
+    def lane(cards=LANE, capacity=3):
+        return groomer.propose(cards, cycles=CYCLES, capacity=capacity,
+                               now=NOW)
+
+    # The golden was written while a Cancel row held one of the three slots
+    # (DRE-4727). Since DRE-7973 it holds none, so a capacity of two builds
+    # the proposal the golden was read over: DRE-101 and DRE-103 planned,
+    # DRE-102 on Cancel, DRE-104 onward the spares.
+    def with_cancel(target):
+        return lane(_lane_with_cancel(target), capacity=2)
 
     bad = {f"DRE-{n}": {"comments": [comment(SUPERSEDED)]}
            for n in range(101, 114)}
@@ -309,13 +317,13 @@ def _scenarios():
         "other-card-covers": lambda: (lane(), FakeLinear({"DRE-105": {
             "search": [other("DRE-300", "Done", "Supersedes DRE-105.")]}}),
             FakeGh()),
-        "cancel-intake": lambda: (lane(_lane_with_cancel("DRE-900")),
+        "cancel-intake": lambda: (with_cancel("DRE-900"),
                                   FakeLinear(lanes={"DRE-900": "Intake"}),
                                   FakeGh()),
-        "cancel-done": lambda: (lane(_lane_with_cancel("DRE-900")),
+        "cancel-done": lambda: (with_cancel("DRE-900"),
                                 FakeLinear(lanes={"DRE-900": "Done"}),
                                 FakeGh()),
-        "cancel-unread": lambda: (lane(_lane_with_cancel("DRE-900")),
+        "cancel-unread": lambda: (with_cancel("DRE-900"),
                                   FakeLinear(fail={"DRE-900"}), FakeGh()),
         "stored-3381b8d562a8": lambda: (stored(), FakeLinear(), FakeGh()),
     }

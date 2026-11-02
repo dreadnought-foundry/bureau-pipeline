@@ -83,6 +83,18 @@ agent-bureau repo; the third clause added by DRE-2103).
     <why>`: GitHub will not say who set a variable or when, so the reason is
     the only record of who owns a hold.
 
+  - **A hung job is re-run, and a hold is diagnosed (DRE-8655).**
+    `channel-watch.yml` (`Channel Watch`) runs every 10 minutes. A hung
+    `Pipeline Tests` job on `main` is canceled and its run re-run once, by
+    the App, so the re-run's completion wakes Promote Channel
+    (`scripts/hung_job.py`). A hold of 2 hours raises
+    `pipeline_notice:channel_hold:stable` with its diagnosis — the failing
+    job and what to do next — and a hold standing between 06:00 and 06:29 PT
+    is raised before the briefing, once it is 45 minutes old; a pass that finds no hold resolves it
+    (`scripts/channel_hold.py`). Set the repository variable
+    `HUNG_JOB_WATCH` to `off` to stop the cancels and re-runs; the watch
+    keeps reporting what it would have done. Unset means live.
+
   - **Every move is a Linear release (DRE-4872).** Once it has moved
     `stable` and read the ref back, `promote-channel.yml` writes release
     `stable-<short sha>` to the `bureau-pipeline-channel` pipeline that

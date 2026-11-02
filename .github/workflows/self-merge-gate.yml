@@ -12,6 +12,8 @@
 # on purpose (Stage 2 #20): the critic's verdict comment is its wake, and the
 # reusable declines the run's completion, so listing it only queued a run
 # whose every job skipped. self-medic.yml still watches it.
+# Groom Replay Gate (DRE-7974) is listed so a pull request held by a red
+# `judge`, or waiting on a replay, is re-evaluated when the replay finishes.
 #
 # @main on purpose, fully qualified: a local ./ ref would resolve from the
 # PR's merge ref, letting a PR that edits merge-gate.yml choose the logic
@@ -20,7 +22,7 @@ name: Merge Gate
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Integration Harness, Smoke · setup-node-cached, Smoke · setup-python-cached]
+    workflows: [Pipeline Tests, Integration Harness, Smoke · setup-node-cached, Smoke · setup-python-cached, Groom Replay Gate]
     types: [completed]
   issue_comment:
     types: [created]

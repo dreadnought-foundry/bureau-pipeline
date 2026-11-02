@@ -155,6 +155,12 @@ class NoHandCopiedPrefixTest(unittest.TestCase):
         for name, expected in cases.items():
             with self.subTest(workflow=name):
                 found = _shell_gate_prefixes(name)
+                # An entry that only extends one of the constant's prefixes is
+                # already owned by it: `bot/onboard-*`, the per-slug onboarding
+                # family, sits under the `bot/onboard` entry's prefix match
+                # (DRE-8658), so the constant does not repeat it.
+                found -= {p for p in found
+                          if any(p != q and p.startswith(q) for q in expected)}
                 self.assertEqual(
                     found, expected,
                     f"{name}'s branch gate drifted from the Python rule. "

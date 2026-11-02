@@ -15,10 +15,16 @@
       "note": "A park note says nothing has read the card, why its classification could not be read, and that the way back is a move to Planning."
     },
     {
+      "unit": "planning_escalation.py#escalate",
+      "reason_at": "planning_escalation.py#escalate",
+      "anchor": "housekeeping_note(",
+      "note": "A park note says the planner's question is housekeeping, not a decision, names the screen's rule it broke, quotes the reason and says the way back is a move to Planning (DRE-7961)."
+    },
+    {
       "unit": "reconcile.py#escalate_out_of_planning",
       "reason_at": "reconcile.py#escalate_out_of_planning",
       "anchor": "stall_park_note(ident, reason)",
-      "note": "A park note says why Planning produced nothing — a stall, the planner line's bound or a hold nobody was asked about — and the way back."
+      "note": "A park note says why Planning produced nothing — a stall or a hold nobody was asked about — and the way back."
     },
     {
       "unit": "reconcile.py#_route_to_defect_lane",
@@ -31,6 +37,12 @@
       "reason_at": "reconcile.py#flag_stranded",
       "anchor": "isn't on the dispatch",
       "note": "The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug."
+    },
+    {
+      "unit": "planning_route.py#_refuse_no_repo",
+      "reason_at": "planning_route.py#_refuse_no_repo",
+      "anchor": "no_repo_note(identifier, unknown)",
+      "note": "The planning exit's refusal says the card carries no repo: label, or one naming no repo in config/repo-map.json, that it was not routed, and the fix — add the label for the repo its files live in — beside a no-route hold stamp (DRE-8145)."
     },
     {
       "unit": "rereview_watch.py#_fire",
@@ -49,6 +61,12 @@
       "reason_at": "agent-fix.yml#Report",
       "anchor": "--reason fix-dispute",
       "note": "A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back."
+    },
+    {
+      "unit": "medic.yml#Ask a person about the diagnosis",
+      "reason_at": "medic.yml#Ask a person about the diagnosis",
+      "anchor": "medic_next_step.py housekeeping-note",
+      "note": "A park note says the medic's question is housekeeping, not a decision for the CEO, names the screen's rule it broke, and carries the diagnosis's three lines and the failed run (DRE-8592)."
     },
     {
       "unit": "plan.yml#One-off critic — park in Triage",

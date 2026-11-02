@@ -380,8 +380,6 @@ class RosterTest(unittest.TestCase):
             "tools": [],
             "maxTurns": None,
             "maxBudget": 0,
-            "kind": "scripted",
-            "model": None,
             "credentials": ["BUREAU_APP_ID", "BUREAU_APP_PRIVATE_KEY", "LINEAR_API_KEY"],
             "repoScope": ["dreadnought-foundry/bureau-pipeline"],
         })

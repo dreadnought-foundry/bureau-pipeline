@@ -210,7 +210,7 @@ def test_a_demo_card_in_motion_runs_the_pass_as_before(capsys):
     stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
              "settle_repair_cards", "flag_stranded", "report_intake_depth",
              "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
-             "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
+             "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
              "redeliver_rescued_work", "build_run_refusal", "redispatch")
     with mock.patch.object(reconcile, "rereview_watch_scope",
@@ -287,7 +287,7 @@ def test_a_busy_pass_at_a_cap_above_zero_asks_the_lift_once(capsys):
     stubs = ("recover_limit_deaths", "card_dependabot_prs", "report_fleet_reviewer_outage",
              "settle_repair_cards", "flag_stranded", "report_intake_depth",
              "advance_urgent_intake", "repair_frozen_planning_holds", "serve_planner_line",
-             "release_groom_queue", "move_hand_built_to_review", "carry_epics_out_of_todo",
+             "move_hand_built_to_review", "carry_epics_out_of_todo",
              "report_break_glass", "report_epic_growth", "pr_for", "agent_run_alive",
              "redeliver_rescued_work", "build_run_refusal", "redispatch")
     with mock.patch.object(reconcile, "rereview_watch_scope",

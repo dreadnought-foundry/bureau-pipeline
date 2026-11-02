@@ -829,3 +829,114 @@ def test_the_brief_says_the_no_code_rule():
     docs = " ".join((ROOT / "docs" / "groomer.md").read_text(
         encoding="utf-8").split())
     assert "a Cancel of a card labeled `no-code` counts only a Done `no-code` card" in docs
+
+
+# --------------------------------------------------------------------------
+# DRE-8028 — a code item may name a line in bureau-pipeline, under `pipeline/`
+#
+# The 2026-10-24 replay left DRE-4417 (labeled `repo:agent-bureau`)
+# `unverified` with `no proof`: the code it is about — death_receipt.py,
+# stream_watchdog.py, push_rescue.py, the medic — is bureau-pipeline's, and
+# the agent had only agent-bureau under `target/`. The verify leg now checks
+# out bureau-pipeline under `pipeline/` too, and a code item names it with
+# `"repo": "bureau-pipeline"`. The runner counts such an item by the same
+# shape rule as one under `target/`, and no other `repo`.
+# --------------------------------------------------------------------------
+DEATH_RECEIPT = {"file": "scripts/death_receipt.py", "line": 12,
+                 "quote": "def receipt(run):", "repo": "bureau-pipeline"}
+
+
+def test_the_pipeline_contract_names():
+    assert gva.PIPELINE_REPO == "bureau-pipeline"
+    assert gva.PIPELINE_DIR == "pipeline/"
+
+
+def test_a_code_item_in_bureau_pipeline_counts_as_one_under_target_does(tmp_path):
+    got, mark = both(tmp_path, row(), "obsolete", [DEATH_RECEIPT])
+    assert (got["verdict"], got["reason"]) == ("obsolete", None)
+    assert got["proof"] == [DEATH_RECEIPT]
+    assert mark["proof"] == [DEATH_RECEIPT]
+    assert got["rested_on"] == ["code"]
+    assert gva.is_file_line(DEATH_RECEIPT)
+
+
+@pytest.mark.parametrize("repo", ["agent-bureau", "portico", "", None, 7,
+                                  "dreadnought-foundry/bureau-pipeline",
+                                  "Bureau-Pipeline"])
+def test_a_code_item_naming_any_other_repo_is_not_counted(tmp_path, repo):
+    item = {**DEATH_RECEIPT, "repo": repo}
+    got, mark = both(tmp_path, row(), "obsolete", [item])
+    assert (got["verdict"], got["reason"]) == ("unverified", "no proof")
+    assert not gva.is_file_line(gva._proof_item(item))
+
+
+def test_a_code_item_naming_another_repo_is_shown_and_not_counted(tmp_path):
+    other = {**DEATH_RECEIPT, "repo": "agent-bureau"}
+    got, mark = both(tmp_path, row(), "obsolete", [PROOF_LINE, other])
+    assert (got["verdict"], got["reason"]) == ("obsolete", None)
+    assert got["proof"] == [PROOF_LINE, other]
+    assert mark["proof"] == [PROOF_LINE, other]
+
+
+def test_a_code_item_with_no_repo_counts_exactly_as_before(tmp_path):
+    got, mark = both(tmp_path, row(), "obsolete", [PROOF_LINE])
+    assert (got["verdict"], got["reason"]) == ("obsolete", None)
+    assert got["proof"] == [PROOF_LINE]
+    assert "repo" not in got["proof"][0]
+    assert gva._proof_item(PROOF_LINE) == PROOF_LINE
+
+
+@pytest.mark.parametrize("item", [
+    {**DEATH_RECEIPT, "file": "/home/runner/pipeline/scripts/death_receipt.py"},
+    {**DEATH_RECEIPT, "file": "../target/scripts/death_receipt.py"},
+    {**DEATH_RECEIPT, "quote": "  "},
+])
+def test_a_bureau_pipeline_item_keeps_todays_shape_rule(tmp_path, item):
+    got, _ = both(tmp_path, row(), "obsolete", [item])
+    assert (got["verdict"], got["reason"]) == ("unverified", "no proof")
+
+
+def test_apply_counts_a_recorded_bureau_pipeline_item_the_way_judge_did():
+    """`apply` reads the document `verdict` wrote, over a row with no
+    targets: the recorded `repo` decides it there as it did in `judge`."""
+    bare = {"card": CARD, "repository": AGENT_BUREAU,
+            "repo_slug": "agent-bureau", "list": "planning"}
+    for item, want in ((DEATH_RECEIPT, ("obsolete", None)),
+                       ({**DEATH_RECEIPT, "repo": "portico"},
+                        ("unverified", "no proof"))):
+        mark = gva._mark(bare, {"card": CARD, "verdict": "obsolete",
+                                "summary": "s", "reason": None,
+                                "proof": [item]})
+        assert (mark["verdict"], mark["reason"]) == want
+
+
+def test_the_page_names_the_repo_of_a_bureau_pipeline_line():
+    assert groomer.proof_line(DEATH_RECEIPT) == (
+        "bureau-pipeline:scripts/death_receipt.py:12 — def receipt(run):")
+    assert groomer.proof_line(PROOF_LINE) == (
+        "src/legacy_migration_lib.ts:886 — export function migrateRoster(portal) {")
+    reason = gva.cancel_reason({"verdict": "obsolete", "summary": "Gone.",
+                                "proof": [DEATH_RECEIPT]})
+    assert ("bureau-pipeline:scripts/death_receipt.py:12 — def receipt(run):"
+            in reason)
+
+
+def test_the_shape_shows_the_repo_key_and_both_checkouts():
+    assert '"repo": "bureau-pipeline"' in gva.SHAPE
+    assert "pipeline/" in gva.SHAPE
+    assert "target/" in gva.SHAPE
+    flat = " ".join(gva.SHAPE.split())
+    assert "If `target/` is absent or empty, the only answer is `unverified`" in flat
+
+
+def test_the_brief_names_both_checkouts_and_the_repo_key():
+    flat = " ".join(BRIEF.read_text(encoding="utf-8").split())
+    assert "checked out read-only under `pipeline/`" in flat
+    assert '"repo": "bureau-pipeline"' in flat
+    assert "`file` is then relative to `pipeline/`" in flat
+    assert "An item with no `repo` is a file under `target/`" in flat
+    assert "`pipeline/` may be absent" in flat
+    assert "If `target/` is absent or empty, the only answer is `unverified`" in flat
+    docs = " ".join((ROOT / "docs" / "groomer.md").read_text(
+        encoding="utf-8").split())
+    assert "bureau-pipeline at `main` under `pipeline/`" in docs

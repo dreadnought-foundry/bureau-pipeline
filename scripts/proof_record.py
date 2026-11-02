@@ -38,12 +38,15 @@ or read the hold. Both now do, through this module:
    lets that hold be one a time lifts.
    `row_cause` (DRE-6607) names the cause a `Not observed. cause: …` row
    carries — one of `proof_reach.causes()` — and `all_unmet_caused` says
-   every unmet row carries one, which the dispatcher reads; the row stays
-   unmet, and `shortfall` still holds the record on it. Two markers only the
-   proof dispatcher reads (DRE-7740): `row_history` reads a `Not met.
-   history: …` row — observed, failed, and on a window or run that cannot
-   change, so it is not a cause — and `row_fixes` the `fix: DRE-<n>` that
-   closes an unmet row's cell. Nothing reads a fix out of free prose.
+   every unmet row carries one, which the dispatcher reads. Two markers
+   (DRE-7740): `row_history` reads a `Not met. history: …` row — observed,
+   failed, and on a window or run that cannot change, so it is not a cause
+   — and `row_fixes` the `fix: DRE-<n>` that closes an unmet row's cell.
+   Nothing reads a fix out of free prose. A cause row and a history row are
+   both GAP rows (`gap_rows`, DRE-7952): unmet, but a re-run would read the
+   same again, so `all_unmet_gaps` — every unmet row one of them — lets
+   `shortfall` pass the record, and the PROOF close files the gaps as one
+   fix card (`proof_gap`).
 3. **The hold-discharge reader** — `open_holds`, moved from `proof_dispatch`;
    `open_holds_at` is the same reading with each hold's time, for the PROOF
    close (DRE-6489). `time_only` (DRE-7228) reads one of those holds as
@@ -61,6 +64,9 @@ or read the hold. Both now do, through this module:
 `shortfall` is the one judgment both halves make over a record. `gather` is the
 merge gate's feed: `python3 proof_record.py gather` writes the record the gate
 reads with `--proof-record-file`, the same shape as `stacked_prs.py gather`.
+`blob` is the proof run's (DRE-8259): `python3 proof_record.py blob` prints the
+record file's path, blob sha and branch head, read before the agent and again
+by the result step, so a run that left its record unchanged reads red.
 
 A LEAF, on purpose: `reconcile` reads `os.environ["REPO"]` when it is imported,
 and neither the merge gate's `Evaluate and merge` step nor linear-sync's
@@ -76,6 +82,7 @@ import argparse
 import base64
 import binascii
 import json
+import os
 import re
 import subprocess  # nosec B404 — one fixed argv, `gh`, no shell
 import sys
@@ -86,6 +93,7 @@ from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import linear_ops  # noqa: E402 — the proof line's mark and tags, spelled once
+import plan_footprint  # noqa: E402 — ONE parse of a card's `**Files:**` line
 import proof_reach  # noqa: E402 — the cause words, spelled once
 import spoken_thread  # noqa: E402 — who said each comment, signature checked
 
@@ -159,6 +167,10 @@ NOT_SEEN = ("the checker accepts only a row seen working, and this one was "
             "not observed")
 #: What a candidate is held for when the checker's seen-quote is not in it.
 UNQUOTED = "the checker's acceptance quotes text the record does not hold"
+#: What a candidate is held for when the checker's verdict carries an
+#: acceptance whose criterion is no row's (DRE-8560) — said, so it is not
+#: read as no acceptance at all; the quoted criteria follow it.
+UNMATCHED = "the checker's acceptance names no row's criterion as the record writes it"
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -450,15 +462,34 @@ def _verdict_link(verdict) -> str | None:
     return url if isinstance(url, str) and _VERDICT_LINK.fullmatch(url) else None
 
 
+def _folded(text: str) -> str:
+    """`text` with each escaped pipe read as the pipe it stands for, as
+    `_cells` reads a cell, and its whitespace collapsed (DRE-8560)."""
+    return " ".join((text or "").replace("\\|", "|").split())
+
+
+def _names(named: str, criterion: str) -> bool:
+    """Is an acceptance's quoted criterion this row's, cut to 70 as `_cut`
+    renders it? Both sides are `_folded` first, and the cut is taken from the
+    row as the reader holds it or as the record's source spells it, pipes
+    escaped — a pipe before character 70 moves the cut by one character.
+    Equality, never a substring: no acceptance names another row (DRE-8560)."""
+    folded = _folded(named)
+    return folded in (_cut(_folded(criterion), 70),
+                      _folded(_cut(criterion.replace("|", "\\|"), 70)))
+
+
 def _naming(lines: list, criterion: str) -> list:
-    """The seen-quotes of the acceptance lines whose criterion is this row's,
-    cut to 70 as `_cut` renders it."""
-    cut = _cut(criterion, 70)
-    return [seen for named, seen in lines if named == cut]
+    """The seen-quotes of the acceptance lines whose criterion is this row's
+    (`_names`)."""
+    return [seen for named, seen in lines if _names(named, criterion)]
 
 
-def _refusal(criterion: str, result: str, checker: list, own: list) -> str | None:
-    """Why an unmet row an acceptance named was not accepted, or None."""
+def _refusal(criterion: str, result: str, checker: list, own: list,
+             stray: list = ()) -> str | None:
+    """Why an unmet row an acceptance named was not accepted, or None. A
+    candidate the checker named not at all, while its verdict carries
+    acceptances naming no row (`stray`), is held for `UNMATCHED`."""
     if _CHECKER.match(_plain(result).lower()):
         return OWN_ACCEPTANCE
     wording = row_wording(result)
@@ -468,6 +499,8 @@ def _refusal(criterion: str, result: str, checker: list, own: list) -> str | Non
         return NOT_SEEN
     if wording and _naming(checker, criterion):
         return UNQUOTED
+    if wording and stray:
+        return f"{UNMATCHED}: " + "; ".join(f"“{_cut(named, 70)}”" for named in stray)
     return None
 
 
@@ -477,8 +510,10 @@ def reading(text: str, verdict=None, others=()) -> Reading:
     `verdict` is the critic verdict the caller binds to the head — its
     `{"body", "url"}`, qa-bot authored — or None (DRE-7949). A candidate row
     (`row_wording`) is accepted only when that verdict carries an
-    `ACCEPTANCE_MARK` line whose criterion is the row's, cut to 70, and whose
-    seen-quote appears in the record's text. `others` are the bodies of every
+    `ACCEPTANCE_MARK` line whose criterion is the row's, cut to 70 (`_names`:
+    an escaped pipe read as a pipe, DRE-8560), and whose seen-quote appears in
+    the record's text. An acceptance that names no row is said against each
+    candidate it left unmet (`UNMATCHED`). `others` are the bodies of every
     other comment the caller read: an acceptance there, or written into the
     record, or a row opening `CHECKER_OPENING`, accepts nothing and is named
     the reading run's own (`refused`). A `Not observed.` row is never accepted.
@@ -487,6 +522,8 @@ def reading(text: str, verdict=None, others=()) -> Reading:
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
     url = _verdict_link(verdict)
     checker = acceptances(verdict["body"]) if url else []
+    stray = [named for named, _ in checker
+             if not any(_names(named, criterion) for criterion, _ in rows or [])]
     own = acceptances(text) + [a for body in others or () for a in acceptances(body)]
     flat = " ".join((text or "").split())
     met, accepted, unmet, checked, refused = [], [], [], [], []
@@ -501,7 +538,7 @@ def reading(text: str, verdict=None, others=()) -> Reading:
             checked.append((criterion, url))
         else:
             unmet.append(row)
-            why = _refusal(criterion, result, checker, own)
+            why = _refusal(criterion, result, checker, own, stray)
             if why is not None:
                 refused.append((row, why))
     caused = [(c, row_cause(r)) for c, r in unmet if row_cause(r)]
@@ -511,8 +548,36 @@ def reading(text: str, verdict=None, others=()) -> Reading:
 
 def all_unmet_caused(read: Reading) -> bool:
     """Is there an unmet row, and does every unmet row carry a cause word?
-    The dispatcher reads it (DRE-6607); the record is still held on them."""
+    The dispatcher reads it (DRE-6607)."""
     return bool(read.unmet) and len(read.caused) == len(read.unmet)
+
+
+#: The kind `gap_rows` names a `Not met. history:` row with — beside the four
+#: cause words, never one of them (DRE-7740).
+HISTORY_KIND = "history"
+
+
+def gap_rows(read: Reading) -> list:
+    """`(criterion, kind)` for each unmet row that carries one of the four
+    cause words or is a history row (DRE-7952): `kind` is the cause word, or
+    `HISTORY_KIND`. A re-run reads either the same again, so such a row is a
+    gap the PROOF close files as a fix card, never a hold. A row the checker
+    accepted is accepted, so it is never here."""
+    gaps = []
+    for criterion, result in read.unmet:
+        word = row_cause(result)
+        if word is None and row_history(result) is not None:
+            word = HISTORY_KIND
+        if word is not None:
+            gaps.append((criterion, word))
+    return gaps
+
+
+def all_unmet_gaps(read: Reading) -> bool:
+    """Is there at least one judged row, and is every unmet row a gap row
+    (`gap_rows`)? Such a record closes its PROOF card, gaps and all (DRE-7952)."""
+    judged = bool(read.met or read.accepted or read.unmet)
+    return judged and len(gap_rows(read)) == len(read.unmet)
 
 
 def _cut(text: str, n: int) -> str:
@@ -577,10 +642,13 @@ def open_holds(voices: list) -> list:
     return [line for line, _ in open_holds_at(voices)]
 
 
-def open_holds_at(voices: list) -> list:
+def open_holds_at(voices: list, *,
+                  discharge: tuple = (spoken_thread.PIPELINE, spoken_thread.PERSON)) -> list:
     """`open_holds`, each as `(first line, createdAt)` — the PROOF close
     weighs a hold against the merge's time (DRE-6489); the dispatcher reads
-    `open_holds` and never the time."""
+    `open_holds` and never the time. A `🔬 proof-observed` discharges from a
+    voice of `discharge`; the dispatcher's lane read, whose every voice is
+    UNKNOWN, widens it to those too (DRE-7967)."""
     held: list = []
     for voice in voices:
         body = (voice.body or "").lstrip()
@@ -591,7 +659,7 @@ def open_holds_at(voices: list) -> list:
         elif voice.kind == spoken_thread.CEO_VIA_CONSOLE:
             held = [h for h in held if CEO_PRESS not in h[0]]
         elif (body.startswith(OBSERVED_MARK)
-              and voice.kind in (spoken_thread.PIPELINE, spoken_thread.PERSON)):
+              and voice.kind in discharge):
             held = [h for h in held if CEO_PRESS in h[0]]
     return held
 
@@ -762,11 +830,68 @@ def fetch(repo: str, files, ref: str, gh=None) -> Record:
         return Record(path, None, f"{path} could not be read at {ref}: {_one_line(exc)}")
 
 
+#: The record file as a run found it or left it (DRE-8259): its path, its
+#: blob's sha, and the record branch's head commit it was read at.
+Blob = namedtuple("Blob", "path sha commit")
+
+
+def _blob_path(repo: str, branch: str, description: str, gh) -> tuple:
+    """`(path, None)` for the record the branch's open pull request adds
+    (`find_record`, the file the gate and the body read), else the one `.md`
+    under `RECORD_DIRS` the card's `**Files:**` line names; `(None, why)`."""
+    prs = json.loads(gh(["pr", "list", "--repo", repo, "--head", branch,
+                         "--state", "open", "--json", "number"]) or "null")
+    if not isinstance(prs, list):
+        return None, f"the open pull requests of {branch} could not be read"
+    if prs:
+        view = json.loads(gh(["pr", "view", str(prs[0]["number"]), "--repo", repo,
+                              "--json", "files"]) or "null")
+        return find_record(view.get("files") if isinstance(view, dict) else None)
+    try:
+        named = plan_footprint.declared_files(description or "")
+    except plan_footprint.FootprintMissing:
+        return None, f"no open pull request of {branch} and no **Files:** line"
+    records = sorted(p for p in named if p.startswith(RECORD_DIRS) and p.endswith(".md"))
+    if len(records) != 1:
+        return None, (f"no open pull request of {branch}, and the **Files:** line names "
+                      f"{len(records)} records")
+    return records[0], None
+
+
+def record_blob(repo: str, card: str, description: str = "", gh=None) -> tuple:
+    """`(Blob, None)` for the record file on `agent/<card>-proof-record` at
+    the branch's head now, or `(None, why)` — no branch (a first run), no
+    record file, or a read that failed. Never raises: a run with no baseline
+    reports as it did before one existed, so nothing is called unchanged
+    without both reads in hand. The BLOB is what a caller compares: a resumed
+    run always moves the head with its merge of main (DRE-8162)."""
+    gh = gh or _gh
+    branch = f"agent/{card}-proof-record"
+    try:
+        ref = json.loads(gh(["api", f"repos/{repo}/git/ref/heads/{branch}"]) or "null")
+        commit = ref["object"]["sha"]
+    except (RuntimeError, ValueError, TypeError, KeyError) as exc:
+        return None, f"{branch} could not be read: {_one_line(exc)}"
+    try:
+        path, why = _blob_path(repo, branch, description, gh)
+        if path is None:
+            return None, why
+        doc = json.loads(gh(["api", f"repos/{repo}/contents/{quote(path)}?ref={commit}"])
+                         or "null")
+        sha = doc["sha"]
+    except (RuntimeError, ValueError, TypeError, KeyError, IndexError) as exc:
+        return None, f"the record of {branch} could not be read at {commit}: {_one_line(exc)}"
+    if not isinstance(sha, str) or not sha:
+        return None, f"{path} came back without its blob sha"
+    return Blob(path, sha, commit), None
+
+
 def shortfall(record: Record, verdict=None, others=()) -> str | None:
     """Why this record does not prove its card, or None when every judged row
-    is met or accepted — the one judgment the merge gate and the PROOF close
-    make. `verdict` and `others` are `reading`'s: the bound critic verdict
-    and every other comment's body (DRE-7949)."""
+    is met or accepted, or every unmet row is a gap row (`all_unmet_gaps`,
+    DRE-7952) — the one judgment the merge gate and the PROOF close make.
+    `verdict` and `others` are `reading`'s: the bound critic verdict and
+    every other comment's body (DRE-7949)."""
     if record is None or record.text is None:
         detail = getattr(record, "detail", None) or "nothing was read"
         return f"no proof record could be read — {_one_line(detail)}"
@@ -774,12 +899,12 @@ def shortfall(record: Record, verdict=None, others=()) -> str | None:
     read = reading(record.text, verdict, others)
     if read.rows is None:
         return f"{path} has no criterion table"
-    if read.unmet:
+    if read.unmet and not all_unmet_gaps(read):
         refused = dict(read.refused)
         rows = "; ".join(f"{_row(c, r)} — {refused[(c, r)]}" if (c, r) in refused
                          else unmet_row(c, r) for c, r in read.unmet)
         return f"{path} has {len(read.unmet)} row(s) not met: {rows}"
-    if not read.met and not read.accepted:
+    if not read.met and not read.accepted and not read.unmet:
         return f"{path} has a criterion table with no row but its closing step"
     return None
 
@@ -842,9 +967,23 @@ def _cmd_gather(args) -> int:
     return 0
 
 
+def _cmd_blob(args) -> int:
+    blob, why = record_blob(args.repo, args.card, os.environ.get("CARD_DESCRIPTION", ""))
+    if blob is None:
+        print(f"proof_record: no baseline — {_one_line(why)}", file=sys.stderr)
+    else:
+        print("\t".join(blob))
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
+    cmd = sub.add_parser("blob", help="print the record file's path, blob sha and commit "
+                                      "on the card's record branch (DRE-8259)")
+    cmd.add_argument("--repo", required=True)
+    cmd.add_argument("--card", required=True)
+    cmd.set_defaults(fn=_cmd_blob)
     cmd = sub.add_parser("gather", help="write the merge gate's proof record")
     cmd.add_argument("--repo", required=True)
     cmd.add_argument("--pr-view-file", required=True,

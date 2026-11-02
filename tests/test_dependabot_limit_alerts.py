@@ -138,24 +138,75 @@ def _check(tmp_path, monkeypatch, prs, config=PIP_ACTIONS_CONFIG, list_rc=0):
     return state
 
 
+# Foundry's shape (DRE-8570): six npm entries, one per manifest folder, the
+# limit left at Dependabot's default. Group names follow Foundry's own.
+FOUNDRY_NPM_DIRS = {
+    "/templates/company/web": "slipway-web-npm-minor-patch",
+    "/templates/company/mobile": "slipway-mobile-npm-minor-patch",
+    "/templates/company/infra": "slipway-infra-npm-minor-patch",
+    "/infra/keel-registry": "keel-registry-npm-minor-patch",
+    "/libraries/js/design-system": "keel-design-system-npm-minor-patch",
+    "/libraries/js/offline": "keel-offline-npm-minor-patch",
+}
+
+
+def _npm_config(dirs):
+    """One npm entry per {directory: group name}, default limit, in order."""
+    entries = "".join(
+        f"""\
+  - package-ecosystem: "npm"
+    directory: "{directory}"
+    schedule:
+      interval: "monthly"
+    groups:
+      {group}:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+"""
+        for directory, group in dirs.items()
+    )
+    return "version: 2\nupdates:\n" + entries
+
+
+FOUNDRY_NPM_CONFIG = _npm_config(FOUNDRY_NPM_DIRS)
+
+
+def _npm_branch(directory, name):
+    return f"dependabot/npm_and_yarn/{directory.strip('/')}/{name}"
+
+
 # --------------------------------------------------------------------------
-# parse_dependabot_limits(): the limit comes from the config, never hardcoded
+# parse_dependabot_entries(): one entry per update, the limit from the config
 # --------------------------------------------------------------------------
-def test_parses_the_live_config_like_yaml_does():
-    """The stdlib parser must agree with a real YAML parse of THIS repo's
-    dependabot.yml on every ecosystem, limit, and group name — parser drift
-    against the live file would make the check silently blind."""
-    parsed = reconcile.parse_dependabot_limits(LIVE_CONFIG.read_text())
-    doc = yaml.safe_load(LIVE_CONFIG.read_text())
-    expected = {u["package-ecosystem"]: u for u in doc["updates"]}
-    assert set(parsed) == set(expected), "every configured ecosystem must parse"
-    for eco, update in expected.items():
-        assert parsed[eco]["limit"] == update.get("open-pull-requests-limit"), (
-            f"{eco}: the limit must be read from dependabot.yml"
-        )
-        assert set(parsed[eco]["groups"]) == set(update.get("groups") or {}), (
-            f"{eco}: group names identify the gate-mergeable grouped PR"
-        )
+@pytest.mark.parametrize("text", [
+    pytest.param(LIVE_CONFIG.read_text(), id="live-config"),
+    pytest.param(FOUNDRY_NPM_CONFIG, id="foundry-six-npm"),
+])
+def test_parses_the_live_config_like_yaml_does(text):
+    """The stdlib parser must agree with a real YAML parse, entry by entry
+    and in file order, on ecosystem, directory, limit and group names — for
+    THIS repo's dependabot.yml and for Foundry's six-npm shape. Parser drift
+    would make the check silently blind, and keying by ecosystem collapsed
+    Foundry's six npm entries into one (DRE-8570)."""
+    parsed = reconcile.parse_dependabot_entries(text)
+    doc = yaml.safe_load(text)
+    expected = [
+        (u["package-ecosystem"], u.get("directory"),
+         u.get("open-pull-requests-limit"), list(u.get("groups") or {}))
+        for u in doc["updates"]
+    ]
+    got = [
+        (e["ecosystem"], e["directory"], e["limit"], e["groups"])
+        for e in parsed
+    ]
+    assert got == expected, "every update entry must parse, in order"
+
+
+def test_old_ecosystem_keyed_reader_is_gone():
+    """The ecosystem-keyed reader collapsed same-ecosystem entries; leaving it
+    beside the new one leaves the bug for its next caller (DRE-8570)."""
+    assert not hasattr(reconcile, "parse_dependabot_limits")
 
 
 LIMIT_7_CONFIG = """\
@@ -387,3 +438,225 @@ def test_main_sweep_runs_the_capacity_check():
         "every full sweep must evaluate dependabot slot capacity — the "
         "no-silent-killers monitor for open-pull-requests-limit"
     )
+
+
+# --------------------------------------------------------------------------
+# DRE-8570: slots are counted per update ENTRY, not per ecosystem
+# --------------------------------------------------------------------------
+# Dependabot applies open-pull-requests-limit to each `updates` entry. Foundry
+# has six npm entries, one per folder; keyed by ecosystem, the last entry
+# overwrote the other five and six grouped PRs (one per folder, 1/5 each) were
+# counted against one limit of 5 — a false CRITICAL on run 41271938398.
+def test_foundry_six_npm_entries_one_grouped_pr_each_is_quiet(
+    tmp_path, monkeypatch, capsys
+):
+    hashes = ["ad441a7b4e", "1c2d3e4f5a", "9b8a7c6d5e", "0a1b2c3d4e",
+              "5f6e7d8c9b", "e4d3c2b1a0"]
+    prs = [
+        _pr(131 + i, _npm_branch(directory, f"{group}-{hashes[i]}"),
+            title=f"Bump the {group} group")
+        for i, (directory, group) in enumerate(FOUNDRY_NPM_DIRS.items())
+    ]
+    assert prs[0]["headRefName"] == (
+        "dependabot/npm_and_yarn/templates/company/web/"
+        "slipway-web-npm-minor-patch-ad441a7b4e"
+    )
+    _check(tmp_path, monkeypatch, prs, config=FOUNDRY_NPM_CONFIG)
+    out = capsys.readouterr()
+    assert "CRITICAL" not in (out.out + out.err), (
+        "each folder holds 1 of its own 5 slots — nothing is at a limit"
+    )
+    assert "WARNING" not in out.out
+    assert reconcile._write_failures == [] and reconcile._read_failures == []
+
+
+def test_full_entry_fires_alone_and_names_its_directory(
+    tmp_path, monkeypatch, capsys
+):
+    """5 open in /templates/company/web, 1 in /templates/company/mobile, both
+    at the default limit: exactly one failure, naming the full entry."""
+    config = _npm_config({
+        "/templates/company/web": "slipway-web-npm-minor-patch",
+        "/templates/company/mobile": "slipway-mobile-npm-minor-patch",
+    })
+    web = [
+        _pr(500 + i, _npm_branch("/templates/company/web", f"dep{i}-{i + 2}.0.0"),
+            title=f"Bump dep{i}")
+        for i in range(5)
+    ]
+    mobile = [_pr(600, _npm_branch("/templates/company/mobile", "react-19.0.0"))]
+    _check(tmp_path, monkeypatch, web + mobile, config=config)
+    assert len(reconcile._write_failures) == 1
+    msg = reconcile._write_failures[0]
+    assert "CRITICAL" in msg and "5/5" in msg
+    assert "dependabot npm /templates/company/web" in msg, (
+        "the line names the ecosystem and the entry's directory"
+    )
+    assert "mobile" not in msg
+    out = capsys.readouterr()
+    assert "/templates/company/mobile" not in (out.out + out.err), (
+        "1/5 in the mobile folder is healthy — that entry stays silent"
+    )
+
+
+def test_critical_line_is_an_error_line(tmp_path, monkeypatch, capsys):
+    """The summary says "see ERROR lines above", so the slot check's critical
+    line must be one: stderr `ERROR: CRITICAL: dependabot ...`, while the
+    recorded failure keeps the word CRITICAL."""
+    _check(tmp_path, monkeypatch, _pip_singles(5))
+    assert "CRITICAL" in reconcile._write_failures[0]
+    err_lines = [ln for ln in capsys.readouterr().err.splitlines() if "CRITICAL" in ln]
+    assert err_lines, "the critical line goes to stderr"
+    assert all(ln.startswith("ERROR: ") for ln in err_lines), err_lines
+    assert err_lines[0].startswith("ERROR: CRITICAL: dependabot pip / is at its")
+
+
+def test_grouped_pr_of_an_earlier_entry_is_never_parked(tmp_path, monkeypatch):
+    """Group names come from the PR's OWN entry: the first entry's grouped PR
+    is not a parked single just because the last entry's group survived."""
+    config = _npm_config({
+        "/templates/company/web": "slipway-web-npm-minor-patch",
+        "/libraries/js/offline": "keel-offline-npm-minor-patch",
+    })
+    grouped = _pr(
+        131,
+        _npm_branch("/templates/company/web",
+                    "slipway-web-npm-minor-patch-ad441a7b4e"),
+        title="Bump the slipway-web-npm-minor-patch group",
+    )
+    singles = [
+        _pr(140 + i, _npm_branch("/templates/company/web", f"dep{i}-{i + 2}.0.0"),
+            title=f"Bump dep{i}")
+        for i in range(4)
+    ]
+    _check(tmp_path, monkeypatch, [grouped] + singles, config=config)
+    assert len(reconcile._write_failures) == 1
+    msg = reconcile._write_failures[0]
+    for pr in singles:
+        assert f"#{pr['number']}" in msg
+    assert "#131" not in msg, "a grouped PR is never listed as parked"
+
+
+def test_unmatched_branch_warns_no_configured_entry(tmp_path, monkeypatch, capsys):
+    config = _npm_config({"/templates/company/web": "slipway-web-npm-minor-patch"})
+    prs = [_pr(700, _npm_branch("/somewhere/else", "lodash-4.17.21"))]
+    _check(tmp_path, monkeypatch, prs, config=config)
+    out = capsys.readouterr()
+    assert "#700" in out.out and "matches no configured entry" in out.out
+
+
+FOUNDRY_PIP_CONFIG = """\
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      foundry-pip-minor-patch:
+        patterns: ["*"]
+  - package-ecosystem: "pip"
+    directory: "/libraries/python/keel-cli"
+    schedule:
+      interval: "monthly"
+    groups:
+      keel-cli-pip-minor-patch:
+        patterns: ["*"]
+  - package-ecosystem: "pip"
+    directory: "/libraries/python/keel-core"
+    schedule:
+      interval: "monthly"
+"""
+
+
+def test_branch_matches_its_entry_root_and_nested():
+    """A root `/` entry gets only what no nested entry claims; a nested
+    branch goes to its folder's entry."""
+    entries = reconcile.parse_dependabot_entries(FOUNDRY_PIP_CONFIG)
+    root = reconcile.dependabot_entry_for(
+        "dependabot/pip/foundry-pip-minor-patch-0f5a1b2c3d", entries)
+    assert root is not None and root["directory"] == "/"
+    nested = reconcile.dependabot_entry_for(
+        "dependabot/pip/libraries/python/keel-cli/setuptools-gte-84.2.1", entries)
+    assert nested is not None
+    assert nested["directory"] == "/libraries/python/keel-cli"
+    # Another ecosystem's token is never a candidate.
+    assert reconcile.dependabot_entry_for(
+        "dependabot/npm_and_yarn/libraries/python/keel-cli/x-1.0", entries) is None
+
+
+def test_longest_directory_wins_on_whole_segments():
+    config = _npm_config({
+        "/libraries/js": "js-npm-minor-patch",
+        "/libraries/js/offline": "keel-offline-npm-minor-patch",
+    })
+    entries = reconcile.parse_dependabot_entries(config)
+    hit = reconcile.dependabot_entry_for(
+        "dependabot/npm_and_yarn/libraries/js/offline/idb-8.0.1", entries)
+    assert hit is not None and hit["directory"] == "/libraries/js/offline"
+    hit = reconcile.dependabot_entry_for(
+        "dependabot/npm_and_yarn/libraries/js/react-19.0.0", entries)
+    assert hit is not None and hit["directory"] == "/libraries/js"
+    # Whole segments only: /libraries/js never claims /libraries/jsx/...
+    assert reconcile.dependabot_entry_for(
+        "dependabot/npm_and_yarn/libraries/jsx/react-19.0.0", entries) is None
+
+
+# --------------------------------------------------------------------------
+# DRE-8570: every recorded failure is printed at the red exit
+# --------------------------------------------------------------------------
+def _main_mocks():
+    return {
+        "unstick_conflicts": MagicMock(),
+        "retrigger_dead_heads": MagicMock(),
+        "fix_approved_but_red": MagicMock(),
+        "retry_dead_fix_runs": MagicMock(),
+        "review_dependabot_prs": MagicMock(),
+        "card_dependabot_prs": MagicMock(),
+        "check_dependabot_capacity": MagicMock(),
+        "close_finished_epics": MagicMock(),
+        "flag_stranded": MagicMock(return_value=set()),
+        "active_cards": MagicMock(return_value=[]),
+        "promote_ready": MagicMock(),
+    }
+
+
+def test_red_exit_prints_every_recorded_failure(capsys):
+    """A failure recorded without its own log line (the crashed-review hold
+    post, say) must still reach the log the summary points at."""
+    write = "crashed-review hold: PR #9 post failed (HTTP 502)"
+    read = "epic queue DRE-1: Linear returned no such card"
+
+    def record_quietly():
+        reconcile._write_failures.append(write)
+        reconcile._read_failures.append(read)
+
+    mocks = _main_mocks()
+    mocks["check_dependabot_capacity"] = MagicMock(side_effect=record_quietly)
+    with patch.multiple(reconcile, **mocks), pytest.raises(SystemExit) as exc:
+        reconcile.main()
+    assert str(exc.value.code) == (
+        "reconcile: 1 write / 1 read failure(s), 0 unfixed card defect(s) — "
+        "see ERROR lines above"
+    ), "the summary text is quoted by the medic and stays unchanged"
+    err = capsys.readouterr().err
+    assert f"ERROR: write failure: {write}" in err
+    assert f"ERROR: read failure: {read}" in err
+
+
+def test_promote_only_red_exit_prints_every_recorded_failure(capsys):
+    write = "DRE-2 advance/comment: HTTP 500"
+    read = "epic start: Linear unreadable"
+
+    def record_quietly(*a, **k):
+        reconcile._write_failures.append(write)
+        reconcile._read_failures.append(read)
+
+    mocks = _main_mocks()
+    mocks["promote_ready"] = MagicMock(side_effect=record_quietly)
+    with patch.multiple(reconcile, **mocks), pytest.raises(SystemExit) as exc:
+        reconcile.main(promote_only=True)
+    assert "see ERROR lines above" in str(exc.value.code)
+    err = capsys.readouterr().err
+    assert f"ERROR: write failure: {write}" in err
+    assert f"ERROR: read failure: {read}" in err

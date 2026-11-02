@@ -3,9 +3,8 @@ itself saying which batch moved it (DRE-3326).
 
 Since DRE-3338 a drain writes ONE `🧺 groom-drained` record on the batch card,
 with a row per card. A card it CANCELS gets a note of its own (DRE-4733). A
-card it MOVES got a lane change and a cycle and nothing else — and so did a
-card the reconcile sweep released from the groom queue (DRE-5435). So no card
-in Planning could say which batch put it there, and undoing a bad batch meant
+card it MOVES got a lane change and a cycle and nothing else, so no card in
+Planning could say which batch put it there, and undoing a bad batch meant
 reading a table on a different card and walking the cards one by one.
 
 Now each moved card gets ONE line, written BEFORE its lane changes:
@@ -14,11 +13,14 @@ Now each moved card gets ONE line, written BEFORE its lane changes:
 
   * `<verdict>` is `position <n> of <m> on the approved Planning list`, or
     `added by the CEO, no position`;
-  * `<writer>` is `the drain`, or `the sweep's queue release, place <p>`;
+  * `<writer>` is `the drain`. Until DRE-8619 it was also `the sweep's queue
+    release, place <p>`, for a card the reconcile sweep released from the
+    groom queue (DRE-5435); the queue is gone, and the parser still reads a
+    note of that shape, because cards already on the board carry them;
   * `<batch card>` is the card the proposal record stands on.
 
 One renderer (`groomer.moved_note`) and one parser (`groomer.parse_moved_note`)
-live in the groomer, and both writers call the renderer. Reversing a batch is a
+live in the groomer, and the drain is the one writer. Reversing a batch is a
 search for `groom-moved: <proposal id>` across the board — the notes alone are
 enough, which is what the end-to-end test below proves.
 
@@ -44,26 +46,19 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import groomer  # noqa: E402
 import linear_ops  # noqa: E402
-import reconcile  # noqa: E402
 
 from test_groomer_cancel_drain import (  # noqa: E402
     KEEP_CANCEL, KEEP_PLANNING, PROPOSAL_CARD, FakeOps, _cancel, _decision,
     _fifteen_and_five, _planning, _thread)
-from test_groomer_two_lists import two_lists  # noqa: E402
-from test_groom_queue import (  # noqa: E402
-    STANDING, Queue, _card, _pin, _release)
+from test_groomer_two_lists import fifteen_and_five_morning  # noqa: E402
 
 PID = "abc123def456"
 
-_pin = _pin  # the queue suite's autouse fixture, applied here too
-
-
-@pytest.fixture(autouse=True)
-def _label_writes(monkeypatch):
-    """A queued card's one write is its label; the drain fixture has none."""
-    def add_label(self, identifier, label_name):
-        self.log.append(("label", identifier, label_name))
-    monkeypatch.setattr(FakeOps, "add_label", add_label, raising=False)
+#: The note the sweep's queue release wrote before DRE-8619 removed it, as
+#: cards already in Planning carry it.
+RELEASED_NOTE = ("🧺 groom-moved: abc123def456 — position 7 of 15 on the "
+                 "approved Planning list · Intake → Planning · by the sweep's "
+                 "queue release, place 2 · record on DRE-4541\n")
 
 
 def _notes(written, identifier=None):
@@ -104,13 +99,22 @@ def test_the_drains_note_for_an_addition_says_it_has_no_position():
         "Intake → Planning · by the drain · record on DRE-2683")
 
 
-def test_the_releases_note_names_the_sweep_and_its_queue_place():
-    note = groomer.moved_note(PID, position=7, of=15, place=2,
-                              batch_card="DRE-4541")
-    assert note.strip() == (
-        "🧺 groom-moved: abc123def456 — position 7 of 15 on the approved "
-        "Planning list · Intake → Planning · by the sweep's queue release, "
-        "place 2 · record on DRE-4541")
+def test_the_renderer_has_no_queue_place_since_the_queue_is_gone():
+    """The sweep's queue release was the only writer that named a place
+    (DRE-8619 removed it with the queue)."""
+    with pytest.raises(TypeError):
+        groomer.moved_note(PID, position=7, of=15, place=2,
+                           batch_card="DRE-4541")
+
+
+def test_the_parser_still_reads_a_note_the_queue_release_wrote():
+    """Cards already in Planning carry the release's notes, and reversing a
+    batch is a search across the board, so the parser keeps reading them."""
+    assert groomer.parse_moved_note(RELEASED_NOTE) == {
+        "id": PID, "from": "Intake", "to": "Planning", "position": 7, "of": 15,
+        "added": False, "writer": "the sweep's queue release, place 2",
+        "place": 2, "batch_card": "DRE-4541",
+        "verdict": "position 7 of 15 on the approved Planning list"}
 
 
 @pytest.mark.parametrize("kwargs, expected", [
@@ -122,17 +126,8 @@ def test_the_releases_note_names_the_sweep_and_its_queue_place():
      {"position": None, "of": None, "added": True, "writer": "the drain",
       "place": None, "batch_card": "DRE-2683",
       "verdict": "added by the CEO, no position"}),
-    ({"position": 7, "of": 15, "place": 2, "batch_card": "DRE-4541"},
-     {"position": 7, "of": 15, "added": False,
-      "writer": "the sweep's queue release, place 2", "place": 2,
-      "batch_card": "DRE-4541",
-      "verdict": "position 7 of 15 on the approved Planning list"}),
-    ({"position": None, "of": 15, "place": 4, "batch_card": "DRE-4541"},
-     {"position": None, "of": None, "added": True,
-      "writer": "the sweep's queue release, place 4", "place": 4,
-      "batch_card": "DRE-4541", "verdict": "added by the CEO, no position"}),
 ])
-def test_the_parser_reads_back_both_writers_output(kwargs, expected):
+def test_the_parser_reads_back_the_drains_output(kwargs, expected):
     parsed = groomer.parse_moved_note(groomer.moved_note(PID, **kwargs))
     assert parsed == {"id": PID, "from": "Intake", "to": "Planning", **expected}
 
@@ -145,14 +140,16 @@ def test_the_parser_reads_only_a_note_anchored_at_the_first_line():
         groomer.cancelled_note(PID, "superseded")) is None
 
 
-def test_reconcile_renders_no_note_of_its_own():
-    """Both writers call the ONE renderer: the sweep never spells the tag."""
+def test_the_sweep_writes_no_note_at_all():
+    """The sweep's queue release was the note's second writer; it went with
+    the queue (DRE-8619), so the sweep neither spells the tag nor calls the
+    renderer."""
     source = (ROOT / "scripts" / "reconcile.py").read_text("utf-8")
     assert "groom-moved" not in source and "MOVED_TAG" not in source
     tree = ast.parse(source)
     calls = [n for n in ast.walk(tree) if isinstance(n, ast.Call)
              and ast.unparse(n.func) == "groomer.moved_note"]
-    assert len(calls) == 1
+    assert calls == []
 
 
 # --------------------------------------------------------------------------
@@ -205,16 +202,6 @@ def test_no_card_the_drain_did_not_move_carries_a_note():
     assert PROPOSAL_CARD not in noted
 
 
-def test_a_queued_card_gets_no_note_until_it_is_released(monkeypatch):
-    monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: (3, 3))
-    proposal, ops = _morning()
-    result = groomer.drain(ops, card=PROPOSAL_CARD)
-    assert result["queued"], "nothing queued, so this proves nothing"
-    noted = {i for i, _ in _notes(ops.written)}
-    assert noted == set(result["moved"]) and len(noted) == 3
-    assert not noted & set(result["queued"])
-
-
 def test_the_note_is_written_before_the_cards_cycle_and_lane():
     proposal, ops = _morning()
     groomer.drain(ops, card=PROPOSAL_CARD)
@@ -237,7 +224,7 @@ class _FailingState(FakeOps):
 
 
 def test_a_failed_state_write_still_finds_the_note_and_no_moved_card_lacks_one():
-    proposal = two_lists()
+    proposal = fifteen_and_five_morning()
     fail = _planning(proposal)[4]
     ops = _FailingState(comments=_thread(proposal), fail=fail)
     with pytest.raises(linear_ops.LinearError):
@@ -280,170 +267,6 @@ def test_every_moved_card_is_found_from_the_notes_alone_by_proposal_id():
 
 
 # --------------------------------------------------------------------------
-# the sweep's queue release — the same note, its place, its position
-# --------------------------------------------------------------------------
-def _drained_then_queued(monkeypatch, *, free=2, added=None):
-    """Drain the fifteen-card batch on the standing card with `free` slots,
-    and hand back the thread the sweep reads afterwards: the proposal, the
-    approval and every record the drain wrote on the card."""
-    monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: (free, 3))
-    proposal = two_lists()
-    comments = _thread(proposal)
-    if added:
-        comments.append(_decision(groomer.ADD_TAG, proposal, card=added))
-    ops = FakeOps(comments=comments)
-    result = groomer.drain(ops, card=STANDING)
-    thread = comments + [{"body": b, "authored_by_pipeline": True,
-                          "created_at": "2026-10-06T12:00:00Z"}
-                         for i, b in ops.written if i == STANDING]
-    return proposal, result, thread
-
-
-def test_a_released_card_carries_the_note_naming_the_sweep_and_its_place(
-        monkeypatch):
-    proposal, result, thread = _drained_then_queued(monkeypatch)
-    queued = result["queued"]
-    queue = Queue(thread, [_card(i) for i in queued])
-    released = _release(queue, 3)
-    assert released == queued[:3]
-    positions, of = _positions(proposal), len(_planning(proposal))
-    for place, identifier in enumerate(released, 1):
-        notes = _notes(queue.of("comment"), identifier)
-        assert len(notes) == 1, f"{identifier} carries {len(notes)} notes"
-        assert notes[0][1] == groomer.moved_note(
-            proposal["id"], position=positions[identifier], of=of,
-            place=place, batch_card=STANDING)
-        parsed = groomer.parse_moved_note(notes[0][1])
-        assert parsed["position"] == positions[identifier] == place + 2
-        assert parsed["writer"] == f"the sweep's queue release, place {place}"
-    assert {i for i, _ in _notes(queue.of("comment"))} == set(released)
-
-
-def test_a_released_addition_is_noted_as_added_with_no_position(monkeypatch):
-    proposal, result, thread = _drained_then_queued(monkeypatch, free=15,
-                                                    added=ADDED)
-    assert result["queued"] == [ADDED]
-    queue = Queue(thread, [_card(ADDED)])
-    assert _release(queue, 1) == [ADDED]
-    [(_, body)] = _notes(queue.of("comment"), ADDED)
-    assert body == groomer.moved_note(proposal["id"], position=None, of=15,
-                                      place=1, batch_card=STANDING)
-
-
-def test_the_release_writes_the_note_before_the_lane():
-    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
-                                          "repo": "portico"}])
-    queue = Queue([{"body": queued, "authored_by_pipeline": True,
-                    "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
-    assert _release(queue, 1) == ["DRE-11"]
-    on_card = [w for w in queue.writes if w[1] == "DRE-11"]
-    assert [w[0] for w in on_card][:2] == ["comment", "state"]
-    assert on_card[0][2].startswith(f"{groomer.MARK} {groomer.MOVED_TAG}: {PID}")
-
-
-def test_a_release_with_no_proposal_on_the_thread_still_writes_a_note():
-    """The position cannot be read, and the note says so rather than guessing
-    — never `added by the CEO` for a card nobody can say was added."""
-    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
-                                          "repo": "portico"}])
-    queue = Queue([{"body": queued, "authored_by_pipeline": True,
-                    "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
-    _release(queue, 1)
-    [(_, body)] = _notes(queue.of("comment"), "DRE-11")
-    parsed = groomer.parse_moved_note(body)
-    assert parsed["id"] == PID and parsed["position"] is None
-    assert not parsed["added"] and "added by the CEO" not in body
-    assert parsed["writer"] == "the sweep's queue release, place 1"
-
-
-def test_a_failed_release_state_write_still_leaves_the_note():
-    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
-                                          "repo": "portico"}])
-    queue = Queue([{"body": queued, "authored_by_pipeline": True,
-                    "created_at": "2026-10-06T12:00:00Z"}],
-                  [_card("DRE-11")], fail_state={"DRE-11"})
-    assert _release(queue, 1) == []
-    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
-    assert queue.of("state") == []
-
-
-class _Cards(Queue):
-    """The queue fake, with each card's own thread served back: the standing
-    card's is the queue's, any other card's is what the pass wrote on it."""
-
-    def comment_records(self, identifier, *, whole_thread=False):
-        if identifier == STANDING:
-            return super().comment_records(identifier, whole_thread=whole_thread)
-        self.thread_reads.append((identifier, whole_thread))
-        return [{"body": b, "authored_by_pipeline": True}
-                for i, b in self.of("comment") if i == identifier]
-
-
-def test_a_stalled_release_retried_pass_after_pass_writes_one_note():
-    """The note posts, the lane write fails, the next pass tries again: the
-    card already carries its note, so the retry writes no second one."""
-    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
-                                          "repo": "portico"}])
-    queue = _Cards([{"body": queued, "authored_by_pipeline": True,
-                     "created_at": "2026-10-06T12:00:00Z"}],
-                   [_card("DRE-11")], fail_state={"DRE-11"})
-    for _ in range(3):
-        reconcile.reset_sweep_cards()
-        assert _release(queue, 1) == []
-    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
-    queue.fail_state.clear()
-    reconcile.reset_sweep_cards()
-    assert _release(queue, 1) == ["DRE-11"]
-    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
-    assert queue.of("state") == [("DRE-11", "Planning")]
-
-
-def test_another_batchs_note_or_a_persons_copy_does_not_count():
-    """Only the pipeline's note for THIS batch stands in for the write."""
-    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
-                                          "repo": "portico"}])
-
-    class _Seeded(Queue):
-        def comment_records(self, identifier, *, whole_thread=False):
-            if identifier == STANDING:
-                return super().comment_records(identifier,
-                                               whole_thread=whole_thread)
-            return [{"body": groomer.moved_note("fedcba987654", position=1,
-                                                of=1, batch_card="DRE-1"),
-                     "authored_by_pipeline": True},
-                    {"body": groomer.moved_note(PID, position=1, of=1,
-                                                batch_card=STANDING),
-                     "authored_by_pipeline": False}]
-
-    queue = _Seeded([{"body": queued, "authored_by_pipeline": True,
-                      "created_at": "2026-10-06T12:00:00Z"}], [_card("DRE-11")])
-    assert _release(queue, 1) == ["DRE-11"]
-    assert len(_notes(queue.of("comment"), "DRE-11")) == 1
-
-
-def test_a_note_that_will_not_post_moves_nothing_and_stops_the_pass():
-    """A card is never in Planning without its note: a note Linear refused is
-    a write failure, the card stays queued, and the pass releases no more."""
-    queued = groomer.queued_record(PID, [{"identifier": "DRE-11",
-                                          "repo": "portico"},
-                                         {"identifier": "DRE-12",
-                                          "repo": "portico"}])
-
-    class _NoNotes(Queue):
-        def cmd_comment(self, identifier, body, *flags):
-            if body.startswith(f"{groomer.MARK} {groomer.MOVED_TAG}:"):
-                raise linear_ops.LinearError(f"{identifier}: Linear said no")
-            super().cmd_comment(identifier, body, *flags)
-
-    queue = _NoNotes([{"body": queued, "authored_by_pipeline": True,
-                       "created_at": "2026-10-06T12:00:00Z"}],
-                     [_card("DRE-11"), _card("DRE-12")])
-    assert _release(queue, 2) == []
-    assert queue.of("state") == [] and queue.of("unlabel") == []
-    assert any("DRE-11" in f for f in reconcile._write_failures)
-
-
-# --------------------------------------------------------------------------
 # the records beside it, the registry and the document
 # --------------------------------------------------------------------------
 def _registry() -> dict:
@@ -451,15 +274,20 @@ def _registry() -> dict:
                       .read_text("utf-8"))
 
 
-@pytest.mark.parametrize("path, anchor", [
-    ("scripts/groomer.py", 'moved_note(record["id"]'),
-    ("scripts/reconcile.py", "groomer.moved_note("),
-])
-def test_both_note_sites_are_declared_not_an_act(path, anchor):
+def test_the_drains_note_site_is_declared_not_an_act():
     rows = [r for r in _registry()["unconverted"]
-            if r.get("file") == path and anchor in r.get("anchor", "")]
-    assert len(rows) == 1, f"{path} {anchor!r} is not declared"
+            if r.get("file") == "scripts/groomer.py"
+            and 'moved_note(record["id"]' in r.get("anchor", "")]
+    assert len(rows) == 1, "the drain's note site is not declared"
     assert rows[0]["kind"] == "not-an-act"
+
+
+def test_the_sweeps_release_rows_are_gone_from_the_registry():
+    """Their anchors went with `release_groom_queue` (DRE-8619)."""
+    rows = [r for r in _registry()["unconverted"]
+            if r.get("file") == "scripts/reconcile.py"
+            and r.get("anchor", "").startswith("groomer.")]
+    assert rows == []
 
 
 def test_the_doc_carries_the_groom_moved_row():
@@ -470,3 +298,4 @@ def test_the_doc_carries_the_groom_moved_row():
     assert row, "the decision-vocabulary table has no groom-moved row"
     assert ("`🧺 groom-moved: <id> — <verdict> · <from> → <to> · by <writer> "
             "· record on <batch card>`") in row
+    assert "queue release" not in row, "the doc still names the sweep's release"

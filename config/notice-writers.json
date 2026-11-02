@@ -63,16 +63,6 @@
       "reason": "repointed by this epic — closed by the writer when the switch is on"
     },
     {
-      "id": "groom-stall",
-      "repo": "bureau-pipeline",
-      "file": "scripts/reconcile.py",
-      "site": "_report_groom_stall",
-      "title": "bureau-pipeline: the groom queue has stalled — approved cards are not reaching Planning",
-      "disposition": "notice",
-      "notice_key": "groom_stall",
-      "reason": "repointed by this epic — closed by the writer when the stall no longer holds"
-    },
-    {
       "id": "reviewer-outage",
       "repo": "bureau-pipeline",
       "file": "scripts/reconcile.py",
@@ -90,6 +80,15 @@
       "disposition": "notice",
       "notice_key": "standards_sync:publish_failed",
       "reason": "repointed by this epic — closed by the writer on the next successful run"
+    },
+    {
+      "id": "triage-unrepaired",
+      "repo": "bureau-pipeline",
+      "file": "scripts/triage_unrepaired.py",
+      "title": "Triage cards the repair could not fix",
+      "disposition": "notice",
+      "notice_key": "triage_repair:fleet:unrepaired",
+      "reason": "a new notice (DRE-8609) — closed by the writer on the first complete Triage Repair run that lists no card; it files no fallback card"
     },
     {
       "id": "spending-decision",
@@ -226,6 +225,17 @@
       "title": "<repo>: flaky test turned main red twice in <window>",
       "disposition": "kept",
       "reason": "work: the flaky test's fix card (DRE-6870)"
+    },
+    {
+      "id": "proof-gap-fix",
+      "repo": "bureau-pipeline",
+      "file": "scripts/proof_gap.py",
+      "title": [
+        "<repo>: the gaps PROOF <card> closed with — <k> row(s) not observable as worded",
+        "<repo>: the defect in the build PROOF <card> found — <k> row(s) not met"
+      ],
+      "disposition": "kept",
+      "reason": "work: the one fix card a PROOF card's gaps, or a spent re-run budget on a build that fails its rows, are filed as in Intake for the groomer to propose (file_fix_card, DRE-7952)"
     },
     {
       "id": "fix-result-stranded",

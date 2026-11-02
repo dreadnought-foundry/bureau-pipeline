@@ -865,12 +865,16 @@ def rescue(
     branch: str = "",
     existing_pr: str = "",
     uncommitted_path: str = "",
+    push_only: bool = False,
 ) -> Outcome:
     """Deliver the card's work with a credential that is still alive.
 
     `branch` and `existing_pr` are the fix run's (DRE-6348); with neither,
     this is the build run's rescue exactly as it was. `uncommitted_path` is
     the build run's opt-in (DRE-6959): without it no new git command runs.
+    `push_only` is the proof run's (DRE-8441): the branch is delivered and no
+    pull request is opened, because the workflow's own step decides whether
+    the record may have one.
     """
     if not _CARD_RE.match(card or ""):
         raise ValueError(f"refusing an unrecognisable card reference: {card!r}")
@@ -1028,6 +1032,13 @@ def rescue(
         # The caller's own pull request: never a second one, and its url is
         # the caller's to know (DRE-6348).
         return out
+    if push_only:
+        # The proof run's record (DRE-8441): its pull request opens only when
+        # the record can merge, and `proof_record_pr.py decide` is the step
+        # that says so — a pull request opened here would open every record.
+        log(f"push rescue: {out.branch} is on the remote; no pull request "
+            f"opened — the caller decides it (--push-only)")
+        return out
 
     # `active_token` first, not the one the step started with: after a retry
     # that is the credential GitHub actually accepted, and handing `gh` the one
@@ -1109,6 +1120,9 @@ def main(argv: list[str]) -> int:
     r.add_argument("--existing-pr", default="",
                    help="the pull request the branch belongs to: never open "
                         "one, and push only while it is OPEN")
+    r.add_argument("--push-only", action="store_true",
+                   help="deliver the branch and never open a pull request; the "
+                        "caller decides it (the proof run, DRE-8441)")
     args = parser.parse_args(argv)
 
     token = os.environ.get(TOKEN_ENV, "").strip()
@@ -1132,6 +1146,7 @@ def main(argv: list[str]) -> int:
             card_title=args.card_title, workdir=args.workdir,
             branch=args.branch, existing_pr=args.existing_pr,
             uncommitted_path=args.uncommitted,
+            push_only=args.push_only,
         )
     except Exception as exc:  # never fail the job over a rescue
         _log(f"push rescue: skipped — {exc}")

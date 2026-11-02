@@ -31,10 +31,15 @@ are pinned in tests/test_model_policy.py — this file is about the ladder WALK.
 Which model leads which ladder, and which group an agent is in, is the
 console's to change (DRE-6862). So every rule of the walk runs against the
 frozen fixture (`tests/model_fixture.py`) — the selector loaded from a
-throwaway tree of the frozen files, or that tree's CLI — and reads every rung
-it expects off the fixture's ladders. Only AgentsRegistryAlignment's `model:`
-check and CommittedStateTest read the committed files, for what must hold for
-any saved state.
+throwaway tree of the frozen files on the frozen home document, or that tree's
+CLI handed the same document — and reads every rung it expects off the
+document's groups (DRE-8018). The tree is copied and never regenerated, and
+the one test of the defaults in the code reads what it expects off the tree's
+own `code_defaults()`. Only CommittedStateTest and CodeDefaultsTest read the
+committed files: the first for what must hold for any saved state, the second
+to hold the hand-written defaults in the code, `CODE_DEFAULTS`, to the
+code-side facts of config/models.yaml now that no generator writes them
+(DRE-6982).
 
 These tests drive the ladder walk with a STUBBED availability function — no real
 network. The is_error heartbeat helpers (attempt_marker/error_marker) and the
@@ -67,23 +72,31 @@ FABLE = "claude-fable-5"
 ROOT = Path(__file__).resolve().parents[1]
 AGENT_FIX_WF = ROOT / ".github" / "workflows" / "agent-fix.yml"
 
-# The frozen config every rule test reads its expected rungs off.
+# The frozen config, read for its code-side facts only, and the frozen home
+# document every rule test reads its expected rungs off.
 FIXTURE = model_fixture.fixture_config()
 SESSION_AGENTS = set(FIXTURE.get("session_agents") or ())
+HOME = model_fixture.fixture_home()
 
-# The selector loaded from a throwaway tree of the frozen files, and that
-# tree's CLI — set by setUpModule.
+# The selector loaded from a throwaway tree of the frozen files on HOME, that
+# tree's CLI, and the tree itself — set by setUpModule.
 fx = None
 FIXTURE_CLI = None
+TREE = None
 _TREE = None
 
 
 def setUpModule():
-    global fx, FIXTURE_CLI, _TREE
+    global fx, FIXTURE_CLI, TREE, _TREE
     _TREE = tempfile.TemporaryDirectory()
-    tree = model_fixture.fixture_tree(Path(_TREE.name) / "tree")
-    fx = model_fixture.fixture_module(tree)
-    FIXTURE_CLI = str(tree / "scripts" / "model_fallback.py")
+    TREE = model_fixture.fixture_tree(Path(_TREE.name) / "tree", regenerate=False)
+    # Reading HOME imports the tree's `model_home`, which puts the tree's
+    # scripts on the path; put it back, so `import dead_run` below is the
+    # repo's.
+    path = list(sys.path)
+    fx = model_fixture.fixture_module(TREE, doc=HOME)
+    sys.path[:] = path
+    FIXTURE_CLI = str(TREE / "scripts" / "model_fallback.py")
 
 
 def tearDownModule():
@@ -91,14 +104,14 @@ def tearDownModule():
 
 
 def walk(role):
-    """The rungs `role` walks in the frozen config: its group's ladder."""
-    return model_fixture.ladder(FIXTURE, FIXTURE["agents"][role])
+    """The rungs `role` walks on the frozen document: its group's models."""
+    return model_fixture.ladder(HOME, HOME["agents"][role])
 
 
 def roles_in(kind):
-    """The pipeline roles the frozen config puts in group `kind`."""
+    """The pipeline roles the frozen document puts in group `kind`."""
     return [
-        role for role, group in FIXTURE["agents"].items()
+        role for role, group in HOME["agents"].items()
         if group == kind and role not in SESSION_AGENTS
     ]
 
@@ -108,8 +121,8 @@ def rung_ids(rungs):
 
 
 def default_ladder():
-    """The frozen config's `default_ladder`, the walk of an unknown role."""
-    return rung_ids(FIXTURE["ladders"][FIXTURE["default_ladder"]])
+    """The walk of an unknown role on a home: the Builders group's models."""
+    return model_fixture.ladder(HOME, fx.WORKHORSE_KIND)
 
 
 EXCLUDED = rung_ids(FIXTURE.get("excluded"))
@@ -130,9 +143,10 @@ def down_to(rung, ladder):
 
 
 def cli_select(*args, available):
-    env = dict(os.environ)
-    # JSON map model->bool consumed by the CLI's test hook.
-    env["BUREAU_FAKE_AVAILABLE"] = json.dumps(available)
+    # The CLI reads HOME, as `fx` did; the JSON map model->bool is consumed
+    # by its test hook.
+    env = model_fixture.home_env(TREE, HOME, BUREAU_FAKE_AVAILABLE=available)
+    env.pop("BUREAU_MODEL_HOME_TOKEN", None)
     return subprocess.run(
         [sys.executable, FIXTURE_CLI, "select", *args],
         capture_output=True, text=True, env=env,
@@ -142,13 +156,13 @@ def cli_select(*args, available):
 class LadderShapeTest(unittest.TestCase):
     def test_the_walk_is_the_configs_ladder_in_the_configs_order(self):
         # The ladder is the contract: what the selector walks is what the
-        # config writes, in the order it writes it. Which model leads is the
-        # config's decision, not this file's; each role's own walk is
+        # home writes, in the order it writes it. Which model leads is the
+        # home's decision, not this file's; each role's own walk is
         # AgentsRegistryAlignment's.
         self.assertEqual(fx.LADDER, default_ladder())
-        for name, rungs in FIXTURE["ladders"].items():
+        for name in HOME["groups"]:
             with self.subTest(ladder=name):
-                self.assertEqual(fx.LADDERS[name], rung_ids(rungs))
+                self.assertEqual(fx.LADDERS[name], model_fixture.ladder(HOME, name))
 
     def test_ladder_entries_are_all_known_models(self):
         self.assertTrue(set(fx.LADDER) <= fx.KNOWN_MODELS)
@@ -207,7 +221,7 @@ class SelectLadderTest(unittest.TestCase):
         # No role hardcodes a model — each walks its group's ladder. Fable
         # probes available too (Anthropic enabled it, 2026-08-09) and is still
         # not chosen: it is not on the walk. See FableIsNotABuildModelTest.
-        for role in FIXTURE["agents"]:
+        for role in HOME["agents"]:
             if role in SESSION_AGENTS:
                 continue
             with self.subTest(role=role):
@@ -261,7 +275,7 @@ class CachingTest(unittest.TestCase):
 
     def test_probe_not_called_repeatedly_within_ttl(self):
         ladder = walk("engineer")
-        peers = [r for r in roles_in(FIXTURE["agents"]["engineer"]) if r != "engineer"]
+        peers = [r for r in roles_in(HOME["agents"]["engineer"]) if r != "engineer"]
         self.assertTrue(peers, "no second role shares the engineer's ladder")
         avail = down_to(ladder[-1], ladder)
         calls = []
@@ -591,22 +605,20 @@ class CallerSuppliedLadderTest(unittest.TestCase):
 
 
 class AgentsRegistryAlignment(unittest.TestCase):
-    """The ladders must agree with the CANONICAL config so the console roster
-    and the runtime selection never drift (the registry contract, DRE-1335).
+    """Each role resolves through its group (the registry contract, DRE-1335).
 
-    DRE-2316 moved the canonical declaration OUT of agents.yaml and into
-    config/models.yaml: the registry's `model:` is now a generated mirror and
-    its 5x copy-pasted `ladder:` block is gone. The resolution — role → group →
-    ladder — is a rule and runs on the fixture; the registry's `model:` lines
-    are checked against the committed config as written. The generated-region
-    mechanics (markers, regeneration, the drift gate) live in
-    tests/test_model_config.py."""
+    DRE-2316 moved the canonical declaration OUT of agents.yaml, and DRE-6982
+    took the last copy of it out: the registry carries no `model:` and no
+    `kind:` at all, and each agent's group and model are read from the home
+    when a run starts. The resolution — role → group → ladder — is a rule and
+    runs on the fixture; tests/test_agents_registry.py holds the registry to
+    carrying no model."""
 
     def test_every_role_walks_its_own_groups_ladder(self):
         # DRE-3015: a role is resolved through its group, not handed the build
         # ladder — the planner's group names a different ladder, and that is
         # the one it walks.
-        for role in FIXTURE["agents"]:
+        for role in HOME["agents"]:
             if role in SESSION_AGENTS:
                 continue
             with self.subTest(role=role):
@@ -614,35 +626,14 @@ class AgentsRegistryAlignment(unittest.TestCase):
         self.assertNotEqual(walk(PLANNER), default_ladder())
         self.assertEqual(fx.ladder_for(PLANNER), walk(PLANNER))
 
-    def test_every_registry_model_line_is_the_top_of_its_configured_ladder(self):
-        """`model:` is the field the console's agent editor rewrites, so it is
-        the field a bad write lands in, and the one no test looked at until an
-        Opus 5 tile was found saving the retired id. It is GENERATED from the
-        config, and it must be the first rung of that agent's configured ladder
-        as written — read off the committed files, whatever they say."""
-        cfg = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
-        agents = yaml.safe_load((ROOT / "agents.yaml").read_text())["agents"]
-        declared = {
-            a["name"]: a["model"] for a in agents if isinstance(a.get("model"), str)
-        }
-        self.assertTrue(declared, "no agent declares a bare model: field")
-        for name, model in sorted(declared.items()):
-            with self.subTest(agent=name):
-                self.assertIn(name, cfg["agents"], f"{name}: in no group")
-                top = model_fixture.ladder(cfg, cfg["agents"][name])[0]
-                self.assertEqual(
-                    model, top,
-                    f"{name}: agents.yaml `model: {model}` is not the top of its "
-                    f"configured ladder ({top})",
-                )
-
 
 class CommittedStateTest(unittest.TestCase):
     """What must hold for the committed files whatever the console saved."""
 
     def test_no_configured_ladder_references_a_retired_or_excluded_model(self):
-        """EVERY ladder draws from selectable models, read off the committed
-        file's own `retired` and `excluded` lists.
+        """EVERY ladder of the defaults in the code draws from selectable
+        models, read off the committed file's own `retired` and `excluded`
+        lists — the file carries no ladder since DRE-6983.
 
         Checking only engineer/planner by name is what let the Opus 5 rotation
         land with `repairer` still pinned to claude-opus-4-8: no test ever
@@ -652,8 +643,9 @@ class CommittedStateTest(unittest.TestCase):
         exists to shut."""
         cfg = yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
         barred = set(rung_ids(cfg.get("retired"))) | set(rung_ids(cfg.get("excluded")))
-        self.assertTrue(cfg["ladders"])
-        for name, rungs in sorted(cfg["ladders"].items()):
+        ladders = mf.code_defaults()["ladders"]
+        self.assertTrue(ladders)
+        for name, rungs in sorted(ladders.items()):
             models = rung_ids(rungs)
             with self.subTest(ladder=name):
                 self.assertEqual(
@@ -781,12 +773,10 @@ class FableIsNotABuildModelTest(unittest.TestCase):
 
 class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
     """DRE-6939: the choices live in the home, and with no home the selector
-    runs on the defaults in the code — never on the choices still written in
-    config/models.yaml. That file is read for the code-side facts only."""
+    runs on the defaults in the code. config/models.yaml carries no choice
+    since DRE-6983 and is read for the code-side facts only."""
 
     def _edited(self, raw: dict) -> dict:
-        name = raw["kinds"]["workhorse"]["ladder"]
-        raw["ladders"][name] = list(reversed(raw["ladders"][name]))
         raw["excluded"] = list(raw.get("excluded") or []) + [
             {"model": "claude-test-excluded", "reason": "a code-side fact this test adds"}]
         return raw
@@ -811,7 +801,10 @@ class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
 
     def test_the_selector_cli_answers_from_the_code_not_the_file(self):
         with tempfile.TemporaryDirectory() as tmp:
-            tree = model_fixture.fixture_tree(Path(tmp) / "tree")
+            tree = model_fixture.fixture_tree(Path(tmp) / "tree", regenerate=False)
+            # What the tree's own code says the engineer walks with no home.
+            defaults = model_fixture.fixture_module(tree).code_defaults()
+            top = defaults["ladders"][defaults["kinds"][defaults["agents"]["engineer"]]][0]
             path = tree / "config" / "models.yaml"
             raw = self._edited(yaml.safe_load(path.read_text()))
             path.write_text(yaml.safe_dump(raw, sort_keys=False))
@@ -822,14 +815,126 @@ class TheCommittedChoicesAreNotReadTest(unittest.TestCase):
                 [sys.executable, str(tree / "scripts" / "model_fallback.py"), "select",
                  "engineer"], capture_output=True, text=True, env=env)
         self.assertEqual(0, proc.returncode, proc.stderr)
-        self.assertEqual(proc.stdout.strip(), default_ladder()[0])
+        self.assertEqual(proc.stdout.strip(), top)
         self.assertNotIn("REFUSING", proc.stderr)
 
     def test_code_defaults_is_a_fresh_copy_of_the_literal(self):
         first = mf.code_defaults()
         first["ladders"]["workhorse"].append("claude-test-scribble")
         self.assertNotIn("claude-test-scribble", mf.code_defaults()["ladders"]["workhorse"])
-        self.assertEqual(mf.code_defaults(), mf._normalize_config(mf._FALLBACK_MODEL_CONFIG))
+        self.assertEqual(mf.code_defaults(), mf._normalize_config(mf.CODE_DEFAULTS))
+
+
+# The code-side facts the defaults in the code carry beside the choices. With
+# no generator (DRE-6982) nothing writes them from config/models.yaml, so the
+# test below holds each to the file's. `rules` is not in the literal: its
+# defaults in the code are `_RULES_DEFAULTS`, held the same way.
+CODE_SIDE_FACTS = ("effort", "review_separation", "discovery", "retired",
+                   "excluded", "session_agents", "about")
+
+
+def code_side_drift(literal: dict, rules: dict, raw: dict) -> list[str]:
+    """The code-side facts on which `literal` (with `rules`, the code's
+    `rules:` defaults) differs from the parsed config `raw`, by key."""
+    ours, theirs = mf._normalize_config(literal), mf._normalize_config(raw)
+    drift = [key for key in CODE_SIDE_FACTS if ours.get(key) != theirs.get(key)]
+    block = raw.get("rules") or {}
+    if {k: tuple(v) for k, v in rules.items()} != {
+            k: tuple(block.get(k) or ()) for k in rules}:
+        drift.append("rules")
+    return drift
+
+
+class CodeDefaultsTest(unittest.TestCase):
+    """`CODE_DEFAULTS` is the hand-written document the fleet runs on when
+    the home cannot be read (DRE-6982). It was a generated literal; the
+    generator and its markers are gone."""
+
+    SOURCE = (ROOT / "scripts" / "model_fallback.py").read_text()
+
+    def _committed(self) -> dict:
+        return yaml.safe_load((ROOT / "config" / "models.yaml").read_text())
+
+    def test_each_code_side_fact_is_the_files(self):
+        drift = code_side_drift(mf.CODE_DEFAULTS, mf._RULES_DEFAULTS, self._committed())
+        self.assertEqual(
+            drift, [],
+            f"CODE_DEFAULTS differs from config/models.yaml on {drift}: edit the "
+            "two together")
+
+    def test_the_check_names_the_key_that_differs(self):
+        edits = {
+            "effort": lambda raw: raw["effort"].update({"claude-test-x": "low"}),
+            "review_separation": lambda raw: raw["review_separation"].update(
+                roles=raw["review_separation"]["roles"][:1]),
+            "discovery": lambda raw: raw["discovery"].update(
+                alert=not raw["discovery"]["alert"]),
+            "retired": lambda raw: raw["retired"].append(
+                {"model": "claude-test-retired", "reason": "x"}),
+            "excluded": lambda raw: raw["excluded"].append(
+                {"model": "claude-test-excluded", "reason": "x"}),
+            "session_agents": lambda raw: raw["session_agents"].pop(),
+            "about": lambda raw: raw["about"].update(
+                {next(iter(raw["about"])): "Says something else"}),
+            "rules": lambda raw: raw["rules"].update(
+                reviewers_only=raw["rules"]["reviewers_only"][:1]),
+        }
+        self.assertEqual(sorted(edits), sorted((*CODE_SIDE_FACTS, "rules")))
+        for key, edit in edits.items():
+            with self.subTest(key=key):
+                raw = self._committed()
+                edit(raw)
+                self.assertEqual(
+                    code_side_drift(mf.CODE_DEFAULTS, mf._RULES_DEFAULTS, raw), [key])
+
+    def test_the_literal_has_no_generated_region_and_says_what_it_is(self):
+        self.assertNotIn("BEGIN generated", self.SOURCE)
+        self.assertNotIn("END generated", self.SOURCE)
+        self.assertEqual(len(re.findall(r"^CODE_DEFAULTS = \{", self.SOURCE, re.M)), 1)
+        lines = self.SOURCE.split("\nCODE_DEFAULTS = {", 1)[0].splitlines()
+        comment = []
+        for line in reversed(lines):
+            if not line.startswith("#"):
+                break
+            comment.insert(0, line.lstrip("# "))
+        said = " ".join(" ".join(comment).split())
+        for clause in ("only when the home cannot be read",
+                       "never edited to change a choice",
+                       "never consulted while the home answers"):
+            self.assertIn(clause, said)
+
+    def test_with_no_home_the_engineer_runs_on_the_first_builders_model(self):
+        groups = mf.CODE_DEFAULTS["groups"]
+        builders = next(key for key, group in groups.items()
+                        if group["label"] == "Builders")
+        first = mf.CODE_DEFAULTS["ladders"][mf.CODE_DEFAULTS["kinds"][builders]][0]
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")}
+        env["BUREAU_FAKE_AVAILABLE"] = "{}"
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "model_fallback.py"), "select",
+             "engineer"], capture_output=True, text=True, env=env)
+        self.assertEqual(0, proc.returncode, proc.stderr)
+        self.assertEqual(proc.stdout.strip(), first)
+        self.assertIn("running on the defaults in the code", proc.stderr)
+
+    def test_render_defaults_prints_a_document_the_check_accepts(self):
+        env = {k: v for k, v in os.environ.items()
+               if k not in ("BUREAU_MODEL_HOME_TOKEN", "BUREAU_MODEL_HOME_FILE")}
+        rendered = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "model_home.py"), "render-defaults"],
+            capture_output=True, text=True, env=env)
+        self.assertEqual(0, rendered.returncode, rendered.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "home.json"
+            path.write_text(rendered.stdout)
+            checked = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "model_home.py"), "check",
+                 str(path)], capture_output=True, text=True, env=env)
+        self.assertEqual(0, checked.returncode, checked.stdout + checked.stderr)
+        doc = json.loads(rendered.stdout)
+        defaults = mf.code_defaults()
+        self.assertEqual(doc["agents"], defaults["agents"])
 
 
 if __name__ == "__main__":

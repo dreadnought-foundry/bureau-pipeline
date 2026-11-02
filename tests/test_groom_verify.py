@@ -776,9 +776,11 @@ def test_a_clean_read_says_clean():
 # the window, and what it does not reach
 # --------------------------------------------------------------------------
 def test_the_check_reads_the_morning_set_and_ten_spares_in_proposal_order():
+    """…and, swept since DRE-7973, every other card on offer after them."""
     linear = FakeLinear()
-    checked(linear=linear)
-    assert linear.asked == [f"DRE-{n}" for n in range(101, 114)]
+    got = checked(linear=linear)
+    assert linear.asked == [f"DRE-{n}" for n in range(101, 116)]
+    assert got["verification"]["swept"] == ["DRE-114", "DRE-115"]
 
 
 def test_a_spare_with_evidence_that_no_slot_reaches_is_not_cancelled_early():
@@ -793,12 +795,31 @@ def test_a_spare_with_evidence_that_no_slot_reaches_is_not_cancelled_early():
 
 def test_a_planning_card_the_check_never_reached_is_named_not_checked():
     """Every spare fails: the Planning list is filled from past the window,
-    and those cards are said to be unchecked rather than clean."""
+    and with the sweep off those cards are said to be unchecked rather than
+    clean."""
+    bad = {f"DRE-{n}": {"comments": [comment(SUPERSEDED)]}
+           for n in range(101, 114)}
+    first = groomer.propose(LANE, cycles=CYCLES, capacity=3, now=NOW)
+    result = groom_verify.check(first, lops=FakeLinear(bad), run=FakeGh(),
+                                owners=OWNERS)
+    got = groom_verify.settle(
+        groomer.propose(LANE, cycles=CYCLES, capacity=3, now=NOW,
+                        verified=result), result)
+    assert got["verification"]["not_checked"] == planning(got)
+    assert planning(got) == ["DRE-114", "DRE-115"]
+
+
+def test_the_sweep_reads_the_cards_past_the_window_so_none_is_unchecked():
+    """The same morning as the groomer runs it since DRE-7973: the sweep read
+    DRE-114 and DRE-115 after the spares, so they are clean, not unchecked."""
     bad = {f"DRE-{n}": {"comments": [comment(SUPERSEDED)]}
            for n in range(101, 114)}
     got = checked(linear=FakeLinear(bad))
-    assert got["verification"]["not_checked"] == planning(got)
     assert planning(got) == ["DRE-114", "DRE-115"]
+    assert got["verification"]["not_checked"] == []
+    for identifier in planning(got):
+        assert record(got, identifier)["list"] == "sweep"
+        assert record(got, identifier)["verdict"] == "clean"
 
 
 def test_the_id_covers_the_checked_lists():

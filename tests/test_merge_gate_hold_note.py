@@ -165,10 +165,20 @@ raise SystemExit(2)
 
 # Records every call; stands in for scripts the step runs that this card does
 # not change (the gatherers, the Linear write, the fork-refresh decision).
+# Imported rather than run, it is the merge-method ask (DRE-8171), answered by
+# the real proof_record.proof_record_branch.
 RECORD_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
-with open(os.environ["SCRIPT_LOG"], "a") as fh:
-    fh.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\n")
+if __name__ != "__main__":
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_real_" + __name__, os.path.join(os.environ["REAL_SCRIPTS"], __name__ + ".py"))
+    real = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real)
+    proof_record_branch = real.proof_record_branch
+else:
+    with open(os.environ["SCRIPT_LOG"], "a") as fh:
+        fh.write(json.dumps([os.path.basename(sys.argv[0])] + sys.argv[1:]) + "\n")
 if os.path.basename(sys.argv[0]) == "order_sensitive_refresh.py":
     print("decision=proceed")
     print("reason=nothing order-sensitive")

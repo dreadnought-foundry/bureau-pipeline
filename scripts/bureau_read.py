@@ -95,6 +95,10 @@ because the door serves relations when it is left out):
         envelope below: `{"schema", "read_at", "since", "reasons",
         "decisions"}`. Read exactly as /split-history is
         (`groom_removals()` says why).
+  GET /alerts
+      — every open console alert at WARN or CRITICAL (DRE-8632), outside the
+        envelope below: `{"schema", "read_at", "alerts"}`. Read exactly as
+        /split-history is (`open_alerts()` says why).
 
 Envelope (HTTP 200 whenever the caller is authenticated):
   {"schema": "bureau-read/1", "verdict": "FRESH"|"UNKNOWN",
@@ -1100,6 +1104,48 @@ def groom_removals(since: str | None = None) -> dict:
         if missing:
             raise _malformed(f"/groom-removals: {ident or 'a decision'} lacks "
                              f"{', '.join(missing[:5])}")
+    _state["served"] += 1
+    return answer
+
+
+# ── The open console alerts (DRE-8632) ──────────────────────────────────────
+#: `GET /alerts` — every system alert the console's Alerts tab serves as open,
+#: at WARN or CRITICAL, oldest `raised_at` first, then by `kind` (agent-bureau's
+#: `console/backend/pipeline_read.py`, the contract of epic DRE-8606). It takes
+#: no query parameter: the door answers any one 400.
+OPEN_ALERTS_PATH = "/alerts"
+#: Five minutes: the full sweep reads it once a pass to resolve the alerts it
+#: raised, and a pass is fifteen minutes apart.
+OPEN_ALERTS_MAX_AGE = 300
+#: Every key of one served alert — the contract's row, exactly. `card` is the
+#: last `:`-separated segment of `kind` when it is `DRE-<n>`, else null.
+OPEN_ALERT_FIELDS = ("kind", "severity", "title", "raised_at", "card")
+
+
+def open_alerts() -> dict:
+    """Every open console alert at WARN or CRITICAL, as the door serves it —
+    the whole answer, or ReadUnknown naming what was wrong. Never part of one.
+
+    Read exactly as `split_history` and `groom_removals` are: the board reads'
+    token, `X-Bureau-Max-Age` and refusal handling, one failure and the door
+    is not asked again this run, asked whatever `BUREAU_READ` says (the
+    alerts have no Linear copy behind them), and the answer outside the lane
+    envelope. The door answers 503 when its database cannot be read, never an
+    empty list in its place, so an empty `alerts` is a whole answer.
+    """
+    answer = _get(OPEN_ALERTS_PATH, {}, max_age=OPEN_ALERTS_MAX_AGE, any_mode=True)
+    if not isinstance(answer, dict) or answer.get("schema") != SCHEMA:
+        raise _malformed(f"/alerts: schema is not {SCHEMA!r}")
+    if not isinstance(answer.get("alerts"), list):
+        raise _malformed("/alerts: alerts is not a list")
+    for row in answer["alerts"]:
+        if not isinstance(row, dict):
+            raise _malformed("/alerts: an alert is not an object")
+        missing = [f for f in OPEN_ALERT_FIELDS if f not in row]
+        if missing:
+            kind = row.get("kind") if isinstance(row.get("kind"), str) else None
+            raise _malformed(f"/alerts: {kind or 'an alert'} lacks "
+                             f"{', '.join(missing)}")
     _state["served"] += 1
     return answer
 

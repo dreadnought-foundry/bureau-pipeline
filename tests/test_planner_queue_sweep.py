@@ -1,23 +1,23 @@
-"""The reconcile sweep is the planner line's backstop (DRE-5178, epic DRE-5167).
+"""The reconcile sweep drains the old planner line, one way (DRE-8618, epic DRE-8539).
 
-THE GAP. The end-of-run dispatch in `plan.yml` is the planner line's fast
-path, and it does not run when a runner is killed, when a job hits its
-timeout (its `always()` steps are skipped), or when the finishing run cannot
-mint a token for the waiting card's owner. A card can then wait in a line
-with a free slot and nothing coming to serve it.
+THE CAP IS GONE. Since DRE-8617 a plan run reads the planners' Linear
+allowance and claims no slot, so nothing joins the line any more. What the
+line still holds is started at once, so no card is stranded when the line
+stops being served (`architecture/decisions/adr-planner-cap-removed.md`).
 
-THE PHASE UNDER TEST — `reconcile.serve_planner_line`, full sweeps only:
+THE PHASE UNDER TEST — `reconcile.serve_planner_line`, full sweeps only, until
+DRE-8622 removes it:
 
-  1. release dead claims: an open claim past the TTL `because expired`,
-     fleet-wide, with no GitHub read; an open claim of THIS repo whose run
-     GitHub reports `completed` `because run-gone`; an unreadable status
-     keeps the claim;
-  2. dispatch into free slots, earliest card in line first, this repo's
-     cards only, through `plan_run.fire` with the card's recorded trigger
-     and reason and never `sent_by_run` — and a `dispatched` receipt only on
-     a confirmed dispatch;
-  3. print the line's depth once, as a `::warning::` once the oldest card
-     has waited over half the line's bound, and never escalate.
+  1. every card the ledger finds waiting — `waiting`, or a `dispatched` past
+     its grace — recorded against THIS repo is fired through `plan_run.fire`
+     on the plan event with its recorded trigger and reason, never
+     `sent_by_run`, whatever the cap file says and however many claims are
+     open;
+  2. a confirmed dispatch is followed by ONE `released … · because
+     cap-removed` receipt, which takes the card out of the line, so a second
+     pass fires nothing;
+  3. nothing is counted: no claim is released (expired or run-gone), no run
+     is read on GitHub, and the cap is never asked.
 
 Every receipt here is composed by `planner_queue.format_receipt`, the module
 that owns the grammar, so a grammar change cannot leave this suite reading a
@@ -57,8 +57,9 @@ CFG = planner_queue.load()
 # DRE-5326 dropped it to two on 2026-09-30 without changing a rule here.
 CAP = 4
 TTL = CFG["claim_ttl_minutes"]
+#: The cap's own reader, before `_pin` stands it in for the importing suites.
+REAL_CAP = planner_queue.cap
 GRACE = CFG["dispatched_grace_minutes"]
-BOUND = planner_queue.waiting_max()
 
 
 @pytest.fixture(autouse=True)
@@ -67,6 +68,11 @@ def _pin(monkeypatch):
     monkeypatch.setattr(reconcile, "REPO_SLUG", "agent-bureau")
     monkeypatch.delenv("MERGED_CARD", raising=False)
     monkeypatch.delenv(planner_queue.CONFIG_ENV, raising=False)
+    # The cap's reader is pinned for the suites that import this fixture
+    # (`test_planner_line_order`); the drain itself never asks it for the
+    # number in force, and
+    # `test_six_cards_waiting_and_a_cap_of_three_are_all_started_in_one_pass`
+    # makes that ask raise to prove so.
     monkeypatch.setattr(planner_queue, "cap", lambda cfg=None, environ=None: CAP)
     ledgers = (reconcile._write_failures, reconcile._read_failures,
                reconcile._stale_defects)
@@ -225,12 +231,6 @@ def _serve(cards, runs=None, fire_result=(True, "")) -> World:
     return world
 
 
-def _depth_lines(out: str) -> list[str]:
-    return [line for line in out.splitlines()
-            if line.removeprefix("::warning::").startswith("planner line: ")
-            and " waiting, oldest " in line]
-
-
 # The full sweep, every other phase stood down: the backstops and the phases
 # that would reach GitHub or read more of the board than this suite fakes.
 _STOOD_DOWN = (
@@ -272,48 +272,94 @@ def _main(cards, runs=None, fire_result=(True, ""), **main_kw):
     return world, spy, later, red
 
 
+def _six_waiting() -> list:
+    """Six cards waiting in the old line, each with its own trigger and reason."""
+    return [
+        _waiting("DRE-201", 60.0, reason="re-run"),
+        _waiting("DRE-202", 50.0),
+        _waiting("DRE-203", 40.0, reason="approved", trigger="in progress",
+                 lane="In Progress"),
+        _waiting("DRE-204", 30.0, reason="re-review"),
+        _waiting("DRE-205", 20.0, trigger="Triage"),
+        _waiting("DRE-206", 10.0, reason="review-retry"),
+    ]
+
+
+def _next_pass(cards, world) -> None:
+    """Put every receipt `world` posted onto its card, newest first, as the
+    next pass's board read returns it."""
+    for ident, body in world.posts:
+        card = next(c for c in cards if c["identifier"] == ident)
+        card["comments"]["nodes"].insert(0, {"body": body, "createdAt": _iso(0)})
+
+
 # --------------------------------------------------------------------------- #
-# 1 + 2 — a run gone, a slot freed, the first card in line served              #
+# 1 + 2 — every waiting card started at once, then released                    #
 # --------------------------------------------------------------------------- #
 
 
-def test_one_full_sweep_releases_the_gone_run_and_serves_the_first_card(capsys):
-    cards = _four_running() + _three_waiting()
-    runs = {"101": "completed", "102": "in_progress", "103": "in_progress",
-            "104": "queued"}
-    world, spy, _, red = _main(cards, runs)
+def test_six_cards_waiting_and_a_cap_of_three_are_all_started_in_one_pass(monkeypatch):
+    # The committed cap file says three, read through its one reader.
+    assert REAL_CAP(planner_queue.load(), environ={}) == 3
+
+    def no_number_in_force(cfg=None, environ=None):
+        # `load` checks the file's own number against its ceiling with an
+        # empty environment; only the number IN FORCE is the cap being asked.
+        if environ is None:
+            raise AssertionError("the drain asked the cap")
+        return REAL_CAP(cfg, environ=environ)
+
+    monkeypatch.setattr(planner_queue, "cap", no_number_in_force)
+    cards = _six_waiting()
+    world, spy, _, red = _main(cards)
 
     assert spy.call_count == 1
-    released = world.receipts("released")
-    assert [(i, r.run, r.because) for i, r in released] == [
-        ("DRE-100", "101", "run-gone")]
-    assert len(world.fires) == 1
-    record, repo, kw = world.fires[0]
-    first = next(c for c in cards if c["identifier"] == "DRE-201")
-    assert record is first, "fire must get the board read's own card record"
-    assert repo == THIS
-    assert kw == {"trigger_state": "Planning", "reason": "re-run",
-                  "event": reconcile.plan_run.PLAN_EVENT}
-    assert "sent_by_run" not in kw
-    dispatched = world.receipts("dispatched")
-    assert [(i, r.trigger, r.reason, r.repo) for i, r in dispatched] == [
-        ("DRE-201", "Planning", "re-run", THIS)]
-    posted_to = {i for i, _ in world.posts}
-    assert not posted_to & {"DRE-202", "DRE-203"}, "the other two stay waiting"
     assert not red
-    assert _depth_lines(capsys.readouterr().out) == [
-        f"planner line: 2 waiting, oldest 20 minutes, 3 running and 1 dispatched of {CAP}"]
+    fired = [(c["identifier"], repo, kw) for c, repo, kw in world.fires]
+    assert fired == [
+        ("DRE-203", THIS, {"trigger_state": "in progress", "reason": "approved",
+                           "event": reconcile.plan_run.PLAN_EVENT}),
+        ("DRE-201", THIS, {"trigger_state": "Planning", "reason": "re-run",
+                           "event": reconcile.plan_run.PLAN_EVENT}),
+        ("DRE-202", THIS, {"trigger_state": "Planning", "reason": None,
+                           "event": reconcile.plan_run.PLAN_EVENT}),
+        ("DRE-204", THIS, {"trigger_state": "Planning", "reason": "re-review",
+                           "event": reconcile.plan_run.PLAN_EVENT}),
+        ("DRE-205", THIS, {"trigger_state": "Triage", "reason": None,
+                           "event": reconcile.plan_run.PLAN_EVENT}),
+        ("DRE-206", THIS, {"trigger_state": "Planning", "reason": "review-retry",
+                           "event": reconcile.plan_run.PLAN_EVENT}),
+    ], "the line's own order: the approval first, then arrival"
+    for (ident, _, _), (record, _, _) in zip(fired, world.fires):
+        assert record is next(c for c in cards if c["identifier"] == ident), (
+            "fire must get the board read's own card record")
+    released = world.receipts("released")
+    assert sorted((i, r.because, r.trigger, r.repo) for i, r in released) == [
+        ("DRE-201", "cap-removed", "Planning", THIS),
+        ("DRE-202", "cap-removed", "Planning", THIS),
+        ("DRE-203", "cap-removed", "in progress", THIS),
+        ("DRE-204", "cap-removed", "Planning", THIS),
+        ("DRE-205", "cap-removed", "Triage", THIS),
+        ("DRE-206", "cap-removed", "Planning", THIS),
+    ], "one release per card"
+    assert len(world.posts) == 6, "a release and nothing else"
+    assert world.receipts("dispatched") == []
+
+    _next_pass(cards, world)
+    for card in cards:
+        assert not planner_queue.in_line(card["comments"]["nodes"])
+    second, _, _, red = _main(cards)
+    assert second.fires == [] and second.posts == []
+    assert not red
 
 
 def test_a_waiting_receipt_with_no_reason_is_fired_with_reason_none():
-    cards = _four_running() + _three_waiting(first_reason=None)
-    world = _serve(cards, {"101": "completed", "102": "in_progress",
-                           "103": "in_progress", "104": "in_progress"})
-    assert len(world.fires) == 1
-    record, _, kw = world.fires[0]
-    assert record["identifier"] == "DRE-201"
+    world = _serve([_waiting("DRE-202", 20.0)])
+    (record, _, kw), = world.fires
+    assert record["identifier"] == "DRE-202"
     assert kw == {"trigger_state": "Planning", "reason": None,
                   "event": reconcile.plan_run.PLAN_EVENT}
+    assert "sent_by_run" not in kw
 
 
 def test_an_activate_route_card_is_refired_on_the_activate_route():
@@ -325,221 +371,57 @@ def test_an_activate_route_card_is_refired_on_the_activate_route():
                      "event": reconcile.plan_run.PLAN_EVENT})]
 
 
-def test_every_run_still_live_dispatches_nothing_and_prints_the_depth(capsys):
-    cards = _four_running() + _three_waiting()
-    world = _serve(cards, {"101": "in_progress", "102": "in_progress",
-                           "103": "queued", "104": "in_progress"})
-    assert world.fires == []
-    assert world.posts == []
-    out = capsys.readouterr().out
-    assert _depth_lines(out) == [
-        f"planner line: 3 waiting, oldest 30 minutes, 4 running and 0 dispatched of {CAP}"]
-    for ident in ("DRE-201", "DRE-202", "DRE-203"):
-        assert any(ident in line and "planner line" in line
-                   for line in out.splitlines()), f"no reason printed for {ident}"
-
-
-def test_an_unreadable_status_keeps_the_claim():
-    cards = _four_running() + _three_waiting()
-    world = _serve(cards, {"101": None, "102": "in_progress", "103": "in_progress",
-                           "104": "in_progress"})
-    assert world.receipts("released") == []
-    assert world.fires == []
+def test_the_drain_returns_the_cards_it_started():
+    with _world(_three_waiting()):
+        assert reconcile.serve_planner_line() == ["DRE-201", "DRE-202", "DRE-203"]
 
 
 # --------------------------------------------------------------------------- #
-# the handover                                                                 #
+# 3 — nothing is counted                                                       #
 # --------------------------------------------------------------------------- #
 
 
-S, C = "4001", "4002"  # the sender run and the run it handed its slot to
-
-
-def _handover_card() -> dict:
-    return _card("DRE-400", "Planning",
-                 _r("claimed", 20.0, run=S),
-                 _r("claimed", 10.0, run=C, from_run=S))
-
-
-def test_a_handed_over_claim_is_one_running_card_and_released_on_nothing(capsys):
-    world = _serve([_handover_card()], {S: "completed", C: "in_progress"})
-    assert world.receipts("released") == []
-    assert S not in world.gh_runs_read(), "S's claim is closed by the handover"
-    assert _depth_lines(capsys.readouterr().out) == [
-        f"planner line: 0 waiting, oldest 0 minutes, 1 running and 0 dispatched of {CAP}"]
-
-
-def test_a_handed_over_claim_whose_run_is_gone_is_released_under_its_own_run():
-    world = _serve([_handover_card()], {S: "completed", C: "completed"})
-    assert [(i, r.run, r.because) for i, r in world.receipts("released")] == [
-        ("DRE-400", C, "run-gone")]
-
-
-def test_a_claim_whose_run_is_no_run_id_is_left_to_the_ttl():
-    world = _serve([_claimed("DRE-410", "not-a-run")], {"not-a-run": "completed"})
+def test_open_claims_neither_block_the_drain_nor_are_released():
+    """Four claims open — the old cap full — and every waiting card starts.
+    No run is read on GitHub and no claim is released, however its run
+    stands: the run-gone check went with the count."""
+    cards = _four_running() + _three_waiting()
+    world = _serve(cards, {"101": "completed", "102": "in_progress"})
+    assert [c["identifier"] for c, _, _ in world.fires] == [
+        "DRE-201", "DRE-202", "DRE-203"]
     assert world.gh_reads == []
+    assert {i for i, _ in world.receipts("released")} == {
+        "DRE-201", "DRE-202", "DRE-203"}
+
+
+def test_an_expired_claim_is_not_released_any_more():
+    cards = [_claimed("DRE-900", "900", repo=OTHER, minutes_ago=TTL + 5),
+             _claimed("DRE-901", "901", minutes_ago=TTL + 5)]
+    world = _serve(cards, {"901": "completed"})
     assert world.posts == []
+    assert world.gh_reads == []
 
 
-# --------------------------------------------------------------------------- #
-# Green Light                                                                  #
-# --------------------------------------------------------------------------- #
-
-
-def test_a_green_light_claim_holds_its_slot():
-    cards = ([_claimed(f"DRE-50{n}", f"5{n}") for n in range(3)]
-             + [_claimed("DRE-510", "510", lane="Green Light")]
-             + [_waiting("DRE-520", 15.0)])
-    board_calls = []
-    with _world(cards, {r: "in_progress" for r in ("50", "51", "52", "510")}) as world:
-        reconcile.serve_planner_line()
-        board_calls = world.board.outside_calls()
-    assert world.fires == []
-    assert board_calls == [("Green Light",)], (
-        "exactly one board read for a lane outside SWEPT_LANES")
-
-
-def test_a_green_light_waiting_card_is_neither_counted_nor_dispatched(capsys):
-    cards = ([_claimed(f"DRE-50{n}", f"5{n}") for n in range(3)]
-             + [_waiting("DRE-530", 15.0, lane="Green Light")])
-    world = _serve(cards, {r: "in_progress" for r in ("50", "51", "52")})
-    assert world.fires == []
-    assert _depth_lines(capsys.readouterr().out) == [
-        f"planner line: 0 waiting, oldest 0 minutes, 3 running and 0 dispatched of {CAP}"]
-
-
-# --------------------------------------------------------------------------- #
-# the reserved slot and the place in line                                      #
-# --------------------------------------------------------------------------- #
-
-
-def _reserved_board(dispatched_minutes_ago: float) -> list:
-    reserved = _card("DRE-600", "Planning",
-                     _r("waiting", 40.0, run="w-600", reason="re-run"),
-                     _r("dispatched", dispatched_minutes_ago, run="fin-1",
-                        reason="re-run"))
-    return ([_claimed(f"DRE-61{n}", f"61{n}") for n in range(3)] + [reserved]
-            + _three_waiting())
-
-
-def test_a_dispatch_inside_the_grace_is_a_taken_slot(capsys):
-    world = _serve(_reserved_board(0.2),
-                   {r: "in_progress" for r in ("610", "611", "612")})
-    assert world.fires == []
-    assert world.posts == []
-    assert _depth_lines(capsys.readouterr().out) == [
-        f"planner line: 3 waiting, oldest 30 minutes, 3 running and 1 dispatched of {CAP}"]
-
-
-def test_a_lost_dispatch_past_the_grace_is_served_first():
-    world = _serve(_reserved_board(GRACE + 5),
-                   {r: "in_progress" for r in ("610", "611", "612")})
+def test_a_lost_dispatch_past_the_grace_is_started():
+    card = _card("DRE-600", "Planning",
+                 _r("waiting", 40.0, run="w-600", reason="re-run"),
+                 _r("dispatched", GRACE + 5, run="fin-1", reason="re-run"))
+    world = _serve([card])
     assert [(c["identifier"], kw) for c, _, kw in world.fires] == [
         ("DRE-600", {"trigger_state": "Planning", "reason": "re-run",
                      "event": reconcile.plan_run.PLAN_EVENT})]
+    assert [(i, r.because) for i, r in world.receipts("released")] == [
+        ("DRE-600", "cap-removed")]
 
 
-def test_a_card_that_lost_its_slot_keeps_its_place_in_line():
-    a = _card("DRE-700", "Planning",
-              _r("waiting", 60.0, run="a1"),
-              _r("dispatched", 55.0, run="fin-a"),
-              _r("claimed", 54.0, run="a2"),
-              _r("waiting", 50.0, run="a2"))
-    b = _waiting("DRE-701", 58.0)
-    cards = [_claimed(f"DRE-71{n}", f"71{n}") for n in range(3)] + [a, b]
-    world = _serve(cards, {r: "in_progress" for r in ("710", "711", "712")})
-    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-700"]
-
-
-def test_a_slot_left_free_by_a_queued_claim_is_served_to_the_head():
-    """DRE-6329: a claim that finds cards already waiting queues behind them
-    and leaves its free slot to `next`. With no release pending to run that
-    `next`, the sweep serves the head of the line — never the queued claim."""
-    a = _waiting("DRE-6300", 20.0)
-    b = _waiting("DRE-6301", 19.0)
-    c = _card("DRE-6302", "Planning",
-              _r("claimed", 18.0, run="37790062876"),
-              _r("waiting", 18.0 - 1 / 60, run="37790062876"))
-    cards = [_claimed(f"DRE-73{n}", f"73{n}") for n in range(3)] + [a, b, c]
-    world = _serve(cards, {r: "in_progress" for r in ("730", "731", "732")})
-    assert [c["identifier"] for c, _, _ in world.fires] == ["DRE-6300"]
-    assert [i for i, _ in world.receipts("dispatched")] == ["DRE-6300"]
-    assert world.receipts("released") == []
-
-
-def _retried_card() -> dict:
-    """DRE-5213's receipts (DRE-5378): claimed and admitted, released by the
-    run that finished, then the automatic retry — a GitHub re-run, under the
-    same run id — claimed again and was told to wait."""
-    run = "36726491495"
-    return _card("DRE-5213", "Planning",
-                 _r("claimed", 150.0, run=run),
-                 _r("released", 121.0, run=run, because="finished"),
-                 _r("claimed", 120.0, run=run),
-                 _r("waiting", 120.0 - 1 / 60, run=run))
-
-
-def test_a_retry_whose_run_finished_is_served_before_cards_that_joined_after_it():
-    """DRE-202 joined the line after DRE-5213's first claim and before its
-    retry; DRE-203 after both. The retry is served first, and GitHub calling
-    its run completed is not read as a dead claim."""
-    cards = ([_claimed(f"DRE-72{n}", f"72{n}") for n in range(3)]
-             + [_retried_card(), _waiting("DRE-202", 140.0), _waiting("DRE-203", 60.0)])
-    runs = {"720": "in_progress", "721": "in_progress", "722": "in_progress",
-            "36726491495": "completed"}
-    world = _serve(cards, runs)
-    assert [(c["identifier"], kw) for c, _, kw in world.fires] == [
-        ("DRE-5213", {"trigger_state": "Planning", "reason": None,
-                      "event": reconcile.plan_run.PLAN_EVENT})]
-    assert [i for i, _ in world.receipts("dispatched")] == ["DRE-5213"]
-    assert world.receipts("released") == []
-    assert "36726491495" not in world.gh_runs_read()
-
-
-def test_the_served_retry_is_dispatched_once_not_every_pass():
-    cards = ([_claimed(f"DRE-72{n}", f"72{n}") for n in range(3)]
-             + [_retried_card(), _waiting("DRE-202", 140.0)])
-    runs = {"720": "in_progress", "721": "in_progress", "722": "in_progress"}
-    first = _serve(cards, runs)
-    assert [c["identifier"] for c, _, _ in first.fires] == ["DRE-5213"]
-    # The next pass reads the `dispatched` receipt the first one posted.
-    ident, body = first.posts[-1]
-    retried = next(c for c in cards if c["identifier"] == ident)
-    retried["comments"]["nodes"].insert(0, {"body": body, "createdAt": _iso(0)})
-    second = _serve(cards, runs)
-    assert second.fires == []
-
-
-# --------------------------------------------------------------------------- #
-# the depth warning                                                            #
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.parametrize("waited, loud", [(BOUND / 2 + 1, True), (BOUND / 2 - 1, False)])
-def test_the_depth_line_warns_past_half_the_bound(capsys, waited, loud):
-    cards = _four_running() + [_waiting("DRE-800", waited)]
-    world = _serve(cards, {r: "in_progress" for r in ("101", "102", "103", "104")})
-    lines = _depth_lines(capsys.readouterr().out)
-    assert len(lines) == 1
-    assert lines[0].startswith("::warning::") is loud
-    assert f"oldest {int(waited)} minutes" in lines[0]
+def test_a_dispatch_inside_its_grace_is_left_for_the_next_pass():
+    """A `dispatched` inside the grace is a dispatch on its way, not a card
+    waiting: the drain leaves it, and starts it once the grace has passed."""
+    card = _card("DRE-610", "Planning",
+                 _r("waiting", 40.0, run="w-610"),
+                 _r("dispatched", 0.2, run="fin-2"))
+    world = _serve([card])
     assert world.fires == [] and world.posts == []
-    for seam in world.moves:
-        seam.assert_not_called()
-
-
-# --------------------------------------------------------------------------- #
-# other repos                                                                  #
-# --------------------------------------------------------------------------- #
-
-
-def test_an_expired_claim_on_another_repos_card_is_released_without_a_read():
-    cards = [_claimed("DRE-900", "900", repo=OTHER, minutes_ago=TTL + 5),
-             _claimed("DRE-901", "901", repo=OTHER, minutes_ago=10.0)]
-    world = _serve(cards, {"901": None})
-    assert [(i, r.run, r.because, r.repo) for i, r in world.receipts("released")] == [
-        ("DRE-900", "900", "expired", OTHER)]
-    assert world.gh_reads == [], "another repo's run is never read"
 
 
 def test_another_repos_waiting_card_is_never_dispatched(capsys):
@@ -550,6 +432,32 @@ def test_another_repos_waiting_card_is_never_dispatched(capsys):
     assert any("DRE-910" in line and OTHER in line for line in out.splitlines())
 
 
+def test_a_green_light_waiting_card_is_not_dispatched():
+    world = _serve([_waiting("DRE-530", 15.0, lane="Green Light")])
+    assert world.fires == [] and world.posts == []
+
+
+def test_a_released_card_is_not_in_line_any_more():
+    """The release the drain posts is about the CARD, as a park's is
+    (`planner_queue.CARD_RELEASES`), though it closes no claim: a sweep's
+    run never held one."""
+    world = _serve([_waiting("DRE-701", 30.0)])
+    (ident, body), = world.posts
+    receipt = planner_queue.parse_receipt(body)
+    assert (ident, receipt.state, receipt.because) == ("DRE-701", "released",
+                                                       "cap-removed")
+    nodes = [{"body": body, "createdAt": _iso(0)}] + _waiting(
+        "DRE-701", 30.0)["comments"]["nodes"]
+    assert not planner_queue.in_line(nodes)
+    assert planner_queue.ledger([_card_with(nodes, "DRE-701")]).waiting == []
+
+
+def _card_with(nodes: list, ident: str) -> dict:
+    card = _waiting(ident, 30.0)
+    card["comments"] = {"nodes": nodes}
+    return card
+
+
 # --------------------------------------------------------------------------- #
 # failure                                                                      #
 # --------------------------------------------------------------------------- #
@@ -558,10 +466,20 @@ def test_another_repos_waiting_card_is_never_dispatched(capsys):
 def test_a_failed_dispatch_posts_no_receipt_and_goes_on_the_write_ledger():
     cards = _three_waiting()
     world, _, _, red = _main(cards, fire_result=(False, "dispatch refused rc=1"))
-    assert len(world.fires) == 1
-    assert world.receipts("dispatched") == []
+    assert len(world.fires) == 1, "a failed dispatch ends the drain for the pass"
+    assert world.posts == []
     assert "dispatch refused rc=1" in reconcile._write_failures
     assert red
+
+
+def test_a_release_that_does_not_post_goes_on_the_write_ledger():
+    with _world(_three_waiting()[:1]) as world, mock.patch.object(
+            linear_ops, "cmd_comment",
+            side_effect=linear_ops.LinearError("refused")):
+        assert reconcile.serve_planner_line() == ["DRE-201"]
+    assert len(world.fires) == 1
+    assert any("DRE-201" in f and "cap-removed" in f
+               for f in reconcile._write_failures)
 
 
 def test_a_malformed_cap_file_is_loud_and_the_rest_of_the_sweep_runs(
@@ -592,9 +510,7 @@ def test_the_event_paths_never_read_or_serve_the_line(mode, capsys):
     spy.assert_not_called()
     assert world.board.outside_calls() == []
     assert world.fires == [] and world.posts == []
-    out = capsys.readouterr().out
-    assert "serve_planner_line" not in out
-    assert _depth_lines(out) == []
+    assert "serve_planner_line" not in capsys.readouterr().out
 
 
 def test_the_phase_runs_after_the_stranded_watchdog():

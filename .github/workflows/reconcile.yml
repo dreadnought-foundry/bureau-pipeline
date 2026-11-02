@@ -112,6 +112,14 @@ on:
         required: false
       LINEAR_API_KEY:
         required: true
+      # The planner's OAuth token (DRE-5589): the same Agent-Bureau user,
+      # metered apart from the fleet key at 5,000 requests an hour. The
+      # console keeps it fresh and publishes it as `Bearer <access token>`
+      # (DRE-5587); nothing here ever refreshes it (DRE-2532). OPTIONAL: a
+      # stub that does not pass it, or a repo it was never published to,
+      # sweeps on the fleet key exactly as before (DRE-8716).
+      LINEAR_PLANNER_KEY:
+        required: false
       BUREAU_APP_ID:
         required: true
       BUREAU_APP_PRIVATE_KEY:
@@ -138,12 +146,6 @@ on:
         required: false
       BUREAU_APP_PRIVATE_KEY_4:
         required: false
-
-env:
-  # How many planners may run at once, as the console published it to this
-  # repo (epic DRE-5783). Empty when never published: planner_queue.cap()
-  # then reads config/planner-queue.json exactly as before.
-  PLANNER_MAX_RUNNING: ${{ vars.PLANNER_MAX_RUNNING }}
 
 jobs:
   sweep:
@@ -178,8 +180,27 @@ jobs:
     # every one of its lines in check_linear_budget.py. The word `fleet` is
     # written once, as the input's default, so every production stub inherits
     # it with no edit.
+    #
+    # WHICH BUCKET (DRE-8716). On 2026-11-01, 2:00-4:00 PM PT, this sweep sent
+    # 3,200 of the fleet key's 4,037 requests (79%, counted from every run's
+    # own `linear-calls:` lines across config/repo-map.json) and the key ran
+    # down to about 850 of 2,500, while the planner's OAuth bucket never read
+    # below 4,296 of 5,000. So every step below that holds a Linear key holds
+    # plan.yml's shape — the planner's token first, the fleet key when none
+    # is published (`||` takes the first non-empty operand) — and the fleet
+    # key again as LINEAR_API_KEY_FALLBACK, which linear_ops.gql steps onto
+    # on a 401 and nothing else (never on a rate limit). A repo whose variable
+    # `LINEAR_SWEEP_BUCKET` is `fleet` (`!=` ignores case) sweeps on the fleet
+    # key instead: the escape hatch, with no code change and no wait for
+    # `stable`. LINEAR_KEY_HOME follows the same switch, and linear_ops names
+    # the home only while the token is what is being spent and only under an
+    # identity that declares it — so the sandbox's lines still say `sandbox`.
+    # The expiry is the console's published one (Stage 2 review item 30): a
+    # token past it is never sent.
     env:
       LINEAR_IDENTITY: ${{ inputs.linear_identity }}
+      LINEAR_KEY_HOME: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && 'planner-oauth' || '' }}
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -301,9 +322,14 @@ jobs:
           PIPELINE_REF: ${{ inputs.pipeline_ref }}
         run: python3 .bureau-pipeline/scripts/bureau_read.py check-ref "$PIPELINE_REF"
 
+      # `id: sweep` is what the phases below read (DRE-8000). This step keeps
+      # its own status — no `continue-on-error`, `exit "$STATUS"` at the end —
+      # so the idle-board alarm still turns the job red.
       - name: Sweep
+        id: sweep
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # The read door (Stage 2 #5/#6a). The mode is the CALLER's variable,
           # `off` when unset, so every repo reads Linear until it is flipped —
           # `shadow` first, for a working day with zero unexplained
@@ -418,6 +444,17 @@ jobs:
       # the `fix_workflow()` naming family. A repo with no stub prints one line
       # and reads nothing, every pass, until its stub lands.
       #
+      # WHENEVER THE SWEEP RAN, pass or fail (DRE-8000). A step `if:` with no
+      # status function is read as `success() && …`, so on 2026-10-25 the
+      # idle-board alarm that failed `Sweep` skipped this step, the Green Light
+      # reply and the switch read in all 14 agent-bureau runs from 12:32 PM PT
+      # to 3:46 PM PT. `!cancelled()` lifts the implied `success()`, and the
+      # Sweep step's own outcome keeps every gate BEFORE it in charge: a
+      # refused `pipeline_ref` or an unminted token leaves `Sweep` `skipped`,
+      # and these three skip with it. Each phase below carries the same
+      # condition, so a failed dispatch does not skip the next two either
+      # (tests/test_reconcile_workflow_phase_independence.py).
+      #
       # `PROOF_DISPATCH_LIVE` is the caller's variable. Anything but `true` is
       # the dry run: `would:` lines, no dispatch, no receipt, no hold.
       #
@@ -425,9 +462,10 @@ jobs:
       # the `proof-release:` lines — the release reading of the card a pass
       # dispatches, the line its proof record quotes (DRE-6516).
       - name: Dispatch proof runs
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -471,14 +509,111 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$STATUS"
+      # DRE-8452: a proof's record pull request stays open only while its
+      # record can merge (DRE-8437). The sweep closes each open one whose
+      # record cannot, keeping its branch, with the hold on its card. Under
+      # the proof dispatcher's gate, stub check and switch: dry (`would:`
+      # lines, nothing written) until PROOF_DISPATCH_LIVE is `true`.
+      - name: Close proof records that cannot merge
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
+        env:
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # The close and its comment go out as the bot token, as the
+          # dispatch's writes do.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+        run: |
+          if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
+            echo "proof-record-sweep: no proof-run stub in this repository — nothing read, nothing closed"
+            exit 0
+          fi
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO" 2>&1 | tee proof-record-sweep.log || STATUS=$?
+          SUMMARY=$(grep -E '^(proof-record-sweep:|would:)' proof-record-sweep.log || true)
+          {
+            echo "### Proof record sweep"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then
+              printf '%s\n' "$SUMMARY"
+            else
+              echo "no proof-record-sweep: line — the sweep exited before it"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$STATUS"
+      # DRE-8626: once a PT day, each PROOF card open more than seven days
+      # gets one comment naming what it waits on (`proof_overdue.reading`,
+      # DRE-8625), and the note line counts them and names the oldest. It
+      # says, and takes no action: the action module, when it has shipped,
+      # runs after it in this step. Under the proof dispatcher's gate, stub
+      # check and switch: dry (`would:` lines, nothing written) until
+      # PROOF_DISPATCH_LIVE is `true`. Each command's status is kept, so one
+      # failing does not skip the other, and the step fails at the end.
+      - name: Proof overdue
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
+        env:
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # The dispatch's tokens: the record reads go out as they do, and
+          # nothing here writes to GitHub — the comments are Linear's.
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
+          REPO: ${{ github.repository }}
+          PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
+          PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+        run: |
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          export REPO_SLUG
+          if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
+            echo "proof-overdue: no proof-run stub in this repository — nothing read, nothing posted"
+            exit 0
+          fi
+          set -o pipefail
+          STATUS=0
+          python3 .bureau-pipeline/scripts/proof_overdue_sweep.py --repo "$REPO_SLUG" 2>&1 | tee proof-overdue.log || STATUS=$?
+          ACT_STATUS=0
+          if [ -f .bureau-pipeline/scripts/proof_overdue_act.py ]; then
+            python3 .bureau-pipeline/scripts/proof_overdue_act.py 2>&1 | tee -a proof-overdue.log || ACT_STATUS=$?
+          else
+            echo "proof-overdue: action step not shipped yet" | tee -a proof-overdue.log
+          fi
+          SUMMARY=$(grep -E '^(proof-overdue: (note|action step)|would:)' proof-overdue.log || true)
+          {
+            echo "### Proof overdue"
+            echo
+            echo '```'
+            if [ -n "$SUMMARY" ]; then
+              printf '%s\n' "$SUMMARY"
+            else
+              echo "no proof-overdue: note line — the pass exited before it"
+            fi
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$STATUS" -ne 0 ]; then exit "$STATUS"; fi
+          exit "$ACT_STATUS"
       # DRE-6138: a comment the CEO leaves on an epic waiting in Green Light
       # sends the plan back for a review, once per comment, with one receipt.
       # Its own process and its own trailer, in the proof step's shape; dry
       # (`would:` lines, nothing written) until GREEN_LIGHT_REPLY_LIVE is `true`.
       - name: Reply to the CEO's Green Light comments
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -521,9 +656,10 @@ jobs:
       # variables, and a catalog row with no plumbing here fails
       # tests/test_switch_reason.py by name (docs/switches.md).
       - name: Read the switches
-        if: inputs.sweep_reason == ''
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_SWEEP_BUCKET != 'fleet' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
@@ -539,6 +675,8 @@ jobs:
           HYGIENE_LIVE_OFF_UNTIL: ${{ vars.HYGIENE_LIVE_OFF_UNTIL }}
           TRIAGE_REPAIR_LIVE: ${{ vars.TRIAGE_REPAIR_LIVE }}
           TRIAGE_REPAIR_LIVE_OFF_UNTIL: ${{ vars.TRIAGE_REPAIR_LIVE_OFF_UNTIL }}
+          NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
+          NAME_GUARD_LIVE_OFF_UNTIL: ${{ vars.NAME_GUARD_LIVE_OFF_UNTIL }}
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG

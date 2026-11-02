@@ -170,7 +170,16 @@ def _no_network(monkeypatch):
 
 @pytest.fixture
 def live_config():
-    return yaml.safe_load(CONFIG_PATH.read_text())
+    """The choices a run is judged by with no home read — the ladders of the
+    defaults in the code — beside the frozen home document's, in the shape
+    `classify_catalog` reads. config/models.yaml carries none since
+    DRE-6983."""
+    defaults = mf.code_defaults()
+    home = ma.home_config(model_fixture.fixture_home())
+    ladders = {f"home-{key}": rungs for key, rungs in home["ladders"].items()}
+    ladders.update({f"defaults-{key}": list(rungs)
+                    for key, rungs in defaults["ladders"].items()})
+    return {**home, "ladders": ladders}
 
 
 def home_file(tmp_path, doc=None) -> Path:
@@ -647,7 +656,12 @@ def test_haiku_5_5_is_priced_excluded_and_on_nothing():
     assert declared[haiku]["output"] == 0.50
     assert str(declared[haiku].get("source", "")).strip()
 
-    cfg = model_fixture.fixture_config()
+    # The choices are the frozen home document's, the code-side facts the
+    # frozen file's (DRE-6983).
+    side = model_fixture.fixture_config()
+    cfg = {**ma.home_config(model_fixture.fixture_home()),
+           "excluded": side["excluded"], "retired": side["retired"],
+           "effort": side["effort"], "review_separation": side["review_separation"]}
     excluded = {
         entry["model"] if isinstance(entry, dict) else entry
         for entry in cfg["excluded"]

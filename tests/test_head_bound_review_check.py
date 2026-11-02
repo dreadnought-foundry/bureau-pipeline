@@ -134,6 +134,36 @@ class TestVerdictDecidesTheCheck:
         conclusion, _, _ = prc.decide(real=True, verdict="## Summary\nlgtm\n")
         assert conclusion == "failure"
 
+    def test_a_comment_held_at_the_name_guard_is_never_a_green_check(self):
+        """DRE-8170: when the name guard holds the critic's comment, the
+        composed verdict file still reads APPROVE, but nothing approving was
+        posted — the pull request carries a held status that says no verdict
+        stands. The check must say the same, and fail closed."""
+        conclusion, title, summary = prc.decide(
+            real=True, verdict=APPROVE, held=True,
+        )
+        assert conclusion == "failure", (
+            "a held comment posted no approval — a green check would tell "
+            "the merge view and `gh pr checks` the opposite"
+        )
+        assert "APPROVE" not in title
+        assert "held at the name guard" in title.lower()
+        assert "not a code rejection" in summary.lower()
+
+    def test_the_held_flag_reaches_the_check_from_the_command_line(self, tmp_path):
+        state = {"calls": [], "post": [], "patch": [], "lookup": "[]"}
+        verdict = tmp_path / "qa-verdict.md"
+        verdict.write_text(APPROVE)
+        with patch.object(prc.subprocess, "run", side_effect=_gh_stub(state)), \
+             patch.object(prc.time, "sleep", lambda *_: None):
+            rc = prc.main([
+                "--repo", REPO, "--sha", SHA,
+                "--verdict-file", str(verdict), "--real", "true",
+                "--held", "true",
+            ])
+        assert rc == 0
+        assert _body(state["post"][0])["conclusion"] == "failure"
+
     def test_check_name_is_review_named_so_existing_readers_see_it(self):
         """reconcile._review_checks_at_head and
         reconcile.fix_approved_but_red both classify a check as review-owned
@@ -309,6 +339,14 @@ class TestWorkflowWiring:
         assert "always()" in cond and "!cancelled()" in cond, (
             "a crashed critic must still stamp its crash on the head"
         )
+
+    def test_a_comment_held_at_the_name_guard_reaches_the_check(self):
+        """DRE-8170: `post_verdict.sh` writes `held=true` to the post step's
+        outputs when the name guard held the comment; the publish step must
+        hand it to the publisher, or a held head is stamped green APPROVE."""
+        step = _step("publish_review_check.py")
+        assert step["env"].get("HELD") == "${{ steps.post.outputs.held }}"
+        assert '--held "$HELD"' in step["run"]
 
     def test_it_runs_after_the_verdict_is_posted(self):
         names = [s.get("name", "") for s in _steps()]

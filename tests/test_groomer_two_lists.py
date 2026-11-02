@@ -1,14 +1,16 @@
-"""The proposal is two lists, Planning and Cancel, drawn from the same twenty
-(DRE-4727).
+"""The proposal is two lists, Planning and Cancel (DRE-4727).
 
 The CEO's decision on DRE-4669 (2026-09-23): when the groomer looks at the
 morning's 20 cards it also decides whether each one still applies, and the ones that
 were replaced, superseded or already done go on a list he can agree with or
-not. What this file holds:
+not. Since DRE-7973 (epic DRE-6648) the Cancel list is no longer drawn from
+the same twenty: it is drawn from the whole lane and holds no Planning slot
+(`tests/test_groomer_sweep.py`). What this file holds:
 
-  * **the set arithmetic** — the morning's `capacity` cards are Planning plus
-    Cancel together, walked in the rules' order; a card outside the set waits
-    its turn whatever its description or the read says about it;
+  * **the set arithmetic** — the Planning list is the first `capacity` cards
+    in the rules' order that are not on the Cancel list; a card whose
+    description or the read condemns it goes on the Cancel list wherever it
+    stands;
   * **the record** — every Cancel row carries a `position` restarting at 1 and
     a non-empty one-line `reason`, the one the drain later writes on the card;
   * **the table** — `CANCEL_HEADING` and `CANCEL_COLUMNS` are the wire contract
@@ -80,6 +82,15 @@ def two_lists(**kwargs):
                            judgement=judged(cards, answer_for(cards)), **kwargs)
 
 
+def fifteen_and_five_morning():
+    """DRE-4727's morning: twenty cards, five of them to cancel. Since
+    DRE-7973 a Cancel row holds no slot, so the lane is those twenty and no
+    more — a twenty-first card would be planned."""
+    cards = lane(20, superseded=SUPERSEDED)
+    return groomer.propose(cards, cycles=CYCLES, capacity=20, now=NOW,
+                           judgement=judged(cards, answer_for(cards)))
+
+
 def ids(rows) -> list:
     return [row["identifier"] for row in sorted(rows, key=lambda r: r["position"])]
 
@@ -87,44 +98,45 @@ def ids(rows) -> list:
 # --------------------------------------------------------------------------
 # the set arithmetic
 # --------------------------------------------------------------------------
-def test_the_twenty_are_fifteen_for_planning_and_five_for_cancel():
+def test_a_cancel_row_holds_no_slot_so_planning_takes_every_card_left():
+    """Twenty-five cards, seven to cancel: the eighteen left all fit under
+    the capacity of twenty, so nothing is `not-now` (DRE-7973)."""
     proposal = two_lists()
-    assert len(proposal["outcomes"]["now"]) == 15
-    assert len(proposal["outcomes"]["dead"]) == 5
-    # Cancel positions 1–5, in the rules' order.
+    assert len(proposal["outcomes"]["now"]) == 18
+    assert len(proposal["outcomes"]["dead"]) == 7
+    # Cancel positions 1–7, in the rules' order.
     assert ids(proposal["outcomes"]["dead"]) == [
-        "DRE-3", "DRE-5", "DRE-8", "DRE-12", "DRE-15"]
-    assert [r["position"] for r in proposal["outcomes"]["dead"]] == [1, 2, 3, 4, 5]
-    later = {r["identifier"] for r in proposal["outcomes"]["not-now"]}
-    assert "DRE-21" in later, "the 21st card is past the morning's twenty"
+        "DRE-3", "DRE-5", "DRE-8", "DRE-12", "DRE-15", "DRE-22", "DRE-24"]
+    assert [r["position"] for r in proposal["outcomes"]["dead"]] == list(
+        range(1, 8))
+    assert proposal["outcomes"]["not-now"] == []
 
 
 def test_the_planning_list_is_numbered_from_one_in_the_rules_order():
     proposal = two_lists()
     planning = sorted(proposal["outcomes"]["now"], key=lambda r: r["position"])
-    assert [r["position"] for r in planning] == list(range(1, 16))
+    assert [r["position"] for r in planning] == list(range(1, 19))
     assert [r["identifier"] for r in planning] == [
-        f"DRE-{n}" for n in range(1, 21)
-        if f"DRE-{n}" not in SUPERSEDED + LIKELY_DONE]
+        f"DRE-{n}" for n in range(1, 26)
+        if f"DRE-{n}" not in SUPERSEDED + LIKELY_DONE + ("DRE-22", "DRE-24")]
 
 
-def test_a_card_to_cancel_outside_the_twenty_waits_its_turn():
+def test_a_card_to_cancel_outside_the_twenty_is_cancelled_too():
     """DRE-22 says it was superseded and the read called DRE-24 done, and
-    neither is in the morning's twenty: they are `not-now` with a cycle, not
-    cancelled early and not shown as dead."""
+    neither would have been in DRE-4727's twenty: since DRE-7973 they are on
+    the Cancel list all the same, with no cycle."""
     proposal = two_lists()
-    later = {r["identifier"]: r for r in proposal["outcomes"]["not-now"]}
+    later = {r["identifier"] for r in proposal["outcomes"]["not-now"]}
+    dead = {r["identifier"] for r in proposal["outcomes"]["dead"]}
     for cid in ("DRE-22", "DRE-24"):
-        assert cid in later
-        assert later[cid]["reconsidered_in"] == 13
-        assert cid not in {r["identifier"] for r in proposal["outcomes"]["dead"]}
+        assert cid in dead and cid not in later
     seq = {r["identifier"]: r for r in proposal["sequence"]}
-    assert seq["DRE-22"]["outcome"] == "not-now"
+    assert seq["DRE-22"]["outcome"] == "dead"
+    assert seq["DRE-22"]["cycle"] is None
     assert seq["DRE-3"]["outcome"] == "dead"
-    assert groomer.CANCEL_HEADING in groomer.render_proposal(proposal)
     body = groomer.render_proposal(proposal).split(groomer.CANCEL_HEADING)[1]
     body = body.split("\n## ", 1)[0]
-    assert "DRE-22" not in body and "DRE-24" not in body
+    assert "DRE-22" in body and "DRE-24" in body
 
 
 def test_with_no_judgement_and_no_superseded_line_the_twenty_are_all_planning():
@@ -143,7 +155,8 @@ def test_an_unranked_card_is_skipped_and_the_next_card_takes_its_slot():
               | {r["identifier"] for r in proposal["outcomes"]["dead"]})
     assert "DRE-2" not in placed
     assert "DRE-21" in placed
-    assert len(placed) == 20
+    assert len(placed) == 24
+    assert len(proposal["outcomes"]["now"]) == 17
     assert proposal["judgement"]["unranked"] == ["DRE-2"]
 
 
@@ -151,15 +164,16 @@ def test_an_epic_is_never_split_between_the_set_and_the_rest():
     cards = [card(f"DRE-{n}", days=n) for n in range(1, 4)]
     cards += [card(f"DRE-{n}", days=50, parent="DRE-800",
                    description=("Superseded by: DRE-900" if n == 10 else ""))
-              for n in (10, 11)]
+              for n in (10, 11, 12)]
     proposal = groomer.propose(cards, cycles=CYCLES, capacity=4, now=NOW)
-    placed = ({r["identifier"] for r in proposal["outcomes"]["now"]}
-              | {r["identifier"] for r in proposal["outcomes"]["dead"]})
-    # Three cards and a two-card epic do not fit in four: the epic waits whole,
-    # the card it would cancel included.
-    assert placed == {"DRE-1", "DRE-2", "DRE-3"}
+    # Three cards and the epic's two live cards do not fit in four: the two
+    # wait whole. The card it would cancel holds no slot and is on the Cancel
+    # list wherever its unit stands (DRE-7973).
+    assert {r["identifier"] for r in proposal["outcomes"]["now"]} == {
+        "DRE-1", "DRE-2", "DRE-3"}
+    assert {r["identifier"] for r in proposal["outcomes"]["dead"]} == {"DRE-10"}
     later = {r["identifier"] for r in proposal["outcomes"]["not-now"]}
-    assert {"DRE-10", "DRE-11"} <= later
+    assert {"DRE-11", "DRE-12"} <= later
 
 
 # --------------------------------------------------------------------------
@@ -243,7 +257,8 @@ def test_the_cancel_list_renders_as_a_table_under_the_contracted_heading():
     assert table[1] == "| -- | -- | -- | -- | -- | -- | -- |"
     rows = cancel_rows(text)
     assert [(r["position"], r["identifier"]) for r in rows] == [
-        (1, "DRE-3"), (2, "DRE-5"), (3, "DRE-8"), (4, "DRE-12"), (5, "DRE-15")]
+        (1, "DRE-3"), (2, "DRE-5"), (3, "DRE-8"), (4, "DRE-12"), (5, "DRE-15"),
+        (6, "DRE-22"), (7, "DRE-24")]
     for row, record in zip(rows, sorted(proposal["outcomes"]["dead"],
                                         key=lambda r: r["position"])):
         assert len(row["cells"]) == 7
@@ -291,8 +306,8 @@ def test_the_page_names_both_lists_and_what_approval_does():
     proposal = two_lists()
     text = groomer.render_proposal(proposal)
     lead = text.splitlines()[2]
-    assert lead.startswith("20 cards of 25 in Intake are proposed for cycle 12")
-    assert "15 for Planning and 5 for Cancel" in lead
+    assert lead.startswith("25 cards of 25 in Intake are proposed for cycle 12")
+    assert "18 for Planning and 7 for Cancel" in lead
     assert groomer._LANE_LINE.search(text).group(1) == "Intake"
     approve = next(l for l in text.splitlines() if l.startswith("**To approve:**"))
     assert "Planning list to Planning" in approve

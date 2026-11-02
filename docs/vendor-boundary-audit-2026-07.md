@@ -144,6 +144,15 @@ deletes the record it settled, so `limit_recovery.py` re-enters the stage as
 before. The medic's run-log line names the card and says whether recovery is
 automatic or needs a person; it asks for a by-hand re-entry only when neither
 the marker nor the record could be kept.*
+*Amended 2026-11-01 (DRE-8690): the account-switch trigger is unwired (the
+marker records no account, and DRE-5456 keeps the Claude credential out of the
+sweep), so a `kind=claude stage=review` marker has a second trigger: a critic
+verdict anywhere in the repository newer than the marker's own comment, read
+off the sweep's open-PR listing. A review re-entry re-runs an existing run and
+starts no build, so it neither waits on nor spends WIP room. At the crashed
+review's retry cap, a live marker of that kind naming the crashed run means
+wait — the `🚨 reviewer-down` comment would close the marker — and every other
+head at the cap also raises a `reviewer-down:<repo>:<card>` console alert.*
 
 **Verdict:** covered.
 

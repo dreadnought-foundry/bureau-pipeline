@@ -24,6 +24,17 @@ request. `find` drops a pull request closed without merging, so before that
 inference the step asks the exact head for one: a closed pull request, or a
 read that fails, still means no open pull request.
 
+A lookup that FAILS on an agent branch is not "no open pull request"
+either (DRE-8004). On 2026-10-25, medic run 40212007014 moved DRE-2657 to
+Green Light while its PR #4175 on `agent/DRE-2657-harness-credential-rotation`
+was open: the lookup ran on the workflow's own `GITHUB_TOKEN`, which the
+product repo's medic stub grants no `pull-requests` read, so `gh pr list
+--head` failed with "Resource not accessible by integration", `find` exited
+3, and the step decided as if there were no pull request. The step's
+pull-request reads now run on the bot token the job mints (`steps.app`), and
+on an `agent/*` or `repair/*` head a failed `find`, or a failed closed read,
+passes `--has-open-pr`. Any other head keeps the fallback.
+
 The step's script runs here as the job runs it, with `card_pr.py` and
 `medic_next_step.py` the real scripts and `gh` a stub that answers the exact
 head lookup and the search separately, as GitHub did that day.
@@ -45,6 +56,7 @@ MEDIC = os.path.join(ROOT, ".github", "workflows", "medic.yml")
 VERDICT = ".bureau-pipeline/medic-verdict.txt"
 REPORT = ".bureau-pipeline/medic-report.md"
 PORTICO = "dreadnought-foundry/portico"
+BOT_TOKEN = "bot-token"
 
 
 def _step() -> dict:
@@ -67,13 +79,20 @@ with open(os.environ["CALLS"], "a", encoding="utf-8") as f:
 # `gh pr list`: the exact `--head` lookup and the `--search` lookup answer
 # from separate fakes, because that day they gave different answers. The
 # step's own closed-pull-request read on the head can fail on its own.
+# Every call also records the GH_TOKEN it ran with, and the exact head lookup
+# itself can fail the way run 40212007014's did, with GitHub's words on stderr.
 STUB_GH = "#!/usr/bin/env python3" + STUB_LOG.replace("NAME", '"gh"') + """
+with open(os.environ["TOKENS"], "a", encoding="utf-8") as f:
+    f.write(os.environ.get("GH_TOKEN", "") + "\\n")
 argv = sys.argv[1:]
 if argv[:2] != ["pr", "list"]:
     sys.exit(2)
 if "--head" in argv:
     if "closed" in argv and os.environ.get("FAKE_CLOSED_RC", "0") != "0":
         sys.exit(int(os.environ["FAKE_CLOSED_RC"]))
+    if "all" in argv and os.environ.get("FAKE_HEAD_RC", "0") != "0":
+        sys.stderr.write(os.environ.get("FAKE_HEAD_STDERR", "") + "\\n")
+        sys.exit(int(os.environ["FAKE_HEAD_RC"]))
     print(os.environ.get("FAKE_HEAD_JSON", "[]"))
 elif "--search" in argv:
     print(os.environ.get("FAKE_SEARCH_JSON", "[]"))
@@ -95,8 +114,9 @@ sys.stdout.write("[]")
 
 
 class Run:
-    def __init__(self, proc, outputs, calls):
+    def __init__(self, proc, outputs, calls, tokens=()):
         self.proc, self.outputs, self.calls = proc, outputs, calls
+        self.tokens = list(tokens)
         self.log = proc.stdout
 
     @property
@@ -111,7 +131,7 @@ class Run:
 
 def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code",
                  head_prs=(), search_prs=(), gh_rc=0, closed_rc=0, repo=PORTICO,
-                 attempt="1") -> Run:
+                 attempt="1", retry="true", head_rc=0, head_stderr="") -> Run:
     step = _step()
     values = {
         "steps.claude.outcome": "success",
@@ -120,8 +140,9 @@ def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code
         "github.event.workflow_run.run_attempt": attempt,
         "github.event.workflow_run.head_branch": head_branch,
         "github.event.workflow_run.event": event,
-        "needs.classify.outputs.retry": "true",
+        "needs.classify.outputs.retry": retry,
         "github.token": "test-token",
+        "steps.app.outputs.token": BOT_TOKEN,
         "github.repository": repo,
         "secrets.LINEAR_API_KEY": "test-linear-key",
     }
@@ -148,8 +169,8 @@ def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code
         os.chmod(bin_ / "gh", 0o755)
         (td / VERDICT).write_text(verdict, encoding="utf-8")
         (td / REPORT).write_text("The tests fail on the branch.\n", encoding="utf-8")
-        calls, output = td / "calls.log", td / "output"
-        for p in (calls, output):
+        calls, output, tokens = td / "calls.log", td / "output", td / "tokens.log"
+        for p in (calls, output, tokens):
             p.touch()
         proc = subprocess.run(
             ["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
@@ -159,6 +180,9 @@ def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code
                  "FAKE_SEARCH_JSON": json.dumps(list(search_prs)),
                  "FAKE_GH_RC": str(gh_rc),
                  "FAKE_CLOSED_RC": str(closed_rc),
+                 "FAKE_HEAD_RC": str(head_rc),
+                 "FAKE_HEAD_STDERR": head_stderr,
+                 "TOKENS": str(tokens),
                  "PATH": f"{bin_}:{os.path.dirname(sys.executable)}:{os.environ['PATH']}",
                  "PYTHONIOENCODING": "utf-8",
                  "REAL_SCRIPTS": os.path.join(ROOT, "scripts"),
@@ -170,7 +194,8 @@ def _run_verdict(*, target, head_branch, event="pull_request", verdict="bad-code
         outputs = dict(ln.split("=", 1)
                        for ln in output.read_text(encoding="utf-8").splitlines() if "=" in ln)
         parsed = [json.loads(ln) for ln in calls.read_text(encoding="utf-8").splitlines() if ln]
-        return Run(proc, outputs, parsed)
+        return Run(proc, outputs, parsed,
+                   tokens.read_text(encoding="utf-8").splitlines())
 
 
 # ── 1. the two real cases, replayed ─────────────────────────────────────────
@@ -282,19 +307,98 @@ class TheEmptyLookupOnAPullRequestRunTest(unittest.TestCase):
         self.assertEqual("ask-person", run.outputs["step"])
         self.assertIn(self.HEAD, run.log)
 
-    def test_a_closed_read_that_fails_still_falls_back(self):
+    def test_a_closed_read_that_fails_is_not_no_open_pr(self):
+        # DRE-8004: a read that fails is "could not tell", never "closed",
+        # and on an agent head the card is not asked of a person on that ground.
         run = self._empty(closed_rc=1)
-        self.assertNotIn("--has-open-pr", run.decide)
-        self.assertEqual("ask-person", run.outputs["step"])
-        self.assertIn("::warning", run.log)
+        self.assertIn("--has-open-pr", run.decide)
+        self.assertEqual("fix-path", run.outputs["step"])
+        self.assertNotIn("falls back", run.log)
+        warnings = [ln for ln in run.log.splitlines() if ln.startswith("::warning")]
+        self.assertEqual(1, len(warnings), run.log)
+        self.assertIn("does not decide that the card has no open pull request", warnings[0])
 
-    def test_a_lookup_that_fails_still_warns_with_its_exit_code(self):
+    def test_a_lookup_that_fails_on_an_agent_head_is_not_no_open_pr(self):
         run = self._empty(gh_rc=1)
         self.assertRegex(run.log, r"::warning title=Pull request not read::"
                                   r"card_pr\.py find exited 3 ")
+        self.assertIn("--has-open-pr", run.decide)
+        self.assertEqual("fix-path", run.outputs["step"])
+        self.assertNotIn("falls back", run.log)
 
 
-# ── 3. the step's wiring ────────────────────────────────────────────────────
+# ── 3. a lookup that fails is not "no open PR" (DRE-8004) ───────────────────
+DENIED = "GraphQL: Resource not accessible by integration (repository.pullRequests)"
+AB = "dreadnought-foundry/agent-bureau"
+DRE_2657_HEAD = "agent/DRE-2657-harness-credential-rotation"
+
+
+class TheFailedLookupReplayTest(unittest.TestCase):
+    """Run 40212007014: the exact head lookup exits 1 with GitHub's refusal."""
+
+    def _replay(self, **kw):
+        kw.setdefault("head_branch", DRE_2657_HEAD)
+        kw.setdefault("event", "pull_request")
+        kw.setdefault("head_rc", 1)
+        kw.setdefault("head_stderr", DENIED)
+        return _run_verdict(target="DRE-2657", repo=AB, verdict="bad-code",
+                            attempt="2", retry="true", **kw)
+
+    def test_the_run_decides_fix_path(self):
+        run = self._replay()
+        self.assertEqual("bad-code", run.outputs["class"])
+        self.assertIn("--has-open-pr", run.decide)
+        self.assertEqual("fix-path", run.outputs["step"], run.log)
+        self.assertNotIn("falls back", run.log)
+
+    def test_the_lookup_failed_as_it_did_that_day(self):
+        run = self._replay()
+        self.assertIn(DENIED, run.proc.stderr)
+        self.assertIn("exited 3 and printed: (nothing)", run.log)
+
+    def test_the_warning_says_the_lookup_failed_and_no_pr_is_not_decided(self):
+        run = self._replay()
+        warnings = [ln for ln in run.log.splitlines() if ln.startswith("::warning")]
+        self.assertEqual(1, len(warnings), run.log)
+        self.assertIn("card_pr.py find exited 3 for DRE-2657", warnings[0])
+        self.assertIn("does not decide that the card has no open pull request", warnings[0])
+        self.assertNotIn("decides as if the card has no open pull request", warnings[0])
+
+    def test_a_repair_head_is_never_asked_of_a_person_on_that_ground(self):
+        for event in ("pull_request", "push"):
+            with self.subTest(event=event):
+                run = self._replay(head_branch="repair/main-ci", event=event)
+                self.assertIn("--has-open-pr", run.decide)
+                self.assertEqual("fix-path", run.outputs["step"], run.log)
+                self.assertNotIn("falls back", run.log)
+
+    def test_an_agent_head_off_a_pull_request_run_is_not_no_open_pr_either(self):
+        run = self._replay(event="push")
+        self.assertIn("--has-open-pr", run.decide)
+        self.assertEqual("fix-path", run.outputs["step"])
+
+    def test_every_pull_request_read_runs_on_the_bot_token(self):
+        for kw in ({}, {"head_rc": 0, "head_prs": [], "closed_rc": 1}):
+            with self.subTest(**{k: str(v) for k, v in kw.items()}):
+                run = self._replay(**kw)
+                self.assertTrue(run.tokens, run.log)
+                self.assertEqual({BOT_TOKEN}, set(run.tokens))
+
+    # ── the controls: off an agent or repair head, today's fallback holds ──
+    def test_a_head_outside_agent_and_repair_still_falls_back(self):
+        for head in ("dependabot/pip/requests-2.33", "feature/agent/DRE-2657",
+                     "main", "repairs/main-ci"):
+            with self.subTest(head=head):
+                run = self._replay(head_branch=head)
+                self.assertNotIn("--has-open-pr", run.decide)
+                self.assertEqual("ask-person", run.outputs["step"])
+                self.assertRegex(run.log, r"::warning title=Pull request not read::"
+                                          r"card_pr\.py find exited 3 for DRE-2657, "
+                                          r"so the medic decides as if the card has "
+                                          r"no open pull request\.")
+
+
+# ── 4. the step's wiring ────────────────────────────────────────────────────
 class TheStepWiringTest(unittest.TestCase):
     def setUp(self):
         self.step = _step()
@@ -312,6 +416,26 @@ class TheStepWiringTest(unittest.TestCase):
 
     def test_no_run_text_on_a_shell_line(self):
         self.assertNotIn("${{", self.step["run"])
+
+    def test_its_pull_request_reads_run_on_the_bot_token(self):
+        # DRE-8004: the workflow's GITHUB_TOKEN holds only what the product
+        # repo's medic stub grants, and no stub grants `pull-requests` read.
+        self.assertEqual("${{ steps.app.outputs.token }}", self.env.get("GH_TOKEN"))
+
+    def test_the_fix_path_receipts_lookup_runs_on_the_bot_token(self):
+        with open(MEDIC, encoding="utf-8") as f:
+            steps = yaml.safe_load(f)["jobs"]["diagnose"]["steps"]
+        receipt = next(s for s in steps if s.get("id") == "receipt")
+        self.assertIn('card_pr.py" find "$TARGET"', receipt["run"])
+        self.assertEqual("${{ steps.app.outputs.token }}",
+                         (receipt.get("env") or {}).get("GH_TOKEN"))
+
+    def test_the_bot_token_is_the_one_the_job_mints(self):
+        with open(MEDIC, encoding="utf-8") as f:
+            steps = yaml.safe_load(f)["jobs"]["diagnose"]["steps"]
+        ids = [s.get("id") for s in steps]
+        self.assertEqual(0, ids.index("app"))
+        self.assertLess(ids.index("app"), ids.index("verdict"))
 
 
 if __name__ == "__main__":

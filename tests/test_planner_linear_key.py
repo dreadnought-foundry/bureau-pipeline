@@ -200,7 +200,6 @@ CHANGED = (
     "tests/test_linear_identities.py",
     "tests/test_agent_linear_key.py",
     "tests/test_epic_split_wiring.py",
-    "tests/test_planner_queue_wiring.py",
     "tests/test_planner_stamps_children.py",
     "tests/test_spoken_thread_wiring.py",
 )

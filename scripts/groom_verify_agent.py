@@ -164,6 +164,12 @@ UNVERIFIED_REASONS = (STEP_FAILED, STEP_SKIPPED, NO_FILE, NO_PROOF,
 #: `matched_work`, a fact from the row's `routing` — and `source` only ever
 #: supports one of them.
 CODE, DONE_WORK, ROUTING = "code", "done-work", "routing"
+#: The second checkout (DRE-8028): bureau-pipeline at `main`, beside the
+#: card's own repo on every leg whose repo is not bureau-pipeline. A code
+#: item naming a line there carries `"repo": PIPELINE_REPO`, its `file`
+#: relative to `PIPELINE_DIR`; a code item with no `repo` is under `target/`.
+PIPELINE_REPO = "bureau-pipeline"
+PIPELINE_DIR = "pipeline/"
 #: What a verdict rested on: the kinds of the anchored items that counted,
 #: and the context the agent declared, kept only when it was supplied.
 RESTED_ON = (CODE, DONE_WORK, ROUTING, "thread", "relations", "parent")
@@ -789,6 +795,7 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
   "summary": "One or two sentences.",
   "proof": [
     {{"file": "<path under target/>", "line": 1, "quote": "<the line>"}},
+    {{"file": "<path under pipeline/>", "line": 1, "quote": "<the line>", "repo": "bureau-pipeline"}},
     {{"done_card": "DRE-N", "pr": "<owner>/<repo>#<n>", "covers": "whole | part", "quote": "<what it solved>"}},
     {{"routing": "<fact id>", "quote": "<what the fact shows>"}},
     {{"source": "<where>", "quote": "<the words>"}}
@@ -800,7 +807,10 @@ SHAPE = f"""Write exactly one file, `{RAW_FILE}`, at the workspace root:
 
 Every answer but `unverified` needs at least one anchored proof item: a
 `file:line` from `target/`, a Done card with its merged pull request from the
-matched Done work, or a routing fact from where jobs ran. A `source` item
+matched Done work, or a routing fact from where jobs ran. A `file:line` from
+bureau-pipeline, checked out under `pipeline/` when the card's repo is not
+bureau-pipeline, carries `"repo": "bureau-pipeline"` and a `file` relative to
+`pipeline/`; one with no `repo` is under `target/`. A `source` item
 never counts on its own. For a card with children, a Cancel counts only a
 Done card that is not under it, or a routing fact. For a card labeled
 `no-code`, a Cancel counts only a Done card whose line ends `no-code`. If
@@ -1109,7 +1119,12 @@ def _proof_item(item) -> dict:
                 or isinstance(line, bool) or not isinstance(line, int)
                 or line < 1):
             raise _Unreadable
-        return {"file": _one_line(path), "line": line, "quote": quote}
+        found = {"file": _one_line(path), "line": line, "quote": quote}
+        # Kept as written (DRE-8028): `is_file_line` counts only
+        # `PIPELINE_REPO`, and the page shows any other beside the line.
+        if "repo" in item:
+            found["repo"] = _one_line(item["repo"])
+        return found
     if "done_card" in item:
         card, ref = item.get("done_card"), item.get("pr")
         if (not isinstance(card, str) or not card.strip()
@@ -1134,11 +1149,16 @@ def _proof_item(item) -> dict:
 
 
 def is_file_line(item: dict) -> bool:
-    """A `file:line` item naming a line inside `target/` and quoting it."""
+    """A `file:line` item naming a line inside `target/` — or, with
+    `"repo": PIPELINE_REPO`, inside `pipeline/` (DRE-8028) — and quoting it.
+    Its shape alone, read off the item, so `judge` and `_mark` agree: a
+    relative path with no `..` and a quote that is not empty. Any other
+    `repo` is not counted."""
     path = str(item.get("file") or "")
     parts = Path(path).parts
     return ("file" in item and bool(path) and not Path(path).is_absolute()
-            and ".." not in parts and bool(_one_line(item.get("quote"))))
+            and ".." not in parts and bool(_one_line(item.get("quote")))
+            and ("repo" not in item or item["repo"] == PIPELINE_REPO))
 
 
 def _kind(item: dict) -> str | None:

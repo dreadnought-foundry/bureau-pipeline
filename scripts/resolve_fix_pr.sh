@@ -301,6 +301,16 @@ set -e
 #   leaves no push marker, or a newer decision releases it. A hold from
 #   before this change carries no commit and reads as released, once.
 #
+# 2026-10-30 · DRE-8503. Conflict mode merges the pull request's own base.
+#   At 3:44 and 3:46 PM PT a fix run committed `merge: resolve conflicts
+#   with main (round 1/2)` onto agent-bureau's
+#   agent/DRE-8281-send-to-planning-pr, whose base is
+#   agent/DRE-8277-initiatives-drafts-pr. The diff against that base then
+#   carried main's own work, 251 files and 13,343 lines, and the critic
+#   refused it as too large. The conflict-mode instruction now names
+#   origin/<base_ref> from the same read, and for an ordinary pull request
+#   that is the default branch, as before.
+#
 PR=${PR_NUMBER}
 INFO=$(gh pr view "$PR" --repo ${REPO} --json state,headRefName,headRefOid,mergeStateStatus,baseRefName,isDraft,files)
 STATE=$(echo "$INFO" | python3 -c "import json,sys; print(json.load(sys.stdin)['state'])")
@@ -451,8 +461,12 @@ fi
 } >> "$GITHUB_OUTPUT"
 
 if [ "$MODE" = "conflict" ]; then
+  # The pull request's OWN base, never the default branch: a stacked pull
+  # request's base is another agent branch, and merging main into it put
+  # main's own work into the diff (DRE-8503). Unread, the agent reads it.
+  MERGE_FROM=${BASE_REF:-"<its base branch: gh pr view $PR --json baseRefName>"}
   {
-    echo "escalation=MODE: merge-conflict resolution ONLY. The critic has not requested changes — do NOT rework the diff. Merge the default branch into this branch, resolve conflicts preserving BOTH sides' intent (renumber this branch's alembic migration to main's-head + 1 if that is the conflict). A GENERATED lockfile in conflict (package-lock.json, yarn.lock, pnpm-lock.yaml, poetry.lock, Cargo.lock) must NEVER be hand-merged — hand-merging one eats the whole turn budget: take the default branch's copy (git checkout origin/<default-branch> -- <lockfile>) and regenerate it from this branch's manifest with the package manager (e.g. npm install). Then run local checks and push. Commit message: \"merge: resolve conflicts with main (round $ATTEMPT)\". Nothing else."
+    echo "escalation=MODE: merge-conflict resolution ONLY. The critic has not requested changes — do NOT rework the diff. Merge the pull request's own base branch into this branch (git fetch origin && git merge origin/$MERGE_FROM), never the default branch unless it is the base, and resolve conflicts preserving BOTH sides' intent (renumber this branch's alembic migration to the base's head + 1 if that is the conflict). A GENERATED lockfile in conflict (package-lock.json, yarn.lock, pnpm-lock.yaml, poetry.lock, Cargo.lock) must NEVER be hand-merged — hand-merging one eats the whole turn budget: take the base branch's copy (git checkout origin/$MERGE_FROM -- <lockfile>) and regenerate it from this branch's manifest with the package manager (e.g. npm install). Then run local checks and push. Commit message: \"merge: resolve conflicts with $MERGE_FROM (round $ATTEMPT)\". Nothing else."
   } >> "$GITHUB_OUTPUT"
 # The model id is not pinned here (DRE-2316).
 elif [ "$FRESH_EYES" = "true" ]; then

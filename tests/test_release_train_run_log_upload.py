@@ -55,6 +55,9 @@ STEPS_BEFORE = [
     "checkout: the caller",
     "checkout: dreadnought-foundry/bureau-pipeline",
     "Name the tagger",
+    # The surface's Node (DRE-8463), before the identity is assumed.
+    "Read the surface's node",
+    "Set up the surface's node",
     "Assume the caller's release identity",
     "Run the surface",
 ]

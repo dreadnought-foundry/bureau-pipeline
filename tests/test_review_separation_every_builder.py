@@ -74,7 +74,7 @@ fmf = None
 def setUpModule():
     global _TREE_DIR, TREE, fmf
     _TREE_DIR = tempfile.TemporaryDirectory()
-    TREE = model_fixture.fixture_tree(Path(_TREE_DIR.name) / "tree")
+    TREE = model_fixture.fixture_tree(Path(_TREE_DIR.name) / "tree", regenerate=False)
     fmf = model_fixture.fixture_module(TREE, doc=HOME)
 
 
