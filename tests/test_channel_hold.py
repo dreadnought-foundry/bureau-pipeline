@@ -679,6 +679,39 @@ class TestStuckJob:
         assert "Stuck job" not in seen.body
         assert SHARD not in seen.body
 
+    def rerun_queued(self):
+        """Attempt 1 canceled; attempt 2 began at 14:20, its job not started.
+        The run itself was created at 12:20:01, two hours before."""
+        first = attempt("2026-10-27T12:20:01Z", "2026-10-27T13:26:58Z",
+                        "cancelled", unit_jobs())
+        second = attempt("2026-10-27T14:20:00Z", "2026-10-27T14:20:00Z", None,
+                         [job(9, SHARD, None, None, None, status="queued")],
+                         status="queued")
+        return oct27(attempts=[first, second])
+
+    def watch_as(self, how, fake, at):
+        if how == "replay":
+            return replay(fake, at)
+        fake.stable = STABLE   # live reads the tag as it stands, not as it stood
+        return channel_hold.watch(fake, REPO, interval=10,
+                                  now=channel_hold.parse_at(at))
+
+    @pytest.mark.parametrize("how", ["replay", "live"])
+    def test_a_re_run_not_started_is_timed_from_its_own_attempt(self, how):
+        # The run was created 125 minutes ago; its attempt 2 began 5 minutes
+        # ago.
+        seen = self.watch_as(how, self.rerun_queued(), "2026-10-27T14:25:00Z")
+        assert seen.job != SHARD, seen.body
+        assert "Stuck job" not in seen.body
+        assert "a re-run has not cleared it" not in seen.body
+
+    @pytest.mark.parametrize("how", ["replay", "live"])
+    def test_a_re_run_not_started_two_hours_after_its_attempt_began_is_stuck(self, how):
+        seen = self.watch_as(how, self.rerun_queued(), "2026-10-27T16:20:00Z")
+        assert seen.job == SHARD
+        assert seen.body.startswith(f"Stuck job: {SHARD} (")
+        assert seen.step == channel_hold.PERSON
+
     @pytest.mark.parametrize("conclusion", ["failure", "cancelled", "timed_out"])
     def test_a_concluded_job_is_still_a_failing_job(self, conclusion):
         fake = oct27(jobs=unit_jobs(shard_conclusion=conclusion,
