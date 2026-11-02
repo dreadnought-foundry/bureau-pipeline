@@ -351,7 +351,7 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
-## The hygiene agent's fourteen rows — `🧹 hyg-*` (DRE-5368)
+## The hygiene agent's fifteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |
 | -- | -- | -- | -- |
@@ -369,14 +369,17 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
 | `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
 | `hygiene-triage-alarm` | `hyg-triage-aged` | hold | `operator` |
+| `hygiene-blocker-owner-notice` | `hyg-blocker-owner` | hold | `operator` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
 table of tags is each row's anchor, and every receipt opens
 `🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
-trailer. **Which** act a pass takes is decided by a lane module
+trailer. A notice that lists what it found — the blocker-owner lane's
+(DRE-8648) — carries those lines behind one blank line after the evidence,
+and they are composed by the same `hygiene.receipt`. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all fourteen through one seam, which is why `tests/test_check_act_receipts.py`
+all fifteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 
@@ -394,6 +397,16 @@ reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
 that sees it), held or not: it parked again after the repair, or the repair did
 not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
 repair still running never alarms.
+
+`hygiene-blocker-owner-notice` (`scripts/hygiene_blockers.py`, DRE-8648) is
+said once on a card that has sat more than 48 hours in `Intake` or `Hand-work`
+while a `blocks` relation names an open card. It names the card's owner as
+plain text — the assignee, or the creator when nobody is assigned — lists every
+open card it holds up, directly and through chains of relations, and says the
+two ways on. An owner who is not a person reads `no owner to tell`, and the
+card is a left row in the summary too. The cause is `<card> in <lane> since
+<YYYY-MM-DD>`, so a card is told once per stay. The board read covers `Intake`
+for it, and the guard still never writes a card into that lane.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`

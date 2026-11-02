@@ -136,8 +136,10 @@ class TestEveryActDeclaresItsCadence:
         epic in a repo held at max_wip 0 is told once; sixty since DRE-7799
         added the receipt of the step the medic takes on its diagnosis;
         sixty-one since DRE-7952 added the receipt of the one fix card a
-        PROOF closes with when its unmet rows are all gaps."""
-        assert len(pipeline_act.acts()) == 61
+        PROOF closes with when its unmet rows are all gaps; sixty-two since
+        DRE-8648 added the notice a blocker parked in Intake or Hand-work
+        gives its owner."""
+        assert len(pipeline_act.acts()) == 62
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
