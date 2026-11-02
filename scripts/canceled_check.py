@@ -455,7 +455,7 @@ def held_receipt(number, sha: str, run_id, why: str, now: datetime) -> str:
         f"🛑 {AGAIN_TAG} @{sha} run {run_id} {HELD_MARK} {why}.\n\n"
         f"The sweep never re-runs a job onto the runner service it just failed "
         f"on, so it re-ran nothing for PR #{number} and sent no fix agent. If "
-        f"that column names another service within six hours — until {until} "
+        f"that column names another service within {HELD_HOURS} hours — until {until} "
         f"— the sweep re-runs workflow run {run_id} then, once. After that "
         f"nothing automatic is coming: an operator re-runs it. Said once per "
         f"commit and run (DRE-8817)."

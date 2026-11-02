@@ -153,7 +153,10 @@ def columns_from_env(env) -> dict:
 # --- services -----------------------------------------------------------------
 
 def _is_runs_on_label(label: str) -> bool:
-    return label == RUNS_ON or label.startswith("runs-on=")
+    """`runs-on`, `runs-on=<id>/…`, or `runs-on/runner=…` — the form the
+    fleet's columns read back and its jobs carry
+    (`docs/red-main-proof-2026-10.md`)."""
+    return label == RUNS_ON or label.startswith(("runs-on=", "runs-on/"))
 
 
 def service_of(job: dict) -> str:

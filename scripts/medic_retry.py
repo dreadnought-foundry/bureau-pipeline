@@ -1297,8 +1297,9 @@ def _decide_cli(args) -> int:
             file=sys.stderr,
         )
     # DRE-8817: never back onto the runner service the run just failed on.
-    # Asked only where the medic would still retry (attempt 1, or a first
-    # kill on attempt 2) and only when medic.yml handed the workflow file.
+    # Asked on every attempt up to 2, whether or not the medic would still
+    # retry, and only when medic.yml handed the workflow file: a hold also
+    # skips the resume after a diagnosis (medic.yml's ninth exception).
     failed_service = ""
     if args.workflow_file and _attempt(args.run_attempt) <= 2:
         notes = (read_annotations(_read(args.annotations))
