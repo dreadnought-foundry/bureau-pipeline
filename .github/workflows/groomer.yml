@@ -144,6 +144,19 @@ on:
         type: string
         required: false
         default: ""
+      sandbox:
+        # THE SANDBOX GROOM (DRE-8782). `true`, a `propose` grooms only the
+        # lane's cards labeled `repo:agent-bureau-demo` — the sandbox
+        # fixtures DRE-7783 keeps off the real proposal among them — leaves
+        # out the sandbox groom card `config/groom-sandbox.json` names, and
+        # posts to `card`. A `drain` with it set refuses before any write:
+        # nobody drains a sandbox proposal. Anything else is today's run.
+        description: >-
+          `true` = groom only the sandbox's cards (propose only); anything
+          else = an ordinary run
+        type: string
+        required: false
+        default: ""
     secrets:
       LINEAR_API_KEY:
         required: true
@@ -348,6 +361,7 @@ jobs:
           INTAKE_HOLD: ${{ inputs.intake_hold }}
           JUDGEMENT: ${{ inputs.judgement }}
           REPLAY: ${{ inputs.replay }}
+          SANDBOX: ${{ inputs.sandbox }}
           # The read door's settings (DRE-7242), under names no script reads
           # and handed to each command below as the door's own. `targets`
           # gets all four: its problem search (`groom_lookups.cards`) asks
@@ -373,6 +387,16 @@ jobs:
           if [ -n "$REPLAY" ] && [ "$MODE" = "drain" ]; then
             echo "a replay re-checks a stored proposal and never drains" >&2
             exit 1
+          fi
+          # THE SANDBOX GROOM (DRE-8782): proposed for the memory proofs to
+          # press on, and never drained. Refused before anything runs.
+          SANDBOXED=()
+          if [ "${SANDBOX:-}" = "true" ]; then
+            if [ "$MODE" = "drain" ]; then
+              echo "a sandbox proposal is never drained — nothing on it moves" >&2
+              exit 1
+            fi
+            SANDBOXED=(--sandbox)
           fi
           if [ "$MODE" = "drain" ]; then
             if [ -z "$CARD" ]; then
@@ -413,7 +437,7 @@ jobs:
                 BUREAU_READ_AUDIENCE="$DOOR_READ_AUDIENCE" \
                 BUREAU_PIPELINE_REF="$DOOR_PIPELINE_REF" \
                 python3 .bureau-pipeline/scripts/groomer.py propose \
-                "${SHAPING[@]}" "${JUDGE[@]}" "${THREAD[@]}" \
+                "${SHAPING[@]}" "${JUDGE[@]}" "${THREAD[@]}" "${SANDBOXED[@]}" \
                 --keep-answer judgement-answer.txt \
                 --out proposal.json | tee proposal.txt
             fi

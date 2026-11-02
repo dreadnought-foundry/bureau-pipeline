@@ -49,6 +49,10 @@ itself, once, on stderr (DRE-8794):
 
     read-fallback: reader="<workflow> / <job> / <script>" read=<read> reason=<reason>
 
+A reader that asks `enabled()` first and skips a stopped door calls no read
+at all, so it names that fallback itself, through `note_fallback`, with the
+reason the door stopped (DRE-8796) — the same line, once per read.
+
 `<workflow>` is `GITHUB_WORKFLOW` (`local` when unset), `<job>` is
 `GITHUB_JOB` (`-` when unset) and `<script>` is the basename of `sys.argv[0]`.
 `<read>` is `board`, `cards`, `dependents`, `workflow-states` or `search` — the

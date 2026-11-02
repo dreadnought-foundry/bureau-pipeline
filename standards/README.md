@@ -39,7 +39,7 @@ commit (the channel note above). The per-role mapping:
 
 | Role | Standards injected (comms + untrusted-content are added to all) |
 |---|---|
-| engineer | engineering, architecture, card-quality, vendor-boundaries, console-honesty, whats-new |
+| engineer | engineering, architecture, card-quality, vendor-boundaries, console-honesty, design-system, whats-new |
 | devops | engineering, architecture, card-quality, vendor-boundaries, whats-new |
 | database-architect | engineering, architecture, card-quality, vendor-boundaries, whats-new |
 | frontend | engineering, architecture, card-quality, design, design-system, vendor-boundaries, console-honesty, whats-new |
@@ -48,7 +48,7 @@ commit (the channel note above). The per-role mapping:
 | verifier | design, design-parity |
 | plan-critic-pre | card-quality, design-parity, plan-artifact, plan-critic |
 | plan-critic-post | card-quality, engineering, architecture, vendor-boundaries, plan-artifact, plan-critic |
-| fix | engineering, whats-new |
+| fix | engineering, design-system, whats-new |
 | medic | engineering |
 | proof | card-quality, engineering |
 

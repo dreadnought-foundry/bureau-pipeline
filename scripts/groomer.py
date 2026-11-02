@@ -298,6 +298,7 @@ import groom_context  # noqa: E402 — the context pack (DRE-3150)
 import groom_judgement  # noqa: E402 — the one ranked read (DRE-3150)
 import groom_memory  # noqa: E402 — the newest decision per card (DRE-7822)
 import groom_priority  # noqa: E402 — a stale Urgent or High ranks as Medium (DRE-5307)
+import groom_sandbox  # noqa: E402 — the sandbox groom proposal's card and scope (DRE-8782)
 import groom_verify  # noqa: E402 — the check before posting (DRE-4966)
 import intake_controls  # noqa: E402 — ONE reading of the operator's Intake switch
 import linear_ops  # noqa: E402
@@ -808,6 +809,13 @@ class WillNotClose(RuntimeError):
 
     The ONE refusal that writes nothing: it is a bad invocation, caught before
     the card has been read, so there is no batch for a record to name."""
+
+
+class SandboxNeverDrained(ValueError):
+    """The drain was pointed at the sandbox groom card (DRE-8782). Nobody
+    drains a sandbox proposal: it exists for the groomer's memory proofs to
+    press on, and its batch never moves. Like `WillNotClose`, caught before
+    the card is read, so it reads and writes nothing."""
 
 
 # --------------------------------------------------------------------------- #
@@ -4855,6 +4863,12 @@ def drain(lops, *, card: str, lane: str = "Intake", to: str = DRAIN_TO) -> dict:
     carry. Every refusal but the destination is written onto the card as
     `🧺 groom-drain-refused: <id> — <reason>`.
     """
+    sandbox = groom_sandbox.card()
+    if sandbox and card.strip() == sandbox:
+        # Before the card is read, as below: there is no batch to name.
+        raise SandboxNeverDrained(
+            f"{card} is the sandbox groom card ({groom_sandbox.CONFIG.name}) — "
+            "a sandbox proposal is never drained, and nothing on it moves")
     if to in NEVER_WRITES or to == CANCEL_TO:
         # Before the card is read, so there is no batch to name and nothing to
         # write down: a bad invocation, not a refused batch.
@@ -5512,6 +5526,16 @@ def _build(args) -> dict:
     function or the model call inside it.
     """
     cards = read_population(linear_ops, args.lane)
+    # THE SANDBOX GROOM (DRE-8782): only the sandbox's cards, its fixtures
+    # among them, and never the sandbox groom card. `main` has already
+    # refused a sandbox run whose config names no card.
+    sandbox = groom_sandbox.card() if getattr(args, "sandbox", False) else None
+    if sandbox:
+        whole = len(cards)
+        cards = groom_sandbox.scope(cards, card=sandbox)
+        print(f"groomer: the sandbox groom — {_plural(len(cards), 'card')} "
+              f"labeled {groom_sandbox.REPO_LABEL} of {whole} in "
+              f"{args.lane}, {sandbox} left out", file=sys.stderr)
     # The memory, read once and BEFORE the census (DRE-7824): the console's
     # record and the WHOLE thread of every standing card, the current one
     # among them — the repo switch and the CEO's per-card answers both live
@@ -5609,8 +5633,15 @@ def _build(args) -> dict:
     if getattr(args, "verify", False):
         # After `propose` and before anything is posted, so the id the CEO
         # approves covers the checked lists (DRE-4966).
-        return verify_proposal(cards, shaping, lops=linear_ops)
-    return propose(cards, **shaping)
+        proposal = verify_proposal(cards, shaping, lops=linear_ops)
+    else:
+        proposal = propose(cards, **shaping)
+    if sandbox:
+        # Read by `groom_verify_agent.targets`, which then judges a sandbox
+        # fixture rather than excluding it (DRE-7783). Absent on the real
+        # proposal, so its record is byte-for-byte what it was.
+        proposal["sandbox"] = True
+    return proposal
 
 
 def _readiness(lops, on_offer: list[dict], judgement) -> dict:
@@ -5910,6 +5941,12 @@ def main(argv=None) -> int:
                         help="read this card's thread as --post does, and "
                              "post NOTHING — `post` posts the record later "
                              "(DRE-4971)")
+    # DRE-8782. The sandbox groom proposal: the lane's cards labeled
+    # `repo:agent-bureau-demo`, sandbox fixtures included, never the sandbox
+    # groom card `config/groom-sandbox.json` names.
+    p_propose.add_argument("--sandbox", action="store_true",
+                           help="groom only the sandbox's cards, and never "
+                                "the sandbox groom card (DRE-8782)")
     p_propose.add_argument("--keep-answer", dest="keep_answer",
                            help="write the ranked read's raw answer here, for "
                                 "the run artifact — only when a call answered "
@@ -5969,6 +6006,11 @@ def main(argv=None) -> int:
                           "by_repo": census(cards)}, indent=2))
         return 0
 
+    if getattr(args, "sandbox", False) and groom_sandbox.card() is None:
+        print(f"groomer: refused — config/{groom_sandbox.CONFIG.name} names "
+              "no sandbox groom card, so a sandbox groom would list its own "
+              "card and have nowhere to post", file=sys.stderr)
+        return 2
     proposal = _build(args)
     # ONE read of the thread, and only when there is a card to read: it answers
     # both "is there a decline to open with" (DRE-3373) and "is this batch

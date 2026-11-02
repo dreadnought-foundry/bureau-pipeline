@@ -128,6 +128,10 @@ NOT_REPLAYED = {
         "parser only for the page's stale-priority lines"),
     "scripts/groom_readiness.py": (
         "read by `propose`, which a replay skips"),
+    "scripts/groom_sandbox.py": (
+        "read by `propose --sandbox`, which a replay skips, and by `drain`, "
+        "which a replay refuses; `targets` reads only the proposal's own "
+        "`sandbox` flag, never this module (DRE-8782)"),
 }
 
 #: The import walk's family: shared plumbing outside it (`linear_ops`,

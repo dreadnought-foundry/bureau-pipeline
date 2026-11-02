@@ -1045,6 +1045,21 @@ jobs:
           python3 .bureau-pipeline/scripts/assemble_context.py assemble fix \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of fix context"
+          # The parts catalog (DRE-8735, rule 7 of DRE-8708), read at the root
+          # of the pull request's own checkout, on every fix run whatever the
+          # card's role: a fix for one finding can write UI code on any card.
+          # design_parts.py (DRE-8717) always exits 0 and logs its one
+          # `design-parts:` line on stderr; a missing script is said, never a
+          # failed step.
+          CATALOG=$(mktemp)
+          if [ -f .bureau-pipeline/scripts/design_parts.py ]; then
+            python3 .bureau-pipeline/scripts/design_parts.py catalog > "$CATALOG" || true
+          fi
+          if ! grep -qE '^PARTS CATALOG:' "$CATALOG"; then
+            echo "PARTS CATALOG: UNKNOWN — .bureau-pipeline/scripts/design_parts.py is missing from this pipeline checkout or printed no catalog" > "$CATALOG"
+          fi
+          { echo; cat "$CATALOG"; } >> .bureau-pipeline/agent-context.md
+          grep -E '^PARTS CATALOG:' "$CATALOG" | head -1 || true
 
       # The model home (DRE-6939) is a variable on
       # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
@@ -1632,6 +1647,10 @@ jobs:
                judgement only a person can make, do NOT push anything: write
                your reasoning to ${{ steps.handoff.outputs.blocker }} instead. That file asks
                a HUMAN, and the card is parked until one answers.
+               A finding that carries the `🎨 design-question:` block is the
+               CEO's to answer, not yours: push nothing, and write the
+               blocker file with the block's four lines in it word for word
+               — the pipeline asks him on the card, once per part.
                The blocker file is for work you did not commit, so commit
                nothing when you write it; a push GitHub refused is step 5's
                case, not this one, and a commit you made beyond the head you
