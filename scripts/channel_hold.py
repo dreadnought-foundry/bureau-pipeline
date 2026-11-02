@@ -7,7 +7,7 @@ and nothing says why or what it needs. On 10-27 the answer was "a re-run of one
 canceled test job", and it stood for five hours.
 
 This module answers both, once a pass. It reads whether the channel is held
-and since when, writes a diagnosis that names the failing job and what is
+and since when, writes a diagnosis that names the failing (or stuck) job and what is
 needed next — `NEXT_STEPS`, a re-run, a fix or a person — and raises it as one
 console alert through the notice door (`pipeline_notice.py`) at 2 hours and
 before the 06:30 PT briefing. It resolves the alert on the pass that finds no
@@ -45,13 +45,18 @@ Four reads, made only for a held channel:
 The failing job is the earliest-completing job that concluded `failure`,
 `cancelled` or `timed_out`, in the newest commit's runs that have one. A
 roll-up job that only sums other jobs (`ROLLUP_JOBS`) is passed over when one
-of its parts failed before it, or with it. A run still in progress past 2
-hours of hold names its running job.
+of its parts failed before it, or with it. With none failed, a job still
+running, or not yet started, is named only once the job itself has run 2
+hours — from its own start, or from its run's creation when it has not
+started — never from the hold's age: a merge train keeps the hold old while
+each new run is young (DRE-8778). It is named as a stuck job, never a failing
+one.
 
 What is needed next is exactly one of `NEXT_STEPS`:
 
-  * a re-run — the failing job was canceled, timed out, lost its runner (it
-    failed with no step failed), or is still running, on attempt 1;
+  * a re-run — the failing job was canceled, timed out, or lost its runner
+    (it failed with no step failed), or the stuck job's run needs canceling
+    and re-running, on attempt 1;
   * a fix — a job failed at a step (a test or a harness scenario), or the
     decision is `mirror-tests-failed`;
   * a person — the run is already on attempt 2 or later, the decision is
@@ -234,6 +239,7 @@ class Job:
     started: datetime | None
     completed: datetime | None
     failed_step: str | None
+    created: datetime | None = None   # its run's, for a job not yet started
 
 
 @dataclass(frozen=True)
@@ -531,7 +537,7 @@ def commit_jobs(reader, repo: str, sha: str, at: datetime | None) -> list:
                              if s.get("conclusion") == FAILURE), None)
                 found.append(Job(str(job.get("name") or ""), url, n, state,
                                  _when(job.get("started_at")), completed,
-                                 step if state == FAILURE else None))
+                                 step if state == FAILURE else None, created))
     return found
 
 
@@ -549,13 +555,21 @@ def failing_job(jobs: list) -> Job | None:
     return min(pool, key=lambda j: j.completed) if pool else None
 
 
-def running_job(jobs: list) -> Job | None:
-    """The earliest-started job still running, else one not yet started."""
+def going_since(job: Job) -> datetime | None:
+    """When a running job started, or a not-started one's run was created."""
+    if job.state == RUNNING and job.started is not None:
+        return job.started
+    return job.created
+
+
+def running_job(jobs: list, now: datetime) -> Job | None:
+    """The longest-going job still running, else one not yet started — only
+    once it has gone `ALERT_AFTER_MINUTES` by its own clock."""
     for state in (RUNNING, QUEUED):
-        going = [j for j in jobs if j.state == state]
-        if going:
-            return min(going, key=lambda j: j.started or datetime.max.replace(
-                tzinfo=timezone.utc))
+        stuck = [j for j in jobs if j.state == state and going_since(j) is not None
+                 and (now - going_since(j)).total_seconds() >= ALERT_AFTER_MINUTES * 60]
+        if stuck:
+            return min(stuck, key=going_since)
     return None
 
 
@@ -608,7 +622,8 @@ def read_hold(reader, repo: str, *, now: datetime,
     return reading
 
 
-def diagnose(reader, repo: str, reading: Reading, *, at: datetime | None) -> Reading:
+def diagnose(reader, repo: str, reading: Reading, *, at: datetime | None,
+             now: datetime) -> Reading:
     """The diagnosis reads. A failure here is named, never raised: the hold
     is known, and what could not be read is a person's to look at."""
     unread = []
@@ -628,8 +643,8 @@ def diagnose(reader, repo: str, reading: Reading, *, at: datetime | None) -> Rea
         if found:
             reading.failing = found
             break
-        running = running or running_job(jobs)
-    if reading.failing is None and reading.age >= ALERT_AFTER_MINUTES and running:
+        running = running or running_job(jobs, now)
+    if reading.failing is None and running:
         reading.failing = running
     reading.unread = tuple(unread)
     return reading
@@ -680,6 +695,12 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
             return FIX, (f"the job failed at step \"{job.failed_step}\" on attempt "
                          f"{job.attempt}, so the code needs a fix before "
                          f"{pc.CHANNEL} can move.")
+        if job.state not in FAILING:
+            since = ("it started" if job.state == RUNNING else "its run was created")
+            return RERUN, (f"the job {_doing(job)} on attempt {job.attempt}, "
+                           f"{ALERT_AFTER_MINUTES // 60} hours or more after "
+                           f"{since}, so it is stuck: cancel the run and "
+                           "re-run it.")
         return RERUN, (f"the job {_doing(job)} on attempt {job.attempt}, so "
                        "re-running its failed jobs is the next step.")
     if outcome in OUTCOME_NEXT:
@@ -715,6 +736,15 @@ def job_label(reading: Reading) -> tuple[str, str]:
     return "no failing job found", "none"
 
 
+def job_word(reading: Reading) -> str:
+    """`Stuck job` for a job named because it is still going, else
+    `Failing job`."""
+    decision, job = reading.decision, reading.failing
+    if decision and decision.outcome == pc.OUTCOME_HELD:
+        return "Failing job"
+    return "Stuck job" if job and job.state not in FAILING else "Failing job"
+
+
 def title(reading: Reading, step: str, label: str) -> str:
     return f"stable held since {pt_clock(reading.since)} PT — needs {step}: {label}"
 
@@ -722,7 +752,7 @@ def title(reading: Reading, step: str, label: str) -> str:
 def body(reading: Reading, step: str, why: str, label: str, url: str) -> str:
     oldest = reading.chain[-1].sha
     return "\n".join([
-        f"Failing job: {label} ({url})",
+        f"{job_word(reading)}: {label} ({url})",
         f"Needs: {step} — {why}",
         f"Held since: {iso(reading.since)} ({pt_clock(reading.since)} PT)",
         f"Waiting on stable: {len(reading.chain)} commit(s), oldest {_sha7(oldest)}",
@@ -754,7 +784,7 @@ def watch(reader, repo: str, *, interval: int, at: datetime | None = None,
     if not reading.held:
         return Pass(f"{TAG} none — {pc.CHANNEL} carries {pc.TRUNK} "
                     f"{_sha7(reading.carried)}", "resolve")
-    reading = diagnose(reader, repo, reading, at=at)
+    reading = diagnose(reader, repo, reading, at=at, now=now)
     step, why = next_step(reading, hold_text)
     label, url = job_label(reading)
     action = raise_window(reading.age, now, interval) or "quiet"
