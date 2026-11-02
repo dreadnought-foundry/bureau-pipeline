@@ -77,10 +77,12 @@ def _empty_epic_queue(monkeypatch) -> None:
 
 def _no_ambient_event(monkeypatch) -> None:
     """The read door's client refuses to ask from a `pull_request` run (the
-    door refuses those tokens by design, S7) — and the CI that runs this suite
-    IS a `pull_request` run. A test that is about the event sets it itself; no
-    test inherits the runner's."""
+    door refuses those tokens by design, S7) except for the one card its head
+    branch names (DRE-8812) — and the CI that runs this suite IS a
+    `pull_request` run, on an `agent/DRE-<n>-…` branch. A test that is about
+    the event or the branch sets it itself; no test inherits the runner's."""
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
 
 
 def _own_runner_temp(monkeypatch, tmp_path_factory) -> None:
