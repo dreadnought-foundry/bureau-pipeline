@@ -444,7 +444,9 @@ def receipt_text(decision: Decision, now: datetime, rules: dict | None = None) -
     elif decision.outcome == CEO:
         lines.append(ACT_PREFIX + decision.act)
         if decision.act == BUSINESS_CHOICE:
-            lines.append(CHOICES_PREFIX + json.dumps(decision.choices, ensure_ascii=False))
+            # ASCII, so U+2028, U+2029 and U+0085 — which `splitlines` breaks
+            # on — are escaped and the line reads back whole.
+            lines.append(CHOICES_PREFIX + json.dumps(decision.choices, ensure_ascii=True))
     elif decision.outcome == DONE_ALREADY:
         lines += [f'{EVIDENCE_PREFIX}"{_flat(q)}"' for q in decision.evidence]
         lines.append(CLOSE_LINE)
