@@ -15,7 +15,7 @@ WHAT IT REFUSES. Any of `NAMES`, each matched as a whole name: a letter, a
 digit or an underscore on either side makes it part of another name, so
 `planner_cap` never matches `planner_capacity`, the unrelated model-fallback
 module, nor this file's own name. A hyphen, a dot, a slash or a space does
-not, so `config/planner-queue.json`, `import planner_queue` and
+not, so `config/planner-queue.json`, `planner_queue.cap()` and
 `vars.PLANNER_MAX_RUNNING` are all found. A failure names every file and
 line.
 
@@ -128,7 +128,7 @@ def test_the_cap_files_are_deleted():
 
 
 def test_a_name_is_matched_whole():
-    assert _hits("x", "import planner_queue")
+    assert _hits("x", "planner_queue.cap()")
     assert _hits("x", "scripts/planner_queue.py")
     assert _hits("x", "config/planner-queue.json")
     assert _hits("x", "🎟️ planner-slot: waiting")
