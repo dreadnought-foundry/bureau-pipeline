@@ -398,9 +398,12 @@ class _Board:
         self.comments: dict = {card["identifier"]: [] for card in self.cards}
         self.moves: list = []
 
-    def backlog_children(self):
+    def backlog_children(self, only=None, **_):
+        # The board read and the fresh read before a refusal (DRE-8851) are
+        # one remembered board here: both see the lane the last move left.
         return [c for c in self.cards
-                if self.lane[c["identifier"]] in lane_contract.QUEUE_LANES]
+                if self.lane[c["identifier"]] in lane_contract.QUEUE_LANES
+                and (only is None or c["identifier"] in only)]
 
     def cmd_advance(self, identifier, to_state, from_states_csv):
         # The real write is guarded on the from-lane; a stand-in that ignored
