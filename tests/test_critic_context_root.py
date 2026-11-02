@@ -149,7 +149,9 @@ def _lay_out_the_runner_after_the_move(td: Path) -> tuple[Path, Path]:
     workspace = td / "work" / "bureau-pipeline" / "bureau-pipeline"
     pipeline_dir = td / "work" / "_temp" / "bureau-pipeline"
     pipeline_dir.mkdir(parents=True)
-    for content in ("scripts", "standards", "briefs"):
+    # `config` since DRE-8721: design_answer.py's imports read the lane
+    # contract, as every Linear-reading script's do.
+    for content in ("scripts", "standards", "briefs", "config"):
         (pipeline_dir / content).symlink_to(ROOT / content)
     stub = workspace / IN_TREE / ".github" / "actions" / "install-claude-code"
     stub.mkdir(parents=True)

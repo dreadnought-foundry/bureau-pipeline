@@ -363,6 +363,9 @@ class TheBriefTest(unittest.TestCase):
         rest = text.split(head, 1)[1]
         cls.section = rest.split("\n## ", 1)[0]
         cls.flat = " ".join(cls.section.split())
+        # A fenced block nested in a list item is indented; its lines are
+        # read as the critic writes them.
+        cls.lines = [ln.strip() for ln in cls.section.splitlines()]
 
     def test_it_points_at_the_standard(self):
         self.assertIn('`standards/design-system.md` § "UI code in a repo whose '
@@ -383,7 +386,7 @@ class TheBriefTest(unittest.TestCase):
     def test_the_provisional_line_with_no_green_light_question(self):
         line = (f"{parts_review.PROVISIONAL_MARK} `<Name>` at `<path>` — "
                 "reasoning: <one sentence>")
-        self.assertIn(line, self.section.splitlines())
+        self.assertIn(line, self.lines)
         self.assertIn("no Green Light question", self.flat)
         # The line the brief shows is the line the gate reads.
         self.assertEqual(parts_review.provisional_records(line),
@@ -394,7 +397,7 @@ class TheBriefTest(unittest.TestCase):
                  f"{console_escalation.FINDING_PREFIX} <one line>",
                  f"{console_escalation.QUESTION_PREFIX} <one line>",
                  f"{console_escalation.RECOMMENDATION_PREFIX} <one line>"]
-        self.assertIn("\n".join(block), self.section)
+        self.assertIn("\n".join(block), "\n".join(self.lines))
         self.assertIn("at most one", self.flat)
 
     def test_the_ceos_answer_settles_it_and_asked_repeats_it(self):
@@ -409,7 +412,7 @@ class TheBriefTest(unittest.TestCase):
                      "Parts check: applied by hand — the review read UNKNOWN "
                      "(<reason>), <n> finding(s)",
                      "Parts check: not applied — <reason>"):
-            self.assertIn(line, self.section.splitlines())
+            self.assertIn(line, self.lines)
         self.assertIn("**When the line says `UNKNOWN`", self.flat)
         self.assertIn("`gh pr diff` refuses for a very large pull request",
                       self.flat)
