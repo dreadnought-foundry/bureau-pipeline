@@ -620,6 +620,15 @@ class TheSweepReportsItOnce(unittest.TestCase):
             ["🧭 routing-verdict: PARKED — deliberately not built"]
             if parked else []
         )
+        # The card already filed for this finding, as the tally's search
+        # reads it back (DRE-8635): same title, same occurrence.
+        earlier = [{
+            "identifier": existing,
+            "title": sf.card_title("portico", self.BRANCH),
+            "description": f"Occurrence: {self.BRANCH}@9f1b7542",
+            "state": "Planning", "createdAt": "2026-08-11T09:00:00.000Z",
+            "completedAt": "",
+        }] if existing else []
         with mock.patch.multiple(
             reconcile,
             REPO="dreadnought-foundry/portico",
@@ -628,7 +637,13 @@ class TheSweepReportsItOnce(unittest.TestCase):
                 [{"name": self.BRANCH, "sha": "a" * 40}] if branch_exists else [])),
             gh=mock.MagicMock(return_value=compare),
         ), mock.patch.object(
-            reconcile.linear_ops, "find_open", return_value=existing,
+            reconcile.linear_ops, "repo_cards_by_title_prefix",
+            return_value=earlier,
+        ), mock.patch.object(
+            reconcile.linear_ops, "comment_records", return_value=[],
+        ), mock.patch.object(
+            reconcile.linear_ops, "cmd_comment",
+            side_effect=AssertionError("a repeat finding posts no count"),
         ), mock.patch.object(
             reconcile.linear_ops, "comment_bodies", return_value=parked_comment,
         ), mock.patch.object(
