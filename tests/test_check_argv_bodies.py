@@ -270,6 +270,54 @@ def test_a_heredoc_written_output_through_a_variable():
     assert_one_site(text, "gh pr comment")
 
 
+def test_a_prefix_assignment_puts_a_read_in_the_commands_environment():
+    text = workflow('''
+        BODY=$(cat F) python3 x.py
+    ''')
+    found = argv_bodies.sites(text)
+    assert [s.line for s in found] == [line_of(text, "python3 x.py")], found
+    assert "environment string BODY" in found[0].what, found[0].what
+
+
+def test_a_prefix_assignment_through_a_variable():
+    text = workflow('''
+        NOTE=$(cat "$F")
+        BODY="$NOTE" gh pr comment "$PR" --body-file=-
+    ''')
+    assert_one_site(text, "gh pr comment")
+
+
+def test_an_exported_read_reaches_the_next_external_command():
+    text = workflow('''
+        export BODY=$(cat F)
+        echo "exported"
+        python3 x.py
+        python3 y.py
+    ''')
+    found = argv_bodies.sites(text)
+    assert [s.line for s in found] == [line_of(text, "python3 x.py")], found
+    assert "exported $BODY" in found[0].what, found[0].what
+    assert "environment string" in found[0].what, found[0].what
+
+
+def test_a_read_exported_after_it_is_assigned():
+    for export in ("export BODY", "declare -x BODY"):
+        text = workflow(f'''
+            BODY=$(cat F)
+            {export}
+            gh pr comment "$PR" --body-file /tmp/b.md
+        ''')
+        assert_one_site(text, "gh pr comment")
+
+
+def test_an_exported_read_reaches_a_command_inside_a_substitution():
+    text = workflow('''
+        export BODY=$(cat F)
+        N=$(python3 count.py)
+    ''')
+    assert_one_site(text, "count.py")
+
+
 def test_a_site_message_names_the_file_line_step_limit_and_fix():
     text = workflow('''
         gh pr comment "$PR" --body "$(cat body.md)"
@@ -329,6 +377,17 @@ def test_a_read_that_only_reaches_builtins_is_not_a_site():
         echo "why=$VAR" >> "$GITHUB_OUTPUT"
         printf '%s' "$VAR" | gh pr comment "$PR" --body-file=-
         jq -r . <<< "$VAR"
+    '''))
+
+
+def test_a_bounded_or_builtin_environment_is_not_a_site():
+    assert_no_site(workflow('''
+        TITLE=$(head -c 256 F) python3 x.py
+        BODY=$(cat F) printf '%s' "$BODY" > out
+        export SHORT=$(head -c 256 F)
+        python3 y.py
+        export LONG=$(cat F)
+        echo "$LONG" > out
     '''))
 
 
