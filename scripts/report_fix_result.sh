@@ -17,9 +17,11 @@ set -e
 #    `stranded_fix.py local-compare` lists the local commits the base
 #    does not hold, and `stranded_fix.py route` decides whether any work
 #    is stranded and whether the push reached the branch. When work is
-#    stranded it files one card with `linear_ops.py oneoff`, unless
-#    `find-open` finds that card already. It posts nothing on the merged
-#    pull request and exits 0.
+#    stranded it hands the card to `failure_tally.py file`, which files it,
+#    or adds a count to the card already filed for that branch in the last
+#    30 days in any state, or does nothing when that card already names the
+#    same newest commit. It posts nothing on the merged pull request and
+#    exits 0.
 # 3. It reads the agent's three handoff files through `fix_handoff.py
 #    read`: the refutation, the blocker and the conflict agent's no-push
 #    reason. Exit 4 means the file is not this run's, and the script
@@ -311,6 +313,12 @@ set -e
 #   126), so a long hold body made the receipt call fail and the
 #   `|| printf` fallback posted it without the act trailer the sweep and
 #   qa-review.yml read back. DRE-8758 hit the same limit on a plan note.
+# 2026-11-02, DRE-8635. `find-open` saw only an OPEN card, so a stranded-fix
+#   card a person canceled was filed again on the next sweep: DRE-4828,
+#   DRE-4831 and DRE-4861 were one branch filed three times.
+#   `failure_tally.py file` replaced the `find-open` and `oneoff` pair, with
+#   `<branch>@<sha8>` from `stranded_fix.py route` as the occurrence.
+
 # 2026-11-02, DRE-8735, DRE-8722, DRE-2776. The critic's design question is a
 #   decision, not a broken card. Its REQUEST_CHANGES carries the
 #   `🎨 design-question:` block, the fix agent writes it to its blocker file,
@@ -352,16 +360,13 @@ if [ "$PRSTATE" = "MERGED" ]; then
        --compare-file /tmp/stranded-compare.json \
        --card "$CARD" --pushed "$LANDED" \
        --out-title /tmp/stranded-title.txt \
-       --out-body /tmp/stranded-body.md; then
+       --out-body /tmp/stranded-body.md \
+       --out-occurrence /tmp/stranded-occurrence.txt; then
     TITLE=$(cat /tmp/stranded-title.txt)
-    EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
-    if [ -z "$EXISTING" ]; then
-      python3 .bureau-pipeline/scripts/linear_ops.py oneoff "$TITLE" \
-        /tmp/stranded-body.md --label "repo:$SLUG" --label agent:engineer \
-        || echo "::error::could not file the stranded-fix card for $REPO#$PR — the commits are named in this run's log above"
-    else
-      echo "stranded fix already filed as $EXISTING"
-    fi
+    python3 .bureau-pipeline/scripts/failure_tally.py file --title "$TITLE" \
+      --body-file /tmp/stranded-body.md --occurrence "$(cat /tmp/stranded-occurrence.txt)" \
+      --repo "$SLUG" --label "repo:$SLUG" --label agent:engineer \
+      || echo "::error::could not file or count the stranded-fix card for $REPO#$PR — the commits are named in this run's log above"
   else
     echo "::warning::PR #$PR merged during this fix run and nothing provable is stranded on ${BRANCHREF:-its branch} — filing no card"
   fi

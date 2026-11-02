@@ -171,6 +171,7 @@ import dependency_cycle  # noqa: E402 — DRE-3539: the loop across the epic and
 import deliver_rescue  # noqa: E402
 import epic_growth  # noqa: E402 — DRE-6414: the question an epic grown past its green light asks
 import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
+import failure_tally  # noqa: E402 — DRE-8635: a failure already on a card adds a count to it
 import fix_budget  # noqa: E402 — ONE reading of what a fix run may still do
 import fix_concurrency  # noqa: E402 — ONE source for the fix loop's grouping (DRE-2810)
 import fix_context  # noqa: E402 — ONE parser for what an operator decision is
@@ -10976,28 +10977,29 @@ def _stranded_on(pr: dict):
 
 def _file_stranded_fix_card(found, card: str) -> None:
     """One card per branch, composed by the one composer the fix loop's own
-    re-route uses."""
+    re-route uses, and filed through `failure_tally` (DRE-8635): a branch
+    whose card is already filed, in any state, gains a count on that card
+    for a new stranded commit and nothing at all for the same one."""
     slug = stranded_fix.slug_for_repo(REPO)
     if slug is None:
         print(f"stranded-fix: {REPO} is not in config/repo-map.json — "
               f"PR #{found.pr}'s stranded commits cannot be routed to a card")
         return
     title = stranded_fix.card_title(slug, found.branch)
-    existing = linear_ops.find_open(title)
-    if existing:
-        return  # said once, and once is the point — keyed on the branch
     body = stranded_fix.card_body(
         repo=REPO, stranded=found, card=card, pushed=True,
     )
-    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
-                                     encoding="utf-8") as fh:
-        fh.write(body)
-        path = fh.name
-    try:
-        linear_ops.cmd_oneoff(title, path, "--label", f"repo:{slug}",
-                              "--label", "agent:engineer")
-    finally:
-        os.unlink(path)
+    tally = failure_tally.file_or_tally(
+        title, body, occurrence=stranded_fix.occurrence(found),
+        repo_slug=slug, labels=[f"repo:{slug}", "agent:engineer"],
+    )
+    if tally.outcome == failure_tally.UNREAD:
+        # The read that used to raise here: the sweep still says so.
+        _write_failures.append(
+            f"stranded-fix: the card search for {title!r} did not answer")
+        return
+    if tally.outcome != failure_tally.FILED:
+        return  # said once, and once is the point — keyed on the branch
     print(f"stranded-fix: PR #{found.pr} merged at {found.merged_at} and "
           f"{found.branch} carries {len(found.commits)} commit(s) pushed "
           f"after it — filed {title!r}")

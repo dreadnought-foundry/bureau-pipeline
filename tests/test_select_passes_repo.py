@@ -57,7 +57,9 @@ GROOMER_REPOSITORY = "${{ matrix.repository }}"
 #: The workflows whose one run serves cards from many repos, and the matrix
 #: field each binds REPOSITORY to.
 MANY_REPOS = {"groomer.yml": GROOMER_REPOSITORY,
-              "triage-repair.yml": "${{ matrix.repo }}"}
+              "triage-repair.yml": "${{ matrix.repo }}",
+              # DRE-8634: the Alarm Repair works alerts on every repo's cards.
+              "alarm-repair.yml": "${{ matrix.repo }}"}
 
 
 def _join_continuations(script: str) -> str:
