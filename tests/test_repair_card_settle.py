@@ -1566,9 +1566,12 @@ class TheEarlierCardsReadTest(unittest.TestCase):
             got = linear_ops.repo_cards_by_title_prefix(
                 repair_card.TITLE_ANCHOR, repo_slug="bureau-pipeline",
                 since=since)
+        # `title` and `completedAt` are read too (DRE-8635): the failure
+        # tally keeps exact title matches only, and names a Done card's date.
         self.assertEqual(
-            [{"identifier": FIRST["card"], "description": "d",
-              "state": "Canceled", "createdAt": "2026-10-09T15:00:00.000Z"}],
+            [{"identifier": FIRST["card"], "title": "", "description": "d",
+              "state": "Canceled", "createdAt": "2026-10-09T15:00:00.000Z",
+              "completedAt": ""}],
             got)
         query, variables = asked[0]
         self.assertEqual(repair_card.TITLE_ANCHOR, variables["prefix"])
@@ -1608,9 +1611,10 @@ class TheEarlierCardsReadTest(unittest.TestCase):
                 repair_card.TITLE_ANCHOR, repo_slug="bureau-pipeline",
                 since=NOW - timedelta(days=14))
         self.assertEqual(101, len(got))
-        self.assertEqual({"identifier": "DRE-100", "description": "d",
+        self.assertEqual({"identifier": "DRE-100", "title": "", "description": "d",
                           "state": "Canceled",
-                          "createdAt": "2026-10-09T15:00:00.000Z"}, got[-1])
+                          "createdAt": "2026-10-09T15:00:00.000Z",
+                          "completedAt": ""}, got[-1])
         self.assertEqual([None, "c1"], [v["after"] for _, v in asked])
         self.assertIn("pageInfo { hasNextPage endCursor }", asked[0][0])
 

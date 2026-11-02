@@ -832,6 +832,43 @@ count never reads the lift line as one of its receipts.
 
 The console must learn this act before this row merges, as for every row.
 
+## The row that counts a failure already filed — `🔢 failure-tally` (DRE-8635)
+
+| Field | Value |
+| -- | -- |
+| tag | `failure-tally-receipt` |
+| act name | `failure-tally` |
+| kind · state · next actor | `refusal` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | `null` — the card stays exactly where it was, with whoever holds it or the person who closed it, and nothing is expected to speak after a count |
+| emitted by | `scripts/failure_tally.py`, at the `pipeline_act.receipt("failure-tally", …)` call in `_post` |
+
+A failure the pipeline has already filed as a card adds a count to that card
+instead of filing another (epic DRE-8606). `failure_tally.file_or_tally`
+reads the repo's cards whose title equals the failure's title, filed in the
+last 30 days, in any state. With none it files the card, its body ending
+`Occurrence: <occurrence>`. When the newest is open, Canceled or Duplicate and
+does not yet name the occurrence, it posts:
+
+    🔢 failure-tally: <n> · <occurrence>
+
+where `<n>` counts every occurrence, the first filing included. When the
+newest is Done it files a new card naming the Done one, because a count on a
+closed card is seen by nobody. A search that never answered files nothing.
+**The receipt key is live**: an occurrence already on the card's description
+or on one of these receipts writes nothing, and the receipts the pipeline
+wrote are what `<n>` counts; a comment of that shape from any other author
+counts for nothing. A card filed before the tally has no `Occurrence:` line,
+so on it a `<key>@<id>` occurrence is already named when its description holds
+the key and the id each as a whole token: the stranded-fix card lists the
+branch and each commit's sha8 apart, and the first sweep over commits it
+already lists is not a second occurrence. The stranded-fix class files through it at both of its
+writers, with `<branch>@<sha8 of the newest stranded commit>` as the
+occurrence. The tag is `failure-tally-receipt`, never the bare act name, so a
+`tag in body` count never reads the `failure-tally:` log line as a receipt.
+
+The console must learn this act before this row merges, as for every row.
+
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
 
 | Field | Value |

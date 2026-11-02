@@ -1188,6 +1188,24 @@
       }
     },
     {
+      "name": "failure-tally",
+      "tag": "failure-tally-receipt",
+      "adopted": true,
+      "kind": "refusal",
+      "means": "A failure the pipeline had already filed as a card, within FAILURE_TALLY_WINDOW_DAYS (30) and in any state, was found again with a new occurrence, so the pipeline declined to file another card and counted it on the one it is already on: `🔢 failure-tally: <n> · <occurrence>`, where <n> counts every occurrence, the first filing included. An open, Canceled or Duplicate card keeps its lane and the decision a person made, and gains the count.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: scripts/failure_tally.py posts the receipt and leaves the card exactly where it was — an open card with whoever already holds it, a Canceled or Duplicate one with the person who closed it — and nothing in this tree is expected to speak after a count, so the console reads it as parked, not overdue.",
+      "why": "DRE-8635 (epic DRE-8606). The stranded-fix title was filed eight times from 09-20, and DRE-4828, DRE-4831 and DRE-4861 were one branch, portico's agent/DRE-4518-mcp-form-read-tools, filed three times: both writers looked only for an OPEN card with the exact title (linear_ops.find_open), so a card a person canceled was filed again by the next sweep. `scripts/failure_tally.py` file_or_tally reads the repo's cards with that exact title over 30 days in any state (linear_ops.repo_cards_by_title_prefix kept to equality) and answers filed (none found, or the newest is Done — a new card naming it), tallied (this receipt, on the newest open, Canceled or Duplicate card) or already-tallied (the occurrence is on the card's description or a receipt). A search that never answered files nothing and answers unread. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🔢 failure-tally:` and names an occurrence is that occurrence's one count, so a later sweep over the same occurrence writes nothing, and the receipts on a card are what <n> counts. The tag is `failure-tally-receipt`, never the bare act name, so a `tag in body` count of this act never reads the `failure-tally:` log line as one of its receipts. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/failure_tally.py",
+        "anchor": "pipeline_act.receipt(\"failure-tally\""
+      }
+    },
+    {
       "name": "proof-run-dispatched",
       "tag": "proof-run",
       "adopted": true,
