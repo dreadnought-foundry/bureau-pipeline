@@ -239,6 +239,24 @@
       "printed_by": "scripts/parts_review.py",
       "constant": "TAG",
       "when": "every `review` run since DRE-8719, one line on stderr: the review's first line with `PARTS REVIEW: ` taken off, and `, <m> finding(s)` where it applies; since DRE-8721 in qa-review.yml's `Assemble critic context` step's log on every review"
+    },
+    {
+      "tag": "read-fallback:",
+      "printed_by": "scripts/bureau_read.py",
+      "constant": "FALLBACK_TAG",
+      "when": "every read of the board, cards, dependents, workflow states or search that falls back to Linear in `BUREAU_READ=on`, since DRE-8794: one line on stderr per fallback, naming the reader (workflow, job and script), the read and the reason; never in `off` or `shadow`, and never for a `linear-hold` skip"
+    },
+    {
+      "tag": "read-door:",
+      "printed_by": "scripts/bureau_read.py",
+      "constant": null,
+      "when": "every process that reads the door's mode, on stderr: the `read-door: mode <off|shadow|on>` line once when the mode is first read, and in `shadow` or `on` the `read-door: served …` line at exit"
+    },
+    {
+      "tag": "linear-calls:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": null,
+      "when": "every process that sent Linear a request through `linear_ops.py`, at exit on stderr: one line per budget bucket it spent, with the request count this run, the process token and the bucket; a process that never called Linear prints none"
     }
   ],
   "causes": [
