@@ -23,6 +23,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_operator_agent_green_lig
 """
 from __future__ import annotations
 
+import ast
 import copy
 import json
 import re
@@ -314,8 +315,12 @@ def test_the_sandbox_opener_is_the_groomers():
 
 
 def test_select_does_not_import_the_groomer():
-    source = Path(operator_agent.__file__).read_text(encoding="utf-8")
-    assert "groom_verify_agent" not in source.split('"""', 2)[2]
+    tree = ast.parse(Path(operator_agent.__file__).read_text(encoding="utf-8"))
+    imported = {alias.name for node in ast.walk(tree)
+                if isinstance(node, (ast.Import, ast.ImportFrom))
+                for alias in node.names} | {node.module for node in ast.walk(tree)
+                                            if isinstance(node, ast.ImportFrom)}
+    assert "groom_verify_agent" not in imported and "operator_green_light" in imported
 
 
 def test_the_board_read_is_one_read_of_the_three_lanes_and_green_light(tmp_path, monkeypatch):

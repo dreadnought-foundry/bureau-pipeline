@@ -269,8 +269,8 @@ def test_a_card_titled_for_the_operator_is_taken_in_each_lane(tmp_path, monkeypa
     assert [row["card"] for row in _select(tmp_path)] == ["DRE-9001"]
 
 
-@pytest.mark.parametrize("lane", ["Planning", "Triage", "Green Light", "In Progress",
-                                  "In Review"])
+# Green Light is read since DRE-9050, by its own rules: tests/test_operator_agent_green_light.py.
+@pytest.mark.parametrize("lane", ["Planning", "Triage", "In Progress", "In Review"])
 def test_a_card_in_another_writers_lane_is_not_read(tmp_path, monkeypatch, lane):
     board = Board().install(monkeypatch)
     board.add("DRE-9001", lane=lane, title="OPERATOR: a step",
