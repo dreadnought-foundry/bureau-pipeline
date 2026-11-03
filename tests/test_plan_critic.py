@@ -2430,14 +2430,15 @@ class TheOneOffDecisionFailsClosed(unittest.TestCase):
             pc.SEND_BACK, "a test reads a file the build agent cannot open")
         self.assertEqual(pc.REVISE, action)
 
-    def test_a_critic_that_never_ran_escalates_rather_than_passing(self):
+    def test_a_critic_that_never_ran_parks_rather_than_passing(self):
         """The one place this route INVERTS the epic route. There a crash is
         not a rejection and the plan proceeds — the CEO still reads it. Here
         nothing reads the card after this step, so a critic that produced no
-        result must not be a silent pass."""
+        result must not be a silent pass. Since DRE-8772 the second in a row
+        — the default — parks for the operator rather than asking the CEO."""
         for result in (pc.NO_RESULT, "", "MAYBE", pc.SEND_BACK):
             action, _note = pc.one_off_decide(result)
-            self.assertEqual("escalate", action, result)
+            self.assertEqual("park", action, result)
 
     def test_the_epic_route_still_proceeds_on_a_crash(self):
         """The inversion is deliberate and scoped: `decide()` is untouched."""
@@ -2783,16 +2784,16 @@ class TheCli(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn(pc.question(pc.STAGE_ONE_OFF), out.stdout)
 
-    def test_a_missing_result_file_escalates_and_writes_the_ceos_reason(self):
+    def test_a_missing_result_file_never_passes_and_never_asks_the_ceo(self):
         """DRE-3041 AC3, through the seam the workflow actually calls: the
         critic step died, so there is no result file at all. The step output
-        the run branches on must say `escalate`, and the reason file the
-        escalation exit reads must exist — a card that stops here with neither
-        is the silent pass this gate exists to remove.
+        the run branches on must never say `proceed` — a card that leaves
+        here unread is the silent pass this gate exists to remove.
 
         Since DRE-7491 the first such read is read again (`rerun`, no reason
-        file) and only the second in a row escalates, so the escalation is
-        asserted on the second: the newest one-off record is a no-result."""
+        file), and since DRE-8772 the second in a row parks for the operator
+        (`park`, `bound=true`) and writes no reason for the CEO either: the
+        newest one-off record is a no-result."""
         def decide(thread, name):
             gho = os.path.join(self.tmp, f"{name}.out")
             why = os.path.join(self.tmp, f"{name}.why.txt")
@@ -2811,10 +2812,10 @@ class TheCli(unittest.TestCase):
 
         written, why = decide(
             [ours(pc.marker(pc.STAGE_ONE_OFF, 1, pc.NO_RESULT))], "second")
-        self.assertIn("action=escalate", written)
+        self.assertIn("action=park", written)
+        self.assertIn("bound=true", written)
         self.assertIn("result=NO_RESULT", written)
-        self.assertTrue(os.path.exists(why))
-        self.assertTrue(open(why).read().strip())
+        self.assertFalse(os.path.exists(why))
 
     def test_a_pass_writes_no_escalation_reason(self):
         """`Unknown` and `no` are different facts: a reason file left behind by

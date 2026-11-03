@@ -153,7 +153,11 @@ class TheRunThatRanOutOfTurnsSaysSo(unittest.TestCase):
 
     def test_the_note_says_it_ran_out_and_names_the_ceiling(self):
         action, note = pc.one_off_decide(pc.NO_RESULT, "", 0, ran_out=ran_out(36))
-        self.assertEqual(pc.ESCALATE, action)
+        # The default is the second no-result in a row, which parks for the
+        # operator (DRE-8772); the first is read again, and both say so.
+        self.assertEqual(pc.PARK, action)
+        self.assertEqual(pc.RERUN, pc.one_off_decide(
+            pc.NO_RESULT, "", 0, ran_out=ran_out(36), rerun_spent=False)[0])
         self.assertIn("ran out of turns", note.lower())
         self.assertIn("36", note)
         self.assertNotIn("did not answer", note.lower())
@@ -212,15 +216,20 @@ class TheRunThatRanOutOfTurnsSaysSo(unittest.TestCase):
 
 
 class AReaderThatWasNeverReachedIsUnchanged(unittest.TestCase):
-    """AC3. A genuine no-answer — the model was never reached — keeps today's
-    wording, word for word. The two failures have different next actions and
-    must not be told as one."""
+    """AC3. A genuine no-answer — the model was never reached — keeps its own
+    wording and never claims it ran out of turns. The two failures have
+    different next actions and must not be told as one. Since DRE-8772 the
+    second in a row parks for the operator, with the two-run note."""
 
-    def test_the_note_is_word_for_word_what_it_always_was(self):
-        self.assertEqual((pc.ESCALATE, pc.NO_CRITIC_NOTE),
+    def test_the_note_never_claims_the_reader_ran_out(self):
+        self.assertEqual((pc.PARK, pc.one_off_twice_note(())),
                          pc.one_off_decide(pc.NO_RESULT))
-        self.assertEqual((pc.ESCALATE, pc.NO_CRITIC_NOTE),
+        self.assertEqual((pc.PARK, pc.one_off_twice_note(())),
                          pc.one_off_decide(pc.NO_RESULT, "", 0, ran_out=None))
+        self.assertEqual((pc.RERUN, pc.NO_CRITIC_RERUN_NOTE),
+                         pc.one_off_decide(pc.NO_RESULT, "", 0, ran_out=None,
+                                           rerun_spent=False))
+        self.assertNotIn("ran out", pc.one_off_decide(pc.NO_RESULT)[1])
 
     def test_the_escalation_is_word_for_word_what_it_always_was(self):
         text = pc.one_off_escalation(pc.NO_RESULT)
@@ -234,7 +243,7 @@ class AReaderThatWasNeverReachedIsUnchanged(unittest.TestCase):
         case and keeps the no-answer words."""
         row = ran_out(36, turns=1, subtype="error_during_execution")
         self.assertFalse(pc.hit_the_turn_cap(row))
-        self.assertEqual(pc.NO_CRITIC_NOTE,
+        self.assertEqual(pc.one_off_twice_note(()),
                          pc.one_off_decide(pc.NO_RESULT, "", 0, ran_out=row)[1])
 
 
@@ -338,9 +347,9 @@ class TheCliCarriesIt(unittest.TestCase):
                 for name, path in paths.items()}
         return {"outputs": outputs, **read}
 
-    #: Since DRE-7491 a first no-result is read again and only the second in
-    #: a row reaches the CEO, so the escalation-text tests below run on the
-    #: second: the card's newest one-off round record is already a no-result.
+    #: Since DRE-7491 a first no-result is read again, and since DRE-8772 the
+    #: second in a row parks for the operator, so the note tests below run on
+    #: the second: the card's newest one-off round record is a no-result.
     @staticmethod
     def _second_in_a_row() -> tuple:
         return ({"body": pc.marker(pc.STAGE_ONE_OFF, 1, pc.NO_RESULT,
@@ -350,19 +359,21 @@ class TheCliCarriesIt(unittest.TestCase):
     def test_a_run_cut_off_at_its_ceiling_says_so_on_the_card(self):
         run = self._decide("", {"subtype": pc.TURN_CAP_SUBTYPE, "num_turns": 21,
                                 "is_error": True}, records=self._second_in_a_row())
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
         self.assertEqual("true", run["outputs"]["ran_out"])
         self.assertIn("ran out of turns", run["note"].lower())
         self.assertIn("36", run["note"])
-        self.assertIn("35523230304", run["escalation"])
-        self.assertNotIn("did not answer at all", run["escalation"])
+        self.assertIn("35523230304", run["note"])
+        self.assertEqual("", run["escalation"])
 
     def test_a_reader_never_reached_writes_the_words_it_always_wrote(self):
         run = self._decide("", None, records=self._second_in_a_row())
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
         self.assertEqual("false", run["outputs"]["ran_out"])
-        self.assertIn(pc.NO_CRITIC_NOTE, run["note"])
-        self.assertIn("nothing has checked this card", run["escalation"])
+        self.assertIn("the critic produced no result either time", run["note"])
+        self.assertIn("nothing has checked this card", run["note"])
+        self.assertNotIn("ran out", run["note"])
+        self.assertEqual("", run["escalation"])
 
     def test_a_missing_execution_file_is_not_a_turn_cap(self):
         run = self._decide("", None, ceiling="36")
