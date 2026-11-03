@@ -1111,7 +1111,7 @@ class TestTheRecord:
 
     def test_the_agent_leaves_its_switch_alone(self):
         rows = json.loads((ROOT / "config" / "operator-agent.json").read_text())["leave_alone"]
-        assert [r["card"] for r in rows] == ["DRE-8748", "DRE-8830", "DRE-8927"]
+        assert [r["card"] for r in rows] == ["DRE-8748", "DRE-8830", "DRE-8927", "DRE-9053"]
         assert "OPERATOR_AGENT_DO_LIVE" in rows[2]["why"]
 
     def test_the_proof_can_read_what_the_new_jobs_print(self):
