@@ -58,6 +58,23 @@ variable (DRE-8899). There a thread read asks the door. A `pull_request` run's
 token is refused for any card but the one its head branch names, so that read
 goes to Linear with `reason=pull-request`.
 
+**Merge Gate, Proof Task and Deliver Rescue** set it at job level, at 300
+(DRE-8901): merge-gate.yml's `evaluate`, proof-task.yml's `execute` and
+deliver-rescue.yml's `deliver` carry the four door variables and
+`BUREAU_READ_CARD_MAX_AGE: 300` in their job `env:`. The gate's job also opens
+with `Note the job's start for the read door`, which writes
+`BUREAU_READ_CARD_SEEN_AFTER` to `$GITHUB_ENV`. `code_owner_hold.park` and
+`release` read the thread for the marker an earlier gate run posted, and the
+job's concurrency group means that run finished before this job began, so a
+door answer from before the job's start is read from Linear instead (the floor,
+below). No `env:` block in that job names the variable, because one that did
+would override it. Proof Task and Deliver Rescue get no such step: nothing they
+read was posted by an earlier run moments before. The door itself must name
+`proof-task` and `deliver-rescue` among the workflows it serves (agent-bureau's
+`github_oidc.ALLOWED_WORKFLOWS`). Until it does, their first card read is
+refused with `workflow` and they read Linear for the rest of the run, exactly
+as before.
+
 ## The floor: a read sees every write it must see
 
 An age bound cannot vouch for a write made seconds before the read. The door's
