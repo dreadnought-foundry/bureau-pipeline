@@ -421,14 +421,26 @@ class ImportsNoSharedPartTest(unittest.TestCase):
 
     def test_a_changed_file_is_judged_when_the_diff_adds_a_declaration(self):
         """Moved by DRE-8949's first narrowing: a changed file is judged only
-        when the diff adds a line on which a component is declared, so this
-        diff now edits the declaration line rather than the body."""
+        when the diff adds a line on which a component is declared. Moved
+        again by DRE-9089: editing an existing declaration line removes the
+        declaration it adds, so the diff now declares a second component."""
+        with TemporaryDirectory() as tmp:
+            root = _repo(Path(tmp) / "repo", {**BASE, HOME: _page("")})
+            got = _check(root, _change(root, {HOME: _page("").replace(
+                "HomePage()", "HomePage(): JSX.Element")
+                + "\nfunction Footer() {\n  return <footer />;\n}\n"}))
+            self.assertEqual(1, got.returncode)
+            self.assertIn(f"NO-SHARED-PART {HOME}", got.stdout)
+
+    def test_editing_an_existing_declaration_line_passes(self):
+        """DRE-9089: the edited declaration is on the diff's removed side as
+        well as its added side, so it is the same component, not a new one."""
         with TemporaryDirectory() as tmp:
             root = _repo(Path(tmp) / "repo", {**BASE, HOME: _page("")})
             got = _check(root, _change(root, {HOME: _page("").replace(
                 "HomePage()", "HomePage(): JSX.Element")}))
-            self.assertEqual(1, got.returncode)
-            self.assertIn(f"NO-SHARED-PART {HOME}", got.stdout)
+            self.assertEqual(0, got.returncode, got.stdout + got.stderr)
+            self.assertEqual("", got.stdout)
 
 
 class OnlyTheDiffIsJudgedTest(unittest.TestCase):
