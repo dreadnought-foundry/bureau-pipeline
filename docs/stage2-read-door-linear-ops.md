@@ -49,6 +49,27 @@ not asked, whatever the max-age says.
 Every workflow that moves onto the door sets the variable on the jobs or steps
 it moves. A workflow that does not set it reads as before.
 
+A standalone workflow — one that runs in bureau-pipeline and checks out no
+`pipeline_ref` — sets no `BUREAU_PIPELINE_REF`, and the client then makes no
+ref check (`bureau_read.pipeline_ref_problem`). Triage Repair, Alarm Repair
+and Hygiene are three (DRE-8902): `BUREAU_READ`, `BUREAU_READ_URL`,
+`BUREAU_READ_AUDIENCE` and `BUREAU_READ_CARD_MAX_AGE: 300` on the job-level
+`env:` of triage-repair.yml's `select`, `repair` and `unrepaired`,
+alarm-repair.yml's `select` and `repair`, and hygiene.yml's `read`, `keep`
+and `summary`, each of which can mint the OIDC token. The jobs that read a
+receipt posted before they began — triage-repair.yml's `repair` and
+`unrepaired`, alarm-repair.yml's `repair`, hygiene.yml's `keep` — open with
+the step `Note the job's start for the read door`, which writes
+`BUREAU_READ_CARD_SEEN_AFTER` to `$GITHUB_ENV`: a re-run's `claim` then finds
+the claim an earlier attempt posted, and a Hygiene pass finds the receipts
+the pass queued ahead of it posted. Hygiene's one door-reachable thread read
+is the seam's idempotency check (`hygiene._receipts_on`) on a card the board
+does not carry or whose window is partial; `read` reads the board and
+`summary` the standing card's window off Linear, and `summary`'s comment asks
+the door only for the card's `id`, which never changes. `alarm_repair.read_card` asks `card_via_door(card, comments=50,
+relations=True)` first. Those runs read cards of every repo; a card the door
+does not serve them reads Linear after one `read=cards reason=not-found` line.
+
 **Inside the Reconcile sweep nothing changes.** `reconcile.yml` sets no
 `BUREAU_READ_CARD_MAX_AGE`, so `card_via_door` is never asked in its steps.
 The pass cache answers first, as before, and a cache miss reaches

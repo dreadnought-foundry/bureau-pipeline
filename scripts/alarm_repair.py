@@ -30,7 +30,9 @@ morning briefing's `Open over a day` section once it is a day old.
 For each alert in scope, oldest first, the card's WHOLE thread is read
 (`linear_ops.comment_records(card, whole_thread=True)`) and the card itself
 in one read: lane, labels, description, its `blocks` inverse relations with
-their states, and its live hold stamp (`hold.read_stamp`). One action each:
+their states, and its live hold stamp (`hold.read_stamp`). Both ask the read
+door first (`linear_ops.card_via_door`, DRE-8902) and read Linear when it
+cannot answer. One action each:
 
   * `spent` — a contract receipt for this alert's `kind` and `raised_at`
     already stands. Once per raise: an alert resolved and raised again has a
@@ -291,7 +293,14 @@ def read_card(card: str) -> dict:
     """The card with what the classes read off it — lane, labels,
     description, its parent, whether it has children, and its `blocks`
     inverse relations with each blocker's state — in one read. Raises when
-    the card is not there."""
+    the card is not there.
+
+    The read door answers first (DRE-8902): its node carries every field
+    `_CARD_QUERY` selects. On None — a step that does not opt in, a door
+    that cannot answer, a card it does not serve — Linear, as before."""
+    door = linear_ops.card_via_door(card, comments=50, relations=True)
+    if door is not None:
+        return door[0]
     issue = ((linear_ops.gql(_CARD_QUERY, {"id": card}) or {}).get("issue")) or None
     if not issue:
         raise linear_ops.LinearError(f"issue {card} not found")
