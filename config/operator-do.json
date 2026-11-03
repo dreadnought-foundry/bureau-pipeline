@@ -1,0 +1,115 @@
+{
+  "_readme": "The steps the Operator Agent may carry out itself (DRE-8922, epic DRE-8738): the four kinds, each kind's one credential, and each op's fields, the argv it becomes and whether it writes. Read only through scripts/operator_do_ops.py, whose load refuses a kind outside operator_step_kind.MACHINE_KINDS, the deploy kind (a deploy needs production access and is the studio's, never do), a credential other than GH_TOKEN or LINEAR_API_KEY, and a command naming a field its op does not declare. A command is an argv list: each `{field}` in an element is replaced by the op's value, `{field|base64}` by its base64, `{field*}` by its list spread as arguments, and a bool reads `true` or `false`. A field's type says how check reads it: `repo` is an owner/name value of config/repo-map.json that opens `org`, and a plan names at most one; `variable` and `project` must be quoted word for word in the card's title or description outside fenced code; `branch` must be quoted or be `agent/<the plan's card>-<slug>`, and is never one of `never_branches`; `path` under .github/workflows/ must be quoted; `sha` is a 40-hex commit sha (a branch-create starts at a commit, and GitHub's refs API takes no branch name); `status` is one of the op's `choices`; `script` is a key of `scripts`, and `args` must take that script's one form. file-put adds a file the branch does not yet hold: replacing one needs the old blob's sha, which no op reads. pr-open's base is main, the default branch of every dreadnought-foundry repository in the map (read 2026-11-03). No op runs or lists a workflow, sets a secret, or reaches an organization or an environment, and an Initiative is not an op: a step that needs any of them is refused by check and left for a person. `never` are the agent's own switches, refused wherever an op names them. max_ops caps one plan; max_do_per_pass, max_close_per_pass and pr_wait_days are read by the executor and the close (DRE-8924, DRE-8925). Adding an op is a reviewed pull request; tests/test_operator_do_ops.py renders every one.",
+  "max_ops": 20,
+  "max_do_per_pass": 3,
+  "max_close_per_pass": 10,
+  "pr_wait_days": 14,
+  "org": "dreadnought-foundry/",
+  "never": [
+    "OPERATOR_AGENT_LIVE",
+    "OPERATOR_AGENT_LIVE_OFF_UNTIL",
+    "OPERATOR_AGENT_DO_LIVE",
+    "OPERATOR_AGENT_DO_LIVE_OFF_UNTIL"
+  ],
+  "never_branches": ["main"],
+  "scripts": {
+    "scripts/proof_release.py": {
+      "why": "A GitHub read: whether the release the fleet runs carries a merge.",
+      "head": ["check", "--repo", "{repo}"],
+      "repeat": "--merge",
+      "value": "^DRE-[0-9]+:[0-9]+:[0-9a-f]{7,40}$",
+      "min_repeat": 1
+    }
+  },
+  "kinds": {
+    "variable": {
+      "credential": "GH_TOKEN",
+      "mint": "A bureau App installation token for the plan's one repository, minted with no permission-* subset: the pinned actions/create-github-app-token declares no input for repository variables and GitHub refuses the undeclared permission-variables (DRE-7230), so the token carries every permission the installation grants on that repository (DRE-8928). The grant it needs is actions_variables: write, which the probe reads for every fleet repository (DRE-8924).",
+      "ops": {
+        "variable-set": {
+          "fields": {"repo": "repo", "name": "variable", "value": "text"},
+          "writes": true,
+          "command": ["gh", "variable", "set", "{name}", "--body", "{value}", "-R", "{repo}"]
+        },
+        "variable-delete": {
+          "fields": {"repo": "repo", "name": "variable"},
+          "writes": true,
+          "command": ["gh", "variable", "delete", "{name}", "-R", "{repo}"]
+        },
+        "variable-list": {
+          "fields": {"repo": "repo"},
+          "writes": false,
+          "command": ["gh", "variable", "list", "-R", "{repo}"]
+        }
+      }
+    },
+    "bot-pr": {
+      "credential": "GH_TOKEN",
+      "mint": "A token for the plan's one repository minted with contents: write and pull_requests: write only (DRE-8928) — the two permissions the probe reads besides actions_variables. No op needs actions: read or write.",
+      "ops": {
+        "branch-create": {
+          "fields": {"repo": "repo", "branch": "branch", "from": "sha"},
+          "writes": true,
+          "command": ["gh", "api", "--method", "POST", "repos/{repo}/git/refs",
+                      "-f", "ref=refs/heads/{branch}", "-f", "sha={from}"]
+        },
+        "file-put": {
+          "fields": {"repo": "repo", "branch": "branch", "path": "path", "content": "text",
+                     "message": "text"},
+          "writes": true,
+          "command": ["gh", "api", "--method", "PUT", "repos/{repo}/contents/{path}",
+                      "-f", "message={message}", "-f", "content={content|base64}",
+                      "-f", "branch={branch}"]
+        },
+        "pr-open": {
+          "fields": {"repo": "repo", "branch": "branch", "title": "text", "body": "text",
+                     "draft": "bool"},
+          "writes": true,
+          "command": ["gh", "api", "--method", "POST", "repos/{repo}/pulls",
+                      "-f", "head={branch}", "-f", "base=main",
+                      "-f", "title={title}", "-f", "body={body}", "-F", "draft={draft}"]
+        },
+        "pr-close": {
+          "fields": {"repo": "repo", "number": "number"},
+          "writes": true,
+          "command": ["gh", "api", "--method", "PATCH", "repos/{repo}/pulls/{number}",
+                      "-f", "state=closed"]
+        },
+        "branch-delete": {
+          "fields": {"repo": "repo", "branch": "branch"},
+          "writes": true,
+          "command": ["gh", "api", "--method", "DELETE", "repos/{repo}/git/refs/heads/{branch}"]
+        },
+        "pr-view": {
+          "fields": {"repo": "repo", "number": "number"},
+          "writes": false,
+          "command": ["gh", "api", "repos/{repo}/pulls/{number}"]
+        }
+      }
+    },
+    "linear-admin": {
+      "credential": "LINEAR_API_KEY",
+      "mint": "The fleet's Linear key, a member key and not an admin. A workspace member may change a team project's status; Linear refusing the projectUpdate all the same is a command that exits non-zero, and nothing is changed.",
+      "ops": {
+        "project-status": {
+          "fields": {"project": "project", "status": "status"},
+          "choices": {"status": ["Completed", "Canceled"]},
+          "writes": true,
+          "command": ["python3", "scripts/operator_do.py", "linear", "project-status",
+                      "{project}", "{status}"]
+        }
+      }
+    },
+    "script": {
+      "credential": "GH_TOKEN",
+      "mint": "A read-only token for the plan's one repository.",
+      "ops": {
+        "script": {
+          "fields": {"repo": "repo", "path": "script", "args": "args"},
+          "writes": false,
+          "command": ["python3", "{path}", "{args*}"]
+        }
+      }
+    }
+  }
+}
