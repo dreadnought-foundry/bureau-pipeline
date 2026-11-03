@@ -356,6 +356,26 @@ def test_a_signed_answer_older_than_the_newest_park_rules_nothing_out():
     assert read(card) == module.Reading(taken=True, why=module.TAKEN_WHY)
 
 
+def test_an_unchecked_answer_after_the_park_takes_nothing(monkeypatch):
+    """With the console's key unreadable, the answer after the park may be the
+    CEO's: the check never ran, so the row is never the agent's."""
+    def down():
+        raise console_receipt.KeyUnavailable("the console did not answer")
+
+    module = _module()
+    monkeypatch.setattr(spoken_thread, "_VERIFIER", console_receipt.Verifier(key_loader=down))
+    card = build("r4-signed")
+    [voice] = [v for v in spoken_thread.voices(linear_ops.window_nodes(card["comments"]),
+                                               PIPELINE_USER, card="DRE-2498")
+               if v.kind == spoken_thread.UNCHECKED]
+    assert voice.created_at == "2026-11-02T20:00:05.000Z"
+    assert read(card) == module.Reading(taken=False, why=module.SIGNED_WHY)
+    escalation = next(n for n in decision_card("gl-stopped-run")["comments"]["nodes"]
+                      if n["body"].startswith("🙋"))
+    later = push(card, escalation["body"], "2026-11-02T20:30:00.000Z")
+    assert read(later) == module.Reading(taken=True, why=module.TAKEN_WHY)
+
+
 def test_an_unscreened_planner_question_is_taken():
     """The escalation-choices block is what rule 7 reads: the same live
     escalation without it is taken."""
