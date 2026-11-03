@@ -283,21 +283,31 @@ class BelowTheBoundNothingMoved(unittest.TestCase):
 
 class ARoundTheCriticNeverDecidedIsNotAFailedRound(unittest.TestCase):
     """AC5. The epic route's rule, expressed the same way: a crash is not a
-    rejection, so it escalates and spends nothing."""
+    rejection, so it spends nothing — a first one is read again, and the
+    second in a row parks on its own note, never the bound's (DRE-8772)."""
 
-    def test_a_crash_at_the_bound_still_escalates_rather_than_parking(self):
+    def test_a_crash_at_the_bound_is_never_the_bound_park(self):
+        bound_note = pc._one_off_park_note(pc.MAX_ROUNDS + 4)
         for result in (pc.NO_RESULT, "", "MAYBE"):
+            self.assertEqual(
+                (pc.RERUN, pc.NO_CRITIC_RERUN_NOTE),
+                pc.one_off_decide(result, prior_send_backs=pc.MAX_ROUNDS + 3,
+                                  rerun_spent=False), result)
             action, note = pc.one_off_decide(
                 result, prior_send_backs=pc.MAX_ROUNDS + 3)
-            self.assertEqual(pc.ESCALATE, action, result)
-            self.assertEqual(pc.NO_CRITIC_NOTE, note, result)
+            self.assertEqual(pc.PARK, action, result)
+            self.assertEqual(pc.one_off_twice_note(()), note, result)
+            self.assertNotEqual(bound_note, note, result)
 
-    def test_a_reason_less_send_back_is_a_crash_and_never_a_park(self):
+    def test_a_reason_less_send_back_is_a_crash_and_never_the_bound(self):
         """`read_result` already reads one as NO_RESULT; the decision agrees,
         so a critic that wrote a bare header cannot spend the CEO's budget."""
-        action, _note = pc.one_off_decide(pc.SEND_BACK, "",
-                                          prior_send_backs=pc.MAX_ROUNDS)
-        self.assertEqual(pc.ESCALATE, action)
+        action, note = pc.one_off_decide(pc.SEND_BACK, "",
+                                         prior_send_backs=pc.MAX_ROUNDS)
+        self.assertEqual((pc.PARK, pc.one_off_twice_note(())), (action, note))
+        self.assertEqual(pc.RERUN, pc.one_off_decide(
+            pc.SEND_BACK, "", prior_send_backs=pc.MAX_ROUNDS,
+            rerun_spent=False)[0])
         self.assertEqual(pc.NO_RESULT, pc.read_result(
             pc.result_line(pc.SEND_BACK))[0])
 

@@ -177,10 +177,12 @@ class TheDecisionRoutesEachCaseToWhoCanAct(unittest.TestCase):
                          + [pc.PARK] * 3, answers)
 
     def test_no_result_is_still_not_a_pass(self):
+        """The second no-result in a row parks for the operator (DRE-8772)
+        — never a pass, and never the CEO's question."""
         for result in (pc.NO_RESULT, "", "MAYBE"):
             action, _note = pc.one_off_decide(
                 result, prior_send_backs=pc.MAX_ROUNDS)
-            self.assertEqual(pc.ESCALATE, action, result)
+            self.assertEqual(pc.PARK, action, result)
             self.assertNotEqual(pc.PROCEED, action)
 
     def test_only_a_pass_moves_the_card(self):
@@ -298,12 +300,15 @@ class TheDecideCli(unittest.TestCase):
 
     def test_no_result_does_not_proceed(self):
         """A first no-result is read again (DRE-7491); the second in a row
-        goes to the CEO. Neither is ever a pass."""
+        parks for the operator (DRE-8772). Neither is ever a pass, and
+        neither writes a reason for the CEO."""
         first = self._decide([], "")
         self.assertEqual(pc.RERUN, first["outputs"]["action"])
         self.assertEqual("", first["escalation"])
         second = self._decide(pipeline(first["record"].strip()), "")
-        self.assertEqual(pc.ESCALATE, second["outputs"]["action"])
+        self.assertEqual(pc.PARK, second["outputs"]["action"])
+        self.assertEqual("true", second["outputs"]["bound"])
+        self.assertEqual("", second["escalation"])
         for run in (first, second):
             self.assertNotEqual(pc.PROCEED, run["outputs"]["action"])
 
