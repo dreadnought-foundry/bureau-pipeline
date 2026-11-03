@@ -935,7 +935,11 @@ receipt names the cause, quotes the facts and says
 Repair's, so the state stays `unchanged`. `keep` leaves a genuine decision
 where it is, under a receipt that says `stays: Green Light`, and moves
 nothing; the agent never approves. The sweep's `hand-work-overdue` alarm is
-also a trigger for the agent's next pass on the card.
+also a trigger for the agent's next pass on the card. The receipt key has one
+exception here, the re-keep (DRE-9051): a `keep` that a comment came after
+(`operator_decide.keep_stands` is False) no longer spends the pass, so `claim`
+posts the next Green Light decision's receipt over the same fingerprint and
+the row is re-read once per comment it gets, never every pass.
 
 The console must learn this act before this row merges, as for every row.
 
