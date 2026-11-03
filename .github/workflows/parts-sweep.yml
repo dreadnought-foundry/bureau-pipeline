@@ -1,0 +1,422 @@
+# Linear reads (DRE-8783):
+#   sweep · File the cleanup cards · parts_cleanup.filed — the search for a copy's card already filed, because the read door returns no description to match a `parts-copy:` identity line on
+#   sweep · Record each provisional part's outcome · parts_cleanup.filed, the replacement-card search — parts_provisional.scan's search for a rejected part's card already filed, because the read door returns no description to match a `parts-rejected:` identity line on
+#   sweep · Record each provisional part's outcome · spoken_thread.read on the parts card — the one shared reader that checks the CEO's console signature and tells the pipeline's own comments apart, so only his signed rejection counts
+#   weekly · Post the week's parts list · spoken_thread.read on the parts card — the one shared reader that checks the CEO's console signature and tells the pipeline's own comments apart, so the once-a-week check reads only the pipeline's own post
+#
+# The weekly parts sweep (DRE-8945): once a week, before the 06:30 PT Sunday
+# briefing, every roster repo's copies of shared parts now and a week ago,
+# one cleanup card per copy not already carded in a listed repo, each
+# provisional part's outcome recorded, and the week's `🪴 parts-weekly:`
+# comment posted on the standing parts card, which the console's Sunday
+# briefing shows (DRE-9057).
+#
+# THE JOBS.
+#   roster — `scripts/parts_sweep.py roster` (DRE-8944) reads
+#      `config/repo-map.json` live, one row per key; a dispatch that names a
+#      `repo` narrows it to that row. It also fixes the run's `week_ago`, seven
+#      days before the run, so every leg counts against the same instant.
+#   sweep — one leg per row, one at a time. The read mint for that one
+#      repository may fail: outside this organization the leg records the
+#      repo `unread` and passes; inside it, `failed`, and the leg is red. An
+#      archived repo is recorded `archived` and nothing else runs. Otherwise
+#      the repo is checked out with full history and counted
+#      (`parts_sweep.py count`); a counted repo `config/parts-count.json`
+#      lists is handed to the filer (`scripts/parts_cleanup.py file`,
+#      DRE-8843), and every counted repo to the provisional scan
+#      (`scripts/parts_provisional.py scan`, DRE-8941) on the record mint,
+#      `pull-requests: write` for that one repository. Every leg uploads
+#      `parts-sweep-<slug>`: `count.json` and, for a counted repo,
+#      `provisional.json`.
+#   weekly — after both, on a `roster` that succeeded:
+#      `scripts/parts_weekly.py post` (DRE-9055) on every leg's records.
+#
+# THE POST IS ONLY EVER A WHOLE ROSTER'S LIST. Once a week's list stands,
+# `parts_weekly.py`'s once-a-week check stops any later post for that week, so
+# two runs must never post. A dispatch that names a `repo` counts, files and
+# records that one repo for real, and its post always runs `--dry-run`. A
+# failed `roster` skips `weekly`; a `roster` with no rows hands `post` an empty
+# `--repos`, which it refuses with `the roster named no repos` and exit 1. In
+# each case the real Sunday post is still free to land on a re-run.
+#
+# WHAT IS PUBLIC (the epic's contract 5). This repository is public, so its
+# logs and artifacts are too. Part names, paths, repo slugs, counts, card ids
+# and pull request numbers may appear in them; the critic's reasoning never
+# does. Neither record carries it, and `parts_weekly.py` reads it back from
+# the pull request into the Linear comment only. No step traces, writes a
+# step summary, or prints a record file.
+#
+# `dry_run` writes nothing anywhere: the filer, the scan and the post run with
+# `--dry-run`, and the record mint is never made. With `PARTS_WEEKLY_CARD`
+# empty (before DRE-8946) the run still goes green: the scan makes nothing
+# permanent, nothing is posted, and both say so.
+#
+# THE RECORD is this run's log: the `parts-sweep:`, `parts-count:`,
+# `parts-cleanup:`, `parts-provisional:` and `parts-weekly:` lines its scripts
+# print, unchanged (config/proof-reach.json declares them).
+#
+# This file only wires the scripts; what each decides lives in them and their
+# tests. The wiring is held by tests/test_parts_sweep_workflow.py.
+#
+# WHEN. Sunday 10:26 UTC — 02:26 PT in standard time, 03:26 PT in daylight
+# time: after Groom Week's `11 10 * * 0`, well before the briefing, clear of
+# the 12:00 and 13:00 UTC train crons, on a minute no other workflow here fires
+# on (standards/engineering.md, CI rule 2).
+#
+# WHAT IF THE RUN GOES RED: "Parts Sweep" is in the Red-Main Repair caller's
+# and the medic's watch lists (self-red-main-repair.yml, self-medic.yml), and
+# scripts/check_workflow_watchers.py fails the build if it ever leaves them.
+#
+# THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
+#   Q1 actor — a schedule initiates as `github-actions`, a dispatch as the
+#      person. No step gates on the actor.
+#   Q2 secrets — both events read this repository's own full store:
+#      BUREAU_APP_ID and BUREAU_APP_PRIVATE_KEY for the mints, the qa-bot
+#      App's pair for its login, and LINEAR_API_KEY on the filing, scanning
+#      and posting steps only. The one write grant asked for is
+#      `pull-requests: write` on the record mint, which the App already holds
+#      (DRE-8946 records the look-up).
+#   Q3 retry — a re-run counts again from the files, and the filer's search,
+#      the record lines' read-back and the post's once-a-week check make it
+#      file, write and post nothing twice. Artifacts are overwritten.
+#   Q4 command limits — a repo outside this organization the App cannot reach
+#      is an `unread` row, an archived repo an `archived` row, and a mint
+#      refused inside this organization a red leg.
+#   Q5 crash — cards, record lines and the post already written stay; the
+#      re-run does the rest, and `weekly` still runs and shows a repo whose
+#      leg died as `failed`. A run whose `roster` died, or found no rows, or
+#      that was narrowed to one repo posts nothing, so it never leaves a wrong
+#      list standing in front of the real one.
+name: Parts Sweep
+
+on:
+  schedule:
+    - cron: "26 10 * * 0"
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: >-
+          one roster slug to sweep; its post runs dry. Empty = the whole roster.
+        type: string
+        default: ""
+      dry_run:
+        description: write nothing anywhere — no card, no record line, no post
+        type: boolean
+        default: false
+
+# READ ONLY. Each repo is read and recorded on a minted App token; Linear is
+# written through the scripts.
+permissions:
+  contents: read
+
+# parts-count.yml's group: both file under the `parts-copy:` identity with a
+# search-then-create filer, so they queue behind each other and an overlap
+# never files a card twice.
+concurrency:
+  group: parts-count
+  cancel-in-progress: false
+
+jobs:
+  roster:
+    name: Read the roster
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    outputs:
+      repos: ${{ steps.roster.outputs.repos }}
+      week_ago: ${{ steps.roster.outputs.week_ago }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The rows, and the one instant every leg counts a week back from. A
+      # roster that cannot be read, or a `repo` the map does not carry, prints
+      # its `parts-sweep:` UNKNOWN line and fails here.
+      - name: Read the roster
+        id: roster
+        env:
+          REQUESTED: ${{ inputs.repo }}
+        run: |
+          args=()
+          if [ -n "$REQUESTED" ]; then
+            args=(--repo "$REQUESTED")
+          fi
+          rows="$(python3 scripts/parts_sweep.py roster "${args[@]}")"
+          week_ago="$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%S+00:00')"
+          printf '%s\n' "$rows"
+          echo "week_ago=$week_ago"
+          printf '%s\n' "$rows" "week_ago=$week_ago" >> "$GITHUB_OUTPUT"
+
+  # One leg per repo, one at a time. Everything the leg writes goes into
+  # `leg/`, and only its two records are uploaded.
+  sweep:
+    name: Sweep ${{ matrix.repo }}
+    needs: roster
+    if: needs.roster.outputs.repos != '' && needs.roster.outputs.repos != '[]'
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 30
+    # Whose Linear bucket the filer and the scan spend: the fleet's.
+    env:
+      LINEAR_IDENTITY: fleet
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.roster.outputs.repos) }}
+    steps:
+      # Per repo, because an App installation token is scoped to ONE
+      # installation. A mint that fails leaves the leg running, so the repo
+      # still gets its record.
+      - name: Mint a read-only token for the repository
+        id: read_app
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.name }}
+          permission-contents: read
+          permission-pull-requests: read
+
+      # An archived repo is read-only: it is recorded and not swept.
+      - name: Read whether the repository is archived
+        id: archived
+        if: steps.read_app.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.read_app.outputs.token }}
+          FULL_NAME: ${{ matrix.owner }}/${{ matrix.name }}
+        run: |
+          archived="$(gh api "repos/$FULL_NAME" --jq .archived)"
+          case "$archived" in
+            true|false) ;;
+            *)
+              echo "::error::GitHub answered archived=$archived for $FULL_NAME"
+              exit 1
+              ;;
+          esac
+          echo "archived=$archived"
+          echo "archived=$archived" >> "$GITHUB_OUTPUT"
+
+      # The default branch with its full history, for the week-ago count, and
+      # no credential left on disk. First, because a checkout at the workspace
+      # root clears it.
+      - name: Check out the repository
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'false'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.owner }}/${{ matrix.name }}
+          token: ${{ steps.read_app.outputs.token }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # This run's own commit, so the scripts are the ones this run carries.
+      - name: Check out bureau-pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .bureau-pipeline
+          persist-credentials: false
+
+      # The three records of a repo the leg does not count (contract 6).
+      - name: Record a repository outside this organization the token cannot reach
+        if: steps.read_app.outcome != 'success' && matrix.owner != github.repository_owner
+        env:
+          SLUG: ${{ matrix.repo }}
+          OWNER: ${{ matrix.owner }}
+          NAME: ${{ matrix.name }}
+        run: |
+          mkdir -p leg
+          python3 .bureau-pipeline/scripts/parts_sweep.py record --repo "$SLUG" --state unread --reason "the read token could not be minted for $OWNER/$NAME" --json-out leg/count.json
+
+      # Exits 1: inside this organization a refused mint is a defect, so the
+      # leg and the run are red, and the record is still uploaded.
+      - name: Record a repository inside this organization the token cannot reach
+        if: steps.read_app.outcome != 'success' && matrix.owner == github.repository_owner
+        env:
+          SLUG: ${{ matrix.repo }}
+          OWNER: ${{ matrix.owner }}
+          NAME: ${{ matrix.name }}
+        run: |
+          mkdir -p leg
+          python3 .bureau-pipeline/scripts/parts_sweep.py record --repo "$SLUG" --state failed --reason "the read token could not be minted for $OWNER/$NAME, inside this organization" --json-out leg/count.json
+
+      - name: Record an archived repository
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'true'
+        env:
+          SLUG: ${{ matrix.repo }}
+          OWNER: ${{ matrix.owner }}
+          NAME: ${{ matrix.name }}
+        run: |
+          mkdir -p leg
+          python3 .bureau-pipeline/scripts/parts_sweep.py record --repo "$SLUG" --state archived --reason "archived on GitHub, so it is read-only and not swept" --json-out leg/count.json
+
+      # The count record, and for a counted repo the `parts_check.py count
+      # --json` object the filer reads. Exit 1 is the count's UNKNOWN, and
+      # nothing after it runs. `counted` is whether the repo has a design
+      # system to file and scan for.
+      - name: Count the copies of shared parts, now and a week ago
+        id: count
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'false'
+        env:
+          SLUG: ${{ matrix.repo }}
+          WEEK_AGO: ${{ needs.roster.outputs.week_ago }}
+        run: |
+          mkdir -p leg
+          python3 .bureau-pipeline/scripts/parts_sweep.py count --repo "$SLUG" --repo-root . --week-ago "$WEEK_AGO" --json-out leg/count.json --count-out leg/parts-count.json
+          if [ -f leg/parts-count.json ]; then
+            echo "counted=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "counted=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # A listed repo only: an unlisted one is counted and never carded here.
+      - name: File the cleanup cards
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'false' && steps.count.outputs.counted == 'true' && matrix.listed == true
+        env:
+          SLUG: ${{ matrix.repo }}
+          AGENT: ${{ matrix.agent }}
+          INITIATIVE: ${{ matrix.initiative }}
+          OWNED_BY: ${{ matrix.owned_by }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          args=(--repo "$SLUG" --count-json leg/parts-count.json --agent "$AGENT" --initiative "$INITIATIVE")
+          if [ -n "$OWNED_BY" ]; then
+            args+=(--owned-by "$OWNED_BY")
+          fi
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .bureau-pipeline/scripts/parts_cleanup.py file "${args[@]}"
+
+      # The scan's one write: a record line on a part's own pull request.
+      # Never `continue-on-error`: a refusal turns the leg red (contract 4).
+      # Never made under `dry_run`.
+      - name: Mint the record token for the repository
+        id: record_app
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'false' && steps.count.outputs.counted == 'true' && !inputs.dry_run
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.name }}
+          permission-pull-requests: write
+
+      # For its login only: the critic's verdicts are the qa-bot's, derived
+      # as merge-gate.yml derives QA_LOGIN.
+      - name: Mint the qa-bot token for its login
+        id: qa
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'false' && steps.count.outputs.counted == 'true'
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+          permission-metadata: read
+
+      # Every counted repo, listed or not: a rejection's replacement card is
+      # filed under the row's labels. Under `dry_run` it reads on the read
+      # token and writes nothing.
+      - name: Record each provisional part's outcome
+        if: steps.read_app.outcome == 'success' && steps.archived.outputs.archived == 'false' && steps.count.outputs.counted == 'true'
+        env:
+          GH_TOKEN: ${{ inputs.dry_run && steps.read_app.outputs.token || steps.record_app.outputs.token }}
+          WRITER_LOGIN: ${{ inputs.dry_run && steps.read_app.outputs.app-slug || steps.record_app.outputs.app-slug }}[bot]
+          QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
+          SLUG: ${{ matrix.repo }}
+          FULL_NAME: ${{ matrix.owner }}/${{ matrix.name }}
+          CARD: ${{ vars.PARTS_WEEKLY_CARD }}
+          AGENT: ${{ matrix.agent }}
+          INITIATIVE: ${{ matrix.initiative }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          args=(--repo "$SLUG" --full-name "$FULL_NAME" --repo-root . --qa-login "$QA_LOGIN" --writer-login "$WRITER_LOGIN" --card "$CARD" --agent "$AGENT" --initiative "$INITIATIVE" --json-out leg/provisional.json)
+          if [ "$DRY_RUN" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 .bureau-pipeline/scripts/parts_provisional.py scan "${args[@]}"
+
+      # Every leg, green or red, so `weekly` names every repo. Exactly the two
+      # records, neither carrying the critic's reasoning.
+      - name: Keep the leg's records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: parts-sweep-${{ matrix.repo }}
+          path: |
+            leg/count.json
+            leg/provisional.json
+          if-no-files-found: warn
+          overwrite: true
+          retention-days: 30
+
+  weekly:
+    name: Post the week's parts list
+    needs: [roster, sweep]
+    if: ${{ always() && needs.roster.result == 'success' }}
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 15
+    # Whose Linear bucket the post spends: the fleet's.
+    env:
+      LINEAR_IDENTITY: fleet
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download every leg's records
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: parts-sweep-*
+          path: downloaded
+
+      # `in/<slug>/`, the folder `parts_weekly.py` reads each repo's records
+      # from. A leg that left no artifact leaves no folder, and the post shows
+      # that repo as `failed`.
+      - name: Lay the records out by repo
+        run: |
+          mkdir -p in
+          for dir in downloaded/parts-sweep-*; do
+            [ -d "$dir" ] || continue
+            mv "$dir" "in/${dir#downloaded/parts-sweep-}"
+          done
+
+      # Every repo the installation covers, to read each new part's pull
+      # request for the reasoning that goes into the Linear comment only.
+      - name: Mint a read-only token for the organization
+        id: read_app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          permission-pull-requests: read
+
+      - name: Mint the qa-bot token for its login
+        id: qa
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_QA_APP_ID }}
+          private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
+          permission-metadata: read
+
+      # `--repos` is the roster's slugs, so a roster with no rows reaches
+      # `post` as `[]`, which it refuses. A run narrowed to one repo, or under
+      # `dry_run`, posts nothing.
+      - name: Post the week's parts list
+        env:
+          GH_TOKEN: ${{ steps.read_app.outputs.token }}
+          QA_LOGIN: ${{ steps.qa.outputs.app-slug }}[bot]
+          ROSTER: ${{ needs.roster.outputs.repos }}
+          CARD: ${{ vars.PARTS_WEEKLY_CARD }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REQUESTED: ${{ inputs.repo }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          slugs="$(python3 -c 'import json, os; print(json.dumps([row["repo"] for row in json.loads(os.environ["ROSTER"] or "[]")]))')"
+          args=(--in in --repos "$slugs" --card "$CARD" --qa-login "$QA_LOGIN")
+          if [ "$DRY_RUN" = "true" ] || [ -n "$REQUESTED" ]; then
+            args+=(--dry-run)
+          fi
+          python3 scripts/parts_weekly.py post "${args[@]}"

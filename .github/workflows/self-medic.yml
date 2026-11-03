@@ -103,11 +103,17 @@
 # Parts Roster (DRE-8953) prints one line per roster repo, watched on the same
 # terms. Retrying it is safe because it writes nothing: a retried leg reads
 # the repo's files again and prints its line again.
+#
+# Parts Sweep (DRE-8945) is the weekly parts sweep and post, watched on the
+# same terms. Retrying it is safe because the counts are recomputed from the
+# files, the filer searches for every copy's identity line before filing, the
+# scan reads its record lines back before writing one, and the post's
+# once-a-week check stops a second list for the same week.
 name: Pipeline Medic
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Triage Repair, Alarm Repair, Operator Agent, Groom Replay Gate, Groom Week, Channel Watch, Parts Count, Parts Roster]
+    workflows: [Pipeline Tests, Agent Task, Agent Plan, QA Review, Merge Gate, Linear Sync, Reconcile, Agent Fix, Red-Main Repair, Integration Harness, Release Gate, Smoke · setup-node-cached, Smoke · setup-python-cached, Promote Channel, Nightly Watch, Groomer, Deliver Rescue, Model adoption, Hygiene, Proof Task, Triage Repair, Alarm Repair, Operator Agent, Groom Replay Gate, Groom Week, Channel Watch, Parts Count, Parts Roster, Parts Sweep]
     types: [completed]
 
 permissions:
