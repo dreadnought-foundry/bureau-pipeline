@@ -413,7 +413,7 @@ def test_a_comment_run_from_bash_names_the_command_as_its_site():
     lines = proc.stderr.splitlines()
     (read,) = _reads(lines)
     assert (read["site"], read["caller"], read["count"]) == (
-        "linear_ops.comment", "linear_ops.get_issue", "1")
+        "linear_ops.comment", "linear_ops._comment_target", "1")
     assert read["reader"] == "local / - / linear_ops.py"
     assert any(ln.startswith("linear-calls: 2 request(s)") for ln in lines)
 
