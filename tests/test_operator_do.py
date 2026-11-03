@@ -237,6 +237,38 @@ def test_a_command_that_cannot_start_is_a_failed_command_not_a_crash(tmp_path, m
     assert "No such file" in transcript["commands"][0]["output"]
 
 
+def test_a_command_that_runs_out_of_time_is_a_failed_command_and_stops_the_run(
+        tmp_path, monkeypatch, capsys):
+    calls = []
+
+    def slow(argv, **kwargs):
+        calls.append(argv)
+        raise subprocess.TimeoutExpired(argv, kwargs.get("timeout"))
+    monkeypatch.setattr(subprocess, "run", slow)
+    code, transcript = _run(tmp_path, VARIABLE_PLAN)
+    assert code == 0
+    assert len(calls) == 1  # the second and third ops never ran
+    assert transcript["failed"] is True
+    assert [c["exit"] for c in transcript["commands"]] == [124]
+    assert "600 seconds" in transcript["commands"][0]["output"]
+    assert _tag_lines(capsys.readouterr().out)[-1].endswith(" — exit 124")
+
+
+def test_each_command_runs_from_this_repositorys_root_with_a_600_second_limit(
+        tmp_path, monkeypatch):
+    """The linear-admin op renders `python3 scripts/operator_do.py …`, a path
+    relative to this repository's root."""
+    recorder = Recorder()
+    monkeypatch.setattr(subprocess, "run", recorder)
+    code, _transcript = _run(tmp_path, LINEAR_PLAN)
+    assert code == 0
+    (call,) = recorder.calls
+    assert call["argv"][:2] == ["python3", "scripts/operator_do.py"]
+    assert call["cwd"] == operator_do.ROOT
+    assert (Path(call["cwd"]) / call["argv"][1]).is_file()
+    assert call["timeout"] == 600
+
+
 def test_run_exits_2_only_when_it_could_not_write_a_transcript(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "run", Recorder())
     plan_path = _write(tmp_path / f"{CARD}.plan.json", VARIABLE_PLAN)
@@ -449,6 +481,21 @@ def test_check_refuses_a_plan_written_for_another_card(tmp_path, capsys):
     assert any("do refused — plan ·" in line for line in _tag_lines(capsys.readouterr().out))
 
 
+def test_check_refuses_a_plan_whose_card_field_names_another_card(tmp_path, capsys):
+    plan = dict(ALARM_PLAN, card="DRE-8623")
+    code, checked = _check_cli(tmp_path, "DRE-8637", plan, _card_md(tmp_path, "DRE-8637"))
+    assert code == 1 and checked["ok"] is False
+    assert (f"{TAG} DRE-8637 do refused — plan · it is written for 'DRE-8623', not DRE-8637"
+            in _tag_lines(capsys.readouterr().out))
+
+
+def test_check_refuses_a_card_file_that_is_another_cards(tmp_path, capsys):
+    code, checked = _check_cli(tmp_path, "DRE-8637", ALARM_PLAN, _card_md(tmp_path, "DRE-7579"))
+    assert code == 1 and checked["ok"] is False
+    assert (f"{TAG} DRE-8637 do refused — plan · the card file is DRE-7579's, not DRE-8637's"
+            in _tag_lines(capsys.readouterr().out))
+
+
 def test_check_refuses_a_plan_that_is_not_json(tmp_path):
     plan_path = tmp_path / "DRE-8637.plan.json"
     plan_path.write_text("not json", encoding="utf-8")
@@ -561,9 +608,14 @@ PROJECT = {"id": "p-1", "name": "onboard-sandbox: Onboard Sandbox",
 class StubLinear:
     """`linear_ops.gql` answering the name lookup, the update and the read-back."""
 
-    def __init__(self, projects, refuse=None):
+    def __init__(self, projects, refuse=None, statuses=STATUSES, success=True, read_back=None,
+                 read_back_error=None):
         self.projects = projects
         self.refuse = refuse
+        self.statuses = statuses
+        self.success = success
+        self.read_back = read_back
+        self.read_back_error = read_back_error
         self.calls = []
         self.status = {p["id"]: p["status"]["name"] for p in projects}
 
@@ -574,14 +626,20 @@ class StubLinear:
             assert "projectUpdate" in query
             if self.refuse:
                 raise linear_ops.LinearError(self.refuse)
-            name = next(s["name"] for s in STATUSES["nodes"] if s["id"] == variables["statusId"])
+            if not self.success:
+                return {"projectUpdate": {"success": False}}
+            name = next(s["name"] for s in self.statuses["nodes"]
+                        if s["id"] == variables["statusId"])
             self.status[variables["id"]] = name
             return {"projectUpdate": {"success": True}}
         if "projects(" in query:
-            return {"projects": {"nodes": self.projects}, "projectStatuses": STATUSES}
+            return {"projects": {"nodes": self.projects}, "projectStatuses": self.statuses}
         if "project(" in query:
+            if self.read_back_error:
+                raise linear_ops.LinearError(self.read_back_error)
             pid = variables["id"]
-            return {"project": {"id": pid, "name": "x", "status": {"name": self.status[pid]}}}
+            name = self.read_back or self.status[pid]
+            return {"project": {"id": pid, "name": "x", "status": {"name": name}}}
         raise AssertionError(f"an unexpected Linear request: {query}")
 
     def mutations(self):
@@ -631,6 +689,48 @@ def test_project_status_exits_1_with_linears_message_when_the_update_is_refused(
     stub = StubLinear([dict(PROJECT)], refuse=message)
     assert _project_status(monkeypatch, stub) == 1
     assert message in capsys.readouterr().out
+
+
+def test_project_status_exits_1_when_the_read_back_is_not_the_status_asked(monkeypatch,
+                                                                          capsys):
+    stub = StubLinear([dict(PROJECT)], read_back="In Progress")
+    assert _project_status(monkeypatch, stub) == 1
+    assert len(stub.mutations()) == 1
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        f"project {PROJECT['name']!r} status read back: In Progress")
+
+
+def test_project_status_exits_1_when_linear_answers_the_update_without_success(monkeypatch,
+                                                                              capsys):
+    stub = StubLinear([dict(PROJECT)], success=False)
+    assert _project_status(monkeypatch, stub) == 1
+    assert len(stub.mutations()) == 1
+    assert len(stub.reads()) == 1  # the name lookup, and no read-back
+    assert "project-status refused by Linear" in capsys.readouterr().out
+
+
+def test_project_status_takes_a_status_of_the_completed_type_by_another_name(monkeypatch):
+    statuses = {"nodes": [{"id": "st-started", "name": "In Progress", "type": "started"},
+                          {"id": "st-finished", "name": "Finished", "type": "completed"}]}
+    stub = StubLinear([dict(PROJECT)], statuses=statuses)
+    assert _project_status(monkeypatch, stub) == 0
+    (_query, variables), = stub.mutations()
+    assert variables == {"id": "p-1", "statusId": "st-finished"}
+
+
+def test_project_status_refuses_a_workspace_with_no_such_status(monkeypatch, capsys):
+    statuses = {"nodes": [{"id": "st-started", "name": "In Progress", "type": "started"}]}
+    stub = StubLinear([dict(PROJECT)], statuses=statuses)
+    assert _project_status(monkeypatch, stub) == 1
+    assert stub.mutations() == []
+    assert "the workspace has no 'Completed' project status" in capsys.readouterr().out
+
+
+def test_project_status_exits_1_when_the_read_back_fails(monkeypatch, capsys):
+    stub = StubLinear([dict(PROJECT)], read_back_error="Linear API returned 500")
+    assert _project_status(monkeypatch, stub) == 1
+    assert len(stub.mutations()) == 1
+    assert "its read-back failed" in capsys.readouterr().out
 
 
 def test_project_status_refuses_a_status_off_the_ops_choices(monkeypatch):
