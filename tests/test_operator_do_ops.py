@@ -508,6 +508,110 @@ def test_check_refuses_the_agents_own_switches_even_when_quoted(switch):
     assert refusals == [f"op 1 variable-set: `{switch}` is the agent's own switch"]
 
 
+SWITCHES = ["OPERATOR_AGENT_LIVE", "OPERATOR_AGENT_DO_LIVE", "OPERATOR_AGENT_LIVE_OFF_UNTIL",
+            "OPERATOR_AGENT_DO_LIVE_OFF_UNTIL"]
+
+
+@pytest.mark.parametrize("switch", SWITCHES)
+@pytest.mark.parametrize("spell", [str.lower, str.title], ids=["lower", "mixed"])
+def test_check_refuses_the_agents_own_switches_in_any_letter_case(switch, spell):
+    """GitHub reads a variable name without letter case: `operator_agent_do_live`
+    is `OPERATOR_AGENT_DO_LIVE`."""
+    name = spell(switch)
+    text = _text("DRE-8637") + f"\nSet `{name}` to `true`."
+    for op in ({"op": "variable-set", "name": name, "value": "true"},
+               {"op": "variable-delete", "name": name}):
+        op = {**op, "repo": "dreadnought-foundry/bureau-pipeline"}
+        ok, refusals = _check("DRE-8637", "variable", op, text=text)
+        assert not ok
+        assert refusals == [f"op 1 {op['op']}: `{switch}` is the agent's own switch"], name
+
+
+WORKFLOW = ".github/workflows/groom-replay-gate.yml"
+
+
+@pytest.mark.parametrize("path", [f"./{WORKFLOW}", ".github//workflows/groom-replay-gate.yml",
+                                  ".github/./workflows/groom-replay-gate.yml",
+                                  ".github/workflows//groom-replay-gate.yml",
+                                  ".GitHub/Workflows/groom-replay-gate.yml",
+                                  "briefs/groom-verify.md?ref=main", "briefs/groom-verify.md#x",
+                                  "briefs/%2e%2e/groom-verify.md", "briefs/groom\x01verify.md",
+                                  "./briefs/groom-verify.md", "briefs//groom-verify.md",
+                                  "briefs/./groom-verify.md"])
+def test_check_refuses_a_path_spelled_around_its_guard(path):
+    """A workflow file is only ever one the card names, however its path is
+    written, and nothing in a path reaches past `repos/{repo}/contents/`."""
+    ok, refusals = _check("DRE-7978", "bot-pr",
+                          {"op": "file-put", "repo": "dreadnought-foundry/bureau-pipeline",
+                           "branch": "operator/replay-gate-negative-control", "path": path,
+                           "content": "x", "message": "m"})
+    assert not ok
+    assert _refused(refusals, 1, "file-put", f"`{path}` is not"), refusals
+
+
+@pytest.mark.parametrize("branch", ["operator/x?y", "operator/x#y", "operator/x%2fy",
+                                    "operator/x\x01y", "operator/../x", "operator/./x",
+                                    "operator//x"])
+def test_check_refuses_a_quoted_branch_that_reaches_past_its_url(branch):
+    text = _text("DRE-7978") + f"\nDelete the branch `{branch}`."
+    ok, refusals = _check("DRE-7978", "bot-pr",
+                          {"op": "branch-delete", "repo": "dreadnought-foundry/bureau-pipeline",
+                           "branch": branch}, text=text)
+    assert not ok
+    assert _refused(refusals, 1, "branch-delete", f"`{branch}` is not a branch name"), refusals
+
+
+BAD_VALUES = [["x"], {"x": 1}, 7, None]
+BAD_IDS = ["list", "dict", "int", "none"]
+
+
+@pytest.mark.parametrize("bad", BAD_VALUES, ids=BAD_IDS)
+def test_check_never_raises_on_a_wrong_typed_value_in_any_field_of_any_op(bad):
+    doc = operator_do_ops.load()
+    for kind, row in doc["kinds"].items():
+        for name, spec in row["ops"].items():
+            for field in ["op", *spec["fields"]]:
+                op = {"op": name, **{f: "x" for f in spec["fields"]}, field: bad}
+                ok, refusals = operator_do_ops.check(_plan("DRE-8623", kind, op),
+                                                     _text("DRE-8623"), REPO_MAP, None)
+                assert not ok and refusals, (name, field)
+                for refusal in refusals:
+                    assert re.match(r"^(plan|op 1 [a-z-]+): \S", refusal), refusal
+
+
+@pytest.mark.parametrize("bad", BAD_VALUES, ids=BAD_IDS)
+def test_check_never_raises_on_a_wrong_typed_plan_key(bad):
+    for key in ("card", "kind", "step", "reason", "ops", "continues"):
+        plan = {**_plan("DRE-8623", "variable", {"op": "variable-list", "repo": DEMO}), key: bad}
+        ok, refusals = operator_do_ops.check(plan, _text("DRE-8623"), REPO_MAP, None)
+        if (key, bad) != ("continues", None):
+            assert not ok and refusals, key
+
+
+@pytest.mark.parametrize("bad", BAD_VALUES, ids=BAD_IDS)
+def test_check_refuses_a_script_path_that_is_not_text(bad):
+    ok, refusals = _check("DRE-8623", "variable",
+                          {"op": "script", "repo": "dreadnought-foundry/agent-bureau",
+                           "path": bad, "args": ["check"]})
+    assert not ok
+    assert _refused(refusals, 1, "script", "is not a script path")
+
+
+@pytest.mark.parametrize("bad", BAD_VALUES, ids=BAD_IDS)
+def test_plan_repo_raises_only_value_error_on_a_repo_that_is_not_text(bad):
+    with pytest.raises(ValueError):
+        operator_do_ops.plan_repo(_plan("DRE-8623", "variable",
+                                        {"op": "variable-list", "repo": bad}))
+    with pytest.raises(ValueError):
+        operator_do_ops.plan_repo({**_plan("DRE-8623", "variable"), "ops": 7})
+
+
+def test_render_refuses_a_spread_that_is_not_a_list():
+    with pytest.raises(ValueError):
+        operator_do_ops.render({"op": "script", "repo": "dreadnought-foundry/agent-bureau",
+                                "path": "scripts/proof_release.py", "args": "check"})
+
+
 def test_check_refuses_more_than_max_ops():
     ops = [{"op": "variable-list", "repo": DEMO}] * 21
     ok, refusals = _check("DRE-8623", "variable", *ops)
