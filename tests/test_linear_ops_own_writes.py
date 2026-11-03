@@ -24,7 +24,7 @@ import bureau_read  # noqa: E402
 import linear_ops  # noqa: E402
 from bureau_read_fakes import FakeDoor, FakeIssuer  # noqa: E402
 from test_linear_ops_card_via_door import (  # noqa: E402,F401
-    WORLD, door, door_env_for, door_up, fallback_lines, linear, records, run)
+    WORLD, door, door_env_for, fallback_lines, linear, records, run)
 
 
 def record(runner_temp) -> list[dict]:
