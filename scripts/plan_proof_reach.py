@@ -149,8 +149,9 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: words. The epic's PROOF holds both equal to agent-bureau's
 #: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the twenty after the six, the
 #: Initiatives page's writes; DRE-8727 the eight after those, the Loops 1
-#: epic's (DRE-8698) loop presses; DRE-8937 the last eight, the Loops 2 epic's
-#: (DRE-8699) KPI presses.
+#: epic's (DRE-8698) loop presses; DRE-8937 the eight after those, the Loops 2
+#: epic's (DRE-8699) KPI presses; DRE-9034 the last three, the Loops 3 epic's
+#: (DRE-8700) follow-up and asks.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
 _S = r"['’]s"
 SANDBOX_PRESSES = (
@@ -200,6 +201,9 @@ SANDBOX_PRESSES = (
     ("unlinkKpiLoop", rf"\bunlink(?:s|ed|ing)?\s+{_A}kpi\s+(?:and|from)\s+{_A}loop\b"),
     ("proposeKpi", rf"\bpropos(?:e|es|ed|ing)\s+{_A}kpi\b"),
     ("confirmKpi", rf"\bconfirm(?:s|ed|ing)?\s+{_A}kpi\b"),
+    ("followUpLoop", rf"\b(?:send|sends|sent|sending)\s+{_A}follow[-\s]?up\s+on\s+{_A}loop\b"),
+    ("askLoopStatus", rf"\bask(?:s|ed|ing)?\s+{_A}loop\s+for\s+{_A}status\b"),
+    ("askLoopAgain", rf"\bask(?:s|ed|ing)?\s+{_A}loop\s+again\b"),
 )
 
 #: The rows that send a press to a person.
