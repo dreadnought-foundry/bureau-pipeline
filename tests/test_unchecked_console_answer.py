@@ -433,6 +433,9 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: `UNKNOWN` and writes nothing (DRE-8941). `operator_green_light.py` reads
 #: the CEO's answer after a Green Light park, and an unchecked one may be that
 #: answer, so the operator agent never takes the row (DRE-9048).
+#: `parts_weekly.py` counts only the pipeline's own comment as the week's list
+#: already posted, and an unchecked one, its text withheld, never stands for
+#: it (DRE-9055).
 OTHER_READERS = {
     "answer_into_card.py": "tests/test_answer_into_card.py::"
     "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
@@ -452,6 +455,8 @@ OTHER_READERS = {
     "test_an_unchecked_answer_after_the_park_takes_nothing",
     "parts_provisional.py": "tests/test_parts_provisional.py::"
     "test_an_unchecked_message_is_unknown_even_for_a_part_twenty_days_old",
+    "parts_weekly.py": "tests/test_parts_weekly.py::"
+    "test_an_unchecked_comment_never_counts_as_posted",
     "planning_escalation.py": "tests/test_planning_escalation_prior_answer.py::"
     "test_an_unchecked_answer_is_the_third_form_naming_the_key",
     "proof_dispatch.py": "tests/test_proof_dispatch.py::"

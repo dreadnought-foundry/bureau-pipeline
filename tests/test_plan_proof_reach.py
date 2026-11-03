@@ -696,6 +696,13 @@ THOUGHT_PRESSES = (
     ("saveThought", "save a thought for later", "the run saves a thought for later on Later",
      "the run saved a thought for later", "saving a thought for later"),
 )
+#: The one press DRE-9077 added for the KPI page epic (DRE-8702), after the
+#: saved thought: its operation, its plain words as the standard's bullet gives
+#: them, and the press as a criterion writes it in the present, past and -ing.
+KPI_WHY_PRESSES = (
+    ("askKpiWhy", "ask why a KPI moved", "the run asks why a KPI moved",
+     "the run asked why the KPI moved", "asking why a KPI moved"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -784,7 +791,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(46, len(listed), listed)
+        self.assertEqual(47, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -942,10 +949,10 @@ class TheListIsCopied(unittest.TestCase):
                 self.assertEqual(["nudgeLoop"], ppr.sandbox_presses(text))
 
     def test_save_thought_follows_the_asks(self):
-        """DRE-9044: `saveThought`, after `askLoopAgain`, the last press."""
+        """DRE-9044: `saveThought`, after `askLoopAgain`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual(["saveThought"], ours[45:])
-        self.assertEqual([op for op, *_ in THOUGHT_PRESSES], ours[45:])
+        self.assertEqual(["saveThought"], ours[45:46])
+        self.assertEqual([op for op, *_ in THOUGHT_PRESSES], ours[45:46])
 
     def test_save_thought_names_only_itself(self):
         """DRE-9044: the press's plain words, in a criterion and in its forms,
@@ -976,6 +983,47 @@ class TheListIsCopied(unittest.TestCase):
         for text in ("the run saves an initiative draft", "saveInitiativeDraft"):
             with self.subTest(text=text):
                 self.assertEqual(["saveInitiativeDraft"], ppr.sandbox_presses(text))
+
+    def test_ask_kpi_why_follows_save_thought(self):
+        """DRE-9077: `askKpiWhy`, after `saveThought`, the last press."""
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual(["askKpiWhy"], ours[46:])
+        self.assertEqual([op for op, *_ in KPI_WHY_PRESSES], ours[46:])
+
+    def test_ask_kpi_why_names_only_itself(self):
+        """DRE-9077: the press's plain words, in a criterion and in its forms,
+        and its operation name only `askKpiWhy`."""
+        for op, words, present, past, ing in KPI_WHY_PRESSES:
+            for text in (words, present, past, ing, op,
+                         f"Sandbox press: on agent-bureau-demo, {present}"):
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_no_existing_pattern_matches_ask_kpi_why(self):
+        """DRE-9077: none of the forty-six earlier patterns reads the press's
+        words, and its own pattern reads them."""
+        for op, *texts in KPI_WHY_PRESSES:
+            for text in texts:
+                for other, pattern in ppr.SANDBOX_PRESSES:
+                    with self.subTest(op=op, text=text, pattern=other):
+                        self.assertEqual(other == op,
+                                         re.search(pattern, text, re.IGNORECASE) is not None)
+
+    def test_a_link_is_not_an_ask_why(self):
+        """DRE-9077: `askKpiWhy` does not take a `linkKpiLoop` or a `moveKpi`
+        criterion, and each still names only its own press."""
+        why = dict(ppr.SANDBOX_PRESSES)["askKpiWhy"]
+        for op, texts in (
+                ("linkKpiLoop", ("the run links a KPI and a loop",
+                                 "the run linked a KPI to a loop", "linkKpiLoop",
+                                 "Sandbox press: on agent-bureau-demo, the run links a KPI "
+                                 "and a loop")),
+                ("moveKpi", ("the run moves a KPI to Later", "the run moved a KPI to Focus",
+                             "moveKpi"))):
+            for text in texts:
+                with self.subTest(op=op, text=text):
+                    self.assertIsNone(re.search(why, text, re.IGNORECASE))
+                    self.assertEqual([op], ppr.sandbox_presses(text))
 
 
 class TheSandboxPressRule(_Cli):
