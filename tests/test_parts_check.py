@@ -655,7 +655,7 @@ class DocTest(unittest.TestCase):
         self.assertNotIn("any new or changed UI file", standard)
         for text in (" ".join(DOC.read_text(encoding="utf-8").split()),
                      " ".join((parts_check.__doc__ or "").split())):
-            self.assertIn("a UI file the diff adds, or in which it adds a line declaring "
+            self.assertIn("UI file the diff adds, or in which it adds a line declaring "
                           "a component", text)
             self.assertIn("the diff adds the part's file", text)
             self.assertNotIn("adds or changes, outside every declared folder", text)

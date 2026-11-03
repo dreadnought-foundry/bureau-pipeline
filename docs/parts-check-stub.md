@@ -25,12 +25,22 @@ jobs:
 
 The canary repos, agent-bureau and bureau-pipeline, ride `@main` with `pipeline_ref: main` instead, per [`docs/self-hosting.md`](self-hosting.md).
 
-The stub passes no `secrets:` and grants `contents: read` alone. The check
+The stub grants `contents: read` alone, and passes `secrets:` only as the
+caller's own channel guard requires (below). The check
 needs no secret, and bureau-pipeline is public, so a Dependabot pull request,
 with its empty secrets store and read-only token, runs it the same way. There
 is no `paths:` filter, on purpose: a filtered-out pull request gets no check
 run at all (`standards/engineering.md`, CI rule 1). The check passes a diff
 that changes no UI file, and a repo with no design system, by itself.
+
+The stub's `secrets:` follows the caller's own channel guard, read from its
+`.github/bureau/pipeline-guard.json`. Where `secrets_style` is `inherit`, add
+`secrets: inherit` to the `call` job. It passes nothing the check reads, and a
+Dependabot pull request runs it the same way. Where it is `explicit` (a repo
+outside `dreadnought-foundry`), the guard requires the canonical secrets
+mapped one per line. GitHub refuses a call that passes a secret the called
+workflow does not declare, and this one declares none. So plan that repo's
+stub against its guard rather than copying this page.
 
 ## What it does
 
@@ -44,8 +54,8 @@ own lines unchanged: its `parts-check:` status line and, on a failure, every
 `parts-check: COPY …` and `parts-check: NO-SHARED-PART …` line.
 
 The check's exit code is the job's. A copy of a shared part the diff adds, or
-a new UI file that imports no shared part, exits 1 and turns the check run
-red; so does a crash or a diff the check cannot read, which fails closed. The
+a UI file the diff adds or declares a component in that imports no shared
+part, exits 1 and turns the check run red; so does a crash or a diff the check cannot read, which fails closed. The
 merge gate holds any pull request with a check run that is not green
 (`merge_gate.evaluate_checks`, `GREEN_CONCLUSIONS`), so a red Parts Check holds
 the merge with no branch-protection change. On an event that is not a pull

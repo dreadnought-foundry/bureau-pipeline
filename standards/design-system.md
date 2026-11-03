@@ -354,8 +354,8 @@ covers only the diff, so nothing fails on old code on day one.
 
 ### Renamed copies are caught two ways (rule 9)
 
-The mechanical check in CI flags any new or changed UI file that imports none
-of the shared parts. The critic looks for look-alike parts: the same structure,
+The mechanical check in CI flags a UI file the pull request adds, or in which
+it declares a component, that imports none of the shared parts. The critic looks for look-alike parts: the same structure,
 props and behavior under a different name, such as a `StatusBanner` that is
 really a `Notice`. It sends one back with the look-alike finding above.
 
