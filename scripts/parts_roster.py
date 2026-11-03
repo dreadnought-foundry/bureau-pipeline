@@ -9,11 +9,12 @@ stored list:
 * `yes` — `design_parts.exists` says so (DRE-8717). The line names the source
   it read and the catalog's part count.
 * `undeclared` — `design_parts.exists` says no, yet a folder named `atoms`,
-  `molecules`, `organisms` or `templates` directly holds a part file by
-  `design_parts`' own rule. A path with a `node_modules`, `.git`,
-  `.bureau-pipeline` or test-fixture segment is never read: a fixture tree is
-  a test's design system, never the repo's. At most eight folders are named,
-  repo-relative and sorted, then `+<k> more`.
+  `molecules`, `organisms` or `templates` directly holds a part by
+  `design_parts`' own rule: a part file, or a subfolder with an index UI
+  file. A path with a `node_modules`, `.git`, `.bureau-pipeline` or
+  test-fixture segment is never read: a fixture tree is a test's design
+  system, never the repo's. At most eight folders are named, repo-relative
+  and sorted, then `+<k> more`.
 * `no` — neither; the reason is the one `design_parts.exists` gives.
 * `UNKNOWN` — the declaration or `config/parts-count.json` cannot be read, or
   the root is not a directory.
@@ -82,7 +83,7 @@ class Reading(NamedTuple):
 
     @property
     def line(self) -> str:
-        head = f"{TAG} {self.slug} — {self.state} — {self.detail}"
+        head = f"{TAG} {_CONTROL.sub(' ', self.slug)} — {self.state} — {self.detail}"
         if self.state == "UNKNOWN":
             return head
         return (f"{head}; count {'on' if self.count else 'off'}; "
@@ -94,8 +95,8 @@ class Reading(NamedTuple):
 # ---------------------------------------------------------------------------
 
 def layer_folders(repo_root) -> list:
-    """Every folder named for a layer that directly holds a part file,
-    repo-relative and sorted."""
+    """Every folder named for a layer that directly holds a part — a part
+    file, or a subfolder with an index UI file — repo-relative and sorted."""
     root = Path(repo_root)
     found = []
     for folder, dirs, files in os.walk(root):
@@ -103,7 +104,8 @@ def layer_folders(repo_root) -> list:
         path = Path(folder)
         if path == root or path.name not in design_parts.LAYERS:
             continue
-        if any(design_parts._is_part_file(path / name) for name in files):
+        if (any(design_parts._is_part_file(path / name) for name in files)
+                or any(design_parts._index(path / name) for name in dirs)):
             found.append(path.relative_to(root).as_posix())
     return sorted(found)
 
