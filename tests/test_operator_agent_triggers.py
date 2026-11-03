@@ -18,6 +18,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_operator_agent_triggers.
 """
 from __future__ import annotations
 
+import ast
 import json
 import re
 import sys
@@ -37,6 +38,7 @@ import operator_decide  # noqa: E402
 import operator_rules  # noqa: E402
 
 FIXTURE = ROOT / "tests" / "fixtures" / "operator-agent-triggers-2026-11-03.json"
+RULES_TEST = ROOT / "tests" / "test_operator_rules.py"
 RECORD_KEYS = {"source", "copied", "cut_after", "withheld", "card"}
 #: The fields `board_snapshot.CARD_QUERY` selects on a card.
 CARD_KEYS = {"id", "identifier", "title", "description", "createdAt", "updatedAt", "state",
@@ -516,6 +518,19 @@ def test_the_fixture_names_no_address_link_or_account_number():
     assert not re.search(r"\d{12}", text)
 
 
+def _refused_names() -> str:
+    """The pattern `tests/test_operator_rules.py`'s
+    `test_the_fixture_names_the_ceo_and_no_one_else` refuses, read from that
+    test rather than spelled again here."""
+    tree = ast.parse(RULES_TEST.read_text(encoding="utf-8"))
+    test = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                and node.name == "test_the_fixture_names_the_ceo_and_no_one_else")
+    return next(node.args[0].value for node in ast.walk(test)
+                if isinstance(node, ast.Call) and getattr(node.func, "attr", "") == "search")
+
+
 def test_the_fixture_names_the_ceo_and_no_one_else():
     text = FIXTURE.read_text(encoding="utf-8")
-    assert not re.search(r"\bSid\b|Conklin", text)
+    refused = _refused_names()
+    assert refused and not re.search(refused, text)
+    assert "the CEO" in text
