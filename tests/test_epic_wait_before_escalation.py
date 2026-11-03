@@ -214,6 +214,11 @@ class _Board:
     def lane_history(self, identifier, **_kw):
         return list(self.history)
 
+    def card_via_door(self, identifier, **_kw):
+        """The read door is off for this reader (DRE-8904): every read is
+        the Linear one above."""
+        return None
+
 
 # --------------------------------------------------------------------------- #
 # the step, run as Actions runs it                                             #
