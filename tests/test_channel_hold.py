@@ -924,6 +924,7 @@ class TestEveryOutcome:
             pc.OUTCOME_HELD: ch.PERSON,
             pc.OUTCOME_BLOCKED: ch.RERUN,
             pc.OUTCOME_QUEUE_STALL: ch.RERUN,
+            pc.OUTCOME_INCONCLUSIVE: ch.RERUN,
             pc.OUTCOME_UNPROVEN: ch.RERUN,
             pc.OUTCOME_FORCE_NEEDS_REASON: ch.PERSON,
             pc.OUTCOME_FORCE_NOT_OPERATOR: ch.PERSON,

@@ -63,6 +63,12 @@
       "note": "A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back."
     },
     {
+      "unit": "medic.yml#Hold the card on an inherited red main",
+      "reason_at": "medic.yml#Hold the card on an inherited red main",
+      "anchor": "--reason inherited-red-main",
+      "note": "An inherited-red-main hold stamp at the failed run's head says every failing check on the pull request failed on the merge base too, and the medic's receipt after it names the repo, the checks and the merge base, and says the sweep returns the card once main is green on them (DRE-8849)."
+    },
+    {
       "unit": "medic.yml#Ask a person about the diagnosis",
       "reason_at": "medic.yml#Ask a person about the diagnosis",
       "anchor": "medic_next_step.py housekeeping-note",

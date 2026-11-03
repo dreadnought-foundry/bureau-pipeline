@@ -268,6 +268,7 @@ harness run, and its conclusion is the suite's: a red suite reads
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
 | `harness-blocked-by-sandbox` | the harness never judged this commit — its own sandbox (reconcile/merge-gate/linear-sync) failed first | nothing proven either way; the next run re-proves this trunk |
 | `harness-blocked-by-github-queue` | GitHub left a sandbox run queued with no jobs, and it stayed stuck through the harness's two re-runs (DRE-6147) | nothing proven either way; GitHub's queue, not the code — the next run re-proves this trunk |
+| `harness-inconclusive` | rate-limited: GitHub refused the harness for a rate limit that outlasted its wait, and no scenario failed for real (DRE-9068). The stamp leads `harness blocked: GitHub rate limit` | nothing proven either way and not a red trunk — re-run the harness once the limit resets, or let the next push re-prove the trunk |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 | `by-hand-promoting` | a person promoted a commit the harness had already proved | nothing — the run records who, when and why |

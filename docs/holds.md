@@ -18,13 +18,14 @@ one to `hold.apply`.
 
 ## The vocabulary
 
-Twelve reasons, seven lift kinds and four readers, as exact strings:
+Thirteen reasons, eight lift kinds and four readers, as exact strings:
 
 - **Reasons:** `stranded-no-run`, `no-route`, `review-cap-spent`,
   `dead-run-cap`, `turn-cap-park`, `epic-rereview-twice`, `plan-critic-bound`,
-  `fix-dispute`, `unfixable-check`, `operator-step`, `wip-cap-held`, `manual`.
+  `fix-dispute`, `unfixable-check`, `operator-step`, `wip-cap-held`,
+  `inherited-red-main`, `manual`.
 - **Lift kinds:** `run-started`, `repo-on-rail`, `new-head`, `unpark-marker`,
-  `blockers-terminal`, `cap-restored`, `manual`. One more lift applies to every reason: `card-closed`, whenever the
+  `blockers-terminal`, `cap-restored`, `inherited-checks-green`, `manual`. One more lift applies to every reason: `card-closed`, whenever the
   card is Done or Canceled. It is a rule, not a row.
 - **Readers:** `sweep` (`reconcile.held`, `reconcile.live_promotion_refusal`),
   `fix-dispatch` (`reconcile.card_parked_for_human`, asked by
@@ -54,6 +55,7 @@ moves itself (below).
 | `unfixable-check` | `new-head` | The red check was read on one head (its receipt is keyed `unfixable-check-hold @<sha8>`). A new head is read again. | Triage → In Review |
 | `operator-step` | `blockers-terminal` | A planner-filed operator step is a person's to do once the work before it is finished. The card's `blockedBy` relations say when, and the sweep's promotion gate reads them. | Queued → Hand-work |
 | `wip-cap-held` | `cap-restored` | A Queued child of an approved epic whose repo's WIP cap is 0. Nothing in that repo is built or promoted, so the child waits on the cap, and the sweep lifts the hold once the cap is above 0 again. | Nothing moves |
+| `inherited-red-main` | `inherited-checks-green` | The medic held the card because every failing check on its pull request failed on the merge base too: the fault is on `main`, and the card waits on `main`, not on a person. The sweep lifts it once every one of those checks is green on `main` again, or with `because=new-head` once the pull request has a new head (DRE-8849). | Triage → In Review |
 | `manual` | `manual` | A person chose it, or a writer created the card already held. Nothing a sweep can read says it is over. | Nothing moves, save a person's card (OPERATOR or WORKBENCH) whose blockers are all finished: the sweep carries it Queued → Hand-work with the label kept (DRE-8646) |
 
 A `manual` hold — `epic-rereview-twice`, `plan-critic-bound`, `manual`, and any
@@ -213,6 +215,43 @@ The act tag `repo-held` and the reason `wip-cap-held` are two different words
 on purpose. No hold line may carry an act tag (below), and a reason spelled
 `repo-held` would put the tag into every stamp.
 
+### `inherited-red-main` is lifted by the sweep when `main` is green
+
+On 2026-11-01 four foundry cards sat in Triage for four to eight hours with
+nothing wrong with any of them. Each had an approved pull request that went red
+because foundry's own `main` was broken, and the medic's housekeeping question
+parked each one where the fix loop and the stale-merge-ref refresh do not
+reach. `main` was green again by 9:22 PM PT, and an operator moved the cards by
+hand at about 12:20 AM PT (DRE-8849).
+
+Before the medic asks a person on an `ask-person` card with an open pull
+request, `medic.yml#Hold the card on an inherited red main` reads the failed
+run's head and its merge base, as `agent-fix.yml`'s inherited-failure step
+does. When every failing check on the head failed on the merge base too
+(`scripts/inherited_red_main.py medic-read`, through
+`inherited_failures.inherited`), it holds the card at that head and moves it to
+Triage instead of asking:
+
+    🔒 hold: reason=inherited-red-main at=<full 40-hex head sha> lifts=inherited-checks-green by=medic.yml
+
+The stamp carries the full head sha, as a `new-head` reason does, and
+`hold.stamp_line` refuses anything else. The medic's receipt names the repo,
+the failed checks and the merge base; nothing reads either back off the card.
+
+On every full pass, `reconcile.return_inherited_red_main_holds` — right before
+`refresh_stale_merge_refs` — reads this repo's Triage cards wearing the hold
+whose live stamp is `inherited-red-main`, and each one's open pull request.
+When the head is still the stamped sha and `stale_merge_ref.decide` answers
+`refresh`, it lifts the hold with `because=inherited-checks-green`; when the
+head has moved, with `because=new-head`. Either way the card goes to In Review
+and gets one `inherited-red-main-return` note. Any other answer is one log line,
+and the card stays held. The refresh then updates the branch with `main` on the
+same pass. `hold.lift_due` answers None for `inherited-checks-green` outside
+Done or Canceled, as it does for `cap-restored`, so the hygiene holds lane
+never lifts it except by `card-closed`: the sweep is its only lifter. The
+Triage repair gives such a card `wait` (`config/triage-repair.json`): no
+planner runs and nothing is claimed.
+
 ### `stranded-no-run` waits on a person's re-send
 
 This is the one reason whose lift waits on something a person does. The sweep
@@ -299,8 +338,8 @@ pipeline's own Linear identity, right after the label:
     🔒 hold: reason=<code> at=<qualifier or none> lifts=<lift-kind> by=<writer-file>
 
 The qualifier follows the lift kind: the full head sha for `review-cap-spent`,
-`fix-dispute` and `unfixable-check`, `repo:<slug>` for `no-route`, and `none`
-for the other seven. `hold.stamp_line` refuses any other pairing, so a wrong
+`fix-dispute` and `unfixable-check`, and for `inherited-red-main`, the head the
+medic read; `repo:<slug>` for `no-route`; and `none` for the other eight. `hold.stamp_line` refuses any other pairing, so a wrong
 qualifier fails at the writer and never at the lift. `hold.py apply` exits 2 on
 the same input before it writes anything. A writer that lands the label itself
 posts only the stamp, through `hold.post_stamp`: `dead_run.py park --reason
@@ -586,6 +625,7 @@ without a person before it holds.
 | `scripts/linear_ops.py` · `_file_operator_hold` (`subissue`, `oneoff`) | `filed as an operator step` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card is filed held by design; the sweep lifts it when every blocker is terminal |
 | `scripts/hand_work_migration.py` · `_convert_one` (`operator-backlog`) | `one card of the operator-backlog pass` | `operator-step` | `blockers-terminal` | fix-dispatch, medic, limit-recovery | None — the card already wears the hold; the pass names the reason a person's label left unsaid |
 | `scripts/repo_held_epics.py` · `_hold` (`hold_pass`) | `Hold one Queued child for the cap` | `wip-cap-held` | `cap-restored` | sweep | None — a cap of 0 is the repo's own hold, and nothing in it is built or promoted until a person restores the cap |
+| `.github/workflows/medic.yml` · Hold the card on an inherited red main | `inherited_red_main.py" medic-read` | `inherited-red-main` | `inherited-checks-green` | sweep, fix-dispatch, medic, limit-recovery | The medic's diagnosis and its read of the head's and the merge base's check runs (DRE-8849) |
 
 `scripts/dead_run.py`'s site is `dead_run.py park`, which the build run's Report
 step (`scripts/report_agent_result.sh`) calls when either budget is spent.
@@ -610,6 +650,7 @@ records.
 | `unfixable-check` | The fix run itself, which read the red check and found nothing to fix. | `unfixable-check-hold @` |
 | `operator-step` | None — the step is a person's by design, and it waits only on its blockers. | — |
 | `wip-cap-held` | None — a cap of 0 is the repo's own hold, set in its reconcile stub, and nothing in the repo is built or promoted until a person restores it. | — |
+| `inherited-red-main` | The medic's diagnosis of the failed run, and its read of the head's and the merge base's check runs: every failing check on the head failed on the merge base too. | `medic-next-step: class=` |
 | `manual` | None — a person, or a writer creating a card already held, chose it. | — |
 
 ## The merge gate does not read the hold

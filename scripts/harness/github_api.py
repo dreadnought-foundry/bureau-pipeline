@@ -94,6 +94,14 @@ class GitHubError(RuntimeError):
 #: observed wait) and the ceiling (under the budget it warns against).
 RATE_LIMIT_WAIT_CAP_SECONDS = 35 * 60
 
+#: The wait when a refusal names no reset at all (DRE-9068) — a secondary
+#: limit answered with neither `retry-after` nor an empty primary window.
+#: GitHub's own rule for that case is "wait at least one minute", and the
+#: merge gate's lookup leg waits exactly this since DRE-8859. Before this card
+#: the client read "no reset" as "nothing to wait for", and the refusal ended
+#: the run on the spot.
+RATE_LIMIT_BACKOFF_SECONDS = 60
+
 
 class RateLimited(GitHubError):
     """A 403/429 whose body names GitHub's rate limit (DRE-4575).
@@ -146,6 +154,13 @@ def _reset_from_headers(headers, now: float) -> int | None:
     hour out. Preferring the primary header there turns a one-minute pause
     into a reset past the cap, and the client gives up on a refusal it only
     had to sit out.
+
+    And `x-ratelimit-reset` only when the primary window is the one that is
+    EMPTY (DRE-9068): a secondary limit sent without `retry-after` still
+    carries the primary window's reset, and a non-zero
+    `x-ratelimit-remaining` beside it says that window did not refuse us.
+    None then, which `_wait_for_reset` answers with GitHub's minute — the
+    order the merge gate's lookup leg reads since DRE-8859.
     """
     raw = _header(headers, "retry-after")
     if raw is not None:
@@ -153,6 +168,9 @@ def _reset_from_headers(headers, now: float) -> int | None:
             return int(now + float(raw))
         except ValueError:
             pass
+    remaining = _header(headers, "x-ratelimit-remaining")
+    if remaining is not None and remaining.strip() not in ("0", ""):
+        return None
     raw = _header(headers, "x-ratelimit-reset")
     if raw is not None:
         try:
@@ -405,14 +423,19 @@ class GitHub:
         """The WORKER's answer to a refusal (DRE-4575): its identity IS the
         thing under test, so it cannot move — it waits for the counter to
         reset, bounded by RATE_LIMIT_WAIT_CAP_SECONDS, and sends once more.
-        False when there is no reset to read or it is past the cap: the
-        refusal stands, and the run says why."""
+        A refusal naming no reset waits RATE_LIMIT_BACKOFF_SECONDS, GitHub's
+        minute (DRE-9068). False when the reset is past the cap: the refusal
+        stands, the run says why, and the harness ends inconclusive rather
+        than failed (`framework.run_scenario`)."""
         if err.reset is None:
             self._log(
                 f"github: {self.identity} refused for rate limit and GitHub "
-                "named no reset — nothing to wait for"
+                f"named no reset — waiting {RATE_LIMIT_BACKOFF_SECONDS}s, the "
+                "minute GitHub asks of a secondary limit, then sending the "
+                "request once more"
             )
-            return False
+            self._sleeper(RATE_LIMIT_BACKOFF_SECONDS)
+            return True
         wait = err.reset - self._wall()
         if wait > RATE_LIMIT_WAIT_CAP_SECONDS:
             self._log(

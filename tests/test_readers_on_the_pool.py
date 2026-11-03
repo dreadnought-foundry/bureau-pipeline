@@ -683,7 +683,10 @@ class FixPoolIsUngatedOnPurposeTest(unittest.TestCase):
 #: The medic steps whose GitHub reads are pull-request reads, which the
 #: workflow's own token cannot make in a product repo (DRE-8004): they ride the
 #: job's `Mint bot token` (`id: app`, `BUREAU_APP_ID`), never a pool slot.
-MEDIC_PR_READERS = ("Read the diagnosis verdict", "Write the medic's receipt")
+#: The hold on an inherited red main reads the card's pull request, its merge
+#: base and both commits' check runs (DRE-8849).
+MEDIC_PR_READERS = ("Read the diagnosis verdict", "Hold the card on an inherited red main",
+                    "Write the medic's receipt")
 
 
 class MedicIsNotAConsumerTest(unittest.TestCase):

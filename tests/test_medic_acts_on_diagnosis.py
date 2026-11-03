@@ -532,9 +532,10 @@ class TheSendToPlanningTest(unittest.TestCase):
                       run_)
         self.assertIn('linear_ops.py advance "$TARGET" "Planning" "$FROM_LANES"', run_)
         self.assertEqual(1, _text().count('advance "$TARGET" "Planning"'))
-        # The Green Light move (DRE-7794) calls the same command, and no other.
+        # The Green Light move (DRE-7794) calls the same command, and so does
+        # the hold on an inherited red main (DRE-8849), and no other.
         assigned = re.findall(r"FROM_LANES=(.*)", _text())
-        self.assertEqual(2, len(assigned))
+        self.assertEqual(3, len(assigned))
         for value in assigned:
             self.assertEqual("$(python3 .bureau-pipeline/scripts/medic_next_step.py "
                              "from-lanes) || true", value.strip())
