@@ -430,3 +430,22 @@ def test_the_doc_says_a_caller_names_it_in_the_merge_gate_and_medic_lists():
     assert f"`{STUB_NAME}`" in text
     assert "DRE-2028" in text
     assert "never re-evaluates" in text
+
+
+def test_the_page_says_the_stubs_secrets_follow_the_callers_channel_guard():
+    """DRE-8949: a caller whose guard declares `secrets_style: inherit`
+    needs `secrets: inherit`, so the page no longer says the stub passes
+    none; the yaml block itself still carries no `secrets`."""
+    text = " ".join(_doc().split())
+    for name in ("`secrets_style`", "`secrets: inherit`", "`explicit`",
+                 "`.github/bureau/pipeline-guard.json`"):
+        assert name in text, name
+    assert "passes no `secrets:`" not in text
+    assert "secrets" not in _stub()["jobs"]["call"]
+
+
+def test_the_pages_failure_sentence_names_the_narrowed_rule():
+    text = " ".join(_doc().split())
+    assert ("a UI file the diff adds or declares a component in that imports no "
+            "shared part, exits 1") in text
+    assert "a new UI file that imports no shared part" not in text

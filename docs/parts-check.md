@@ -64,21 +64,28 @@ copy, at its first declaration.
 
 ## `check` — the pull request's diff
 
-`check` judges only the pull request's diff, read beside the checkout the
-review holds. It fails for either of two reasons and names every one.
+`check` judges only what the pull request's diff adds, read beside the
+checkout the review holds (DRE-8949). It fails for either of two reasons and
+names every one.
 
-1. **A copy the diff adds.** A copy from `count` where either of its two
-   declarations — the part's or the copy's — sits on a line the diff adds. A
-   copy whose declarations are both on untouched lines never fails a pull
-   request, so an existing copy elsewhere in the repo does not hold the first
-   pull request after the check goes live, and neither does a diff that edits
-   a line inside the shared part's body rather than its declaration.
-2. **A UI file that imports none of the shared parts.** A UI file the diff adds
-   or changes, outside every declared folder, not a `.test.`/`.spec.`/`.stories.`
-   file, that declares at least one component, and in which no `import`
-   statement imports a catalog part (the import rule, below). The file is read
-   from the checkout; when the checkout does not hold it, from the diff's
-   added and context lines.
+1. **A copy the diff adds.** A copy from `count` whose own declaration sits on
+   a line the diff adds, or for which the diff adds the part's file (its old
+   side `/dev/null`) — a new shared part whose name an existing local
+   component already uses. A copy whose declaration is on an untouched line,
+   of a part whose file the diff does not add, never fails a pull request, so
+   an existing copy elsewhere in the repo does not hold the first pull request
+   after the check goes live, and neither does a diff that edits the shared
+   part's body or its declaration line.
+2. **A UI file that imports none of the shared parts.** A UI file the diff
+   adds, or in which it adds a line declaring a component, outside every
+   declared folder, not a `.test.`/`.spec.`/`.stories.` file, and in which no
+   `import` statement imports a catalog part (the import rule, below). A
+   component is declared on an added line when a `parts_review._declarations`
+   match opens on a line `added_lines` numbers as added; a file the diff adds
+   has every line added, so a new file is judged whole. A diff that adds a
+   route line to a router shell that declares a component and has no part to
+   import does not fail. The file is read from the checkout; when the
+   checkout does not hold it, from the diff's added and context lines.
 
 A repo whose design system does not exist passes with a log line saying so;
 so does a diff that adds or changes no UI file, and a repo whose design system

@@ -620,6 +620,14 @@ The sandbox presses, the one list (DRE-7772):
 - `nudgeLoop` — nudge a loop
 - `closeLoop` — close a loop with an ending
 - `markNotALoop` — mark a loop not a loop
+- `reviseKpi` — revise a KPI
+- `closeKpi` — close a KPI at its goal
+- `retireKpi` — retire a KPI
+- `moveKpi` — move a KPI to Later or Focus
+- `linkKpiLoop` — link a KPI and a loop
+- `unlinkKpiLoop` — unlink a KPI and a loop
+- `proposeKpi` — propose a KPI from plain words
+- `confirmKpi` — confirm a proposed KPI
 
 The list is the copy of agent-bureau's `SANDBOX_PRESS_MUTATIONS`
 (`console/backend/proof_reader_presses.py`), which bureau-pipeline cannot read,
@@ -629,9 +637,11 @@ dropped it: the console's owner gate refuses it to the proof-reader on the
 sandbox too. DRE-8305 (2026-10-28) added the twenty Initiatives presses, the
 twenty bullets after `answerDeskPermission`, and left `approveInitiativeDraft`,
 `answerInitiativeDraftQuestion(s)` and `answerDecision` off, as the CEO's own
-answers. DRE-8727 (2026-11-02) added the eight loop presses, the last eight
-bullets, for the Loops 1 epic (DRE-8698), and left the CEO's own answers off
-too.
+answers. DRE-8727 (2026-11-02) added the eight loop presses, the eight
+bullets after `deleteInitiativeFile`, for the Loops 1 epic (DRE-8698), and left
+the CEO's own answers off too. DRE-8937 (2026-11-03) added the eight KPI
+presses, the last eight bullets, for the Loops 2 epic (DRE-8699), and left the
+CEO's own answers off as before.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run

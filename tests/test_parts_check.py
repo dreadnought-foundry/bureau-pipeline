@@ -2,10 +2,11 @@
 
 `scripts/parts_check.py count` counts every copy of a shared part in a
 checkout: a component declared again, under a part's name, in any other UI
-file of the repo. `check --diff` judges only a pull request's diff: it fails
-for a copy one of whose two declarations sits on a line the diff adds, and for
-a UI file the diff adds or changes, outside every declared folder, that
-declares a component and imports none of the shared parts.
+file of the repo. `check --diff` judges only what a pull request's diff adds
+(DRE-8949): it fails for a copy whose own declaration sits on a line the diff
+adds, or whose shared part's file the diff adds, and for a UI file outside
+every declared folder in which the diff adds a line declaring a component and
+which imports none of the shared parts.
 
 Every case builds a real repo in a temporary folder, commits a base tree, and
 takes the pull request's diff from `git diff --cached`, so the check reads the
@@ -418,10 +419,14 @@ class ImportsNoSharedPartTest(unittest.TestCase):
         self.assertEqual(0, self._judge({"console/web/src/pages/fmt.tsx": helper})
                          .returncode)
 
-    def test_a_changed_file_is_judged_too(self):
+    def test_a_changed_file_is_judged_when_the_diff_adds_a_declaration(self):
+        """Moved by DRE-8949's first narrowing: a changed file is judged only
+        when the diff adds a line on which a component is declared, so this
+        diff now edits the declaration line rather than the body."""
         with TemporaryDirectory() as tmp:
             root = _repo(Path(tmp) / "repo", {**BASE, HOME: _page("")})
-            got = _check(root, _change(root, {HOME: _page("").replace("home", "Home")}))
+            got = _check(root, _change(root, {HOME: _page("").replace(
+                "HomePage()", "HomePage(): JSX.Element")}))
             self.assertEqual(1, got.returncode)
             self.assertIn(f"NO-SHARED-PART {HOME}", got.stdout)
 
@@ -465,12 +470,98 @@ class OnlyTheDiffIsJudgedTest(unittest.TestCase):
         self.assertIn(f"COPY Notice — shared part declared at {NOTICE}:3; copy declared "
                       f"at {INITIATIVES}:4", got.stdout)
 
-    def test_adding_the_parts_declaration_line_fails(self):
+    def test_editing_the_parts_declaration_line_passes(self):
+        """Moved by DRE-8949's second narrowing: the part's side counts only
+        when the diff adds the part's file, so editing an existing part's
+        declaration line no longer fails over the untouched copy."""
         got = _check(self.root, _change(self.root, {
             NOTICE: NOTICE_SRC.replace("export function Notice(", "export function Notice (")}))
-        self.assertEqual(1, got.returncode)
-        self.assertEqual([f"parts-check: COPY Notice — shared part declared at {NOTICE}:3; "
-                          f"copy declared at {INITIATIVES}:4"], got.stdout.splitlines())
+        self.assertEqual(0, got.returncode, got.stdout)
+        self.assertNotIn("COPY", got.stdout)
+
+
+APP = "console/web/src/app/App.tsx"
+
+#: A router shell: it declares a component, composes feature code, and has no
+#: shared part to import.
+APP_SRC = """\
+import React from "react";
+import { HomePage } from "../pages/home/HomePage";
+
+const routes = [
+  { path: "/", element: <HomePage /> },
+];
+
+export function App() {
+  return <Router routes={routes} />;
+}
+"""
+
+
+class OnlyWhatTheDiffAddsTest(unittest.TestCase):
+    """The check judges only what a diff adds (DRE-8949): a UI file with no
+    shared part fails only when the diff declares a component in it, and a
+    part's side counts only when the diff adds the part's file."""
+
+    def _judge(self, base: dict, files: dict) -> subprocess.CompletedProcess:
+        with TemporaryDirectory() as tmp:
+            root = _repo(Path(tmp) / "repo", {**BASE, **base})
+            return _check(root, _change(root, files))
+
+    def test_a_route_line_in_an_existing_shell_passes(self):
+        got = self._judge({APP: APP_SRC}, {APP: APP_SRC.replace(
+            '  { path: "/", element: <HomePage /> },\n',
+            '  { path: "/", element: <HomePage /> },\n'
+            '  { path: "/home", element: <HomePage /> },\n')})
+        self.assertEqual(0, got.returncode, got.stdout + got.stderr)
+        self.assertEqual("", got.stdout)
+        self.assertEqual(["parts-check: pass — 1 UI file(s) checked, 0 copies added, "
+                          "0 UI files importing no shared part"], got.stderr.splitlines())
+
+    def test_a_component_declared_in_that_shell_fails(self):
+        got = self._judge({APP: APP_SRC}, {APP: APP_SRC + (
+            "\nfunction StatusBanner() {\n  return <p>status</p>;\n}\n")})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: NO-SHARED-PART {APP} — imports none of the "
+                          f"shared parts"], got.stdout.splitlines())
+        self.assertEqual(["parts-check: fail — 0 copy(ies) added, 1 UI file(s) "
+                          "importing no shared part"], got.stderr.splitlines())
+
+    def test_a_new_file_that_declares_a_component_still_fails(self):
+        got = self._judge({}, {APP: APP_SRC})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: NO-SHARED-PART {APP} — imports none of the "
+                          f"shared parts"], got.stdout.splitlines())
+
+    def test_editing_the_parts_declaration_line_leaves_the_copy_alone(self):
+        got = self._judge({INITIATIVES: INITIATIVES_COPY}, {
+            NOTICE: NOTICE_SRC.replace("{ title, children }", "{ title, children = null }")})
+        self.assertEqual(0, got.returncode, got.stdout)
+        self.assertNotIn("COPY", got.stdout)
+        self.assertEqual(["parts-check: pass — 1 UI file(s) checked, 0 copies added, "
+                          "0 UI files importing no shared part"], got.stderr.splitlines())
+
+    def test_a_new_part_whose_name_a_local_component_already_uses_fails(self):
+        banner = f"{MOLECULES}/Banner.tsx"
+        settings = ('import React from "react";\n'
+                    'import { Notice } from "@/components/molecules/Notice";\n\n'
+                    "function Banner() {\n  return <Notice title=\"b\" />;\n}\n")
+        got = self._judge({SETTINGS: settings}, {banner: (
+            'import React from "react";\n\n'
+            "export function Banner() {\n  return <div role=\"banner\" />;\n}\n")})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: COPY Banner — shared part declared at {banner}:3; "
+                          f"copy declared at {SETTINGS}:4"], got.stdout.splitlines())
+        self.assertEqual(["parts-check: fail — 1 copy(ies) added, 0 UI file(s) "
+                          "importing no shared part"], got.stderr.splitlines())
+
+    def test_a_local_notice_added_to_a_page_still_fails(self):
+        got = self._judge({}, {INITIATIVES: INITIATIVES_COPY})
+        self.assertEqual(1, got.returncode, got.stderr)
+        line = _line(INITIATIVES_COPY, "function Notice")
+        self.assertEqual([f"parts-check: COPY Notice — shared part declared at "
+                          f"{NOTICE}:3; copy declared at {INITIATIVES}:{line}"],
+                         got.stdout.splitlines())
 
 
 class CheckEdgesTest(unittest.TestCase):
@@ -553,6 +644,21 @@ class DocTest(unittest.TestCase):
                         "## A copy's identity"):
             self.assertIn(heading, text)
         self.assertIn("(`part`, `copy_path`, `copy_line`)", flat)
+
+    def test_the_documents_state_the_narrowed_rule(self):
+        """DRE-8949: rule 9, this page and the script's docstring say the
+        check judges only what a pull request adds."""
+        standard = " ".join((ROOT / "standards" / "design-system.md")
+                            .read_text(encoding="utf-8").split())
+        self.assertIn("flags a UI file the pull request adds, or in which it declares a "
+                      "component, that imports none of the shared parts", standard)
+        self.assertNotIn("any new or changed UI file", standard)
+        for text in (" ".join(DOC.read_text(encoding="utf-8").split()),
+                     " ".join((parts_check.__doc__ or "").split())):
+            self.assertIn("UI file the diff adds, or in which it adds a line declaring "
+                          "a component", text)
+            self.assertIn("the diff adds the part's file", text)
+            self.assertNotIn("adds or changes, outside every declared folder", text)
 
 
 if __name__ == "__main__":
