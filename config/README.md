@@ -262,6 +262,20 @@ mints (see `models.yaml` below).
   a sentence of `tests/fixtures/operator-agent-board-2026-11-01.json`, and
   `tests/test_operator_rules.py` pins every fixture card the table sends to
   the CEO or to the studio host.
+- **`operator-do.json`** — the steps the operator agent may carry out itself
+  (DRE-8922, epic DRE-8738): a `_readme`; `max_ops` (20, one plan's cap),
+  `max_do_per_pass` (3), `max_close_per_pass` (10) and `pr_wait_days` (14);
+  `org`, the one organization a plan's repository may open; `never`, the
+  agent's own switches and their `_OFF_UNTIL` companions; `never_branches`;
+  `scripts`, the one script a `script` op may run and its one argument form;
+  and `kinds` — exactly `variable`, `bot-pr`, `linear-admin` and `script`,
+  each with its `credential` (`GH_TOKEN` or `LINEAR_API_KEY`), its `mint` and
+  its `ops`, each op with `fields` (name to type), `writes` and the argv
+  `command` it becomes. Read only through `scripts/operator_do_ops.py`, whose
+  `load` refuses `deploy`, a kind outside `operator_step_kind.MACHINE_KINDS`,
+  any other credential and a command naming an undeclared field, and whose
+  `check` refuses a plan that names an op not in the file, a second
+  repository, or a target the card's own text does not quote.
 - **`notice-writers.json`** — every writer that files a Linear card
   automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
   writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,
