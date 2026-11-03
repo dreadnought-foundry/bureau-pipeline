@@ -424,8 +424,9 @@ jobs:
             `outcome`, `step` (never empty — the step in your own words),
             `reason` (one sentence), `evidence` (a list of quotes), `access`,
             `deploy` (true or false), `host_cannot` (a list of quotes),
-            `finding`, `question` and `recommendation`. Leave out a key the
-            outcome does not use.
+            `finding`, `question` and `recommendation`. The last key,
+            `answer`, is for a card in Green Light, and no card here is one.
+            Leave out a key the outcome does not use.
 
             For a business choice only, also write its choices to
               ${{ runner.temp }}/operator-agent/answers/<CARD>.choices.json

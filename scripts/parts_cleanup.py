@@ -160,9 +160,10 @@ def _unescaped(line: str) -> str:
     return _ESCAPE.sub(r"\1", line.strip().strip("`").strip())
 
 
-def filed(slug: str) -> dict:
+def filed(slug: str, mark: str = IDENTITY_MARK) -> dict:
     """Identity line → the OLDEST card carrying it, in any state, among the
-    team's cards whose description holds `parts-copy: <slug>`."""
+    team's cards whose description holds `<mark> <slug>` — `parts-copy:` here,
+    `parts-rejected:` for `parts_provisional.py`'s replacement cards (DRE-8941)."""
     nodes = linear_ops.gql_paged(
         """query($needle: String!, $after: String) {
              issues(first: 100, after: $after, filter: {
@@ -170,7 +171,7 @@ def filed(slug: str) -> dict:
                description: {contains: $needle}
              }) { nodes { identifier createdAt description }
                   pageInfo { hasNextPage endCursor } } }""",
-        {"needle": f"{IDENTITY_MARK} {slug}"},
+        {"needle": f"{mark} {slug}"},
     )
     found = {}
     for node in sorted(nodes, key=lambda n: n.get("createdAt") or ""):
