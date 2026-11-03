@@ -1,0 +1,7 @@
+{
+  "card": "DRE-8821",
+  "model": "claude-sonnet-5-5",
+  "run_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/41580575581",
+  "dispatched_at": "2026-11-03T04:51:51Z",
+  "record_path": "docs/argv-body-limit-proof-2026-11.md"
+}
