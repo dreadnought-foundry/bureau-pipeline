@@ -332,7 +332,10 @@ class JobsTest(unittest.TestCase):
 class PermissionsTest(unittest.TestCase):
     def test_the_workflow_token_is_read_only(self):
         doc = _doc()
-        self.assertEqual(doc["permissions"], {"contents": "read", "actions": "read"})
+        # `id-token: write` mints the read door's OIDC token (DRE-8902); it
+        # grants no write on the repository.
+        self.assertEqual(doc["permissions"],
+                         {"contents": "read", "actions": "read", "id-token": "write"})
         for job_id, job in doc["jobs"].items():
             self.assertNotIn("permissions", job, f"{job_id} widens its own grant")
 

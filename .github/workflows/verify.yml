@@ -781,9 +781,21 @@ jobs:
         # A shadow replay's agent (DRE-7194) holds no Linear key: it posts
         # nothing, and the card's thread holds the verdicts it is replaying.
         # A live run's key is the same expression, inside the gate.
+        #
+        # The read door (DRE-8899), closed the same way: a replay is handed no
+        # door either, since the door would serve it the thread its Linear key
+        # was taken away to keep from it. A live run reads the card from the
+        # job's snapshot (the prompt says how), and any `linear_ops` card read
+        # it makes asks the door first, at most the review card's 120 seconds
+        # old (`bureau_read.REVIEW_CARD_MAX_AGE`).
         env:
           LINEAR_API_KEY: ${{ !inputs.shadow && (vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY) || '' }}
           LINEAR_API_KEY_FALLBACK: ${{ !inputs.shadow && (secrets.LINEAR_API_KEY) || '' }}
+          BUREAU_READ: ${{ !inputs.shadow && (vars.BUREAU_READ || 'off') || 'off' }}
+          BUREAU_READ_URL: ${{ !inputs.shadow && vars.BUREAU_READ_URL || '' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -855,8 +867,14 @@ jobs:
             `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
-            1. Read the card's acceptance criteria (read the LIVE card as the
-               authoritative source, not just the PR body). If the card has a
+            1. Read the card's acceptance criteria from the card itself, not
+               just the PR body. This run already read the card once, at its
+               start, into a snapshot: its description is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py description "$RUNNER_TEMP/card-snapshot.json"`
+               and its comment thread, oldest first, is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py thread "$RUNNER_TEMP/card-snapshot.json"`.
+               Read the card from Linear only when the snapshot is absent
+               (both commands exit non-zero). If the card has a
                `**Design:**` ref, Read that screen PNG (normal-sized exports
                under console/design/images/screens/..., safe to Read) and
                verify the built screen against it.
@@ -972,9 +990,21 @@ jobs:
         # A shadow replay's agent (DRE-7194) holds no Linear key: it posts
         # nothing, and the card's thread holds the verdicts it is replaying.
         # A live run's key is the same expression, inside the gate.
+        #
+        # The read door (DRE-8899), closed the same way: a replay is handed no
+        # door either, since the door would serve it the thread its Linear key
+        # was taken away to keep from it. A live run reads the card from the
+        # job's snapshot (the prompt says how), and any `linear_ops` card read
+        # it makes asks the door first, at most the review card's 120 seconds
+        # old (`bureau_read.REVIEW_CARD_MAX_AGE`).
         env:
           LINEAR_API_KEY: ${{ !inputs.shadow && (vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY) || '' }}
           LINEAR_API_KEY_FALLBACK: ${{ !inputs.shadow && (secrets.LINEAR_API_KEY) || '' }}
+          BUREAU_READ: ${{ !inputs.shadow && (vars.BUREAU_READ || 'off') || 'off' }}
+          BUREAU_READ_URL: ${{ !inputs.shadow && vars.BUREAU_READ_URL || '' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1024,8 +1054,14 @@ jobs:
             `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
-            1. Read the card's acceptance criteria (read the LIVE card as the
-               authoritative source, not just the PR body). If the card has a
+            1. Read the card's acceptance criteria from the card itself, not
+               just the PR body. This run already read the card once, at its
+               start, into a snapshot: its description is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py description "$RUNNER_TEMP/card-snapshot.json"`
+               and its comment thread, oldest first, is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py thread "$RUNNER_TEMP/card-snapshot.json"`.
+               Read the card from Linear only when the snapshot is absent
+               (both commands exit non-zero). If the card has a
                `**Design:**` ref, Read that screen PNG (normal-sized exports
                under console/design/images/screens/..., safe to Read) and
                verify the built screen against it.
@@ -1124,6 +1160,16 @@ jobs:
           # Empty = the verdict line is composed exactly as it is today.
           CONTENT_ID: ${{ steps.pr.outputs.content }}
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+          # The read door (DRE-8899): the Linear copy's pre-read of the card
+          # asks the door first. This pull_request run's own card is the one
+          # read the door serves it (agent-bureau DRE-8807), at most the
+          # review card's 120 seconds old (`bureau_read.REVIEW_CARD_MAX_AGE`).
+          # The comment itself is Linear's write either way.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           if [ "$REAL" = "true" ]; then
             # A real verdict (PASS or FAIL with evidence) from a Verifier that

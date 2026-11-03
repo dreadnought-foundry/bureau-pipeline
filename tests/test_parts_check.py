@@ -564,6 +564,114 @@ class OnlyWhatTheDiffAddsTest(unittest.TestCase):
                          got.stdout.splitlines())
 
 
+WEB_ATOMS = "ui/atoms"
+NATIVE_ATOMS = "ui/native/atoms"
+WEB_SEAL = f"{WEB_ATOMS}/Seal.tsx"
+NATIVE_SEAL = f"{NATIVE_ATOMS}/Seal.tsx"
+BADGE = f"{WEB_ATOMS}/Badge.tsx"
+PAGE = "app/Page.tsx"
+
+#: foundry's shape (DRE-8101): the same atoms built twice, web and phone.
+TWO_PLATFORMS = json.dumps({"parts": {"atoms": [WEB_ATOMS, NATIVE_ATOMS], "molecules": [],
+                                      "organisms": [], "templates": []}})
+
+WEB_SEAL_SRC = """\
+import React from "react";
+
+export function Seal({ label }: { label: string }) {
+  return <span className="seal">{label}</span>;
+}
+"""
+
+NATIVE_SEAL_SRC = """\
+import React from "react";
+import { Text } from "react-native";
+
+export function Seal({ label }: { label: string }) {
+  return <Text>{label}</Text>;
+}
+"""
+
+#: Another part's file declaring a local component with a part's name.
+BADGE_SRC = """\
+import React from "react";
+
+function Seal() {
+  return <i />;
+}
+
+export function Badge() {
+  return <b><Seal /></b>;
+}
+"""
+
+#: A page declaring its own `Seal`.
+PAGE_SRC = """\
+import React from "react";
+import { Badge } from "../ui/atoms/Badge";
+
+function Seal() {
+  return <em />;
+}
+
+export function Page() {
+  return <main><Badge /><Seal /></main>;
+}
+"""
+
+COUNTERPARTS = {DECLARATION: TWO_PLATFORMS, WEB_SEAL: WEB_SEAL_SRC,
+                NATIVE_SEAL: NATIVE_SEAL_SRC, BADGE: BADGE_SRC, PAGE: PAGE_SRC}
+
+
+class CounterpartsTest(unittest.TestCase):
+    """Two parts that share a name, each shipping from a declared folder, are
+    counterparts — the same part built for two platforms — and neither is a
+    copy of the other (DRE-8998). A file that is not a part file of that name
+    still holds a copy."""
+
+    def _judge(self, base: dict, files: dict) -> subprocess.CompletedProcess:
+        with TemporaryDirectory() as tmp:
+            root = _repo(Path(tmp) / "repo", base)
+            return _check(root, _change(root, files))
+
+    def test_count_reports_no_copy_at_the_counterpart(self):
+        with TemporaryDirectory() as tmp:
+            root = _repo(Path(tmp) / "repo", COUNTERPARTS)
+            self.assertEqual([
+                {"part": "Seal", "layer": "atoms", "part_path": WEB_SEAL, "part_line": 3,
+                 "copy_path": PAGE, "copy_line": _line(PAGE_SRC, "function Seal")},
+                {"part": "Seal", "layer": "atoms", "part_path": WEB_SEAL, "part_line": 3,
+                 "copy_path": BADGE, "copy_line": _line(BADGE_SRC, "function Seal")},
+            ], _copies(root))
+            got = _count(root)
+            self.assertEqual(0, got.returncode, got.stderr)
+            self.assertNotIn(NATIVE_SEAL, got.stdout)
+            self.assertEqual([f"parts-count: {root.resolve()} — 2 copy(ies) of shared "
+                              f"parts from {DECLARATION}"], got.stderr.splitlines())
+
+    def test_adding_a_phone_counterpart_adds_no_copy(self):
+        card_web = f"{WEB_ATOMS}/Card.tsx"
+        card_native = f"{NATIVE_ATOMS}/Card.tsx"
+        got = self._judge({**COUNTERPARTS, card_web: WEB_SEAL_SRC.replace("Seal", "Card")},
+                          {card_native: NATIVE_SEAL_SRC.replace("Seal", "Card")})
+        self.assertNotIn("parts-check: COPY", got.stdout)
+        self.assertEqual(0, got.returncode, got.stdout + got.stderr)
+
+    def test_editing_the_counterparts_declaration_line_adds_no_copy(self):
+        got = self._judge(COUNTERPARTS, {NATIVE_SEAL: NATIVE_SEAL_SRC.replace(
+            "{ label: string }", "{ label: string; }")})
+        self.assertNotIn("parts-check: COPY", got.stdout)
+        self.assertEqual(0, got.returncode, got.stdout + got.stderr)
+
+    def test_a_pages_own_seal_is_still_a_copy(self):
+        got = self._judge(COUNTERPARTS, {PAGE: PAGE_SRC.replace(
+            "function Seal() {", "function Seal(): JSX.Element {")})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: COPY Seal — shared part declared at {WEB_SEAL}:3; "
+                          f"copy declared at {PAGE}:{_line(PAGE_SRC, 'function Seal')}"],
+                         got.stdout.splitlines())
+
+
 class CheckEdgesTest(unittest.TestCase):
 
     def test_a_diff_with_no_ui_file_does_not_apply(self):
@@ -659,6 +767,18 @@ class DocTest(unittest.TestCase):
                           "a component", text)
             self.assertIn("the diff adds the part's file", text)
             self.assertNotIn("adds or changes, outside every declared folder", text)
+
+    def test_the_documents_state_the_counterpart_rule(self):
+        """DRE-8998: this page and the script's docstring say two parts that
+        share a name, each shipping from a declared folder, are counterparts."""
+        rule = ("When two parts share a name, each shipping from a declared folder, "
+                "they are counterparts")
+        text = " ".join(DOC.read_text(encoding="utf-8").split())
+        self.assertIn(f"- {rule}", text)
+        self.assertIn(rule, " ".join((parts_check.__doc__ or "").split()))
+        for page in (text, " ".join((parts_check.__doc__ or "").split())):
+            self.assertNotIn("the other's file is a copy of it", page)
+            self.assertNotIn("other than the part's own", page)
 
 
 if __name__ == "__main__":

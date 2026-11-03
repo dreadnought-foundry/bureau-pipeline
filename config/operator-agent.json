@@ -61,6 +61,10 @@
     {
       "card": "DRE-8830",
       "why": "the switch's off-reason — a person sets it before the workflow merges, and DRE-8748 deletes the variable it sets when it turns the agent on"
+    },
+    {
+      "card": "DRE-8927",
+      "why": "the switch that turns the agent's `do` step on (OPERATOR_AGENT_DO_LIVE, DRE-8928) — the agent never decides it"
     }
   ]
 }

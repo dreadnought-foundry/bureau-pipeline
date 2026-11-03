@@ -9,6 +9,14 @@ files are read inside the declared folders and outside them; a `.test.`,
 `.bureau-pipeline` segment, is never read. A copy's identity is (repo, part
 name, copy file).
 
+When two parts share a name, each shipping from a declared folder, they are
+counterparts — the same part built for two platforms, such as a web atom and
+its phone atom — and neither is a copy of the other (DRE-8998). A component
+declared in a UI file under a part's name is a copy only when that file is not
+the "ships at" file of any catalog part of that name; a page, a feature, or
+another part's file declaring it is still a copy, reported against the first
+part of that name in catalog order.
+
 Nothing is kept. The copies are computed from the checkout's files on every
 run — `git ls-files` when the root is a git work tree, the directory tree
 otherwise — and no baseline is written or read. Components are recognized
@@ -167,9 +175,11 @@ def count(repo_root) -> Counted:
     if not present:
         return Counted(None, f"the repo's design system does not exist ({why})", [])
     source = design_parts.load(root).source
-    parts = {}
+    parts, ships = {}, {}
     for part in design_parts.catalog(root):
         parts.setdefault(part.name, part)
+        # Every part file of a name is a counterpart, never a copy (DRE-8998).
+        ships.setdefault(part.name, set()).add(part.ships_at)
     if not parts:
         return Counted(source, f"no part ships in the folders read from {source}", [])
     part_lines = {}
@@ -185,7 +195,7 @@ def count(repo_root) -> Counted:
             continue
         for name, line in _declared(text).items():
             part = parts.get(name)
-            if part is not None and path != part.ships_at:
+            if part is not None and path not in ships[name]:
                 copies.append(Copy(name, part.layer, part.ships_at, part_lines[name],
                                    path, line))
     copies.sort(key=lambda c: (c.part, c.copy_path, c.copy_line))
