@@ -97,7 +97,11 @@ read from the environment. Exit 0 on every pass, `unknown` included, and 1
 only when the notice client reports `lost`. The notice key is `NOTICE_KEY`
 (console kind `pipeline_notice:channel_hold:stable`), at WARN, with a fallback
 card titled `FALLBACK_TITLE` — one title, so the fallback finds its own open
-card and never files a second. One line per pass on stdout, under `TAG`:
+card and never files a second. The fallback card wears `agent:ops` and
+`no-code` beside `repo:bureau-pipeline`, and goes to the operator, not to a
+build: a held channel needs a re-run, a fix, a person or a wait, which is an
+operator's act, and those two labels route the card `OPERATOR` before any
+model or critic reads it (DRE-9162). One line per pass on stdout, under `TAG`:
 
     channel-hold: none — stable carries main <sha7>
     channel-hold: held since <h:mm AM/PM PT> age=<m>m next=<re-run|fix|person|wait> job="<name>" run=<url> — <raise|morning-raise|quiet>
@@ -152,11 +156,13 @@ MORNING_FLOOR_MINUTES = 45
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 #: The card the alert is filed as when the door cannot take it. One title, so
-#: `linear_ops.find_open` finds the card it filed and comments there.
+#: `linear_ops.find_open` finds the card it filed and comments there. Labeled
+#: for the operator (DRE-9162): `agent:ops` and `no-code` route it OPERATOR at
+#: precedence 1 (`config/routing-verdicts.json`), so it never reaches a build.
 FALLBACK_TITLE = "bureau-pipeline: the stable channel is held"
 FALLBACK = pipeline_notice.Fallback(
     title=FALLBACK_TITLE, lane=pipeline_notice.DEFAULT_LANE,
-    labels=("repo:bureau-pipeline",))
+    labels=("repo:bureau-pipeline", "agent:ops", "no-code"))
 
 #: The workflows it reads, by file, and the names they carry.
 UNIT_SUITE_FILE = "tests.yml"          # pc.UNIT_SUITE, "Pipeline Tests"
