@@ -372,6 +372,7 @@ on:
       artifact: { required: false, type: string, default: "" }
       card_url: { required: false, type: string, default: "" }
 permissions:
+  id-token: write
   contents: read
   actions: read
 jobs:
@@ -406,6 +407,10 @@ whatever the caller granted — so a `deliver-rescue.yml` stub pasted without
 That one is the sharper edge of the two: the `agent-task.yml` omission degrades
 to the 403 path described below, but a delivery job that cannot read its own
 artifact is a red run and still no pull request.
+
+`id-token: write` is the third line, and the soft one (DRE-8901): it lets the
+delivery's card reads ask the console's read door. A stub without it runs
+exactly as before, its reads going to Linear.
 
 Add it to that repo's **medic** `workflow_run` list too, by that exact name —
 this is the one workflow whose failure leaves somebody's only copy of finished

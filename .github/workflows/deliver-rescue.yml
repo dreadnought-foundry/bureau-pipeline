@@ -89,8 +89,20 @@ jobs:
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # Whose Linear hour this job spends (DRE-3321), like every other stage.
+    #
+    # The read door (DRE-8901), exactly as reconcile.yml's door steps set it,
+    # and `BUREAU_READ_CARD_MAX_AGE`, which opts this job's card reads in
+    # (DRE-8898): `deliver_rescue.py apply`'s comments and the `advance` that
+    # follows take their comment pre-read and thread reads from the door
+    # first; the `advance`'s own `get_issue` reads stay on Linear with the
+    # write path. Five minutes. The stub grants `id-token: write` for it.
     env:
       LINEAR_IDENTITY: fleet
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     steps:
       # THIS JOB'S OWN CREDENTIAL, minted first because everything below spends
       # it: the artifact download, the checkout git pushes with, and `gh pr

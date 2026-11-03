@@ -356,9 +356,38 @@ jobs:
       cancel-in-progress: false
     # Whose Linear hour this job spends (DRE-3321): the card advance and the
     # merge comment ride the fleet key. Job level, so every step inherits it.
+    #
+    # The read door (DRE-8901), job level for the same reason, exactly as
+    # reconcile.yml's door steps set it. `BUREAU_READ_CARD_MAX_AGE` opts this
+    # job's card reads in (DRE-8898): `linear_ops`' thread reads — the hold's
+    # and release's `comment_records` — and every comment's pre-read ask the
+    # door first, and `card_snapshot.take` already asks it whenever the mode
+    # is `on`. Five minutes, the near end of the five to fifteen the epic's
+    # survey measured for this reader. None of this job's wakes is a
+    # `pull_request` event, and the stub grants `id-token: write`. The write
+    # path's own reads (`get_issue`, the DRE-2316 re-read, the DRE-1877
+    # read-back) and `state-of` stay on Linear.
     env:
       LINEAR_IDENTITY: fleet
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     steps:
+      # FIRST, before anything reads the card (DRE-8901). The hold's reads
+      # look for the marker an EARLIER gate run posted — `park` posts the
+      # hold only when the latest marker is not already the hold, `release`
+      # moves the card back only when it is — and the concurrency group above
+      # means that run finished before this job began. So no card read in
+      # this job takes a door answer older than this instant: through
+      # DRE-8898's floor an older one is read from Linear instead, with
+      # `reason=older-than-needed`. Through `$GITHUB_ENV`, so the value is the
+      # job's start and not each step's; no `env:` block in this job may name
+      # the variable, because one that did would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Mint qa-bot token (author != merger)
         id: qa
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
