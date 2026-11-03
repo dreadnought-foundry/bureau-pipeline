@@ -163,6 +163,7 @@ import re
 import signal
 import subprocess  # nosec B404 - one fixed argv (the key read), no shell
 import sys
+import sysconfig
 import time
 import urllib.error
 import urllib.request
@@ -707,6 +708,10 @@ def _fall_back(why: str, verb: str = "refused") -> None:
     # (its published expiry had passed) spent nothing, so it is charged
     # nothing and gets no `0 request(s)` line of its own.
     _budget["calls_by_bucket"] = {refused: _budget["calls"]} if _budget["calls"] else {}
+    # The reads so far went out on the same key, so they move with the calls
+    # (DRE-8897): the refused request, when it was a read, among them.
+    _budget["reads_by_bucket"] = {refused: _budget["reads"]} if _budget["reads"] else {}
+    _budget["reads"] = {}
     if refused == identity:
         refused = "the primary key"
     _budget["fell_back"] = True
@@ -828,6 +833,10 @@ def _reset_budget_state() -> None:
         # the remainder of `calls` is the current bucket's (Stage 2 item 28)
         calls_by_bucket={},
         expiry_unreadable_said=False,  # an unreadable published expiry was named
+        # reads sent on the current bucket, by (site, caller) (DRE-8897), and
+        # those charged to a bucket this process has LEFT, as calls_by_bucket
+        reads={},
+        reads_by_bucket={},
         # The rate-limit headers of the LAST response, whole (DRE-8616): a
         # header that response did not carry is None here, never the one an
         # earlier response sent. `call` is the request that answered.
@@ -1050,7 +1059,12 @@ def calls_lines() -> list[str]:
     One line per bucket (Stage 2 item 28, K5): a planner whose token was
     refused mid-run sent everything up to and including the refused request
     on `planner-oauth`, and the rest on the fleet key — each is charged its
-    own. A process that never fell back prints one line."""
+    own. A process that never fell back prints one line.
+
+    The reads among those requests are counted again apart, by who asked for
+    them, on the `linear-read:` lines `read_lines` composes (DRE-8897) —
+    printed after these, charged to the same buckets, and changing nothing
+    here."""
     token = process_token()
     charged = dict(_budget["calls_by_bucket"])
     rest = _budget["calls"] - sum(charged.values())
@@ -1063,12 +1077,181 @@ def calls_lines() -> list[str]:
     ]
 
 
+# ── Every read, named by who asked for it (DRE-8897) ────────────────────────
+# The calls lines mix reads and writes, and the read door's own exit line names
+# no bucket and no process, so nothing could tell a read moved onto the door
+# from one that stayed on Linear. `gql` counts each request that is not a
+# mutation by two names read off the stack: the SITE, the nearest frame
+# outside this file — the place in the calling code that asked — and the
+# CALLER, the frame just outside the outermost `gql`/`gql_paged` — the function
+# that sent the query. Both, because most of the reads worth moving live in
+# this file and run as `linear_ops.py <command>` from bash, where no frame
+# outside it exists, and because one script line can ask for two different
+# reads. `check_linear_budget.py` adds the lines up per reader.
+#
+# The tags are values in parentheses, deliberately: `pipeline_act.problems()`
+# reads every `*_TAG = "…"` in this file as an act the registry must declare,
+# and these are log lines a proof run reads (`config/proof-reach.json`), not
+# acts.
+READ_TAG = ("linear-read:")
+DOOR_TAG = ("linear-door:")
+
+_THIS_FILE = os.path.basename(__file__)
+_SENDERS = frozenset({"gql", "gql_paged"})
+# A name lands on a line parsed one field at a time: nothing in it may end
+# the field or open a quote.
+_UNSAFE_NAME_CHARS = re.compile(r"[^\w.<>-]")
+# The interpreter's own library, where a frame is never the calling code: a
+# `with` block's `contextlib`, the `runpy` that starts a script, a thread's
+# `threading`. Installed packages under it are not the library.
+_STDLIB_DIRS = tuple(
+    {os.path.join(os.path.realpath(p), "") for p in (
+        sysconfig.get_paths().get("stdlib"), sysconfig.get_paths().get("platstdlib"))
+     if p}
+)
+
+
+def _library_frame(frame) -> bool:
+    path = frame.f_code.co_filename
+    if path.startswith("<frozen "):
+        return True
+    path = os.path.realpath(path)
+    return path.startswith(_STDLIB_DIRS) and not any(
+        part in path for part in ("site-packages", "dist-packages"))
+
+
+def _frame_name(frame) -> str:
+    """`<module>.<function>`, the module being the file's basename."""
+    module = os.path.splitext(os.path.basename(frame.f_code.co_filename))[0]
+    return _UNSAFE_NAME_CHARS.sub("_", f"{module}.{frame.f_code.co_name}")
+
+
+def _command_site() -> str:
+    """`linear_ops.<command>`, the command exactly as typed on the command
+    line: the site of a read when this file is the process."""
+    command = sys.argv[1] if len(sys.argv) > 1 else "-"
+    return _UNSAFE_NAME_CHARS.sub("_", f"{os.path.splitext(_THIS_FILE)[0]}.{command}")
+
+
+def _read_names(frame) -> tuple[str, str]:
+    """`(site, caller)` for a read sent from inside `frame`, walking out.
+
+    The site is the nearest frame whose file is not this one. A frame of this
+    file running as `__main__` is the process itself — `linear_ops.py
+    <command>` — and nothing past it is calling code, so there, or at the end
+    of the stack, the site is the command. The caller is the frame just
+    outside the outermost `gql`/`gql_paged` frame of this file. Frames of the
+    interpreter's own library are passed over for both."""
+    frames = []
+    while frame is not None:
+        if not _library_frame(frame):
+            frames.append(frame)
+        frame = frame.f_back
+    site = None
+    for f in frames:
+        if os.path.basename(f.f_code.co_filename) != _THIS_FILE:
+            site = _frame_name(f)
+            break
+        if f.f_globals.get("__name__") == "__main__":
+            break
+    site = site or _command_site()
+    outermost = max((i for i, f in enumerate(frames)
+                     if f.f_code.co_name in _SENDERS
+                     and os.path.basename(f.f_code.co_filename) == _THIS_FILE),
+                    default=None)
+    if outermost is None or outermost + 1 >= len(frames):
+        return site, site
+    return site, _frame_name(frames[outermost + 1])
+
+
+def _reader() -> str:
+    """`<workflow> / <job> / <script>` — the value `bureau_read._reader` puts
+    on `read-fallback:` lines, composed here so this seam imports nothing."""
+    workflow = os.environ.get("GITHUB_WORKFLOW") or "local"
+    job = os.environ.get("GITHUB_JOB") or "-"
+    script = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "-"
+    return f"{workflow} / {job} / {script}"
+
+
+def read_lines() -> list[str]:
+    """One line per (site, caller, bucket) this process read on, largest
+    count first:
+
+        linear-read: reader="<workflow> / <job> / <script>" site=<module>.<function> count=<n> budget=<bucket> process=<token> caller=<module>.<function>
+
+    `count` is the reads sent, a retry included, each page of a `gql_paged`
+    one; the bucket is the one `calls_lines` charged that request. A process
+    that sent no read prints none."""
+    charged = {bucket: dict(reads) for bucket, reads in _budget["reads_by_bucket"].items()}
+    if _budget["reads"]:
+        current = charged.setdefault(spending_bucket(), {})
+        for key, n in _budget["reads"].items():
+            current[key] = current.get(key, 0) + n
+    rows = [(n, site, caller, bucket)
+            for bucket, reads in charged.items() for (site, caller), n in reads.items()]
+    rows.sort(key=lambda r: (-r[0], r[1], r[2], r[3]))
+    reader, token = _reader(), process_token()
+    return [
+        f'{READ_TAG} reader="{reader}" site={site} count={n} budget={bucket} '
+        f"process={token} caller={caller}"
+        for n, site, caller, bucket in rows
+    ]
+
+
+def _door_on():
+    """The read door's module when this process imported it and its mode was
+    read as `on`, else None. Its recorded mode is read, never `mode()`: that
+    reads the environment and prints a line the first time, and an exit hook
+    must not be the first to ask."""
+    door = sys.modules.get("bureau_read")
+    state = getattr(door, "_state", None)
+    if not isinstance(state, dict) or state.get("mode") != "on":
+        return None
+    return door
+
+
+def door_line() -> str | None:
+    """The door's answers on the key they were made under, or None when the
+    door was not on in this process:
+
+        linear-door: reader="<workflow> / <job> / <script>" served=<n> fallbacks=<read>/<reason>:<n>[,...] budget=<bucket> process=<token>
+
+    `served` is `bureau_read.served()`; `fallbacks` groups
+    `bureau_read.fallbacks()` by read and reason, sorted, or is `-`; the
+    bucket is the one this process is spending at exit."""
+    door = _door_on()
+    if door is None:
+        return None
+    grouped: dict[str, int] = {}
+    for _reader_name, read, reason in door.fallbacks():
+        key = f"{read}/{reason}"
+        grouped[key] = grouped.get(key, 0) + 1
+    fallbacks = ",".join(f"{key}:{n}" for key, n in sorted(
+        grouped.items(), key=lambda kv: tuple(kv[0].split("/", 1)))) or "-"
+    return (f'{DOOR_TAG} reader="{_reader()}" served={door.served()} '
+            f"fallbacks={fallbacks} budget={spending_bucket()} process={process_token()}")
+
+
 def _report_budget_at_exit() -> None:
-    """Print the budget line and the calls lines ONCE, on stderr, if any Linear
-    call was made. Registered with atexit, and run by the SIGTERM handler
-    below; a process that never touched Linear says nothing. Each is printed
-    on its own, so a failure composing one can never cost the other."""
-    if _budget["reported"] or not _budget["calls"]:
+    """Print the budget line, the calls lines, the `linear-read:` lines and the
+    `linear-door:` line ONCE, on stderr. Registered with atexit, and run by
+    the SIGTERM handler below. A process that never touched Linear prints
+    only the door line, and that only when its read door was on; one that did
+    neither says nothing. Each is composed on its own, so a failure composing
+    one can never cost the others."""
+    if _budget["reported"]:
+        return
+    try:
+        door = door_line()
+    except Exception:  # pragma: no cover — telemetry must never fail an exit
+        door = None
+    if not _budget["calls"]:
+        if door is not None:
+            _budget["reported"] = True
+            try:
+                print(door, file=sys.stderr, flush=True)
+            except Exception:  # pragma: no cover
+                pass
         return
     _budget["reported"] = True
     try:
@@ -1079,6 +1262,12 @@ def _report_budget_at_exit() -> None:
         lines += calls_lines()
     except Exception:  # pragma: no cover
         pass
+    try:
+        lines += read_lines()
+    except Exception:  # pragma: no cover
+        pass
+    if door is not None:
+        lines.append(door)
     for line in lines:
         try:
             print(line, file=sys.stderr, flush=True)
@@ -1387,14 +1576,17 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # spend a 401 first for as long as the console stays down.
     _skip_a_known_dead_token()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
+    # A request that is not a mutation is a read, counted by who asked for it
+    # (DRE-8897) — a write is read the way the read-only switch reads one.
+    read = None if _mutation_field(query) is not None else _read_names(sys._getframe())
     try:
-        out = _send(payload, landed)
+        out = _send(payload, landed, read)
     except _KeyRefused as refused:
         # A dead planner token (DRE-5589): `||` in plan.yml falls back only on
         # an EMPTY secret, and the console never un-publishes a token it could
         # not keep alive. This one request goes again on the fleet key, once.
         _fall_back(refused.why)
-        out = _send(payload, landed)
+        out = _send(payload, landed, read)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
         # The search-speed refusal, same two shapes (DRE-7613): its own type,
@@ -1482,11 +1674,12 @@ def _landed_as(found: dict) -> str:
     return "?"
 
 
-def _send(payload: bytes, landed=None) -> dict:
+def _send(payload: bytes, landed=None, read: tuple[str, str] | None = None) -> dict:
     """One request through the one-shot transient retry (DRE-3087), answered
     as parsed JSON. Raises `_KeyRefused` when the key itself was refused and
     there is a different key to fall back to; every other failure raises
-    exactly as it always has.
+    exactly as it always has. `read` is the `(site, caller)` a read is
+    counted under each time it is sent (DRE-8897), None for a write.
 
     A CREATE IS NEVER SENT TWICE BLIND (DRE-6839). This seam is handed bytes
     and cannot tell a read from a create, and a read sent twice is harmless
@@ -1519,6 +1712,9 @@ def _send(payload: bytes, landed=None) -> dict:
         # B310: URL is the constant https://api.linear.app endpoint, no user
         # input.
         _budget["calls"] += 1
+        if read is not None:
+            # Counted where the call is (DRE-8897): a retry is a read again.
+            _budget["reads"][read] = _budget["reads"].get(read, 0) + 1
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
                 _note_response_headers(getattr(resp, "headers", None))

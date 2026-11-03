@@ -410,6 +410,12 @@ def fallbacks() -> list[tuple[str, str, str]]:
     return list(_state["fallbacks"])
 
 
+def served() -> int:
+    """The reads the door served this process — the number the
+    `read-door: served` exit line prints (DRE-8897)."""
+    return _state["served"]
+
+
 def _falls_back(read: str):
     """Wrap a read with a Linear copy behind it: each `ReadUnknown` it raises
     that is not a skip is one fallback, named once. A pull_request run's

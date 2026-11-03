@@ -80,10 +80,43 @@ in words, with the number of runs read in mode `on`, and a repo the token
 cannot read prints UNKNOWN there too. The line is read only where it opens a
 line, exactly as the markers above are.
 
+A third table follows (DRE-8897): the reads each process sent Linear
+directly, per reader and the place in its code that asked. Every process that
+sent Linear a read through `linear_ops.py` prints, at exit, one line per
+(site, caller, bucket):
+
+    linear-read: reader="<workflow> / <job> / <script>" site=<module>.<function> count=<n> budget=<bucket> process=<token> caller=<module>.<function>
+
+`site` is the place in the calling code that asked for the read and `caller`
+the function that sent the query; a write is never on the line. The table,
+`direct Linear reads, last <N>h — per reader and site`, has one row per
+(repo, reader, site, bucket) with the count summed over callers, sorted by
+count, then by name, and then one TOTAL row per (repo, reader). `--by-caller`
+prints it with one more key column instead, under `direct Linear reads, last
+<N>h — per reader, site and caller`: one row per (repo, reader, site, caller,
+bucket), the same TOTAL rows under it.
+
+A fourth follows that, in both forms (DRE-8897): the door's answers, on the
+key they were made under. Every process whose read-door mode was `on` prints
+one line at exit:
+
+    linear-door: reader="<workflow> / <job> / <script>" served=<n> fallbacks=<read>/<reason>:<n>[,...] budget=<bucket> process=<token>
+
+and `door answers, last <N>h — per reader and bucket` has one row per (repo,
+reader, bucket) with `served` summed and one `<read>/<reason>` column per
+fallback seen, summed, sorted by served, then by name.
+
+Both lines are read only where they open a line, as every marker above is,
+and a line repeated with the same `process=` is counted once. A run with
+neither adds nothing to those tables, and changes nothing in the first two:
+a log from before them reads exactly as it did. With no line in the window
+each table says so in words, and a repo the token cannot read prints UNKNOWN
+there too.
+
 Never writes anything: `gh run list` and `gh run view --log` are its only
 calls. Usage:
 
-    python3 scripts/check_linear_budget.py [--hours N]
+    python3 scripts/check_linear_budget.py [--hours N] [--by-caller]
 """
 
 from __future__ import annotations
@@ -137,6 +170,16 @@ _FALLBACK_RE = re.compile(
     _LINE_START + r'read-fallback: reader="([^"\n]*)" read=(\S+) reason=(\S+)'
 )
 _DOOR_MODE_RE = re.compile(_LINE_START + r"read-door: mode (off|shadow|on)\b")
+# The lines linear_ops prints at exit (DRE-8897): one per (site, caller,
+# bucket) a process read on, and one for the door's answers in mode `on`.
+_READ_RE = re.compile(
+    _LINE_START + r'linear-read: reader="([^"\n]*)" site=(\S+) count=(\d+) '
+    r"budget=(\S+) process=(\S+) caller=(\S+)"
+)
+_DOOR_RE = re.compile(
+    _LINE_START + r'linear-door: reader="([^"\n]*)" served=(\d+) fallbacks=(\S+) '
+    r"budget=(\S+) process=(\S+)"
+)
 
 UNKNOWN = "UNKNOWN"
 
@@ -408,6 +451,157 @@ def render_fallbacks(summary: dict, unknown_repos: list[str], *,
     return "\n".join(lines)
 
 
+def reads_from_log(log_text: str) -> list[dict]:
+    """One entry per `linear-read:` line that opens its line, a line repeated
+    with the same process counted once (DRE-8897): `reader`, `site`,
+    `caller`, `budget`, `count`."""
+    out: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for line in (log_text or "").splitlines():
+        m = _READ_RE.match(line.rstrip())
+        if not m:
+            continue
+        reader, site, count, budget, process, caller = m.groups()
+        key = (process, reader, site, caller, budget)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"reader": reader, "site": site, "caller": caller,
+                    "budget": budget, "count": int(count)})
+    return out
+
+
+def aggregate_reads(observations, *, by_caller: bool = False) -> dict:
+    """The direct-read table from the same `(repo, workflow, log_text)`
+    triples the spend table reads (DRE-8897).
+
+    - `rows`: one per (repo, reader, site, bucket) with the count summed over
+      callers — with `by_caller`, one per (repo, reader, site, caller,
+      bucket) — sorted by count, descending, then by name.
+    - `totals`: one per (repo, reader), sorted the same way.
+    """
+    counts: dict[tuple[str, ...], int] = {}
+    totals: dict[tuple[str, str], int] = {}
+    for repo, _workflow, log_text in observations:
+        for r in reads_from_log(log_text):
+            key = ((repo, r["reader"], r["site"], r["caller"], r["budget"]) if by_caller
+                   else (repo, r["reader"], r["site"], r["budget"]))
+            counts[key] = counts.get(key, 0) + r["count"]
+            totals[(repo, r["reader"])] = totals.get((repo, r["reader"]), 0) + r["count"]
+    names = (("repo", "reader", "site", "caller", "budget") if by_caller
+             else ("repo", "reader", "site", "budget"))
+    rows = [dict(zip(names, key), count=n) for key, n in counts.items()]
+    rows.sort(key=lambda r: (-r["count"], *(r[name] for name in names)))
+    total_rows = [{"repo": repo, "reader": reader, "count": n}
+                  for (repo, reader), n in totals.items()]
+    total_rows.sort(key=lambda r: (-r["count"], r["repo"], r["reader"]))
+    return {"rows": rows, "totals": total_rows, "by_caller": by_caller}
+
+
+def render_reads(summary: dict, unknown_repos: list[str], *, hours: float = 1) -> str:
+    """The direct-read table, as text: its rows, UNKNOWN rows for the repos
+    the token could not read, then one TOTAL row per (repo, reader); with
+    nothing to list, a line in words instead of a header."""
+    rows, by_caller = summary["rows"], summary["by_caller"]
+    keys = "reader, site and caller" if by_caller else "reader and site"
+    lines = [f"direct Linear reads, last {hours:g}h — per {keys}"]
+    if not rows and not unknown_repos:
+        lines.append("no linear-read line in the window")
+        return "\n".join(lines)
+    columns = ["reader", "site"] + (["caller"] if by_caller else []) + ["budget"]
+    widths = {c: max([len(c), len(UNKNOWN), len("TOTAL")] + [len(r[c]) for r in rows])
+              for c in columns}
+
+    def row(repo: str, cells: dict, count) -> str:
+        middle = " ".join(f"{cells.get(c, ''):<{widths[c]}}" for c in columns)
+        return f"{repo:<20} {middle} {count:>6}"
+
+    header = row("repo", {c: c for c in columns}, "count")
+    lines += [header, "-" * len(header)]
+    lines += [row(r["repo"], r, r["count"]) for r in rows]
+    lines += [row(repo, {c: UNKNOWN for c in columns}, UNKNOWN)
+              for repo in sorted(unknown_repos)]
+    lines.append("-" * len(header))
+    lines += [row(t["repo"], {"reader": t["reader"], "site": "TOTAL"}, t["count"])
+              for t in summary["totals"]]
+    if not rows:
+        lines.append("no linear-read line in the window")
+    return "\n".join(lines)
+
+
+def doors_from_log(log_text: str) -> list[dict]:
+    """One entry per `linear-door:` line that opens its line, a line repeated
+    with the same process counted once (DRE-8897): `reader`, `served`,
+    `fallbacks` (`<read>/<reason>` → count) and `budget`."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for line in (log_text or "").splitlines():
+        m = _DOOR_RE.match(line.rstrip())
+        if not m:
+            continue
+        reader, served, fallbacks, budget, process = m.groups()
+        if process in seen:
+            continue
+        seen.add(process)
+        counted: dict[str, int] = {}
+        for part in ([] if fallbacks == "-" else fallbacks.split(",")):
+            name, _, n = part.rpartition(":")
+            if name and n.isdigit():
+                counted[name] = counted.get(name, 0) + int(n)
+        out.append({"reader": reader, "served": int(served), "fallbacks": counted,
+                    "budget": budget})
+    return out
+
+
+def aggregate_doors(observations) -> dict:
+    """The door table (DRE-8897): `rows`, one per (repo, reader, bucket) with
+    `served` and each fallback summed, sorted by served, descending, then by
+    name; `fallbacks`, every `<read>/<reason>` seen, sorted — one column each."""
+    rows: dict[tuple[str, str, str], dict] = {}
+    seen: set[str] = set()
+    for repo, _workflow, log_text in observations:
+        for d in doors_from_log(log_text):
+            row = rows.setdefault((repo, d["reader"], d["budget"]), {
+                "repo": repo, "reader": d["reader"], "budget": d["budget"],
+                "served": 0, "fallbacks": {}})
+            row["served"] += d["served"]
+            for name, n in d["fallbacks"].items():
+                row["fallbacks"][name] = row["fallbacks"].get(name, 0) + n
+                seen.add(name)
+    out = sorted(rows.values(),
+                 key=lambda r: (-r["served"], r["repo"], r["reader"], r["budget"]))
+    return {"rows": out, "fallbacks": sorted(seen, key=lambda f: tuple(f.split("/", 1)))}
+
+
+def render_doors(summary: dict, unknown_repos: list[str], *, hours: float = 1) -> str:
+    """The door table, as text: one row per (repo, reader, bucket) and one
+    column per fallback, UNKNOWN rows for the repos the token could not read;
+    with nothing to list, a line in words instead of a header."""
+    rows, fallbacks = summary["rows"], summary["fallbacks"]
+    lines = [f"door answers, last {hours:g}h — per reader and bucket"]
+    if not rows and not unknown_repos:
+        lines.append("no linear-door line in the window")
+        return "\n".join(lines)
+    rw = max([len("reader"), len(UNKNOWN)] + [len(r["reader"]) for r in rows])
+    bw = max([len("budget"), len(UNKNOWN)] + [len(r["budget"]) for r in rows])
+    fw = {f: max(len(f), len(UNKNOWN)) for f in fallbacks}
+
+    def row(repo, reader, budget, served, counts) -> str:
+        tail = "".join(f" {counts(f):>{fw[f]}}" for f in fallbacks)
+        return f"{repo:<20} {reader:<{rw}} {budget:<{bw}} {served:>7}{tail}"
+
+    header = row("repo", "reader", "budget", "served", lambda f: f)
+    lines += [header, "-" * len(header)]
+    lines += [row(r["repo"], r["reader"], r["budget"], r["served"],
+                  lambda f, r=r: r["fallbacks"].get(f, 0)) for r in rows]
+    lines += [row(repo, UNKNOWN, UNKNOWN, UNKNOWN, lambda f: UNKNOWN)
+              for repo in sorted(unknown_repos)]
+    lines.append("-" * len(header))
+    if not rows:
+        lines.append("no linear-door line in the window")
+    return "\n".join(lines)
+
+
 def _gh(*args: str) -> subprocess.CompletedProcess:
     # B603/B607: args are program-constructed, shell=False, `gh` via PATH.
     return subprocess.run(  # nosec B603 B607
@@ -456,9 +650,17 @@ def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        epilog="Prints four tables: the spend per (repo, workflow), the reads that "
+               "fell back from the read door, the reads sent to Linear directly per "
+               "reader and site (`linear-read:` lines), and the door's answers per "
+               "reader and bucket (`linear-door:` lines).")
     ap.add_argument("--hours", type=float, default=1.0,
                     help="how far back to read runs (default 1)")
+    ap.add_argument("--by-caller", action="store_true",
+                    help="split the direct-read table by the function that sent "
+                         "each read, one more key column (`caller`)")
     args = ap.parse_args(argv)
     since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
 
@@ -488,6 +690,11 @@ def main(argv: list[str] | None = None) -> int:
     print()
     print(render_fallbacks(aggregate_fallbacks(observations), unknown_repos,
                            hours=args.hours))
+    print()
+    print(render_reads(aggregate_reads(observations, by_caller=args.by_caller),
+                       unknown_repos, hours=args.hours))
+    print()
+    print(render_doors(aggregate_doors(observations), unknown_repos, hours=args.hours))
     return 0
 
 

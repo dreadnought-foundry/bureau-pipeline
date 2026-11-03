@@ -283,6 +283,18 @@
       "when": "every process that sent Linear a request through `linear_ops.py`, at exit on stderr: one line per budget bucket it spent, with the request count this run, the process token and the bucket; a process that never called Linear prints none"
     },
     {
+      "tag": "linear-read:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": "READ_TAG",
+      "when": "every process that sent Linear a read through `linear_ops.py`, since DRE-8897, at exit on stderr after its `linear-calls:` lines: one line per (site, caller, bucket), naming the reader (workflow, job and script), the site that asked, the count, the bucket, the process token and the function that sent the query; a process that sent only mutations, or nothing, prints none"
+    },
+    {
+      "tag": "linear-door:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": "DOOR_TAG",
+      "when": "every process whose read-door mode was `on`, since DRE-8897, at exit on stderr after its `linear-read:` lines, whether or not it sent Linear a request: one line naming the reader, the reads the door served, each read and reason that fell back with its count (`-` for none), the bucket and the process token; never in `off` or `shadow`"
+    },
+    {
       "tag": "operator-agent:",
       "printed_by": "scripts/operator_decide.py",
       "constant": "LOG_TAG",
