@@ -689,6 +689,13 @@ LOOP_ASK_PRESSES = (
     ("askLoopAgain", "ask a gone-quiet loop again", "the run asks a gone-quiet loop again",
      "the run asked the gone-quiet loop again", "asking a gone-quiet loop again"),
 )
+#: The one press DRE-9044 added for the Loops 4 epic (DRE-8701), after the
+#: three asks: its operation, its plain words as the standard's bullet gives
+#: them, and the press as a criterion writes it in the present, past and -ing.
+THOUGHT_PRESSES = (
+    ("saveThought", "save a thought for later", "the run saves a thought for later on Later",
+     "the run saved a thought for later", "saving a thought for later"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -777,7 +784,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(45, len(listed), listed)
+        self.assertEqual(46, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -901,8 +908,8 @@ class TheListIsCopied(unittest.TestCase):
     def test_the_loop_ask_presses_follow_the_kpis_in_order(self):
         """DRE-9034: the three loop presses, after `confirmKpi`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual(["followUpLoop", "askLoopStatus", "askLoopAgain"], ours[42:])
-        self.assertEqual([op for op, *_ in LOOP_ASK_PRESSES], ours[42:])
+        self.assertEqual(["followUpLoop", "askLoopStatus", "askLoopAgain"], ours[42:45])
+        self.assertEqual([op for op, *_ in LOOP_ASK_PRESSES], ours[42:45])
 
     def test_the_loop_ask_presses_name_only_themselves(self):
         """DRE-9034: each press's plain words, in a criterion and in its forms,
@@ -933,6 +940,42 @@ class TheListIsCopied(unittest.TestCase):
         for text in ("the run nudges a loop", "nudgeLoop"):
             with self.subTest(text=text):
                 self.assertEqual(["nudgeLoop"], ppr.sandbox_presses(text))
+
+    def test_save_thought_follows_the_asks(self):
+        """DRE-9044: `saveThought`, after `askLoopAgain`, the last press."""
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual(["saveThought"], ours[45:])
+        self.assertEqual([op for op, *_ in THOUGHT_PRESSES], ours[45:])
+
+    def test_save_thought_names_only_itself(self):
+        """DRE-9044: the press's plain words, in a criterion and in its forms,
+        and its operation name only `saveThought`."""
+        for op, words, present, past, ing in THOUGHT_PRESSES:
+            for text in (words, present, past, ing, op,
+                         f"Sandbox press: on agent-bureau-demo, {present}"):
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_no_existing_pattern_matches_save_thought(self):
+        """DRE-9044: none of the forty-five earlier patterns reads the press's
+        words, and its own pattern reads them."""
+        for op, *texts in THOUGHT_PRESSES:
+            for text in texts:
+                for other, pattern in ppr.SANDBOX_PRESSES:
+                    with self.subTest(op=op, text=text, pattern=other):
+                        self.assertEqual(other == op,
+                                         re.search(pattern, text, re.IGNORECASE) is not None)
+
+    def test_a_thought_is_not_an_initiative_draft(self):
+        """DRE-9044: `saveInitiativeDraft` does not take a `saveThought`
+        criterion, and saving a draft still names only `saveInitiativeDraft`."""
+        draft = dict(ppr.SANDBOX_PRESSES)["saveInitiativeDraft"]
+        for text in ("save a thought for later", "the run saves a thought for later on Later"):
+            with self.subTest(text=text):
+                self.assertIsNone(re.search(draft, text, re.IGNORECASE))
+        for text in ("the run saves an initiative draft", "saveInitiativeDraft"):
+            with self.subTest(text=text):
+                self.assertEqual(["saveInitiativeDraft"], ppr.sandbox_presses(text))
 
 
 class TheSandboxPressRule(_Cli):
