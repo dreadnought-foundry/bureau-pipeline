@@ -16,13 +16,22 @@ each with an `action` key — `decide`, `spent`, `apply-only` or
 
 ## claim — the receipt that spends the card's pass
 
-For a `studio`, `ceo` or `done-already` decision that is not held and whose
-action is `decide`, `claim` posts `operator_decide.receipt_text(decision,
-now)` through the act registry's receipt writer, as the act `operator-agent`.
-It refuses a `do` or held decision (exit 1) and any other action (exit 3: a
-receipt already stands), and posts nothing. When `operator_decide.newest_receipt` over the
-card's whole thread is a pipeline-authored receipt carrying the decision's
-fingerprint, the pass is spent: nothing is posted, exit 3.
+For a `studio`, `ceo` or `done-already` decision, or a Green Light row's
+`repair`, `answer` or `keep` (`operator_decide.GREEN_LIGHT_OUTCOMES`,
+DRE-9051), that is not held and whose action is `decide`, `claim` posts
+`operator_decide.receipt_text(decision, now)` through the act registry's
+receipt writer, as the act `operator-agent`. It refuses a `do` or held
+decision (exit 1) and any other action (exit 3: a receipt already stands),
+and posts nothing. When `operator_decide.newest_receipt` over the card's whole
+thread is a pipeline-authored receipt carrying the decision's fingerprint,
+the pass is spent: nothing is posted, exit 3.
+
+The one exception is the re-keep. When that standing receipt is a `keep` and
+`operator_decide.keep_stands` is False — a comment came after it — a Green
+Light decision is claimed again, whichever of the three it is, and its fresh
+receipt is the newest record on the thread. So a `keep` row is re-read once
+per comment it gets, never every pass. Every other standing receipt, and
+every waiting decision, is spent by the fingerprint alone.
 
 ## apply — one write, under the receipt, off a live read
 
@@ -31,8 +40,9 @@ through `operator_decide.decision_from_receipt`, with the decision's
 fingerprint and outcome, and not when the relay's lane guard returned the card
 after it (`operator_decide.guard_returned`). It refuses a `do` or held
 decision, and an action other than `decide` or `apply-only`. Each of those
-writes nothing and exits 1. Then it re-reads the card; a card no longer in
-the lane the decision names writes nothing, the log says why, and it exits 0.
+writes nothing and exits 1. Then, for every outcome but `keep`, it re-reads
+the card; a card no longer in the lane the decision names writes nothing, the
+log says why, and it exits 0.
 
 * `studio` — a `blockedBy` relation to `studio.blocker` in
   `config/operator-agent.json`, through `linear_ops._add_blocked_by`, skipped
@@ -48,6 +58,17 @@ the lane the decision names writes nothing, the log says why, and it exits 0.
   `choices_file`. A kept act is not screened and passes no file. `choices=`
   is never passed.
 * `done-already` — `linear_ops.cmd_state(card, "Done", expect=(<its lane>,))`.
+* `repair` and `answer` (`operator_decide.MOVING_OUTCOMES`) — a card still in
+  Green Light moves to `operator_decide.GREEN_LIGHT_DESTINATION`, Planning,
+  through `linear_ops.cmd_state(card, …, expect=(<its lane>,))`, and the log
+  says `operator-agent: <CARD> moved — Green Light → Planning`. A card that
+  already left Green Light — the CEO answered it, or another writer moved it
+  — moves nothing: `operator-agent: <CARD> not moved — it is in <lane> now`,
+  exit 0.
+* `keep` — no write and no live read: the receipt is the whole of it. The
+  log says `operator-agent: <CARD> kept — it stays in Green Light with the
+  CEO`, exit 0. The card already holds the CEO's question, so `keep` never
+  escalates, never asks one and never moves the card.
 
 A write that did not land — no relation on the re-read, a card not in Green
 Light after an escalation that did not stand down, a `cmd_state` that
@@ -150,7 +171,8 @@ EXIT_REFUSED = 4
 
 DONE_LANE = "Done"
 #: The outcomes that write. `do` is a person's step, and writes nothing.
-WRITTEN = (operator_decide.STUDIO, operator_decide.CEO, operator_decide.DONE_ALREADY)
+WRITTEN = ((operator_decide.STUDIO, operator_decide.CEO, operator_decide.DONE_ALREADY)
+           + operator_decide.GREEN_LIGHT_OUTCOMES)
 CLAIMED = ("decide",)
 APPLIED = ("decide", "apply-only")
 
@@ -243,6 +265,16 @@ def _post(card: str, body: str) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _rekept(decision, standing, records) -> bool:
+    """True for the re-keep: a Green Light decision over a standing `keep`
+    that a comment came after, so `keep_stands` no longer holds. Every other
+    standing receipt, and every waiting decision, is spent by the
+    fingerprint alone."""
+    return (decision.outcome in operator_decide.GREEN_LIGHT_OUTCOMES
+            and standing.outcome == operator_decide.KEEP
+            and not operator_decide.keep_stands(records, decision.fingerprint))
+
+
 def claim(card: str, decisions: str) -> int:
     decision, action = read_decision(decisions, card)
     if decision is None:
@@ -258,7 +290,8 @@ def claim(card: str, decisions: str) -> int:
         return EXIT_SPENT
     records = linear_ops.comment_records(card, whole_thread=True)
     _receipt, standing = _standing(decision, records)
-    if standing is not None and standing.fingerprint == decision.fingerprint:
+    if (standing is not None and standing.fingerprint == decision.fingerprint
+            and not _rekept(decision, standing, records)):
         _say(card, f"not claimed — a receipt with fingerprint {decision.fingerprint} "
                    "already stands; this pass is spent. Nothing posted")
         return EXIT_SPENT
@@ -372,6 +405,24 @@ def _done(card: str, lane: str) -> int:
     return EXIT_OK
 
 
+def _moved(card: str, outcome: str, lane: str) -> int:
+    """A `repair` or `answer`: the card back to the lane whose own run re-does
+    the work, from Green Light only and from the lane it read."""
+    if not _same_lane(lane, operator_agent.GREEN_LIGHT):
+        _say(card, f"not moved — it is in {lane or 'no lane'} now")
+        return EXIT_OK
+    what = f"the move to {operator_decide.GREEN_LIGHT_DESTINATION}"
+    try:
+        moved = linear_ops.cmd_state(card, operator_decide.GREEN_LIGHT_DESTINATION,
+                                     expect=(lane,))
+    except Exception as exc:  # noqa: BLE001 — a write that raised did not land
+        return _refused(card, outcome, f"{what} ({exc})")
+    if not moved:
+        return _refused(card, outcome, what)
+    _say(card, f"moved — {operator_agent.GREEN_LIGHT} → {operator_decide.GREEN_LIGHT_DESTINATION}")
+    return EXIT_OK
+
+
 def apply(card: str, decisions: str) -> int:
     decision, action = read_decision(decisions, card)
     if decision is None:
@@ -396,8 +447,13 @@ def apply(card: str, decisions: str) -> int:
                    f"({operator_decide.GUARD_RETURN_TAG}); a person closes it. "
                    "Nothing written")
         return EXIT_UNFINISHED
+    if decision.outcome == operator_decide.KEEP:
+        _say(card, f"kept — it stays in {operator_agent.GREEN_LIGHT} with the CEO")
+        return EXIT_OK
     issue = linear_ops.get_issue(card, fresh=True)
     lane = _lane(issue)
+    if decision.outcome in operator_decide.MOVING_OUTCOMES:
+        return _moved(card, decision.outcome, lane)
     if not _same_lane(lane, decision.lane):
         _say(card, f"left alone — it is in {lane or 'no lane'}, no longer in "
                    f"{decision.lane}. Nothing written")
