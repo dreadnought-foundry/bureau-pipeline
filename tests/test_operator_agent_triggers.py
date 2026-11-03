@@ -475,7 +475,7 @@ def test_the_docstring_names_the_entries_the_trigger_covers_and_the_read_it_does
     assert "🚨 hand-work-overdue:" in doc
     assert "hourly ring" in doc
     assert "TRIGGER_HOURS" in doc
-    flat = " ".join(doc.split())
+    flat = " ".join(doc.split()).lower()
     assert "the triggers add no read" in flat
 
 
