@@ -699,7 +699,7 @@ def test_part_ones_limits_do_catch_a_leak(tmp_path, monkeypatch):
     rules_test = _rules_test()
     leaky = tmp_path / "leaky.json"
     leaky.write_text(FIXTURE.read_text(encoding="utf-8").replace(
-        "the CEO", "person@elsewhere.test", 1), encoding="utf-8")
+        "the CEO", "person" + "@" + "elsewhere.test", 1), encoding="utf-8")
     monkeypatch.setattr(rules_test, "FIXTURE", leaky)
     with pytest.raises(AssertionError):
         rules_test.test_the_fixture_names_no_address_link_or_account_number()
@@ -717,8 +717,11 @@ def test_the_fixture_names_no_linear_user_but_the_two_stand_ins():
 # --------------------------------------------------------------------------- #
 
 
-def test_this_test_names_no_person_email_or_sign_in():
-    text = Path(__file__).read_text(encoding="utf-8")
-    assert not re.search(r"[\w.+-]+@(?!elsewhere\.test)[\w-]+\.[\w.]+", text)
-    assert not re.search(r"(?i)sign[- ]?in\b|signed in|log[- ]?in\b", text)
-    assert "the CEO" in text
+def test_this_test_and_its_fixture_name_no_person_email_or_sign_in():
+    for path in (Path(__file__), FIXTURE):
+        # The two patterns' own lines are set aside: each spells what it refuses.
+        text = "\n".join(line for line in path.read_text(encoding="utf-8").splitlines()
+                         if "re.search(" not in line)
+        assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text), path
+        assert not re.search(r"(?i)sign[- ]?in\b|signed in|log[- ]?in\b", text), path
+        assert "the CEO" in text, path
