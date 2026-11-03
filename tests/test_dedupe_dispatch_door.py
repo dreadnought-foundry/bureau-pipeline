@@ -10,7 +10,12 @@ no door answer reads `get_issue(fresh=True)` exactly as today.
 
 `_one_off_card` reads the card and its WHOLE thread off one door read
 (`comments="all"`), and today's two Linear reads when the door cannot vouch
-for the thread — with one `read-fallback:` line, not two.
+for the thread — with one `read-fallback:` line, not two. Its card is the one
+the build is dispatched with, so it is held to the same floor: the door's copy
+only once it has seen the dispatch, and Linear on a re-run.
+
+The run's `created_at` is read off GitHub once per process, however many of
+those reads ask for it.
 
 No test reaches Linear or the console: Linear is `LinearStub`, a urlopen
 stand-in, and the door and its token issuer are `tests/bureau_read_fakes.py`
@@ -131,6 +136,7 @@ def linear(monkeypatch):
     monkeypatch.delenv(linear_ops.HOME_ENV, raising=False)
     monkeypatch.setenv(linear_ops.IDENTITY_ENV, "fleet")
     monkeypatch.setenv("GITHUB_RUN_ID", "4242")
+    monkeypatch.setattr(dedupe_dispatch, "_DISPATCHED_AT", {}, raising=False)
     linear_ops.reset_pass_cache()
     stub = LinearStub()
     monkeypatch.setattr(urllib.request, "urlopen", stub)
@@ -268,7 +274,7 @@ def _same_card(card: dict) -> dict:
             "thread": [c["body"] for c in linear_ops.window_nodes(card["comments"])]}
 
 
-def test_the_one_off_card_off_the_door_is_the_card_linear_gives(linear, monkeypatch):
+def test_the_one_off_card_off_the_door_is_the_card_linear_gives(linear, meta, monkeypatch):
     baseline = dedupe_dispatch._one_off_card(CARD)
     assert dedupe_dispatch._HAND_BACK_QUERY in linear.sent, "the baseline is today's read"
     assert baseline is not None
@@ -282,9 +288,10 @@ def test_the_one_off_card_off_the_door_is_the_card_linear_gives(linear, monkeypa
     assert _same_card(served)["thread"] == THREAD
     (asked,) = door.asked("/cards")
     assert asked["query"]["comments"] == "all"
+    assert meta.asked == ["4242"]
 
 
-def test_a_thread_the_door_cannot_vouch_for_makes_todays_reads(linear, monkeypatch, capsys):
+def test_a_thread_the_door_cannot_vouch_for_makes_todays_reads(linear, meta, monkeypatch, capsys):
     with door_up(monkeypatch) as door:
         door.incomplete_threads.add(CARD)
         got = dedupe_dispatch._one_off_card(CARD)
@@ -297,10 +304,60 @@ def test_a_thread_the_door_cannot_vouch_for_makes_todays_reads(linear, monkeypat
     assert len(door.asked("/cards")) == 1
 
 
-def test_a_door_card_with_a_child_is_not_a_one_off(linear, monkeypatch):
+def test_a_door_card_with_a_child_is_not_a_one_off(linear, meta, monkeypatch):
     with door_up(monkeypatch) as door:
         door.world["DRE-502"] = card("DRE-502", "In Progress",
                                      title="bureau-pipeline: one piece",
                                      comments=THREAD, children=True)
         assert dedupe_dispatch._one_off_card("DRE-502") is None
     assert linear.sent == []
+
+
+def _read_off_linear(linear: LinearStub) -> bool:
+    """Today's two hand-back reads: the card, and its whole thread."""
+    return (dedupe_dispatch._HAND_BACK_QUERY in linear.sent
+            and any(q != dedupe_dispatch._HAND_BACK_QUERY and "comments(" in q
+                    for q in linear.sent))
+
+
+def test_a_door_older_than_the_dispatch_makes_the_hand_back_read_linear(
+        linear, meta, monkeypatch, capsys):
+    """The planner's last edits land seconds before the dispatch: a door copy
+    from before it would send the build the old title, description or labels."""
+    with door_up(monkeypatch, as_of=ONE_BEFORE) as door:
+        got = dedupe_dispatch._one_off_card(CARD)
+    assert got is not None and got["identifier"] == CARD
+    assert _read_off_linear(linear)
+    (line,) = fallback_lines(capsys.readouterr().err)
+    assert "read=cards" in line and "reason=older-than-needed" in line
+    assert len(door.asked("/cards")) == 1, "the thread is not asked of the door again"
+
+
+def test_a_rerun_reads_the_hand_back_card_off_linear(linear, meta, monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    with door_up(monkeypatch) as door:
+        got = dedupe_dispatch._one_off_card(CARD)
+    assert got is not None and got["identifier"] == CARD
+    assert _read_off_linear(linear)
+    assert door.asked("/cards") == []
+    assert meta.asked == []
+
+
+def test_an_unreadable_created_at_reads_the_hand_back_card_off_linear(linear, meta, monkeypatch):
+    meta.answer["created_at"] = ""
+    with door_up(monkeypatch) as door:
+        got = dedupe_dispatch._one_off_card(CARD)
+    assert got is not None and got["identifier"] == CARD
+    assert _read_off_linear(linear)
+    assert door.asked("/cards") == []
+
+
+def test_the_dispatch_time_is_read_once_per_process(linear, meta, monkeypatch):
+    """The lane, the labels and the hand-back's card each want `created_at`:
+    one GitHub read of the run answers all three."""
+    with door_up(monkeypatch, as_of=ONE_AFTER):
+        assert dedupe_dispatch._current_lane(CARD) == DOOR_LANE
+        assert dedupe_dispatch._card_labels(CARD) == DOOR_LABELS
+        assert dedupe_dispatch._one_off_card(CARD) is not None
+    assert linear.sent == []
+    assert meta.asked == ["4242"]
