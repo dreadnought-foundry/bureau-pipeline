@@ -245,6 +245,34 @@ def test_a_caller_that_sends_gql_itself_is_its_own_site(transport, tmp_path, cap
     assert read["site"] == read["caller"] == "rereview_watch._state_history"
 
 
+def test_a_with_block_is_not_the_site(transport, tmp_path, capsys):
+    """`_card_read_once` reads inside `contextlib`'s `__enter__`: the
+    interpreter's own library is never the calling code."""
+    transport()
+    reconcile = _module(tmp_path, "reconcile.py", """
+        import linear_ops
+
+        def build_started():
+            with linear_ops._card_read_once("DRE-1"):
+                pass
+    """)
+    reconcile.build_started()
+    (read,) = _reads(_exit_lines(capsys))
+    assert (read["site"], read["caller"]) == ("reconcile.build_started",
+                                              "linear_ops.get_issue")
+
+
+def test_a_name_that_cannot_be_read_never_fails_the_read(transport, monkeypatch, capsys):
+    def broken(_frame):
+        raise RuntimeError("no stack")
+
+    monkeypatch.setattr(linear_ops, "_read_names", broken)
+    transport()
+    assert linear_ops.gql("query { viewer { id } }")
+    (read,) = _reads(_exit_lines(capsys))
+    assert read["site"] == read["caller"] == "-"
+
+
 def test_a_retry_of_the_same_read_counts_again(transport, tmp_path, capsys):
     transport(raises={1: urllib.error.URLError(ConnectionResetError("reset"))})
     reconcile = _module(tmp_path, "reconcile.py", """
