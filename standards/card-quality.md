@@ -386,9 +386,21 @@ hand-move children (it double-dispatches and reverts in-progress work).
 closes an In Progress epic on the pass after its last build card is Done, with
 a child Done among them. Its open PROOF and after-merge OPERATOR cards — the
 follow-on work, `epic_cap.follow_on`: a proof, or a card marked for a person —
-carry on under the closed epic, are still promoted and dispatched, and close
-on their own. The close comment names them. Roll-up parents still close when
-every child is Done.
+are promoted and dispatched whether the epic is still In Progress or already
+Done, carry on under it once it closes, and close on their own. The close
+comment names them. A PROOF is promoted to Hand-work by the merge of its last
+build card, before the sweep's next pass closes the epic, so it enters
+Hand-work while the epic is still In Progress. The proof run may be
+dispatched under either epic state, In Progress or Done (`EPIC_ACTIVE` in
+`scripts/proof_dispatch.py`). So a PROOF criterion never asks for the proof to enter Hand-work, or to be dispatched, after its
+epic entered Done. DRE-7956's row asked for that and closed as a gap
+(DRE-8233). The row it should have been: "This card's Linear history shows it
+entering Hand-work no earlier than the last of the epic's build cards entering
+Done, and the epic's history shows it entering Done while this card was not
+Done (all three times quoted in PT). Its first `🔬 proof-run: dispatched`
+receipt is later than its Hand-work entry, and the `proof-dispatch:` line
+naming this card `dispatched` is quoted from that sweep run's log, with the
+run's id." Roll-up parents still close when every child is Done.
 
 **A card has no children.** Giving a card sub-issues silently converts it INTO
 an epic — the gate infers `agent:planner` from having children, and reconcile
