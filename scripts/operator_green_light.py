@@ -38,7 +38,8 @@ the hygiene lane skips itself: no receipt can be told from a stranger's.
    `proof_record.CEO_PRESS` (`proof_record.open_holds`); or a comment
    `spoken_thread.voices` labels `ceo-via-console` newer than the row's newest
    park — the newest comment the pipeline wrote that opens one of `PARK_OPENS`,
-   or the start of the thread when it has none.
+   or the start of the thread when it has none. An answer whose signature could
+   not be checked (`unchecked`) may be the CEO's, so it rules the row out too.
 5. **A row the hygiene agent's Green Light rule acts on, or reads as a stall**
    (`HYGIENE_WHY`), by that lane's own functions: its newest planning receipt is
    a plan-stage limit death, a transport receipt, or a planning question that
@@ -185,11 +186,18 @@ def _growth(card: dict) -> str | None:
     return GROWTH_WHY if (card.get("title") or "").startswith(epic_growth.TITLE_PREFIX) else None
 
 
+#: The voices after a park that may be the CEO's answer: a verified one, and
+#: one whose check could not run — nothing is known about it either way, and
+#: that is never read as "not answered" (DRE-4153).
+_MAY_BE_THE_CEO = (spoken_thread.CEO_VIA_CONSOLE, spoken_thread.UNCHECKED)
+
+
 def _answered(voices: list) -> bool:
-    """A signed answer newer than the newest park the pipeline wrote."""
+    """A signed answer, or one that could not be checked, newer than the
+    newest park the pipeline wrote."""
     park = max((n for n, v in enumerate(voices) if v.kind == spoken_thread.PIPELINE
                 and (v.body or "").lstrip().startswith(PARK_OPENS)), default=-1)
-    return any(v.kind == spoken_thread.CEO_VIA_CONSOLE for v in voices[park + 1:])
+    return any(v.kind in _MAY_BE_THE_CEO for v in voices[park + 1:])
 
 
 def _signed(card: dict, voices: list) -> str | None:
