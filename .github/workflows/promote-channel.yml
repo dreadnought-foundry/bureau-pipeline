@@ -331,15 +331,28 @@ jobs:
       # status, so it carries the stamp of whichever harness run proved the
       # sha — not only the newest one. That is the entire by-hand case: the
       # proof passed an hour ago and the channel is still behind.
+      #
+      # A FAILED harness run on main reads it too (DRE-9068): its stamp's
+      # description is where the run says WHY it is red, and a rate-limited
+      # run's `harness blocked: GitHub rate limit` marker must reach the
+      # decision to be read as `harness-inconclusive` rather than a red trunk.
+      # Without this read the decision saw only `conclusion=failure`, and on
+      # 2026-11-02 a busy quota held `stable` as a red trunk. The stamp is the
+      # failed run's own — harness.yml writes it as the job's last step — and
+      # a failed run never promotes, whatever the stamp says. Read-only on the
+      # workflow token: the bot token stays on the routes that can promote,
+      # and `steps.resolve` stays on them too, so the run's own head names
+      # the commit here.
       - name: Fetch the candidate's combined commit status
         if: >-
           github.event_name == 'workflow_dispatch' ||
           (github.event.workflow_run.head_branch == 'main' &&
            (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.conclusion == 'failure' ||
             github.event.workflow_run.name == 'Pipeline Tests'))
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/commits/${CANDIDATE}/status" \
             > combined_status.json || echo '{}' > combined_status.json

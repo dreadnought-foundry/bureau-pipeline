@@ -56,7 +56,9 @@ What is needed next is exactly one of `NEXT_STEPS`:
 
   * a re-run — the failing job was canceled, timed out, or lost its runner
     (it failed with no step failed), or the stuck job's run needs canceling
-    and re-running, on attempt 1;
+    and re-running, on attempt 1; or the decision is `harness-inconclusive`
+    and the failing job, if any, is the harness's own — GitHub refused it for
+    a rate limit, which no fix clears (DRE-9068);
   * a fix — a job failed at a step (a test or a harness scenario), or the
     decision is `mirror-tests-failed`;
   * a person — the run is already on attempt 2 or later, the decision is
@@ -159,6 +161,9 @@ FALLBACK = pipeline_notice.Fallback(
 #: The workflows it reads, by file, and the names they carry.
 UNIT_SUITE_FILE = "tests.yml"          # pc.UNIT_SUITE, "Pipeline Tests"
 HARNESS_FILE = "harness.yml"           # "Integration Harness"
+#: That workflow's one job, as GitHub names it: its id, since it has no
+#: `name:` of its own.
+HARNESS_JOB = "harness"
 PROMOTE_FILE = "promote-channel.yml"   # "Promote Channel"
 #: (file, the event its runs on main are read for — None for any).
 PROVING = ((UNIT_SUITE_FILE, "push"), (HARNESS_FILE, None))
@@ -186,6 +191,8 @@ OUTCOME_NEXT = {
     pc.OUTCOME_HELD: PERSON,
     pc.OUTCOME_BLOCKED: RERUN,
     pc.OUTCOME_QUEUE_STALL: RERUN,
+    # GitHub's meter refused the harness (DRE-9068): nothing to fix.
+    pc.OUTCOME_INCONCLUSIVE: RERUN,
     pc.OUTCOME_UNPROVEN: RERUN,
     pc.OUTCOME_FORCE_NEEDS_REASON: PERSON,
     pc.OUTCOME_FORCE_NOT_OPERATOR: PERSON,
@@ -698,6 +705,14 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
     if outcome == pc.OUTCOME_MIRROR_FAILED:
         return FIX, ("agent-bureau's mirror tests fail on this commit "
                      "(mirror-tests-failed), so agent-bureau's mirror needs a fix.")
+    if outcome == pc.OUTCOME_INCONCLUSIVE and (job is None or job.name == HARNESS_JOB):
+        # The harness job DID fail at a step — on GitHub's rate limit, which
+        # the decision read off its stamp (DRE-9068). Another job failing
+        # beside it is still that job's fix, below.
+        return RERUN, (f"GitHub refused the harness for a rate limit, so the "
+                       f"run is {pc.OUTCOME_INCONCLUSIVE} and nothing needs a "
+                       f"fix: re-run the harness once the limit resets. "
+                       f"{_one_line(decision.reason)}")
     if job:
         if job.state == FAILURE and job.failed_step:
             return FIX, (f"the job failed at step \"{job.failed_step}\" on attempt "
