@@ -463,10 +463,10 @@ def test_a_write_mint_no_step_reads_is_still_held(tmp_path, key, value, says):
 
 
 def test_every_live_model_home_mint_asks_for_no_subset():
-    """All of them — the 25 read mints and the one write mint, the daily
+    """All of them — the 26 read mints and the one write mint, the daily
     adoption's. The carry's two went with it (DRE-8021); the Alarm Repair's
-    leg added one (DRE-8634), and the Operator Agent's `decide` job one
-    (DRE-8747)."""
+    leg added one (DRE-8634), the Operator Agent's `decide` job one
+    (DRE-8747), and its `do` job one (DRE-8928)."""
     found = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
         doc = yaml.safe_load(path.read_text())
@@ -476,7 +476,7 @@ def test_every_live_model_home_mint_asks_for_no_subset():
                 assert step["uses"].startswith(PINNED), (path.name, step["id"])
                 assert not [k for k in step["with"] if k.startswith("permission-")], \
                     (path.name, job_id, step["id"], step["with"])
-    assert len(found) == 26, found
+    assert len(found) == 27, found
     assert sum(mint_id == "model_home_write" for *_, mint_id in found) == 1
 
 

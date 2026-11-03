@@ -73,7 +73,9 @@ OWN_LONG_JOBS = {
     "alarm-repair.yml": {"repair"},
     # DRE-8747: one model run over up to 20 cards under an 80-turn ceiling,
     # the agent lane. Its `apply` legs are scripts and stay on the short chain.
-    "operator-agent.yml": {"decide"},
+    # DRE-8928: its `do` legs run a model per card, the agent lane too; the
+    # `close` and `credentials` jobs are scripts on the short chain.
+    "operator-agent.yml": {"decide", "do"},
 }
 # Jobs pinned to `ubuntu-latest` with a reason on the line. None today; a pin
 # is named here AND carries its `# github-hosted:` comment.
