@@ -174,9 +174,11 @@ def door(linear, monkeypatch):
 
 
 def _fresh_pass() -> None:
-    """A new process: no kept thread, no kept blocker card."""
+    """A new process: no kept thread, no kept blocker card, the door's mode
+    unread."""
     import reconcile
 
+    bureau_read.reset_for_tests()
     linear_ops.reset_pass_cache()
     reconcile.reset_sweep_cards()
 
@@ -207,11 +209,8 @@ def test_returned_child_off_the_door_answers_what_linear_answers(linear, monkeyp
 
 
 def test_a_card_with_no_parent_asks_the_door_once(door, linear):
-    WORLD["DRE-102"] = card("DRE-102", "Planning", comments=RETURNED)
-    try:
-        got = planning_route._read_returned_child(linear_ops, "DRE-102", RETURNED)
-    finally:
-        del WORLD["DRE-102"]
+    door.world["DRE-102"] = card("DRE-102", "Planning", comments=RETURNED)
+    got = planning_route._read_returned_child(linear_ops, "DRE-102", RETURNED)
     assert got.returned is False
     assert "no parent" in got.reason
     assert _asked_cards(door) == [{"ids": "DRE-102", "comments": "1", "relations": "0"}]

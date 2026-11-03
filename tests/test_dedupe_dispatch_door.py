@@ -298,11 +298,9 @@ def test_a_thread_the_door_cannot_vouch_for_makes_todays_reads(linear, monkeypat
 
 
 def test_a_door_card_with_a_child_is_not_a_one_off(linear, monkeypatch):
-    WORLD["DRE-502"] = card("DRE-502", "In Progress", title="bureau-pipeline: one piece",
-                            comments=THREAD, children=True)
-    try:
-        with door_up(monkeypatch):
-            assert dedupe_dispatch._one_off_card("DRE-502") is None
-    finally:
-        del WORLD["DRE-502"]
+    with door_up(monkeypatch) as door:
+        door.world["DRE-502"] = card("DRE-502", "In Progress",
+                                     title="bureau-pipeline: one piece",
+                                     comments=THREAD, children=True)
+        assert dedupe_dispatch._one_off_card("DRE-502") is None
     assert linear.sent == []
