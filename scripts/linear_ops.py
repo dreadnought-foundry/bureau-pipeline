@@ -841,6 +841,13 @@ def _reset_budget_state() -> None:
         # header that response did not carry is None here, never the one an
         # earlier response sent. `call` is the request that answered.
         reading={"remaining": None, "limit": None, "reset_ms": None, "call": 0},
+        # Who each bucket's key is, read once outside a pass (DRE-8898).
+        viewers={},
+        # The job's own-write record off a runner, where there is no
+        # RUNNER_TEMP to keep it in (DRE-8898).
+        own_writes=[],
+        # What `_say_once` has said.
+        said=set(),
     )
 
 
@@ -1860,6 +1867,11 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
 
     `fresh=True` bypasses `_card_read_once`'s memo: the caller needs the card
     as it is NOW, not as it was when the command began.
+
+    It stays on Linear (DRE-8898): it is the write path's read, and
+    `team { id }`, `state { id type }` and `project { id }` are not on the
+    door's node; `fresh=True` is the DRE-2316 pre-write re-read, which must
+    be live.
     """
     if not fresh and identifier in _card_memo:
         return _card_memo[identifier]
@@ -1873,6 +1885,195 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
         {"id": identifier},
     )
     return data["issue"]
+
+
+# ── A card off the read door, first (DRE-8898) ───────────────────────────────
+# `linear_ops`' own card reads — a card's comment thread, its description, the
+# `id` a comment is posted to — ask the read door before Linear, in a step that
+# opts in by naming its max-age in `BUREAU_READ_CARD_MAX_AGE`. A step that names
+# none (the Reconcile sweep above all) never asks, and reads exactly as before.
+#
+# An age bound cannot vouch for a write made seconds before the read: the
+# door's `as_of` trails real time, so a receipt posted a moment ago can be
+# missing from a FRESH answer. So an answer is taken only when its `as_of` is
+# at or after the card's FLOOR, the latest of `seen_after` (or
+# `BUREAU_READ_CARD_SEEN_AFTER`) and the newest write this job made to the card
+# through this module, from the job's own-write record. Every step of a job
+# shares `$RUNNER_TEMP` and GitHub empties it per job, so a write in one step's
+# process sets the floor of a later step's read of the same card, and never of
+# another job's. `docs/stage2-read-door-linear-ops.md` is the whole account.
+CARD_MAX_AGE_ENV = "BUREAU_READ_CARD_MAX_AGE"
+CARD_SEEN_AFTER_ENV = "BUREAU_READ_CARD_SEEN_AFTER"
+#: The max-ages a step may name, whole seconds, both ends included.
+CARD_MAX_AGE_RANGE = (20, 3600)
+#: The job's own-write record, under `$RUNNER_TEMP`: one
+#: `{"card": "<IDENTIFIER>", "at": "<instant>"}` line per card write.
+OWN_WRITES_FILE = "linear-own-writes.jsonl"
+#: The fallback reason of a door answer older than the card's floor.
+OLDER_THAN_NEEDED = "older-than-needed"
+_WHOLE_SECONDS = re.compile(r"[0-9]+")
+
+
+def _say_once(key, line: str) -> None:
+    """`line` on stderr, the first time `key` is said in this process."""
+    if key in _budget["said"]:
+        return
+    _budget["said"].add(key)
+    print(line, file=sys.stderr, flush=True)
+
+
+def _card_max_age() -> int | None:
+    """The step's `BUREAU_READ_CARD_MAX_AGE`, or None: unset or empty, and a
+    value that is not whole seconds in `CARD_MAX_AGE_RANGE`, which is named
+    once on stderr."""
+    raw = os.environ.get(CARD_MAX_AGE_ENV) or ""
+    value = raw.strip()
+    if not value:
+        return None
+    low, high = CARD_MAX_AGE_RANGE
+    if _WHOLE_SECONDS.fullmatch(value) and low <= int(value) <= high:
+        return int(value)
+    _say_once(("max-age", raw),
+              f"read-door: {CARD_MAX_AGE_ENV}={raw!r} is not whole seconds from {low} "
+              f"to {high} — this step's card reads go to Linear")
+    return None
+
+
+def _own_writes_path() -> str | None:
+    temp = os.environ.get("RUNNER_TEMP") or ""
+    return os.path.join(temp, OWN_WRITES_FILE) if temp else None
+
+
+def _note_own_write(identifier: str, answer: dict | None, field: str) -> None:
+    """Record a card write Linear answered `field { success: true }` to:
+    under `$RUNNER_TEMP` on a runner, in this process's memory off one. A
+    record that cannot be written is said once, and leaves the floor to
+    `seen_after`."""
+    if not ((answer or {}).get(field) or {}).get("success"):
+        return
+    line = {"card": str(identifier or "").strip().upper(),
+            "at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+    path = _own_writes_path()
+    if path is None:
+        _budget["own_writes"].append(line)
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except OSError as exc:
+        _say_once("own-writes-write",
+                  f"own-writes: could not write {path} ({exc}) — this job's later "
+                  "door reads of the card are not held to this write")
+
+
+def _own_writes() -> list:
+    """The job's own-write record, as rows; a line that cannot be read is
+    passed over, and said once."""
+    path = _own_writes_path()
+    if path is None:
+        return list(_budget["own_writes"])
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError) as exc:
+        _say_once("own-writes-read", f"own-writes: could not read {path} ({exc}) — "
+                  "no floor from this job's writes")
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            row = None
+        if not isinstance(row, dict) or _instant(row.get("at")) is None:
+            _say_once("own-writes-read", f"own-writes: a line of {path} cannot be read "
+                      f"({line[:80]!r}) — passed over")
+            continue
+        rows.append(row)
+    return rows
+
+
+def _own_write_floor(identifier: str) -> datetime | None:
+    """When this job last wrote `identifier` through this module, or None."""
+    ident = str(identifier or "").strip().upper()
+    times = [_instant(row.get("at")) for row in _own_writes()
+             if str(row.get("card") or "").strip().upper() == ident]
+    return max(times) if times else None
+
+
+def _card_floor(identifier: str, seen_after) -> tuple[datetime | None, bool]:
+    """`(floor, readable)`: the latest of `seen_after` (the variable when the
+    argument is not passed) and the job's newest write to the card, or None
+    with neither; `readable` is False when `seen_after` cannot be read."""
+    given = os.environ.get(CARD_SEEN_AFTER_ENV) if seen_after is None else seen_after
+    instants = []
+    if isinstance(given, datetime):
+        if given.tzinfo is None:
+            return None, False
+        instants.append(given)
+    elif str(given or "").strip():
+        at = _instant(str(given).strip())
+        if at is None:
+            return None, False
+        instants.append(at)
+    own = _own_write_floor(identifier)
+    if own is not None:
+        instants.append(own)
+    return (max(instants) if instants else None), True
+
+
+def card_via_door(identifier: str, *, comments: int | str = 50, relations: bool = False,
+                  seen_after=None, floor: bool = True
+                  ) -> tuple[dict, bureau_read.DoorRead] | None:
+    """`(node, read)`: the door's node for this one card and the `DoorRead`
+    it came in, or None — and the caller reads Linear exactly as it would
+    have.
+
+    None at once, asking nothing and printing nothing, when the step names
+    no `BUREAU_READ_CARD_MAX_AGE` or the door is not `on`. A stopped door is
+    named here through `note_fallback`; a refusal or an UNKNOWN is named by
+    `bureau_read.cards` itself; `linear-hold` is None too, since a reader here
+    has no phase to skip. With `floor` (the default) an answer whose `as_of`
+    is before the card's floor, or cannot be read, and a `seen_after` that
+    cannot be read, are None after an `older-than-needed` fallback.
+    `floor=False` is for a read of what never changes, the card's `id`.
+
+    The node's `viewer` is never used for authorship: the door's is the
+    console's key, and authorship is judged against this process's own."""
+    max_age = _card_max_age()
+    if max_age is None or _door_mode() != "on":
+        return None
+    if not bureau_read.enabled():
+        bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
+        return None
+    wanted = None
+    if floor:
+        wanted, readable = _card_floor(identifier, seen_after)
+        if not readable:
+            bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
+            return None
+    try:
+        read = bureau_read.cards(
+            [identifier], max_age=max_age, comments=comments, relations=relations,
+            relations_max_age=bureau_read.RELATIONS_MAX_AGE if relations else None)
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            print(f"read-door: {identifier} unknown ({bureau_read.LINEAR_HOLD}) — read "
+                  "from Linear: a card read has no phase to skip", file=sys.stderr)
+        return None
+    except Exception as e:  # noqa: BLE001 — Linear on ANY door error
+        print(f"read-door: {identifier} unreadable ({type(e).__name__}: {e}) — read "
+              "from Linear", file=sys.stderr)
+        bureau_read.note_fallback("cards", "unavailable")
+        return None
+    if wanted is not None:
+        as_of = _instant(read.as_of)
+        if as_of is None or as_of < wanted:
+            bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
+            return None
+    return read.nodes[0], read
 
 
 def state_id(team_id: str, name: str) -> str:
@@ -2226,6 +2427,9 @@ def _clobbered_terminal_state(
 
     An entry older than `since` is never ours, whatever its `toState`: with none
     at or after it, this write left nothing to repair.
+
+    It stays on Linear (DRE-8898): the door serves no history, and the entry
+    it reads back is seconds old.
     """
     data = gql(
         """query($id: String!) { issue(id: $id) {
@@ -2294,11 +2498,12 @@ def _expectation_refusal(
 
 
 def _set_state(identifier: str, issue_id: str, state_id_value: str) -> None:
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue_id, "input": {"stateId": state_id_value}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
 
 
 def guarded_state_write(
@@ -2739,11 +2944,12 @@ def set_description(identifier: str, body: str) -> None:
     alone. This remains a general-purpose description setter.
     """
     issue = get_issue(identifier)
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"description": body}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} description updated")
 
 
@@ -2758,11 +2964,12 @@ def set_title(identifier: str, title: str) -> None:
     the next sweep recomputes the title from the ledger it can read.
     """
     issue = get_issue(identifier)
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"title": title}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} title updated")
 
 
@@ -2802,17 +3009,17 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
         # receipt that quietly loses its trailer is the silence this whole
         # mechanism exists to end.
         body = pipeline_act.receipt(act, body)
-    issue = get_issue(identifier)
+    issue_id = _comment_target(identifier)
     try:
         try:
-            _create_comment(identifier, issue["id"], body)
+            _create_comment(identifier, issue_id, body)
         except BodyTooLong as refused:
             if act or refused.limit is None:
                 raise
             parts = comment_parts(body, refused.limit)
             for i, part in enumerate(parts, 1):
                 try:
-                    _create_comment(identifier, issue["id"], part)
+                    _create_comment(identifier, issue_id, part)
                 except LinearError:
                     print(f"comment: {identifier} part {i} of {len(parts)} not posted "
                           f"({i - 1} posted before it)", file=sys.stderr)
@@ -2829,15 +3036,38 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     return None
 
 
+#: The comment's pre-read (DRE-8898): the card's `id`, and nothing else.
+_COMMENT_TARGET_QUERY = "query($id: String!) { issue(id: $id) { id } }"
+
+
+def _comment_target(identifier: str) -> str:
+    """The card's `id`, the one fact a comment needs of the card (DRE-8898).
+
+    From `_card_read_once`'s memo when the command holds one, else off the
+    door — an `id` never changes, so no floor — else its own Linear read of
+    the `id` alone, named `caller=linear_ops._comment_target` on the
+    `linear-read:` line, apart from the write path's `get_issue`."""
+    if identifier in _card_memo:
+        return _card_memo[identifier]["id"]
+    served = card_via_door(identifier, comments=1, floor=False)
+    if served is not None and served[0].get("id"):
+        return served[0]["id"]
+    issue = (gql(_COMMENT_TARGET_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    if not issue.get("id"):
+        raise LinearError(f"comment: Linear has no card {identifier!r}")
+    return issue["id"]
+
+
 def _create_comment(identifier: str, issue_id: str, body: str) -> None:
     """One `commentCreate`, with its own read-back look so a retried post is
     not doubled (DRE-6839)."""
-    gql(
+    data = gql(
         """mutation($input: CommentCreateInput!) {
              commentCreate(input: $input) { success } }""",
         {"input": {"issueId": issue_id, "body": body}},
         landed=_comment_look(identifier, body, datetime.now(UTC)),
     )
+    _note_own_write(identifier, data, "commentCreate")
     # The pass's cached thread is stale the moment this lands (DRE-3236): the
     # next reader in the pass must see the comment it just posted.
     _pass["threads"].pop(identifier, None)
@@ -2962,13 +3192,17 @@ def _comment_look(identifier: str, body: str, began: datetime):
     check runs before the first attempt and cannot see what that attempt
     made; this reads the thread after it, through the reader every other
     thread read uses, for a comment by this key with exactly this body made at
-    or after `began` less `_READ_BACK_SKEW`."""
+    or after `began` less `_READ_BACK_SKEW`.
+
+    It stays on Linear (DRE-8898): it asks whether a write landed seconds
+    ago, which a door answer trailing real time cannot say."""
     since = began - _READ_BACK_SKEW
 
     def landed() -> dict | None:
         # A pass's cached thread predates the first attempt.
         _pass["threads"].pop(identifier, None)
-        nodes, me = _thread_and_viewer(identifier, "body", "createdAt", "user")
+        nodes, me = _thread_and_viewer(identifier, "body", "createdAt", "user",
+                                       door=False)
         for node in reversed(nodes):
             at = _history_at(node)
             if (me and (node.get("user") or {}).get("id") == me
@@ -4141,7 +4375,10 @@ def _card_look(title: str, began: datetime, parent_id: str | None = None):
     under the same parent. One found is what the first attempt made, answered
     as `issueCreate` answers. More than one is refused naming them: which of
     them is ours is a guess, and adopting a guess hangs the blockers and the
-    hold on somebody else's card."""
+    hold on somebody else's card.
+
+    It stays on Linear (DRE-8898): it asks whether a create landed seconds
+    ago, which a door answer trailing real time cannot say."""
     since = began - _READ_BACK_SKEW
 
     def landed() -> dict | None:
@@ -4637,7 +4874,9 @@ def find_open(title: str) -> str | None:
 
     The value behind `cmd_find_open`, for a Python caller (`repair_card.py`)
     that must decide between reusing that card and creating one — one query,
-    one answer, not a printed line somebody parses back."""
+    one answer, not a printed line somebody parses back.
+
+    It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone."""
     data = gql(
         """query($t: String!) {
              issues(filter: {
@@ -4686,6 +4925,8 @@ def find_open_prefix(prefix: str) -> dict | None:
     can be read. `first: 20` is a fleet-wide alarm's whole plausible range —
     there is one outage at a time, and a listing that ever filled this would
     itself be the finding.
+
+    It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone.
     """
     data = gql(
         """query($prefix: String!) {
@@ -4796,6 +5037,9 @@ def cmd_state_of(identifier: str) -> None:
 
 
 def cmd_children(identifier: str) -> None:
+    """Print how many children the card has.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier."""
     data = gql(
         """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
         {"id": identifier},
@@ -4944,10 +5188,29 @@ _OLDER_PAGE_QUERY = """query($id: String!, $after: String!) { issue(id: $id) {
        nodes { %s } } } }""" % COMMENT_FIELDS
 
 
-def _fetch_thread(identifier: str,
-                  *, whole: bool = False) -> tuple[list[dict], str | None]:
+def _door_thread(identifier: str, *, whole: bool) -> list[dict] | None:
+    """The card's comments off the read door, oldest→newest, or None
+    (DRE-8898). The whole thread for `whole` and inside a pass, which the
+    door answers FRESH only when it marks the thread whole; the
+    COMMENT_WINDOW window otherwise. The door's nodes arrive newest-first, as
+    Linear's do, so they go through `window_nodes` like every window here."""
+    served = card_via_door(identifier,
+                           comments="all" if whole or _pass["open"] else COMMENT_WINDOW)
+    if served is None:
+        return None
+    node, _read = served
+    return window_nodes(node.get("comments"))
+
+
+def _fetch_thread(identifier: str, *, whole: bool = False,
+                  door: bool = True) -> tuple[list[dict], str | None]:
     """`(nodes, viewer_id)`: the card's comments oldest→newest, and who this
     key is.
+
+    Off the read door first when the step opts in (`card_via_door`,
+    DRE-8898), and then the viewer is None: the door's is the console's key,
+    never this one, so a reader that needs it asks `viewer_id()`. `door=False`
+    reads Linear whatever the step says.
 
     The COMMENT_WINDOW window always — the fifty NEWEST, which is the read
     every caller outside a pass gets by default and all it gets. The pages
@@ -4967,6 +5230,10 @@ def _fetch_thread(identifier: str,
     it costs a request per hundred comments, and every other reader here wants
     the recent history the window is.
     """
+    if door:
+        nodes = _door_thread(identifier, whole=whole)
+        if nodes is not None:
+            return nodes, None
     data = gql(_THREAD_QUERY, {"id": identifier})
     me = (data.get("viewer") or {}).get("id")
     conn = ((data.get("issue") or {}).get("comments")) or {}
@@ -4990,22 +5257,25 @@ def _fetch_thread(identifier: str,
     return list(reversed(nodes)), me
 
 
-def _thread(identifier: str, *needs: str) -> list[dict]:
+def _thread(identifier: str, *needs: str, whole: bool = False) -> list[dict]:
     """The card's comment nodes for a reader that needs `needs`: from the
     pass's cache when it carries them, else ONE read — cached for the pass.
-    Never asks who the viewer is; only `comment_records` needs that."""
+    Never asks who the viewer is; only `comment_records` needs that.
+    `whole` pages past the window, as `_thread_and_viewer`'s does."""
     cached = _cached_thread(identifier, needs)
     if cached is not None:
         return cached
-    nodes, me = _fetch_thread(identifier)
+    nodes, me = _fetch_thread(identifier, whole=whole)
     _remember(identifier, nodes, me)
     return nodes
 
 
-def _thread_and_viewer(identifier: str, *needs: str,
-                       whole: bool = False) -> tuple[list[dict], str | None]:
-    """`_thread`, plus the viewer — off the same read on a miss, off the
-    pass's one viewer read on a hit.
+def _thread_and_viewer(identifier: str, *needs: str, whole: bool = False,
+                       door: bool = True) -> tuple[list[dict], str | None]:
+    """`_thread`, plus the viewer — off the same read on a Linear miss, off
+    `viewer_id()` on a hit or a thread the door served (DRE-8898): the
+    door's viewer is the console's key, never this one. `door=False` reads
+    Linear on a miss whatever the step says.
 
     `whole` pages past the window even outside a sweep's pass. A cache HIT is
     still served: nothing is ever cached partial (`remember_comments` drops a
@@ -5016,7 +5286,11 @@ def _thread_and_viewer(identifier: str, *needs: str,
     cached = _cached_thread(identifier, needs)
     if cached is not None:
         return cached, viewer_id()
-    nodes, me = _fetch_thread(identifier, whole=whole)
+    nodes = _door_thread(identifier, whole=whole) if door else None
+    if nodes is not None:
+        _remember(identifier, nodes, None)
+        return nodes, viewer_id()
+    nodes, me = _fetch_thread(identifier, whole=whole, door=False)
     _remember(identifier, nodes, me)
     return nodes, me
 
@@ -5033,13 +5307,23 @@ def _remember(identifier: str, nodes: list[dict], me: str | None) -> None:
 
 
 def viewer_id() -> str | None:
-    """Who `LINEAR_API_KEY` is — read at most once per pass. Outside a pass
-    every call asks, exactly as `comment_records` always did."""
+    """Who `LINEAR_API_KEY` is — read at most once per pass, and outside a
+    pass at most once per process and bucket (DRE-8898), keyed by
+    `spending_bucket()`, so a process that fell back to another key asks
+    again. A viewer Linear did not name is asked again next time.
+
+    It stays on Linear (DRE-8898): authorship is judged against this
+    process's own key, and the door's viewer is the console's."""
     if _pass["open"] and _pass["viewer_read"]:
         return _pass["viewer"]
+    bucket = spending_bucket()
+    if not _pass["open"] and bucket in _budget["viewers"]:
+        return _budget["viewers"][bucket]
     me = ((gql("query { viewer { id } }") or {}).get("viewer") or {}).get("id")
     if _pass["open"] and me:
         _pass.update(viewer=me, viewer_read=True)
+    elif me:
+        _budget["viewers"][bucket] = me
     return me
 
 
@@ -5050,10 +5334,7 @@ def comment_timeline(identifier: str, *, whole_thread: bool = False) -> list[dic
     `whole_thread` pages past the window, as `comment_bodies` does: the
     planning exit retires every verdict a re-planned card carried (DRE-4884),
     and a verdict past the window that it did not see would stay live."""
-    if whole_thread:
-        nodes, _ = _thread_and_viewer(identifier, "body", "createdAt", whole=True)
-    else:
-        nodes = _thread(identifier, "body", "createdAt")
+    nodes = _thread(identifier, "body", "createdAt", whole=whole_thread)
     return [
         {"body": c.get("body") or "", "createdAt": c.get("createdAt") or ""}
         for c in nodes
@@ -5156,10 +5437,7 @@ def comment_bodies(identifier: str, *, whole_thread: bool = False) -> list[str]:
     when the planning classifier read the thread at 12:32 PT, so the classifier
     read the epic as unclassified, and its failed self-check parked it in
     Green Light as a CEO decision."""
-    if whole_thread:
-        nodes, _ = _thread_and_viewer(identifier, "body", whole=True)
-        return [c.get("body") or "" for c in nodes]
-    return [c.get("body") or "" for c in _thread(identifier, "body")]
+    return [c.get("body") or "" for c in _thread(identifier, "body", whole=whole_thread)]
 
 
 def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict]:
@@ -5202,9 +5480,15 @@ def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict
     query carried, at the cost of one request per pass instead of one per epic.
     In `BUREAU_READ=on` a thread past the fifty-comment window is in the cache
     too, off the read door's whole-thread (`comments=all`) answer, when the
-    sweep asked for it (`reconcile._door_epic_threads`, DRE-5850); a thread
-    the door could not prove whole is read from Linear here, as in `off`. The
-    viewer is always Linear's: the door's is the console's key, not this one.
+    sweep asked for it (`reconcile._door_epic_threads`, DRE-5850).
+
+    The thread may come from the read door outside the cache too, in a step
+    that names `BUREAU_READ_CARD_MAX_AGE` (`card_via_door`, DRE-8898): a
+    whole thread only when the door marks it whole, and only an answer at or
+    after the card's floor. A thread the door could not serve is read from
+    Linear here, as in `off`. The VIEWER never comes from the door: the
+    door's is the console's key, and `authored_by_pipeline` is judged against
+    this process's own, Linear's `viewer { id }` (`viewer_id`).
 
     `whole_thread` pages past the fifty-comment window outside a pass too, for
     a reader whose answer a truncated thread makes WRONG rather than stale —
@@ -5403,11 +5687,12 @@ def add_label(identifier: str, label_name: str) -> None:
         )
         label_id = created["issueLabelCreate"]["issueLabel"]["id"]
     label_ids = [lbl["id"] for lbl in existing] + [label_id]
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"labelIds": label_ids}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} + label {label_name!r}")
 
 
@@ -5433,11 +5718,12 @@ def remove_label(identifier: str, label_name: str) -> None:
     label_ids = [
         lbl["id"] for lbl in existing if lbl["name"].lower() != label_name.lower()
     ]
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"labelIds": label_ids}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} − label {label_name!r}")
 
 
@@ -5482,7 +5768,14 @@ def cmd_description(identifier: str) -> None:
     agent-authored and not guaranteed to quote it verbatim). Prints nothing
     (not an error) for a description-less card so callers can treat empty as
     "no design ref".
+
+    Off the read door first when the step opts in (`card_via_door`,
+    DRE-8898), else Linear, exactly as before.
     """
+    served = card_via_door(identifier, comments=1)
+    if served is not None:
+        sys.stdout.write(served[0].get("description") or "")
+        return
     data = gql(
         """query($id: String!) { issue(id: $id) { description } }""",
         {"id": identifier},
@@ -5499,6 +5792,8 @@ def cmd_child_descriptions(identifier: str) -> None:
     where the plan's own prose is only a claim. Same degrade-quietly contract
     as `description` — a childless epic or a body-less child prints nothing,
     so the caller reads "no design refs" rather than the step erroring out.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier.
     """
     data = gql(
         """query($id: String!) {
@@ -5566,6 +5861,8 @@ def cmd_children_json(identifier: str) -> None:
     before, and a Done card describing the work it delivered is the normal
     shape of every Done card. That send-back was the second of two, so the
     epic hit the bound and parked on a finding that was not a gap.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier.
     """
     data = gql(
         """query($id: String!) {
@@ -5631,6 +5928,8 @@ def cmd_children_detail(identifier: str) -> None:
     more questions of the same cards — what is this card called, what labels
     does it carry, and what formally blocks it — so it gets its own read rather
     than widening the critics' one with fields they never look at.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier.
     """
     data = gql(
         """query($id: String!) {

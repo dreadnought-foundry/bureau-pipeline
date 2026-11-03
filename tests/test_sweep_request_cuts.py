@@ -413,6 +413,8 @@ class FakeLinear:
             }}
         if "state { name }" in q:
             return {"issue": {"state": card["state"]}}
+        if "issue(id: $id) { id }" in q:
+            return {"issue": {"id": card["id"]}}
         raise AssertionError(f"unexpected Linear query: {query}")
 
 
