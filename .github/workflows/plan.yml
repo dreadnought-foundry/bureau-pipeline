@@ -223,6 +223,18 @@ jobs:
       # fleet key instead of spending a 401 in every process. Empty until the
       # console publishes the variable, and empty changes nothing.
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, for every reader in this job (DRE-8903): set exactly as
+      # reconcile.yml sets it, the mode the caller's variable and `off` when
+      # unset, and the stub grants `id-token: write` (DRE-4348). Every
+      # `linear_ops` thread read and comment pre-read asks the door first
+      # (DRE-8898), and so do the classifier's parent read and the critic's
+      # card read. Sixty seconds, because the planner needs its card as it is
+      # now; a write this job made is a floor no answer may predate.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: 60
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -6599,10 +6611,21 @@ jobs:
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       # The CEO's entry point, and the address anchored feedback binds to.
+      # Its `linear_ops.py comment` pre-reads the epic's `id`
+      # (`_comment_target`, DRE-8898), the one Linear read this job makes, so
+      # this step alone gets the read door (DRE-8903), set as the plan job sets
+      # it. An `id` never changes, so the pre-read holds no floor. The token
+      # comes from the caller: the stub grants `id-token: write`, and this job
+      # declares no `permissions:` to take it away.
       - name: Plan artifact — announce
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 60
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           URL="${{ steps.publish.outputs.url }}"

@@ -1964,8 +1964,17 @@ def roll_up_parent(lops, identifier: str, *, doc: dict | None = None) -> str | N
     the stamp the split route starts from, written before any child exists. A
     parent with no stamp, another shape, or a stamp that cannot be read is not
     known to be a roll-up, and the card keeps the seam floor it always had.
+
+    The parent is read off the read door first (`linear_ops.card_via_door`,
+    DRE-8903), in a step that opts in, and from `PARENT_QUERY` when the door
+    does not answer or `lops` has no door seam.
     """
-    issue = (lops.gql(PARENT_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    via_door = getattr(lops, "card_via_door", None)
+    served = via_door(identifier, comments=1) if via_door is not None else None
+    if served is not None:
+        issue = served[0]
+    else:
+        issue = (lops.gql(PARENT_QUERY, {"id": identifier}) or {}).get("issue") or {}
     parent = (issue.get("parent") or {}).get("identifier")
     if not parent:
         return None

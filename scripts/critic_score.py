@@ -306,8 +306,19 @@ def read_card(lops, identifier: str) -> dict:
     `LIST_API_CAP` characters of a description and says nothing about it, so
     every cheap reader in the pipeline has been routing on the top of the card.
     This is the one place that pays for the rest.
+
+    Off the read door first (`linear_ops.card_via_door`, DRE-8903), in a step
+    that opts in, when the door's node has no children: `children` is then
+    `[]`, and the answer exact. A card the door shows with children reads
+    Linear, because the door lists them by internal id, not identifier, and so
+    does a door that does not answer or a `lops` with no door seam.
     """
-    issue = lops.gql(CARD_QUERY, {"id": identifier})["issue"]
+    via_door = getattr(lops, "card_via_door", None)
+    served = via_door(identifier, comments=1) if via_door is not None else None
+    if served is not None and not (served[0].get("children") or {}).get("nodes"):
+        issue = served[0]
+    else:
+        issue = lops.gql(CARD_QUERY, {"id": identifier})["issue"]
     return {
         "identifier": issue.get("identifier") or identifier,
         "title": issue.get("title") or "",
