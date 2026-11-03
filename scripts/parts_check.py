@@ -28,8 +28,10 @@ with the patterns the critic's parts review already uses
 fails for a copy whose own declaration sits on a line the diff adds, or for
 which the diff adds the part's file, and for a UI file the diff adds, or in
 which it adds a line declaring a component, outside every declared folder and
-not a test, spec or story, that imports none of the shared parts. A file
-imports a shared part when an `import`
+not a test, spec or story, that imports none of the shared parts. A
+declaration the diff also removes from that file is a component renamed or
+edited, not a new one: only as many added declarations as the diff removes
+from the file are excused (DRE-9089). A file imports a shared part when an `import`
 statement binds a part's name (`import { Notice as N }` counts as `Notice`; a
 default import counts by its local name), or names a relative specifier that
 resolves, against the file's own folder, into a declared folder.
@@ -301,9 +303,17 @@ def _new_side(diff) -> str:
     return "\n".join(text for kind, text in diff.lines if kind != "-") + "\n"
 
 
-def _declares_on(text: str, lines) -> bool:
-    """Whether a component is declared in `text` on one of `lines`."""
-    return any(_line_of(text, match) in lines for match in parts_review._declarations(text))
+def _declared_on(text: str, lines) -> int:
+    """How many components are declared in `text` on one of `lines`."""
+    return sum(1 for match in parts_review._declarations(text) if _line_of(text, match) in lines)
+
+
+def _removed_declarations(diff) -> int:
+    """How many components the lines a file's diff removes declare (DRE-9089)."""
+    old = [(kind, text) for kind, text in diff.lines if kind != "+"]
+    text = "\n".join(line for _, line in old) + "\n"
+    return sum(1 for match in parts_review._declarations(text)
+               if old[_line_of(text, match) - 1][0] == "-")
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +370,11 @@ def check(diff_path, repo_root) -> tuple:
             text = _new_side(diff)
             kinds = [kind for kind, _ in diff.lines if kind != "-"]
             on = {number for number, kind in enumerate(kinds, 1) if kind == "+"}
-        if _declares_on(text, on) and not imports_a_part(diff.path, text, names, folders):
+        # A declaration the diff also removes from the file is a component
+        # renamed, not a new one: only as many as it removes are excused.
+        removed = sum(_removed_declarations(d) for d in ui if d.path == diff.path)
+        if (_declared_on(text, on) > removed
+                and not imports_a_part(diff.path, text, names, folders)):
             lonely.append(diff.path)
     findings = ([f"{CHECK_TAG} COPY {c.part} — shared part declared at "
                  f"{c.part_path}:{c.part_line}; copy declared at {c.copy_path}:{c.copy_line}"

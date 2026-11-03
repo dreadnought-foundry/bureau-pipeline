@@ -91,7 +91,11 @@ names every one.
    `import` statement imports a catalog part (the import rule, below). A
    component is declared on an added line when a `parts_review._declarations`
    match opens on a line `added_lines` numbers as added; a file the diff adds
-   has every line added, so a new file is judged whole. A diff that adds a
+   has every line added, so a new file is judged whole. A declaration the
+   diff also removes from the same file — a component renamed, or its
+   declaration line edited — is not new (DRE-9089): the file fails only when
+   the diff adds more declarations to it than it removes from it, so a rename
+   cannot carry a second, new component past the check. A diff that adds a
    route line to a router shell that declares a component and has no part to
    import does not fail. The file is read from the checkout; when the
    checkout does not hold it, from the diff's added and context lines.
