@@ -140,6 +140,10 @@ critic's round counting trusts (DRE-2721). So:
   line;
 * a reader that needs no viewer (`_thread`, `comment_bodies`,
   `count_comments`, `comment_timeline`) makes no viewer read;
+* agent-task's card snapshot keeps the door's viewer as it came, so
+  `spoken_thread.read` never judges a door-served snapshot's comments against
+  it: it takes the viewer from `viewer_id()` instead (DRE-8900). A snapshot
+  read from Linear keeps the viewer it was read with;
 * outside a pass `viewer_id()` asks at most once per process and bucket, keyed
   by `spending_bucket()`, so a process that fell back to another key mid-run
   asks again. Inside a pass it asks once per pass, as before.
