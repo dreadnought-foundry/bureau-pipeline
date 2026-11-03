@@ -46,6 +46,7 @@ os.environ.setdefault("REPO_SLUG", "portico")
 os.environ.setdefault("GH_TOKEN", "x")
 
 import dead_run  # noqa: E402
+import operator_agent  # noqa: E402
 import pipeline_act  # noqa: E402
 import proof_dispatch  # noqa: E402
 import proof_run_state  # noqa: E402
@@ -56,6 +57,8 @@ import validate_card  # noqa: E402
 import test_operator_card_promotion as promo  # noqa: E402
 
 CONFIG = ROOT / "config" / "hand-work-age.json"
+#: The standing card the Parts Sweep posts the weekly parts list to (DRE-9056).
+PARTS_WEEKLY = "DRE-9090"
 ACT = "hand-work-overdue"
 HAND_WORK = "Hand-work"
 OPERATOR_STEP = "operator-step"
@@ -187,10 +190,33 @@ class TestTheConfig:
     def test_hours_and_the_standing_cards(self):
         doc = json.loads(CONFIG.read_text())
         assert doc["hours"] == 24
-        assert {s["card"] for s in doc["standing"]} == {"DRE-4541", "DRE-5774"}
-        assert len(doc["standing"]) == 2
+        assert [s["card"] for s in doc["standing"]] == ["DRE-4541", "DRE-5774", PARTS_WEEKLY]
         for entry in doc["standing"]:
             assert entry["why"].strip(), f"{entry['card']}: a standing card says why"
+
+    def test_the_weekly_parts_card_stands_and_is_not_the_groomers(self):
+        """DRE-9056: the weekly parts list's card is declared standing, and its
+        `why` never says `groomer` — `tests/test_groom_memory.py` reads a row
+        that does as the groomer's own standing card."""
+        doc = json.loads(CONFIG.read_text())
+        row = doc["standing"][-1]
+        assert row == {
+            "card": PARTS_WEEKLY,
+            "why": ("The weekly parts list: the Parts Sweep posts the week's new "
+                    "shared parts to it every Sunday, and the CEO rejects a part on "
+                    "it; nobody ever finishes it."),
+        }
+        assert "groomer" not in row["why"].lower()
+
+    def test_the_operator_agent_leaves_the_weekly_parts_card_alone(self):
+        """Read from the real config: in Hand-work the operator agent takes any
+        card `left_kind` does not answer for, and may comment on or close it."""
+        card = {"identifier": PARTS_WEEKLY, "state": {"name": HAND_WORK},
+                "title": "Weekly parts list — new shared parts, and where to reject one",
+                "labels": {"nodes": [{"name": "repo:bureau-pipeline"}, {"name": NO_CODE}]}}
+        assert operator_agent.left_kind(card, operator_agent._standing())
+        assert not operator_agent.left_kind({**card, "identifier": "DRE-7001"},
+                                            operator_agent._standing())
 
     def test_the_sweep_reads_the_number_from_the_file(self, tmp_path, monkeypatch, capsys):
         doc = json.loads(CONFIG.read_text())
@@ -334,7 +360,7 @@ class TestNeverAlarms:
         assert line.endswith(
             "; in Hand-work 100h — never alarms (the CEO's own hand-built card)")
 
-    @pytest.mark.parametrize("ident", ["DRE-4541", "DRE-5774"])
+    @pytest.mark.parametrize("ident", ["DRE-4541", "DRE-5774", PARTS_WEEKLY])
     def test_a_standing_card(self, ident, capsys):
         card = _card(ident, entered=100.0)
         got = _sweep([card], capsys)
