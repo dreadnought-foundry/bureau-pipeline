@@ -484,6 +484,16 @@ set -e
 #   ten reads now, off a proof-record branch. Neither of the gate's
 #   two branch writes is reached on that hold, and both are update-branch,
 #   which merges the pull request's own base, never the default branch.
+# DRE-9123 (2026-11-03). At 7:56 AM PT the gate refreshed agent-bureau #4639
+#   and #4641 for new tests. Both new heads were green by about 8:04 with the
+#   APPROVE carried and the Verifier's check passed, and no gate run looked at
+#   either again: the next look hung on a CI-completion wake those green
+#   checks never raised. A person merged both at 9:19. Each branch write's
+#   note opens with merge_gate.REFRESH_NOTE_OPENER, and that opener is now the
+#   gate's ask to be evaluated again: reconcile.regate_green_unmerged
+#   dispatches the gate for the pull request once every check on the new head
+#   has finished green, and says so in one line on it. Each write also logs
+#   one `regate:` line naming the pull request. The note bodies are unchanged.
 
 set -euo pipefail
 
@@ -857,6 +867,8 @@ if [ "$REFRESH" = "refresh" ]; then
       --marker "$REFRESH_MARK" \
       --body-file /tmp/refresh-note.md \
       || echo "the refresh note did not post — the branch update stands"
+    # The note is the ask to be evaluated again, kept by the sweep (DRE-9123).
+    echo "regate: PR #$PR refreshed onto $TIP — the reconcile sweep sends it back to the merge gate once the new head's checks finish green (DRE-9123)"
   else
     echo "update-branch refused for $SHA — not merging; the next evaluation decides again"
   fi
@@ -919,6 +931,7 @@ if ! gh pr merge "$PR" "$MERGE_METHOD" --delete-branch --match-head-commit "$SHA
           --marker "$UPDATE_MARK" \
           --body-file /tmp/update-note.md \
           || echo "the update note did not post — the branch update stands"
+        echo "regate: PR #$PR updated onto $TIP — the reconcile sweep sends it back to the merge gate once the new head's checks finish green (DRE-9123)"
         exit 0
       else
         echo "update-branch refused for $SHA: $(cat /tmp/update-error.txt)"

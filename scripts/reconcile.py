@@ -12279,6 +12279,153 @@ def redispatch_standing_verdicts() -> None:
         return  # one dispatch per sweep; the busy-guard handles the rest
 
 
+#: What the sweep's send-back receipt carries for a head (DRE-9123): its first
+#: line opens `🔁 regate @<head>:`, the once-per-head key.
+REGATE_KEY = "regate"
+#: How long an approved, verified, green, CLEAN head may stay unmerged after
+#: its last check finished before the sweep sends it back to the gate. The
+#: gate merges such a head within a minute of the wake its last check raises,
+#: so fifteen minutes is a wake that never came, not a slow one.
+REGATE_MINUTES = int(os.environ.get("REGATE_MINUTES", "15"))
+
+
+def _regate_receipt_opener(head: str) -> str:
+    return f"🔁 {REGATE_KEY} @{head}:"
+
+
+def refresh_pending(pr: dict) -> bool:
+    """True when the merge gate's newest note on the pull request is one a
+    branch write of its own left (DRE-9123): a refresh, or the out-of-date
+    update, opening with merge_gate.REFRESH_NOTE_OPENER. The gate updated
+    the branch and stopped without merging, and that note is its ask to be
+    evaluated again once the new head's checks finish. Any later gate note —
+    a decline, a hold — means it has looked again and spoken, and the ask is
+    kept. Only the qa-bot's notes count (DRE-1998)."""
+    for c in reversed(pr.get("comments") or []):
+        line = merge_gate.first_line(c.get("body") or "")
+        if is_qa_bot_comment(c) and merge_gate.GATE_NOTE_MARK in line:
+            return line.startswith(merge_gate.REFRESH_NOTE_OPENER)
+    return False
+
+
+def _head_workflow_runs(sha: str) -> list[dict] | None:
+    """The head's workflow runs, the gate's own condition 1 record — or None
+    when the read fails, which condition 1 waits on (DRE-5045)."""
+    out = gh_actions_read("api", f"repos/{REPO}/actions/runs?head_sha={sha}&per_page=100")
+    if not out:
+        return None
+    try:
+        runs = json.loads(out).get("workflow_runs")
+    except (ValueError, AttributeError):
+        return None
+    return runs if isinstance(runs, list) else None
+
+
+def _regate_reason(pr: dict) -> str | None:
+    """Why this pull request goes back to the merge gate now, or None.
+
+    The cheap reads first, off the listing: an `agent/` branch, open, not a
+    draft, its whole thread read, CLEAN, no receipt for this head yet, the
+    critic's newest word APPROVE and the Verifier's, when it has spoken,
+    PASS or SKIP. Then the head's check runs and workflow runs, judged by
+    the gate's own condition 1 (`merge_gate.precheck`): every gating check
+    finished green and no CI run still going. Then the time: a head the gate
+    refreshed goes back as soon as that holds, any other once its last check
+    finished more than REGATE_MINUTES ago. Last, because it can cost two
+    reads, the APPROVE must bind this head — by sha, or carried by content
+    exactly as the gate carries it (`verdict_bound`)."""
+    number, head = pr.get("number"), pr.get("headRefOid") or ""
+    if (not card_branch(pr.get("headRefName")) or pr.get("isDraft")
+            or pr.get(THREAD_UNREADABLE) or not head
+            or pr.get("mergeStateStatus") != "CLEAN"):
+        return None
+    opener = _regate_receipt_opener(head)
+    if any(is_worker_pool_comment(c)
+           and merge_gate.first_line(c.get("body") or "").startswith(opener)
+           for c in pr.get("comments") or []):
+        return None  # sent back once for this head already
+    verdicts = critic_comments(pr)
+    if not verdicts or merge_gate.verdict_token(
+            merge_gate.first_line(verdicts[-1].get("body") or ""),
+            merge_gate.CRITIC_MARKER) != "APPROVE":
+        return None
+    checked = verifier_comments(pr)
+    if checked and merge_gate.verdict_token(
+            merge_gate.first_line(checked[-1].get("body") or ""),
+            merge_gate.VERIFIER_MARKER) not in ("PASS", "SKIP"):
+        return None
+    checks = _head_check_runs(head)
+    if checks is None:
+        print(f"regate: PR #{number} check runs at {head[:8]} could not be "
+              "read — not sending it back on an unread head")
+        return None
+    runs = _head_workflow_runs(head)
+    if merge_gate.precheck(checks, runs, pr.get("mergeStateStatus") or "",
+                           pr.get("headRefName") or "") is not None:
+        return None  # a check red or running, or the runs unread: condition 1 waits
+    counted, _ = merge_gate.gating_check_runs(checks, runs)
+    finished = [c.get("completed_at") for c in counted if c.get("completed_at")]
+    if not finished:
+        return None
+    last = max(finished, key=lambda at: datetime.fromisoformat(at.replace("Z", "+00:00")))
+    idle = int(age_minutes(last))
+    refreshed = refresh_pending(pr)
+    if not refreshed and idle < REGATE_MINUTES:
+        return None
+    if not verdict_bound(pr):
+        return None  # the APPROVE is for code this head no longer proposes
+    if refreshed:
+        return (f"the gate refreshed this branch and stopped without merging, "
+                f"and every check on the new head finished green at {_pt(last)} "
+                "with the critic's APPROVE standing, so the gate evaluates it "
+                "again now (DRE-9123)")
+    return (f"approved, verified, green and CLEAN, and still unmerged {idle} "
+            f"minutes after its last check finished at {_pt(last)}, so the "
+            "gate evaluates it again (DRE-9123)")
+
+
+def regate_green_unmerged() -> None:
+    """DRE-9123: send an approved, verified, green, CLEAN pull request the
+    merge gate has not merged back to the gate, once per head.
+
+    On 2026-11-03 the gate refreshed agent-bureau #4639 and #4641 from `main`
+    for new tests (DRE-6871) at 7:56 AM PT. Every check on the new heads was
+    green by about 8:04, the critic's APPROVE carried and the Verifier's
+    check passed, both read CLEAN — and no gate run evaluated either again.
+    The gate's next look hangs on a wake from the last check's completion,
+    and those green checks raised none that reached it. Four sweeps between
+    8:22 and 9:01 left them alone: the review lane's own gate nudge waits for
+    the card to sit idle two hours. A person merged both at 9:19, 75 minutes
+    after they went green.
+
+    The rule is `_regate_reason`'s. A head the gate refreshed goes back as
+    soon as its checks finish green — the gate's refresh note is its ask to
+    be evaluated again (`refresh_pending`) — and any other head once its last
+    check finished more than REGATE_MINUTES ago. One dispatch per head: the
+    dispatch posts one `🔁 regate @<head>:` line on the pull request naming
+    why, and a head carrying it is never dispatched again, while that gate
+    run is in flight or after it. A new head starts again. A dispatch that
+    does not go through posts nothing and is recorded, so the next sweep
+    tries again. One summary line per sweep, including one that finds
+    nothing."""
+    prs = _open_pr_listing()
+    if prs is None:
+        print("regate: the open pull requests could not be read")
+    candidates = dispatched = 0
+    for pr in prs or []:
+        why = _regate_reason(pr)
+        if not why:
+            continue
+        candidates += 1
+        number, head = pr["number"], pr["headRefOid"]
+        print(f"regate: PR #{number} @{head[:8]} sent back to the merge gate — {why}")
+        if _nudge(gate_workflow(), number):
+            dispatched += 1
+            _post_pr_note(number, f"{_regate_receipt_opener(head)} PR #{number} "
+                                  f"sent back to the merge gate — {why}.")
+    print(f"regate: {candidates} candidate(s), {dispatched} dispatched")
+
+
 #: The head a committed-not-pushed marker names on its first line, in
 #: DRE-6351's grammar (`fix_budget.committed_not_pushed_body`).
 COMMITTED_HEAD_RE = re.compile(r"head still at ([0-9a-f]{8})\b")
@@ -16151,6 +16298,11 @@ def main(
             # that DIED, this one starts the fix run a standing verdict never
             # got (portico #407 sat ten hours on a diagnosis nobody acted on).
             redispatch_standing_verdicts,
+            # DRE-9123, beside it because it is the same question asked of an
+            # APPROVE: a verdict that should have ended in a run of the gate,
+            # and nothing is coming (agent-bureau #4639 and #4641 sat green
+            # and CLEAN for 75 minutes after a refresh).
+            regate_green_unmerged,
             # DRE-3171: a run that hit a usage or request limit comes back on
             # its own once the wall is down — the stage it died in, re-entered.
             recover_limit_deaths,

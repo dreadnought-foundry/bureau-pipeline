@@ -2058,6 +2058,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "sent back to the merge gate — {why}.",
+      "kind": "undeclared-act",
+      "means": "An approved, verified, green, CLEAN pull request the gate has not merged is sent back to the merge gate once per head (DRE-9123): as soon as its checks finish green on a head the gate refreshed, otherwise once its last check finished REGATE_MINUTES ago. Its first line, `🔁 regate @<head>:`, is the once-per-head key `_regate_reason` reads.",
+      "why": "Act-shaped — the sweep dispatched the gate by itself — and the registry has no row for it, as for the review lane's gate nudge just above. A new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own, so the receipt ships as an undeclared act. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "linear_ops.cmd_comment(ident, epic_growth.closing_comment(",
       "kind": "undeclared-act",
       "means": "The sweep closes a growth question the CEO answered (DRE-6414): on his signed `re-approve` or `split`, the question card about an epic grown past the size he approved is moved to Done under one comment, `✅ epic-growth-question: re-approved at <M> cards on <PT time>`, or `split asked at <M> cards on <PT time> — amendment filed on <epic>`. Read back off the card's own thread before it is posted, so a pass that stopped part-way posts no second one.",
