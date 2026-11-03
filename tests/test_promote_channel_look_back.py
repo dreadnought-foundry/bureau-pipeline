@@ -725,7 +725,8 @@ class DocsTest(unittest.TestCase):
     def test_queue_behind_says_a_canceled_pending_run_is_covered(self):
         doc = DOC.read_text()
         start = doc.index("## Queue behind, never cancel")
-        section = _flat(doc[start:doc.index("\n## ", start + 1)])
+        # The paragraphs directly under the heading, before its first `###`.
+        section = _flat(doc[start:doc.index("\n### ", start)])
         self.assertIn("DRE-9069", section)
         self.assertIn("look-back", section)
         self.assertIn("canceled while pending", section)
