@@ -564,6 +564,91 @@ class OnlyWhatTheDiffAddsTest(unittest.TestCase):
                          got.stdout.splitlines())
 
 
+ACTION_ICONS = "console/web/src/components/initiatives/parts/actionIcons.tsx"
+
+#: agent-bureau#4621's shape (DRE-8993): a local helper, imported from no
+#: shared part, renamed from `Icon` to `Glyph` and nothing else.
+ACTION_ICONS_SRC = """\
+import { ArrowUp, X, type LucideIcon } from 'lucide-react'
+import type { ReactNode } from 'react'
+
+import type { ActionOption } from './SplitButton'
+
+export const ACTION_ICON: Record<string, LucideIcon | null> = {
+  sendToPlanning: ArrowUp,
+  cancelCard: X,
+  openCard: null,
+}
+
+/** An option's icon, for a split button's or option buttons' `iconFor`; nothing for an action with none. */
+export function actionIcon(option: ActionOption): ReactNode {
+  const Icon = (ACTION_ICON as Record<string, LucideIcon | null | undefined>)[option.action]
+  return Icon ? <Icon aria-hidden="true" /> : null
+}
+"""
+
+ACTION_ICONS_RENAMED = ACTION_ICONS_SRC.replace(
+    "/** An option's icon, for a split button's or option buttons' `iconFor`; nothing for an "
+    "action with none. */\n",
+    "/**\n * An option's icon, for a split button's or option buttons' `iconFor`; nothing\n"
+    " * for an action with none, inked by the button around it.\n */\n").replace(
+    "const Icon =", "const Glyph =").replace(
+    "return Icon ? <Icon", "return Glyph ? <Glyph")
+
+
+class ARenameIsNotNewTest(unittest.TestCase):
+    """A declaration the diff also removes from the same file is a component
+    renamed, not a new one (DRE-9089): only as many added declarations as the
+    diff removes from that file are excused, so a file that imports no shared
+    part still fails for each component beyond them."""
+
+    def _judge(self, base: dict, files: dict) -> subprocess.CompletedProcess:
+        with TemporaryDirectory() as tmp:
+            root = _repo(Path(tmp) / "repo", {**BASE, **base})
+            return _check(root, _change(root, files))
+
+    def test_renaming_the_action_glyph_passes(self):
+        got = self._judge({ACTION_ICONS: ACTION_ICONS_SRC}, {ACTION_ICONS: ACTION_ICONS_RENAMED})
+        self.assertEqual(0, got.returncode, got.stdout + got.stderr)
+        self.assertEqual("", got.stdout)
+        self.assertEqual(["parts-check: pass — 1 UI file(s) checked, 0 copies added, "
+                          "0 UI files importing no shared part"], got.stderr.splitlines())
+
+    def test_renaming_a_function_component_passes(self):
+        got = self._judge({APP: APP_SRC}, {APP: APP_SRC.replace(
+            "export function App()", "export function Shell()")})
+        self.assertEqual(0, got.returncode, got.stdout + got.stderr)
+        self.assertEqual("", got.stdout)
+
+    def test_a_rename_and_a_new_component_fails(self):
+        got = self._judge({ACTION_ICONS: ACTION_ICONS_SRC}, {ACTION_ICONS: (
+            ACTION_ICONS_RENAMED
+            + "\nexport function ActionBadge() {\n  return <b>action</b>;\n}\n")})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: NO-SHARED-PART {ACTION_ICONS} — imports none of "
+                          f"the shared parts"], got.stdout.splitlines())
+        self.assertEqual(["parts-check: fail — 0 copy(ies) added, 1 UI file(s) "
+                          "importing no shared part"], got.stderr.splitlines())
+
+    def test_a_removal_in_another_file_excuses_nothing(self):
+        got = self._judge({ACTION_ICONS: ACTION_ICONS_SRC, APP: APP_SRC}, {
+            ACTION_ICONS: ACTION_ICONS_SRC.replace(
+                "  const Icon = (ACTION_ICON as Record<string, LucideIcon | null | undefined>)"
+                "[option.action]\n  return Icon ? <Icon aria-hidden=\"true\" /> : null\n",
+                "  return null\n"),
+            APP: APP_SRC + "\nfunction StatusBanner() {\n  return <p>status</p>;\n}\n"})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: NO-SHARED-PART {APP} — imports none of the "
+                          f"shared parts"], got.stdout.splitlines())
+
+    def test_a_brand_new_component_still_fails(self):
+        got = self._judge({ACTION_ICONS: ACTION_ICONS_SRC}, {ACTION_ICONS: (
+            ACTION_ICONS_SRC + "\nexport function ActionBadge() {\n  return <b>action</b>;\n}\n")})
+        self.assertEqual(1, got.returncode, got.stderr)
+        self.assertEqual([f"parts-check: NO-SHARED-PART {ACTION_ICONS} — imports none of "
+                          f"the shared parts"], got.stdout.splitlines())
+
+
 WEB_ATOMS = "ui/atoms"
 NATIVE_ATOMS = "ui/native/atoms"
 WEB_SEAL = f"{WEB_ATOMS}/Seal.tsx"
