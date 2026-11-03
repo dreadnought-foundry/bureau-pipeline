@@ -363,7 +363,7 @@ def test_a_row_carries_exactly_the_contracts_keys(tmp_path, monkeypatch):
     added = board.add("DRE-9001", description="Run the IAM change in the console.")
     row = _select(tmp_path)[0]
     assert set(row) == {"card", "repo", "lane", "title", "labels", "description",
-                        "fingerprint", "rule", "for_model", "action", "receipt"}
+                        "fingerprint", "rule", "for_model", "action", "receipt", "trigger"}
     assert row["fingerprint"] == _fp(added)
     assert row["rule"] == dataclasses.asdict(operator_rules.rule_outcome(
         added["title"], added["description"]))
