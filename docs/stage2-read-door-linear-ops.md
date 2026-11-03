@@ -137,6 +137,26 @@ one Linear request, the viewer query.
 
 Each one's docstring says the same in one sentence.
 
+## Readers outside `linear_ops` (DRE-8904)
+
+Two of the planner's lookups call `card_via_door` themselves, in a step that
+names the max-age:
+
+* `planning_route._read_returned_child` reads the card, and its parent when it
+  has one, with `comments=1`. `_read_epic_wait` reads the epic with
+  `relations=True`, under `bureau_read.RELATIONS_MAX_AGE`. Either falls back to
+  its own query (`_FAMILY_QUERY`, `_WAIT_QUERY`) on `None`, and the epic's also
+  on `inverseRelations.pageInfo.hasNextPage`. The epic's lane history and its
+  blockers' own reads are unchanged.
+* `dedupe_dispatch`'s lane and label reads ask whether the card moved while
+  the dispatch sat in the queue. They pass the run's `created_at` as
+  `seen_after`, so the door's node is taken only when its `as_of` is at or
+  after the dispatch. A re-run, an unreadable `created_at` or no door answer
+  makes the live `get_issue(fresh=True)` read as before. `_one_off_card` reads
+  the card and its whole thread with `comments="all"`. If the door cannot
+  vouch for the thread, the card falls back to today's two Linear reads, with
+  one `read-fallback:` line.
+
 ## The fallback lines
 
 `bureau_read.cards` prints the `read-fallback:` line for a refusal or an
