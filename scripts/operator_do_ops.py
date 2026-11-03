@@ -35,8 +35,10 @@ taken out — and refuses, naming the op (`op <n> <op>: <reason>`) or the plan
 * a variable name, project name, branch name or workflow file the text does
   not quote word for word — the model never invents a target — and the
   default branch, quoted or not;
+* a path or branch with an empty, `.` or `..` part, or a `?`, `#`, `%` or
+  control character — both land in a URL;
 * a script off the file's list, or one whose arguments break its one form;
-* the agent's own switches, wherever an op names them;
+* the agent's own switches, in any letter case, wherever an op names them;
 * more than `max_ops` ops.
 
 ## The close
@@ -84,6 +86,9 @@ _AFTER = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\dZ")
 _SHA = re.compile(r"[0-9a-f]{40}")
 _VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _WORKFLOWS = ".github/workflows/"
+#: What a path or a branch never holds: it lands in a URL, and these end or
+#: re-encode the URL's path there.
+_URL_BREAK = re.compile(r"[?#%\x00-\x1f\x7f]")
 _CARD_DONE = re.compile(r"(?<![\w-])card-done(?![\w-])", re.IGNORECASE)
 _CLOSE_WORD = re.compile(r"\bclos(?:e|es|ed|ing)\b", re.IGNORECASE)
 _SENTENCE = re.compile(r"(?<=[.!?])\s+|\n+")
@@ -182,6 +187,8 @@ def render(op: dict, doc: dict | None = None) -> list:
             if slot.group(1) not in op:
                 raise ValueError(f"the {op['op']} op has no {slot.group(1)}")
         if len(slots) == 1 and slots[0].group(2) == "*":
+            if not isinstance(op[slots[0].group(1)], list):
+                raise ValueError(f"the {op['op']} op's {slots[0].group(1)} is not a list")
             argv.extend(_value(v) for v in op[slots[0].group(1)])
             continue
 
@@ -215,8 +222,16 @@ def credential(kind: str, doc: dict | None = None) -> str:
 
 def plan_repo(plan: dict) -> str | None:
     """The plan's one `owner/name`, or None when no op names one. Two is a
-    `ValueError`: `check` refuses that plan."""
-    repos = {op["repo"] for op in plan.get("ops") or [] if isinstance(op, dict) and "repo" in op}
+    `ValueError`: `check` refuses that plan. So is a repo that is not text,
+    or ops that are not a list."""
+    ops = plan.get("ops") if isinstance(plan, dict) else None
+    if not isinstance(ops, list):
+        raise ValueError("the plan's ops are not a list")
+    named = [op["repo"] for op in ops if isinstance(op, dict) and "repo" in op]
+    for repo in named:
+        if not isinstance(repo, str):
+            raise ValueError(f"the plan's repo {repo!r} is not an owner/name")
+    repos = set(named)
     if len(repos) > 1:
         raise ValueError(f"the plan names {len(repos)} repositories: {', '.join(sorted(repos))}")
     return next(iter(repos), None)
@@ -239,6 +254,13 @@ def _quoted(value: str, text: str) -> bool:
     head = r"(?<![\w/.-])" if re.match(r"[\w/.-]", value) else ""
     tail = r"(?![\w/-])" if re.search(r"[\w/-]$", value) else ""
     return re.search(f"{head}{body}{tail}", text) is not None
+
+
+def _segments_whole(value: str) -> bool:
+    """True when no `/`-separated part of `value` is empty, `.` or `..`, and
+    nothing in it breaks the URL it lands in."""
+    return (not _URL_BREAK.search(value)
+            and not any(part in ("", ".", "..") for part in value.split("/")))
 
 
 def _strings(value):
@@ -295,7 +317,7 @@ class _Reader:
     def variable(self, value, op) -> list:
         if not isinstance(value, str) or not _VARIABLE.fullmatch(value):
             return [f"`{value}` is not a variable name"]
-        if value in self.doc["never"]:
+        if value.upper() in (name.upper() for name in self.doc["never"]):
             return []  # the switch scan names it
         return self.target(value, "variable name")
 
@@ -303,7 +325,8 @@ class _Reader:
         return self.target(value, "project name")
 
     def branch(self, value, op) -> list:
-        if not isinstance(value, str) or not value.strip() or re.search(r"\s", value):
+        if (not isinstance(value, str) or not value.strip() or re.search(r"\s", value)
+                or not _segments_whole(value)):
             return [f"`{value}` is not a branch name"]
         if value in self.doc["never_branches"]:
             return [f"`{value}` is the default branch, never written"]
@@ -313,10 +336,9 @@ class _Reader:
         return [f"`{value}` is not quoted in the card's text, nor `agent/{self.card or 'DRE-<n>'}-<slug>`"]
 
     def path(self, value, op) -> list:
-        if (not isinstance(value, str) or not value.strip() or value.startswith("/")
-                or ".." in value.split("/")):
+        if not isinstance(value, str) or not value.strip() or not _segments_whole(value):
             return [f"`{value}` is not a path inside the repository"]
-        if value.startswith(_WORKFLOWS) and not (
+        if value.lower().startswith(_WORKFLOWS) and not (
                 _quoted(value, self.text) or _quoted(value.rsplit("/", 1)[-1], self.text)):
             return [f"`{value}` is not quoted in the card's text — a workflow file is only "
                     "ever one the card names"]
@@ -344,12 +366,15 @@ class _Reader:
         return []
 
     def script(self, value, op) -> list:
+        if not isinstance(value, str):
+            return [f"`{value}` is not a script path"]
         if value not in self.doc["scripts"]:
             return [f"`{value}` is not on the script list ({', '.join(self.doc['scripts'])})"]
         return []
 
     def args(self, value, op) -> list:
-        spec = self.doc["scripts"].get(op.get("path"))
+        path = op.get("path")
+        spec = self.doc["scripts"].get(path) if isinstance(path, str) else None
         if spec is None:
             return []  # the script's own refusal says why
         form = (f"`{' '.join(spec['head'])} {spec['repeat']} <value> …`, with "
@@ -387,7 +412,7 @@ def _plan_refusals(plan, ops, doc: dict, card_kind: tuple) -> list:
         refusals.append(f"plan: the card is a person's step ({evidence}), and the agent does none")
     elif kind not in doc["kinds"]:
         refusals.append(f"plan: the card's kind is {kind}, which the agent never does")
-    if plan.get("kind") not in doc["kinds"]:
+    if not isinstance(plan.get("kind"), str) or plan["kind"] not in doc["kinds"]:
         refusals.append(f"plan: kind {plan.get('kind')!r} is not a kind the agent does")
     elif cls == operator_step_kind.MACHINE and plan["kind"] != kind:
         refusals.append(f"plan: kind {plan['kind']}, and the card's kind is {kind}")
@@ -421,7 +446,9 @@ def _op_refusals(op, reader: _Reader, doc: dict, card_kind: str) -> list:
         else:
             why += reader.readers[ftype](op[field], op)
     for switch in doc["never"]:
-        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(switch)}(?![A-Za-z0-9_])")
+        # GitHub reads a variable name without letter case.
+        pattern = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(switch)}(?![A-Za-z0-9_])",
+                             re.IGNORECASE)
         if any(pattern.search(s) for f, v in op.items() if f != "op" for s in _strings(v)):
             why.append(f"`{switch}` is the agent's own switch")
     return why
