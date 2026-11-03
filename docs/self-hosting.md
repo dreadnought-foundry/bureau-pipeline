@@ -186,6 +186,10 @@ unblocked `integration-harness` stamp through every gate: its status, its
 ancestry, its own unit suite, the hold and the mirror check. The outcome words
 are the ones in the table below, and the decision line names both commits, the
 refusal word of the run's own commit and how many commits were read. The
+release, the decision record and the run summary name the run behind the
+promoted commit's own stamp as its proof, never the starting run, which was
+about the refused commit; and a chain that could not be read says so, rather
+than that main's history ended. The
 hold, the unit-suite and mirror refusals and every by-hand dispatch never look
 back, so force stays a person's alone.
 

@@ -266,6 +266,10 @@ STOP_FOUND = "found"
 STOP_CHANNEL = "channel"
 STOP_LIMIT = "limit"
 STOP_END = "end"
+#: The chain itself could not be read — the fetch or `rev-list` failed — so
+#: nothing is known about the commits before the run's own; never `STOP_END`,
+#: which says main's history really ended (standards/console-honesty.md).
+STOP_UNREAD = "unread"
 
 #: The bound on the mirror check's one-line summary (DRE-6683). Promote
 #: Channel run 38076381376 moved `stable` and then went red: its summary named
@@ -824,6 +828,15 @@ def proven(combined: dict | None) -> bool:
     return _harness_verdict(combined) == SUCCESS and not blocked_by_sandbox(combined)
 
 
+def proving_run(combined: dict | None) -> str:
+    """The harness run behind a proven stamp — its `target_url` — or `""`.
+    What a look-back promotion names as its proof, never the starting run,
+    which was about the refused commit."""
+    if not proven(combined):
+        return ""
+    return str((_harness_stamp(combined) or {}).get("target_url") or "")
+
+
 def looks_back(decision: Decision, *, manual: bool) -> bool:
     """Does this decision about the run's own commit look back (DRE-9069)?
     Only an automatic refusal at the harness proof does."""
@@ -863,6 +876,8 @@ def look_back(
     proven one is safe, the channel only moves forward, and the newer one
     still promotes when its own run ends.
     """
+    if not chain:
+        return LookBack(own, own_outcome, "", 0, STOP_UNREAD)
     read = 0
     for sha in chain:
         if channel_head and sha == channel_head:
@@ -887,6 +902,9 @@ def look_back_note(look: LookBack) -> str:
     word, A or that nothing was found, and how many commits were read."""
     count = f"{look.read} commit{'' if look.read == 1 else 's'} read"
     head = f"Looked back from {look.own}, refused as {look.own_outcome}"
+    if look.stopped == STOP_UNREAD:
+        return (f"{head}: {TRUNK}'s first-parent chain could not be read, so "
+                f"whether an older commit is proven is unknown.")
     if look.candidate:
         return (f"{head}: {look.candidate} is the newest proven commit on "
                 f"{TRUNK}'s first-parent chain — {count}.")
@@ -1142,10 +1160,12 @@ def look_back_main(argv: list[str]) -> int:
     as the proof would, and on a refusal at the harness proof walk main's
     first-parent chain for the newest proven commit.
 
-    Writes `candidate=<sha>` (empty when there is none, or no look-back) and,
-    when it looked back, the record the decision reads. Exit 0 always."""
+    Writes `candidate=<sha>` (empty when there is none, or no look-back),
+    `proving_run=<url>` — the harness run behind that candidate's stamp, which
+    the decision record and the summary name in place of the starting run —
+    and, when it looked back, the record the decision reads. Exit 0 always."""
     args = _parser(look_back_command=True).parse_args(argv)
-    candidate = ""
+    candidate = proof = ""
     if args.manual:
         print("no look-back: a by-hand dispatch never looks back.")
     else:
@@ -1158,16 +1178,23 @@ def look_back_main(argv: list[str]) -> int:
                   f"harness proof.")
         else:
             chain = _first_parent_chain(args.default_branch, LOOK_BACK_LIMIT)
+            stamps: dict[str, dict | None] = {}
+
+            def read(sha: str) -> dict | None:
+                stamps[sha] = _read_status(args.repo, sha)
+                return stamps[sha]
+
             look = look_back(
-                chain, lambda sha: _read_status(args.repo, sha),
+                chain, read,
                 own=args.sha, own_outcome=own.outcome,
                 channel_head=_read_channel_head(args.repo),
             )
             with open(args.out, "w") as fh:
                 json.dump(look._asdict(), fh)
             candidate = look.candidate
+            proof = proving_run(stamps.get(candidate)) if candidate else ""
             print(f"look-back: {look_back_note(look)}")
-    _write_output(candidate=candidate)
+    _write_output(candidate=candidate, proving_run=proof)
     return 0
 
 

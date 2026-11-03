@@ -300,8 +300,11 @@ jobs:
       # Only a refusal at the harness proof walks the chain, so a passing
       # commit, a held channel and every unit-suite or mirror refusal read
       # nothing more. A walk that finds a proven commit writes
-      # `candidate=<sha>` and `look_back.json`, which both decisions read;
-      # one that finds nothing writes the record alone, so the line says so.
+      # `candidate=<sha>` and `look_back.json`, which both decisions read,
+      # and `proving_run=<url>` — the run behind that commit's own stamp,
+      # which the decision record and the summary name in place of the
+      # starting run; one that finds nothing writes the record alone, so the
+      # line says so.
       # Run as a module, so the steps that name `promote_channel.py` stay the
       # two decisions — the by-hand wiring test finds the decision that way.
       - name: Look back for a proven commit
@@ -891,7 +894,9 @@ jobs:
           ANCESTRY: ${{ steps.ancestry.outputs.status }}
           CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
           FROM_SHA: ${{ steps.ancestry.outputs.head }}
-          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          # On a look-back (DRE-9069) the starting run was about the refused
+          # commit, so the gating run is the one behind the candidate's stamp.
+          HARNESS_RUN: ${{ steps.lookback.outputs.candidate == '' && github.event.workflow_run.html_url || steps.lookback.outputs.proving_run }}
           SCENARIOS: ${{ steps.channel.outputs.scenarios }}
         run: |
           python3 scripts/channel_record.py --repo "$GITHUB_REPOSITORY" \
@@ -954,7 +959,10 @@ jobs:
           OUTCOME: ${{ steps.decide.outputs.outcome }}
           REASON: ${{ steps.decide.outputs.reason }}
           PROMOTED: ${{ steps.decide.outputs.promote }}
-          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          # The run behind the candidate's own stamp on a look-back (DRE-9069),
+          # never the starting run, which was about the refused commit.
+          HARNESS_RUN: ${{ steps.lookback.outputs.candidate == '' && github.event.workflow_run.html_url || steps.lookback.outputs.proving_run }}
+          LOOK_BACK: ${{ steps.lookback.outputs.candidate }}
           # The starting run's workflow (DRE-6993): a `Pipeline Tests` run is
           # named under "Woken by", never as the harness run.
           WOKEN_BY: ${{ github.event.workflow_run.name }}
@@ -977,6 +985,10 @@ jobs:
           if [ "$OUTCOME" = "mirror-tests-failed" ] && [ -z "$MIRROR_CARD" ]; then
             MIRROR_CARD="card owed"
           fi
+          NO_RUN="none — this was a by-hand dispatch"
+          if [ -n "$LOOK_BACK" ]; then
+            NO_RUN="none on record for ${LOOK_BACK:0:7}"
+          fi
           if [ "$PROMOTED" = "true" ]; then
             HEADLINE="moved stable to ${CANDIDATE:0:7}"
           else
@@ -990,10 +1002,12 @@ jobs:
             echo ""
             echo "${REASON}"
             echo ""
-            if [ -n "$HARNESS_RUN" ] && [ "$WOKEN_BY" != "Integration Harness" ]; then
+            if [ -n "$LOOK_BACK" ]; then
+              echo "Harness run: ${HARNESS_RUN:-$NO_RUN} — the run that proved ${LOOK_BACK:0:7}, found by looking back"
+            elif [ -n "$HARNESS_RUN" ] && [ "$WOKEN_BY" != "Integration Harness" ]; then
               echo "Woken by: ${WOKEN_BY} run ${HARNESS_RUN}"
             else
-              echo "Harness run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
+              echo "Harness run: ${HARNESS_RUN:-$NO_RUN}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$PROMOTED" = "true" ]; then
@@ -1023,7 +1037,7 @@ jobs:
               echo "- candidate: \`${CANDIDATE}\`"
               echo "- outcome: \`${OUTCOME}\`"
               echo "- stable is still at: \`${CHANNEL_HEAD:-unknown}\`"
-              echo "- gating run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
+              echo "- gating run: ${HARNESS_RUN:-$NO_RUN}"
               echo "- failing scenarios: ${SCENARIOS:-none}"
               echo "- mirror check: ${MIRROR:-not run}"
               if [ -n "$MIRROR" ]; then
