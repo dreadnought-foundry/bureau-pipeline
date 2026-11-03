@@ -153,9 +153,12 @@ names the max-age:
   `seen_after`, so the door's node is taken only when its `as_of` is at or
   after the dispatch. A re-run, an unreadable `created_at` or no door answer
   makes the live `get_issue(fresh=True)` read as before. `_one_off_card` reads
-  the card and its whole thread with `comments="all"`. If the door cannot
-  vouch for the thread, the card falls back to today's two Linear reads, with
-  one `read-fallback:` line.
+  the card and its whole thread with `comments="all"`, under the same
+  `seen_after`, because its card is what the build is dispatched with. A
+  re-run or an unreadable `created_at` skips the door. If the door cannot
+  vouch for the thread, or its `as_of` is older than the dispatch, the card
+  falls back to today's two Linear reads, with one `read-fallback:` line. The
+  run's `created_at` is read off GitHub once per process.
 
 ## The fallback lines
 

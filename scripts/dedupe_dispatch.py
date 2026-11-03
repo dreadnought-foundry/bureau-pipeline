@@ -700,20 +700,37 @@ def _door_opted_in() -> bool:
     return linear_ops._card_max_age() is not None and linear_ops._door_mode() == "on"
 
 
+#: `_dispatched_at`'s answer per run id: a run's `created_at` never changes,
+#: so the lane, the labels and the hand-back's card share one GitHub read.
+_DISPATCHED_AT: dict = {}
+
+
 def _dispatched_at() -> Optional[datetime]:
     """The instant this dispatch was made — the run's `created_at` — or None:
     a re-run, which carries the ORIGINAL dispatch's creation time and so says
-    nothing about the card now, and a creation time that cannot be read."""
+    nothing about the card now, and a creation time that cannot be read.
+    Read off GitHub once per process (`_DISPATCHED_AT`)."""
     if _is_rerun():
         return None
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if not run_id:
         return None
-    try:
-        at = _moment(_run_meta(run_id).get("created_at") or "")
-    except Exception:  # noqa: BLE001 — unreadable is live, as today
-        return None
-    return at if at is not None and at.tzinfo is not None else None
+    if run_id not in _DISPATCHED_AT:
+        try:
+            at = _moment(_run_meta(run_id).get("created_at") or "")
+        except Exception:  # noqa: BLE001 — unreadable is live, as today
+            at = None
+        _DISPATCHED_AT[run_id] = at if at is not None and at.tzinfo is not None else None
+    return _DISPATCHED_AT[run_id]
+
+
+def _door_seen_after() -> Optional[datetime]:
+    """The floor a door answer must have seen for a read about this dispatch
+    — the run's `created_at` — or None, and then the door is not asked: a
+    step that does not opt in to it (and costs no read of the run here), a
+    re-run, a `created_at` that cannot be read. Never `seen_after=None`,
+    which is no floor at all."""
+    return _dispatched_at() if _door_opted_in() else None
 
 
 def _live_card(identifier: str) -> dict:
@@ -728,12 +745,11 @@ def _live_card(identifier: str) -> dict:
     opt in to the door costs no read of the run here. Otherwise — an older
     `as_of`, an unreadable `created_at`, a re-run, no door answer —
     `get_issue(fresh=True)`, exactly as before."""
-    if _door_opted_in():
-        dispatched = _dispatched_at()
-        if dispatched is not None:
-            served = linear_ops.card_via_door(identifier, comments=1, seen_after=dispatched)
-            if served is not None:
-                return served[0]
+    dispatched = _door_seen_after()
+    if dispatched is not None:
+        served = linear_ops.card_via_door(identifier, comments=1, seen_after=dispatched)
+        if served is not None:
+            return served[0]
     return linear_ops.get_issue(identifier, fresh=True)
 
 
@@ -798,11 +814,18 @@ def _one_off_card(identifier: str) -> Optional[dict]:
 
     Off the read door first (DRE-8904): one `comments="all"` read carries
     the fields, the whole thread and whether the card has a child — the door
-    lists children by id, and only whether there is one is needed. A thread
-    the door cannot vouch for is None from it, and then today's two Linear
-    reads, the thread's without asking the door a second time."""
+    lists children by id, and only whether there is one is needed. This card
+    is what the build is dispatched with, so it holds to `_live_card`'s
+    floor: the door's copy only once its `as_of` is at or after the run's
+    `created_at` (`_door_seen_after`) — a copy from before the planner's
+    last edits would send the build the old title, description or labels.
+    A thread the door cannot vouch for, an older `as_of`, a re-run or an
+    unreadable `created_at` make today's two Linear reads, the thread's
+    without asking the door a second time."""
     try:
-        served = linear_ops.card_via_door(identifier, comments="all")
+        dispatched = _door_seen_after()
+        served = (linear_ops.card_via_door(identifier, comments="all", seen_after=dispatched)
+                  if dispatched is not None else None)
         if served is not None:
             issue = served[0]
             bodies = [c.get("body") or ""
