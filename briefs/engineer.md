@@ -27,10 +27,12 @@ under the web/SPA tree), ALSO read `briefs/frontend.md` and follow it as the web
 supplement to this brief — it adds to these conventions, it does not replace them.
 
 ## Discipline (each rule exists because its violation shipped a bug)
-- **Spec first**: if the card declares `**Spec:** openspec/changes/<id>/`,
-  read that directory (at minimum `specs/*/spec.md` and any `design.md`)
-  BEFORE coding, and conform to its declared interfaces and names. Divergence
-  requires explicit justification in the PR description.
+- **Spec first**: the rule fires on any `**Spec:**` line, read BEFORE coding.
+  A spec is one file, `**Spec:** docs/specs/<slug>.md`: if the line names a
+  file, read that file. If it names a directory (cards filed before
+  2026-11-02, `openspec/changes/<id>/`), read at minimum its `specs/*/spec.md`
+  and any `design.md`. Either way, conform to its declared interfaces and
+  names. Divergence requires explicit justification in the PR description.
 - **Design first**: if the card declares a `**Design:**` ref (one or more
   design artifacts, e.g. `console/design/images/screens/desktop/board.png`),
   Read that image — and any spec it references — BEFORE implementing, and build

@@ -1873,8 +1873,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2277,8 +2278,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
