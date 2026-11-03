@@ -9,6 +9,10 @@
     {
       "card": "DRE-5774",
       "why": "The hygiene agent's hourly summary: the agent posts to it every hour and nobody ever finishes it."
+    },
+    {
+      "card": "DRE-9090",
+      "why": "The weekly parts list: the Parts Sweep posts the week's new shared parts to it every Sunday, and the CEO rejects a part on it; nobody ever finishes it."
     }
   ]
 }
