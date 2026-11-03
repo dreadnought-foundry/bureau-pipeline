@@ -720,7 +720,10 @@ wording-only row its critic can accept — gets its pull request opened, or
 reopened. Any other record keeps none: the open one is closed, the branch is
 kept. **While the proof waits, the record stays on its branch and the card's
 hold says what it waits on** — the one `🔬 proof-waiting` hold that step posts,
-or the CEO-press park's. **A run never opens, closes or reopens a pull request
+or the CEO-press park's. That step posts no hold over an operator's or the
+CEO's, and retires the holds the record supersedes — a time-only hold, the
+record's own, the cause park's — with one `🔬 proof-observed` note before its
+new hold, so the card carries one. **A run never opens, closes or reopens a pull request
 itself**: you never run `gh pr create`, `gh pr reopen` or `gh pr close`.
 
 - **Branch `agent/DRE-<n>-proof-record`.** The `agent/` prefix is what
