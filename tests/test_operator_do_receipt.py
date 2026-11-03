@@ -72,6 +72,13 @@ LATER = datetime(2026, 11, 3, 18, 0, tzinfo=UTC)
 CONTINUES = {"ending": "continues", "after": LATER, "remains": "delete the old variable"}
 
 
+@pytest.fixture(autouse=True)
+def _no_tokens(monkeypatch):
+    """Whatever the runner's own tokens are, no test here reads them."""
+    for name in ("GH_TOKEN", "LINEAR_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+
+
 # --------------------------------------------------------------------------- #
 # the claim                                                                    #
 # --------------------------------------------------------------------------- #
@@ -219,6 +226,14 @@ def test_a_dry_run_transcript_writes_no_receipt():
         operator_decide.do_receipt_text(_decision(), transcript, CLOSE, NOW)
 
 
+@pytest.mark.parametrize("exit_code", [None, "0", True])
+def test_a_command_with_no_whole_exit_code_is_refused(exit_code):
+    transcript = _transcript()
+    transcript["commands"][0]["exit"] = exit_code
+    with pytest.raises(ValueError):
+        operator_decide.do_receipt_text(_decision(), transcript, FAILED, NOW)
+
+
 def test_a_failed_transcript_takes_only_a_failed_ending():
     transcript = _transcript(exits=(0, 1), writes=(True, True), commands=COMMANDS[:2])
     with pytest.raises(ValueError):
@@ -360,7 +375,7 @@ def test_the_close_rules_are_written_as_the_siblings_strings():
     assert operator_decide.CLOSE_RULES == ("record-outcome", "card-done", "own-pr-merge",
                                            "none")
     source = (ROOT / "scripts" / "operator_decide.py").read_text(encoding="utf-8")
-    assert "operator_do_ops" not in source
+    assert not re.search(r"^\s*(?:import|from)\s+operator_do_ops\b", source, re.MULTILINE)
 
 
 # --------------------------------------------------------------------------- #

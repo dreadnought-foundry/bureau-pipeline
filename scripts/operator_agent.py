@@ -55,8 +55,28 @@ card's fingerprint, `operator_decide.fingerprint`; its rule outcome,
      `apply-only`. A pass that died between the receipt and its write
      finishes the write on the next pass, without a second receipt.
 
-A `do` decision writes no receipt (DRE-8746), so none of the six names one;
-a receipt that matches none of them is `decide`. The lane history is read,
+A `do` decision writes no receipt of part 1's (DRE-8746), so none of the six
+names one; a receipt that matches none of them is `decide`.
+
+When the standing receipt is a `do` card's claim, receipt or close-failure
+line (DRE-8923), the six rules are not read. The newest such comment the
+pipeline wrote over the card's current fingerprint decides, read by
+`operator_decide.do_ending_from_receipt` (`do_standing`):
+
+  * none over this fingerprint — the card changed: `decide`, afresh.
+  * a `do-claim` — the pass that claimed it died mid-run: `spent`, so no
+    command runs twice.
+  * a `do` receipt ending `close: record-outcome`, `card-done` or
+    `own-pr-merge`: `close-only` on every pass until the close lands, and
+    `guard-returned` once a comment opening `GUARD_RETURN_TAG` follows it.
+  * a `do` receipt ending `close: none named` or `failed:`, or a `do-close`
+    line: `spent`.
+  * a `do` receipt ending `continues: after <T>`: `spent` before `T` and
+    `continue` at or after it, `T` read against `--hour`.
+
+A `continue` or `close-only` card is never `for_model`: the `do` job plans a
+continued step and makes a close. A `do` comment that does not read back
+skips the card for the pass, as a part 1 receipt does. The lane history is read,
 `linear_ops.lane_history`, only for a card whose receipt is `ceo` or
 `done-already`. A receipt that does not read back
 (`operator_decide.decision_from_receipt` answers None), or a read that
@@ -80,7 +100,9 @@ of an unchanging set at least once.
 its `COMMENTS_KEPT` newest comments, each cut at `COMMENT_CHARS` and each with
 its author kind and time. Every value goes through
 `sanitize_untrusted.py`'s defang, and the file opens and closes with the
-untrusted-card-text sentinels. It is written outside this repository — a
+untrusted-card-text sentinels. A `continue` card's file also holds its `do`
+receipt whole — every command, exit and output — however far back the
+comments it keeps start. It is written outside this repository — a
 directory inside it is refused — and never committed.
 
 ## The reads, named
@@ -105,6 +127,10 @@ whole-thread read per card taken (`linear_ops.comment_records`), and one
     `operator_decide.decision_from_receipt(row, row["receipt"])`, written and
     printed with the row's action, so the line ends ` · spent`,
     ` · apply-only` or ` · guard-returned` and never reads as a fresh `do`.
+  * a row under a `do` comment — `spent`, `guard-returned`, `continue` or
+    `close-only` — is rebuilt with `operator_decide.do_decision_from_receipt`
+    and printed the same way; a `spent` row under a `continues:` receipt
+    ends ` · due after <T>`.
 
 `decisions.json` is a list of `Decision.to_json()` objects, each with the
 row's `action` added. `decide` holds no Linear key and makes no Linear call.
@@ -156,9 +182,13 @@ HAND_BUILT = routing_verdict.HAND_BUILT_LABEL
 
 DECIDE, UNREAD, SPENT, APPLY_ONLY, GUARD_RETURNED = (
     "decide", "unread", "spent", "apply-only", "guard-returned")
-ACTIONS = (DECIDE, UNREAD, SPENT, APPLY_ONLY, GUARD_RETURNED)
+CONTINUE, CLOSE_ONLY = "continue", "close-only"
+ACTIONS = (DECIDE, UNREAD, SPENT, APPLY_ONLY, GUARD_RETURNED, CONTINUE, CLOSE_ONLY)
 #: The actions whose decision is rebuilt from the standing receipt.
 FROM_RECEIPT = (SPENT, APPLY_ONLY, GUARD_RETURNED)
+#: The actions only a `do` card's comments give (DRE-8923). Their decision is
+#: rebuilt from the comment too, and never reaches part 1's model.
+DO_ACTIONS = (CONTINUE, CLOSE_ONLY)
 #: The rule outcomes whose cards take the model's slots first.
 ROUTED = (operator_rules.CEO, operator_rules.STUDIO)
 
@@ -302,6 +332,28 @@ def standing_action(card: dict, fingerprint: str, records, receipt: dict,
     return DECIDE
 
 
+def do_standing(records, fingerprint: str, now: datetime) -> tuple | None:
+    """`(action, record)` for a card whose newest receipt is a `do` card's
+    comment — see the module docstring's `do` rules — or None when the one
+    that decides does not read back. `record` is None for `decide`."""
+    mine = [r for r in records or [] if isinstance(r, dict) and r.get("authored_by_pipeline")
+            and operator_decide.do_word(r)
+            and operator_decide.do_fingerprint(r) == fingerprint]
+    if not mine:
+        return DECIDE, None
+    record = mine[-1]
+    ending = operator_decide.do_ending_from_receipt(record.get("body"))
+    if ending is None:
+        return None
+    if ending["ending"] == operator_decide.CLOSED and (
+            ending["rule"] in operator_decide.CLOSING_RULES):
+        returned = operator_decide.guard_returned(records, record)
+        return (GUARD_RETURNED if returned else CLOSE_ONLY), record
+    if ending["ending"] == operator_decide.CONTINUES:
+        return (CONTINUE if now >= ending["after"] else SPENT), record
+    return SPENT, record
+
+
 # --------------------------------------------------------------------------- #
 # for the model, and unread                                                    #
 # --------------------------------------------------------------------------- #
@@ -363,6 +415,10 @@ def card_file(row: dict, records) -> str:
         lines += ["",
                   sanitize_line(f"--- comment {n} · by a {kind} · {when}"),
                   sanitize_body((record.get("body") or "")[:COMMENT_CHARS])]
+    if row.get("action") == CONTINUE and row.get("receipt"):
+        lines += ["", "The do receipt this card's next part follows — every command it ran, "
+                  "with its exit and its output, whole:",
+                  sanitize_body(row["receipt"])]
     lines.append(END)
     return "\n".join(lines) + "\n"
 
@@ -401,6 +457,7 @@ def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = N
     except Exception as exc:  # noqa: BLE001 — an unread board is not an empty board
         raise BoardUnread(str(exc)) from exc
     os.makedirs(cards_dir, exist_ok=True)
+    now = hour or _now()
 
     rows: list[dict] = []
     for card in sorted(cards, key=lambda c: _id_key({"card": c.get("identifier") or ""})):
@@ -425,7 +482,14 @@ def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = N
         match = operator_rules.rule_outcome(row["title"], row["description"], rules)
         receipt = operator_decide.newest_receipt(records)
         action, body = DECIDE, None
-        if receipt is not None:
+        if receipt is not None and operator_decide.do_word(receipt):
+            standing = do_standing(records, fingerprint, now)
+            if standing is None:
+                _skip(ident, "its standing do receipt does not read back")
+                continue
+            action, record = standing
+            body = record.get("body") if record is not None else None
+        elif receipt is not None:
             recorded = operator_decide.decision_from_receipt(row, receipt.get("body"), rules)
             if recorded is None:
                 _skip(ident, "its standing receipt does not read back")
@@ -448,7 +512,7 @@ def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = N
             fh.write(card_file(row, records))
         rows.append(row)
 
-    mark(rows, limit, hour or _now())
+    mark(rows, limit, now)
     counts = {a: sum(1 for r in rows if r["action"] == a) for a in ACTIONS}
     print(f"{_NOTE} {len(rows)} card(s) taken — "
           + ", ".join(f"{counts[a]} {a}" for a in ACTIONS), file=sys.stderr)
@@ -479,8 +543,15 @@ def decide(rows: list[dict], cards_dir: str, answers_dir: str) -> tuple[list[dic
         if action == UNREAD:
             print(operator_decide.unread_line(ident, operator_decide.UNREAD_LIMIT))
             continue
-        if action in FROM_RECEIPT:
-            decision = operator_decide.decision_from_receipt(row, row.get("receipt"), rules)
+        ending = None
+        if action in FROM_RECEIPT + DO_ACTIONS:
+            ending = operator_decide.do_ending_from_receipt(row.get("receipt"))
+            if ending is not None:
+                decision = operator_decide.do_decision_from_receipt(row, row.get("receipt"))
+            elif action in FROM_RECEIPT:
+                decision = operator_decide.decision_from_receipt(row, row.get("receipt"), rules)
+            else:
+                decision = None
             if decision is None:
                 print(f"ERROR: {ident} is {action} but its receipt does not read back — "
                       "no decision this pass", file=sys.stderr)
@@ -495,7 +566,11 @@ def decide(rows: list[dict], cards_dir: str, answers_dir: str) -> tuple[list[dic
                 print(operator_decide.unread_line(ident, operator_decide.UNREAD_NO_ANSWER))
                 continue
         decisions.append({**decision.to_json(), "action": action})
-        print(operator_decide.log_line(decision, action))
+        line = operator_decide.log_line(decision, action)
+        if (action == SPENT and ending is not None
+                and ending["ending"] == operator_decide.CONTINUES):
+            line += f" · due after {operator_decide.due_text(ending['after'])}"
+        print(line)
     return decisions, whole
 
 
