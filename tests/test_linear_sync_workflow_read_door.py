@@ -90,9 +90,24 @@ def test_the_done_itself_is_untouched():
     assert 'SWEEPS=$(python3 .bureau-pipeline/scripts/merge_sweep_gate.py "$CARD")' in run
 
 
-def test_the_conflict_sweep_reads_no_board_and_is_not_wired():
-    """`--conflicts-only` reads GitHub only (`unstick_conflicts`): nothing in
-    it asks Linear for a card, so there is nothing for the door to serve."""
-    steps = _doc()["jobs"]["conflict-sweep"]["steps"]
+def test_the_conflict_sweep_is_wired_so_its_linear_reads_are_named():
+    """`--conflicts-only` reads each conflicted pull request's card for its
+    park state (`card_parked_for_human`). On this `pull_request` run the door
+    serves no card but the merged one, so those reads stay on Linear; with
+    the mode set they print `reason=pull-request` instead of reading Linear
+    in silence (DRE-8899)."""
+    steps = [s for s in _doc()["jobs"]["conflict-sweep"]["steps"]
+             if "reconcile.py --conflicts-only" in (s.get("run") or "")]
+    assert steps
     for step in steps:
-        assert "BUREAU_READ" not in (step.get("env") or {})
+        env = step.get("env") or {}
+        assert env["BUREAU_READ"] == "${{ vars.BUREAU_READ || 'off' }}"
+        assert env["BUREAU_READ_URL"] == "${{ vars.BUREAU_READ_URL }}"
+        assert env["BUREAU_READ_AUDIENCE"] == "${{ vars.BUREAU_READ_AUDIENCE }}"
+        assert env["BUREAU_PIPELINE_REF"] == "${{ inputs.pipeline_ref }}"
+        assert str(env["BUREAU_READ_CARD_MAX_AGE"]) == "60"
+
+
+def test_the_merge_step_names_its_card_max_age():
+    """`Card → Done` reads the card that has just merged: 60 seconds."""
+    assert str(_step(STEP)["env"]["BUREAU_READ_CARD_MAX_AGE"]) == "60"
