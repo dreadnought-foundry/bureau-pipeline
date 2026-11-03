@@ -150,8 +150,9 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the twenty after the six, the
 #: Initiatives page's writes; DRE-8727 the eight after those, the Loops 1
 #: epic's (DRE-8698) loop presses; DRE-8937 the eight after those, the Loops 2
-#: epic's (DRE-8699) KPI presses; DRE-9034 the last three, the Loops 3 epic's
-#: (DRE-8700) follow-up and asks.
+#: epic's (DRE-8699) KPI presses; DRE-9034 the three after those, the Loops 3
+#: epic's (DRE-8700) follow-up and asks; DRE-9044 the last one, the Loops 4
+#: epic's (DRE-8701) saved thought.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
 _S = r"['’]s"
 SANDBOX_PRESSES = (
@@ -204,6 +205,7 @@ SANDBOX_PRESSES = (
     ("followUpLoop", rf"\b(?:send|sends|sent|sending)\s+{_A}follow[-\s]?up\s+on\s+{_A}loop\b"),
     ("askLoopStatus", rf"\bask(?:s|ed|ing)?\s+{_A}loop\s+for\s+{_A}status\b"),
     ("askLoopAgain", rf"\bask(?:s|ed|ing)?\s+{_A}loop\s+again\b"),
+    ("saveThought", rf"\bsav(?:e|es|ed|ing)\s+{_A}thought\s+for\s+later\b"),
 )
 
 #: The rows that send a press to a person.
