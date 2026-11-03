@@ -259,8 +259,8 @@ def _save():
     with open(os.environ["STUB_SENT"], "w") as fh:
         json.dump(stub.sent, fh)
 atexit.register(_save)
-sys.argv = [scripts + "/linear_ops.py", *sys.argv[3:]]
-runpy.run_path(scripts + "/linear_ops.py", run_name="__main__")
+sys.argv = [scripts + "/" + sys.argv[3], *sys.argv[4:]]
+runpy.run_path(sys.argv[0], run_name="__main__")
 '''
 
 #: What a test process must not inherit from the runner it runs on.
@@ -274,12 +274,18 @@ AMBIENT = ("BUREAU_READ", "BUREAU_READ_URL", "BUREAU_READ_AUDIENCE", "BUREAU_PIP
 def linear_ops_cli(card_file: Path, env_over: dict, *args: str):
     """`linear_ops.py <args…>` as a step runs it, with Linear the card in
     `card_file`. Returns the process and the Linear queries it sent."""
+    return script_cli(card_file, env_over, "linear_ops.py", *args)
+
+
+def script_cli(card_file: Path, env_over: dict, script: str, *args: str):
+    """`<script> <args…>`, any pipeline script, as a step runs it."""
     sent = card_file.parent / f"sent-{len(list(card_file.parent.glob('sent-*')))}.json"
     env = {k: v for k, v in os.environ.items() if k not in AMBIENT}
     env.update(LINEAR_API_KEY="test-key", LINEAR_IDENTITY="fleet", STUB_CARD=str(card_file),
                STUB_SENT=str(sent))
     env.update(env_over)
-    proc = subprocess.run([sys.executable, "-c", _CLI, str(TESTS), str(ROOT / "scripts"), *args],
+    proc = subprocess.run([sys.executable, "-c", _CLI, str(TESTS), str(ROOT / "scripts"), script,
+                           *args],
                           capture_output=True, text=True, env=env, timeout=120)
     return proc, json.loads(sent.read_text()) if sent.exists() else None
 
@@ -348,6 +354,51 @@ def test_the_hand_back_step_reads_the_snapshot():
     snapshot = step("agent-task.yml", "execute",
                     "Card snapshot (one read for every pre-agent step)")["env"]
     assert env.get("BUREAU_CARD_SNAPSHOT") == snapshot["BUREAU_CARD_SNAPSHOT"]
+
+
+#: The design question as the fix loop posts it — its mark line is what
+#: `design_answer` looks for, on a comment the pipeline posted.
+QUESTION = "🎨 design-question: `Board` at `console/src/Board.tsx`\nShould it be one file?"
+
+
+def test_the_hand_back_sees_the_pipelines_question_on_a_door_snapshot(tmp_path):
+    """The door's viewer is the console's key, never this process's ("The
+    viewer is never the door's"). A snapshot the door served must not make the
+    pipeline's own question read as a person's, or `handback` finds nothing
+    asked and the CEO's answer never reaches the critic."""
+    now = datetime.now(UTC)
+    card_file = new_card(tmp_path / "card.json", [comment(QUESTION, iso(now - timedelta(minutes=10)))])
+    snapshot = tmp_path / "card-snapshot.json"
+    with door_at(card_file, iso(now)) as (door, issuer):
+        env = rendered_job_env("agent-task.yml", "execute", door=door, issuer=issuer)
+        took, _ = script_cli(card_file, env, "agent_task_snapshot.py", "take", CARD,
+                             "--out", str(snapshot))
+        assert took.returncode == 0, took.stderr
+        assert json.loads(snapshot.read_text())["source"] == "door"
+        assert json.loads(snapshot.read_text())["viewer"] != VIEWER
+        proc, sent = script_cli(card_file, {**env, "BUREAU_CARD_SNAPSHOT": str(snapshot)},
+                                "design_answer.py", "state", CARD,
+                                "--part", "Board", "--path", "console/src/Board.tsx")
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.strip() == "asked", proc.stderr
+    assert thread_queries(sent) == []  # the thread came off the snapshot
+
+
+def test_a_door_snapshot_with_no_viewer_of_our_own_reads_as_unknown(tmp_path, monkeypatch):
+    """When Linear does not say who this key is, the door's viewer is not
+    taken in its place: the pipeline's comments cannot be told from a
+    person's, and the thread reads UNKNOWN."""
+    import agent_task_snapshot
+    import spoken_thread
+
+    snapshot = tmp_path / "card-snapshot.json"
+    snapshot.write_text(json.dumps({
+        "schema": agent_task_snapshot.SCHEMA, "source": "door", "identifier": CARD,
+        "issue": {"identifier": CARD}, "viewer": "fleet-user",
+        "comments": [comment(QUESTION, "2026-11-01T00:00:00Z", user="fleet-user")]}))
+    monkeypatch.setenv(agent_task_snapshot.ENV, str(snapshot))
+    monkeypatch.setattr(linear_ops, "viewer_id", lambda: None)
+    assert [v.kind for v in spoken_thread.read(CARD)] == [spoken_thread.UNKNOWN]
 
 
 # ── Agent Task's report sees the earlier run's receipt ──────────────────────
