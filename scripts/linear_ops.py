@@ -1111,13 +1111,19 @@ _STDLIB_DIRS = tuple(
 )
 
 
+_LIBRARY_FILES: dict[str, bool] = {}
+
+
 def _library_frame(frame) -> bool:
+    """Whether `frame` runs in the interpreter's own library — decided once
+    per file, since every read walks the whole stack."""
     path = frame.f_code.co_filename
-    if path.startswith("<frozen "):
-        return True
-    path = os.path.realpath(path)
-    return path.startswith(_STDLIB_DIRS) and not any(
-        part in path for part in ("site-packages", "dist-packages"))
+    if path not in _LIBRARY_FILES:
+        real = os.path.realpath(path)
+        _LIBRARY_FILES[path] = path.startswith("<frozen ") or (
+            real.startswith(_STDLIB_DIRS)
+            and not any(part in real for part in ("site-packages", "dist-packages")))
+    return _LIBRARY_FILES[path]
 
 
 def _frame_name(frame) -> str:
@@ -1164,9 +1170,19 @@ def _read_names(frame) -> tuple[str, str]:
     return site, _frame_name(frames[outermost + 1])
 
 
+def _names_of_this_read(frame) -> tuple[str, str]:
+    """`_read_names`, or `("-", "-")` when the stack cannot be read: a count
+    must never fail the read it counts."""
+    try:
+        return _read_names(frame)
+    except Exception:
+        return "-", "-"
+
+
 def _reader() -> str:
     """`<workflow> / <job> / <script>` — the value `bureau_read._reader` puts
-    on `read-fallback:` lines, composed here so this seam imports nothing."""
+    on `read-fallback:` lines, composed here rather than borrowed from the
+    door's private helper, so the two lines can be joined on it."""
     workflow = os.environ.get("GITHUB_WORKFLOW") or "local"
     job = os.environ.get("GITHUB_JOB") or "-"
     script = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "-"
@@ -1578,7 +1594,7 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
     # A request that is not a mutation is a read, counted by who asked for it
     # (DRE-8897) — a write is read the way the read-only switch reads one.
-    read = None if _mutation_field(query) is not None else _read_names(sys._getframe())
+    read = None if _mutation_field(query) is not None else _names_of_this_read(sys._getframe())
     try:
         out = _send(payload, landed, read)
     except _KeyRefused as refused:
