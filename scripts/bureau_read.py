@@ -44,8 +44,10 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   mints one or asks (BP-8) — with ONE exception (DRE-8812). A `pull_request`
   run whose head branch (`GITHUB_HEAD_REF`) names a card asks `/cards` for
   exactly that card, which the door serves it (agent-bureau DRE-8807): QA
-  Review's and Verify's card read. Every other read on those runs, Linear
-  Sync's included, reads Linear exactly as before.
+  Review's and Verify's card snapshot, and since DRE-8899 the `linear_ops`
+  card reads of Linear Sync, QA Review and Verify steps that name a
+  `BUREAU_READ_CARD_MAX_AGE`. Every other read on those runs reads Linear
+  exactly as before.
 
 Every read that falls back to Linear in mode `on` is named by the client
 itself, once, on stderr (DRE-8794):
