@@ -693,16 +693,60 @@ def _is_rerun() -> bool:
         return False
 
 
+def _door_opted_in() -> bool:
+    """Would `linear_ops.card_via_door` ask the door in this step? Its own
+    two conditions: the step names `BUREAU_READ_CARD_MAX_AGE`, and the door's
+    mode is `on`. Neither prints anything."""
+    return linear_ops._card_max_age() is not None and linear_ops._door_mode() == "on"
+
+
+def _dispatched_at() -> Optional[datetime]:
+    """The instant this dispatch was made — the run's `created_at` — or None:
+    a re-run, which carries the ORIGINAL dispatch's creation time and so says
+    nothing about the card now, and a creation time that cannot be read."""
+    if _is_rerun():
+        return None
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if not run_id:
+        return None
+    try:
+        at = _moment(_run_meta(run_id).get("created_at") or "")
+    except Exception:  # noqa: BLE001 — unreadable is live, as today
+        return None
+    return at if at is not None and at.tzinfo is not None else None
+
+
+def _live_card(identifier: str) -> dict:
+    """The card as it is NOW, for the question whether it moved while this
+    dispatch sat in the queue.
+
+    Off the read door (DRE-8904) only when the door has SEEN the dispatch:
+    its answer is taken when its `as_of` is at or after the run's
+    `created_at` (`card_via_door`'s `seen_after`). A store that has applied
+    every change up to a moment after the dispatch answers "did it move
+    since" as well as a live read made at that moment. A step that does not
+    opt in to the door costs no read of the run here. Otherwise — an older
+    `as_of`, an unreadable `created_at`, a re-run, no door answer —
+    `get_issue(fresh=True)`, exactly as before."""
+    if _door_opted_in():
+        dispatched = _dispatched_at()
+        if dispatched is not None:
+            served = linear_ops.card_via_door(identifier, comments=1, seen_after=dispatched)
+            if served is not None:
+                return served[0]
+    return linear_ops.get_issue(identifier, fresh=True)
+
+
 def _current_lane(identifier: str) -> str:
-    """The card's lane as it is NOW — `fresh` because the whole question is
-    whether it moved while this dispatch sat in the queue."""
-    issue = linear_ops.get_issue(identifier, fresh=True)
+    """The card's lane as it is NOW (`_live_card`) — because the whole
+    question is whether it moved while this dispatch sat in the queue."""
+    issue = _live_card(identifier)
     return (issue.get("state") or {}).get("name") or ""
 
 
 def _card_labels(identifier: str) -> list:
-    """The card's label names, as they are NOW."""
-    issue = linear_ops.get_issue(identifier, fresh=True)
+    """The card's label names, as they are NOW (`_live_card`)."""
+    issue = _live_card(identifier)
     return [n.get("name") or "" for n in
             ((issue.get("labels") or {}).get("nodes") or [])]
 
@@ -750,10 +794,26 @@ def _one_off_card(identifier: str) -> Optional[dict]:
     an unreadable card is decided exactly as it was before the hand-back.
 
     The shape stamp is read off the WHOLE thread (DRE-5644): it is written
-    once, when the card enters Planning, and a busy card buries it."""
+    once, when the card enters Planning, and a busy card buries it.
+
+    Off the read door first (DRE-8904): one `comments="all"` read carries
+    the fields, the whole thread and whether the card has a child — the door
+    lists children by id, and only whether there is one is needed. A thread
+    the door cannot vouch for is None from it, and then today's two Linear
+    reads, the thread's without asking the door a second time."""
     try:
-        issue = linear_ops.gql(_HAND_BACK_QUERY, {"id": identifier})["issue"]
-        bodies = linear_ops.comment_bodies(identifier, whole_thread=True)
+        served = linear_ops.card_via_door(identifier, comments="all")
+        if served is not None:
+            issue = served[0]
+            bodies = [c.get("body") or ""
+                      for c in linear_ops.window_nodes(issue.get("comments"))]
+        else:
+            issue = linear_ops.gql(_HAND_BACK_QUERY, {"id": identifier})["issue"]
+            if _door_opted_in():
+                nodes, _me = linear_ops._fetch_thread(identifier, whole=True, door=False)
+                bodies = [c.get("body") or "" for c in nodes]
+            else:
+                bodies = linear_ops.comment_bodies(identifier, whole_thread=True)
     except Exception as e:  # noqa: BLE001 — an unreadable card is today's decision
         print(f"hand-back read failed ({e}) — deciding as before",
               file=sys.stderr)

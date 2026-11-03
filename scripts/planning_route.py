@@ -493,11 +493,33 @@ _FAMILY_QUERY = """query($id: String!) { issue(id: $id) {
 } }"""
 
 
+def _door_family(lops, identifier: str) -> dict | None:
+    """`_FAMILY_QUERY`'s answer off the read door (DRE-8904), or None and the
+    caller reads Linear. The card's node names its parent's identifier only,
+    so the parent's title and children are a second door read; either read
+    the door cannot answer is None for both."""
+    served = lops.card_via_door(identifier, comments=1)
+    if served is None:
+        return None
+    node, _read = served
+    issue = {"children": node.get("children"), "parent": None}
+    parent_id = (node.get("parent") or {}).get("identifier")
+    if parent_id:
+        served = lops.card_via_door(parent_id, comments=1)
+        if served is None:
+            return None
+        up, _read = served
+        issue["parent"] = {"identifier": up.get("identifier") or parent_id,
+                           "title": up.get("title"), "children": up.get("children")}
+    return issue
+
+
 def _read_returned_child(lops, identifier: str, comment_bodies,
                          doc: dict | None = None) -> ReturnedChild:
     """`returned_child` for a live card. The family is read only for a card
     that could be one — shaped epic, carrying a receipt — so the epic route
-    pays nothing new for a card that never came back."""
+    pays nothing new for a card that never came back. Off the read door
+    first (`_door_family`), else `_FAMILY_QUERY`."""
     import routing_verdict
 
     try:
@@ -506,7 +528,9 @@ def _read_returned_child(lops, identifier: str, comment_bodies,
         shape = None
     if shape is None or planning_shape.return_receipt(comment_bodies) is None:
         return returned_child(comment_bodies, None, doc=doc)
-    issue = (lops.gql(_FAMILY_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    issue = _door_family(lops, identifier)
+    if issue is None:
+        issue = (lops.gql(_FAMILY_QUERY, {"id": identifier}) or {}).get("issue") or {}
     has_children = bool((issue.get("children") or {}).get("nodes"))
     node = issue.get("parent")
     parent = None
@@ -658,14 +682,39 @@ _WAIT_QUERY = """query($id: String!) { issue(id: $id) {
 } }"""
 
 
+def _door_wait(lops, identifier: str) -> dict | None:
+    """`_WAIT_QUERY`'s answer off the read door (DRE-8904), or None and the
+    caller reads Linear. The relations' bound is `card_via_door`'s,
+    `bureau_read.RELATIONS_MAX_AGE`: they come from the console's 15-minute
+    poll, so a tighter one would rarely be answered. A blocker lane up to
+    twenty minutes old only decides whether the epic is planned now or waits
+    in Queued — a stale open lane costs one return pass, and a stale closed
+    one is caught by the critics, the CEO and every promotion's live re-read
+    of its blockers (item 32). A node whose relations go on past the page the
+    door served is None: the door says it holds more than it sent."""
+    served = lops.card_via_door(identifier, comments=1, relations=True)
+    if served is None:
+        return None
+    node, _read = served
+    relations = node.get("inverseRelations") or {}
+    if (relations.get("pageInfo") or {}).get("hasNextPage"):
+        return None
+    return {"identifier": node.get("identifier"), "children": node.get("children"),
+            "inverseRelations": relations}
+
+
 def _read_epic_wait(lops, identifier: str) -> EpicWait:
     """`epic_wait` for a live epic. Fails open on the epic's own reads: a
     relation, children or history read that fails holds nothing, so an
     unreadable board never parks an epic the planner could plan. A blocker's
     reads are the sweep's (`strict_blockers`, through `linear_ops`), and those
-    fail closed for that one blocker, as the sweep's do (DRE-7962)."""
+    fail closed for that one blocker, as the sweep's do (DRE-7962). The
+    epic's own read is off the read door first (`_door_wait`), else
+    `_WAIT_QUERY`."""
     try:
-        issue = (lops.gql(_WAIT_QUERY, {"id": identifier}) or {}).get("issue") or {}
+        issue = _door_wait(lops, identifier)
+        if issue is None:
+            issue = (lops.gql(_WAIT_QUERY, {"id": identifier}) or {}).get("issue") or {}
     except Exception as exc:  # noqa: BLE001 — an unread board holds nothing
         return _no_wait(f"its relations and children could not be read ({exc})")
     card = {
