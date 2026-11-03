@@ -23,9 +23,12 @@ This page is the version of that file a person reads.
 | `TRIAGE_REPAIR_LIVE` | `triage-repair.yml`, `Decide dry run` | The scheduled Triage Repair run claims parked cards and has the planner repair them. |
 | `ALARM_REPAIR_LIVE` | `alarm-repair.yml`, `Decide dry run` | The scheduled Alarm Repair claims console alerts open for 2 hours and has an agent make one repair attempt on each alert's card. |
 | `OPERATOR_AGENT_LIVE` | `operator-agent.yml`, `Decide dry run` | The scheduled Operator Agent run posts a receipt on each card it routes studio, ceo or done-already and makes that outcome's write. |
+| `OPERATOR_AGENT_DO_LIVE` | `operator-agent.yml`, `Decide do dry run` | On a scheduled Operator Agent run that is live itself, the agent claims each do card it hands on (at most three a pass), runs the step's checked commands with a token for the one repository the plan names, posts the receipt, and closes each card whose receipt owes a close. Off, the model still plans and the plan is still checked, and the run prints `would run:` lines. A hand dispatch is do live only with both its `dry_run` and `do_dry_run` inputs unchecked. DRE-8927 turns it on (DRE-8928). |
 | `NAME_GUARD_LIVE` | `proof-task.yml`, `Install the name guard` | Every push the proof run makes (the agent's, the push rescue's and the shadow push) and the record pull request's body refresh refuse a person's name from the live roster. The proof run's `Push the shadow record` and `Refresh the record pull request's body` steps read it too. `Report proof result to Linear` carries it for the proof run's escalation comment, which nothing guards until its reporter reads the switch (DRE-8170); `qa-review.yml`'s `Post verdict or neutral status` reads it too: the critic's comment goes through the name redaction seam and guard before it posts, and a comment the guard still refuses is held behind a neutral status. |
 
 `OPERATOR_AGENT_LIVE`'s companion, `OPERATOR_AGENT_LIVE_OFF_UNTIL`, names DRE-8747 until the switch is turned on (DRE-8830 sets it, DRE-8748 deletes it).
+
+`OPERATOR_AGENT_DO_LIVE`'s companion, `OPERATOR_AGENT_DO_LIVE_OFF_UNTIL`, names DRE-8927 until the `do` step is turned on. The Operator Agent leaves DRE-8927 alone, beside DRE-8748 and DRE-8830 (`config/operator-agent.json`), and no plan it writes may name either variable (`config/operator-do.json`'s `never`).
 
 `config/switches.json` is the source. If this table and the file disagree, the
 file is right.

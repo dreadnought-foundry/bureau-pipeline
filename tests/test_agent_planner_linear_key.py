@@ -340,8 +340,9 @@ TOKEN_JOBS = {
     # triage-repair.yml's job env.
     "alarm-repair.yml": ("select", "repair"),
     # DRE-8747: the Operator Agent's `select` in `decide`, and its `claim` and
-    # `apply` legs, on triage-repair.yml's job env.
-    "operator-agent.yml": ("decide", "apply"),
+    # `apply` legs, on triage-repair.yml's job env; and DRE-8928's `do`,
+    # `close` and `credentials` jobs, on the same env.
+    "operator-agent.yml": ("decide", "apply", "do", "close", "credentials"),
     # DRE-8716: the sweep's one job.
     "reconcile.yml": ("sweep",),
 }

@@ -40,8 +40,9 @@ EXPECTED_PROMPT_FILES = {
     # DRE-4972: the groom verify agent, one per proposed card.
     "groomer.yml": 1,
     "medic.yml": 1,
-    # DRE-8747: the Operator Agent's one read of the cards waiting on a person.
-    "operator-agent.yml": 1,
+    # DRE-8747: the Operator Agent's one read of the cards waiting on a person,
+    # and DRE-8928's planner for each `do` card.
+    "operator-agent.yml": 2,
     # DRE-3897: the model trial's prompt. It names no lane and no card — it is
     # a fixed, checkable task on a candidate model — but it is an inline agent
     # prompt like any other and belongs in the enumeration.
