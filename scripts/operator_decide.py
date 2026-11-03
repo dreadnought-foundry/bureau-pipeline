@@ -114,6 +114,8 @@ its fence; a value of `SECRET_ENV` in any line reads `TOKEN_MARK`; and an
 output line that would open `Outcome:` or `Released as` is written after
 `RECORD_GUARD`. `decision_from_receipt` answers None for all three words, so
 the agent reads them with `do_ending_from_receipt` and never part 1's rules.
+Each is posted through the act registry (DRE-8925), so it ends with the
+registry's trailer line, and every reader here sets that line aside.
 
 ## The log lines
 
@@ -140,6 +142,7 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import console_escalation  # noqa: E402
 import operator_rules  # noqa: E402
+import pipeline_act  # noqa: E402 — the act trailer a posted `do` comment ends with
 import planning_escalation  # noqa: E402
 from operator_step_kind import _APOSTROPHES  # noqa: E402
 
@@ -667,6 +670,7 @@ _FAILED_ENDING = re.compile(r"^failed: `(?P<command>.*)` — exit (?P<exit>-?\d+
 _CONTINUES_ENDING = re.compile(r"^continues: after (?P<after>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)"
                                r" — (?P<remains>\S.*)$")
 _CLOSE_FAILED = re.compile(r"^failed: (?P<what>\S.*) — " + re.escape(_LEFT_WHERE) + "$")
+_ACT_TRAILER = f"{pipeline_act.TRAILER_MARK} {pipeline_act.TRAILER_TAG}:"
 
 
 def _scrub(text: str) -> str:
@@ -806,11 +810,21 @@ def do_close_failed_text(decision: Decision, what: str, now: datetime) -> str:
     return _scrub("\n".join(lines))
 
 
+def _without_trailer(body) -> str:
+    """`body` without the act registry's trailer, the last line
+    `pipeline_act.receipt` adds to every comment the agent posts (DRE-8925)."""
+    lines = (body or "").strip().splitlines()
+    if lines and lines[-1].startswith(_ACT_TRAILER):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
 def _do_comment(body) -> dict | None:
     """Everything a claim, a receipt or a close-failure line says, or None
     when `body` is not a whole one. An output is read inside its fence alone,
-    so nothing a command printed reads as a line of the receipt."""
-    lines = (body or "").strip().splitlines()
+    so nothing a command printed reads as a line of the receipt. The act
+    registry's trailer is not a line of it."""
+    lines = _without_trailer(body).splitlines()
     if len(lines) < 3:
         return None
     one, two = _LINE_ONE.match(lines[0]), _FINGERPRINT.match(lines[1])
