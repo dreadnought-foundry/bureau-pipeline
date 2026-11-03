@@ -775,8 +775,7 @@ class DocTest(unittest.TestCase):
                 "they are counterparts")
         text = " ".join(DOC.read_text(encoding="utf-8").split())
         self.assertIn(f"- {rule}", text)
-        self.assertIn(rule.replace("When two", "when two"),
-                      " ".join((parts_check.__doc__ or "").split()))
+        self.assertIn(rule, " ".join((parts_check.__doc__ or "").split()))
         for page in (text, " ".join((parts_check.__doc__ or "").split())):
             self.assertNotIn("the other's file is a copy of it", page)
             self.assertNotIn("other than the part's own", page)
