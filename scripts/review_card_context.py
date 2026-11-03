@@ -138,9 +138,9 @@ _REFUTATION_LEAD = (
 )
 
 _NO_CARD_COMMON = (
-    "There is no card description, no **Spec:** directory, and no "
-    "**Design:** ref — do NOT hunt for them, and their absence is NOT a "
-    "finding. Skip every card-bookkeeping step; do not name a card in your "
+    "There is no card description, no spec a **Spec:** line names, a file "
+    "or a directory, and no **Design:** ref — do NOT hunt for them, and "
+    "their absence is NOT a finding. Skip every card-bookkeeping step; do not name a card in your "
     "verdict."
 )
 
@@ -443,8 +443,8 @@ def build_context(card, branch, pr_body, refutation="", acts_consumer="",
             [
                 f"It implements Linear card {card}. Judge check 1 against "
                 "that card's acceptance criteria — the card description "
-                "quoted in the PR body, and any **Spec:** directory it "
-                "references.",
+                "quoted in the PR body, and the spec the card's **Spec:** "
+                "line names, a file or a directory.",
                 *tail,
             ]
         )

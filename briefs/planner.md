@@ -414,6 +414,13 @@ the plan afterwards needs to know.
   every row of its committed inventory — an `**Inventory:**` line and an
   `inventory-coverage` block — under "An approved mockup — every inventory
   row, one to one (DRE-8612)" in that standard.
+- **Spec refs**: when the epic or card carries a `**Spec:**` line, read the
+  spec it names before you write any card — a file
+  (`**Spec:** docs/specs/<slug>.md`) is the spec itself; a directory (cards
+  filed before 2026-11-02) means its `specs/*/spec.md` and any `design.md`.
+  Cut the cards to its interfaces and names, and copy the same `**Spec:**`
+  line onto every card you write under the epic, so the engineer and the
+  critic read the spec you planned from (`standards/card-quality.md`).
 
 ## The lanes, and the verdict you owe every card (DRE-2724 / DRE-2824)
 
@@ -537,6 +544,8 @@ is a deprecated legacy fallback, not part of new cards.
 ```
 **Design:** <UI cards only — exact design artifact path(s), e.g.
              console/design/images/screens/desktop/board.png; omit on non-UI cards>
+
+**Spec:** <the epic's own **Spec:** line, copied as written; omit when it has none>
 
 <what to build, 3-8 sentences, concrete>
 
