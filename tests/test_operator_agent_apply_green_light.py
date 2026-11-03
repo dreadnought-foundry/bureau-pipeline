@@ -414,7 +414,7 @@ def test_a_comment_after_a_keep_is_claimed_once_more(tmp_path):
     assert board.events == before
 
 
-def test_a_repair_after_a_kept_and_answered_row_posts_and_moves(tmp_path, capsys):
+def test_a_repair_over_a_keep_a_comment_came_after_posts_and_moves(tmp_path, capsys):
     board, _kept = _kept_then_said(tmp_path)
     decision = _repair()
     assert base._claim(board, tmp_path, decision) == 0
