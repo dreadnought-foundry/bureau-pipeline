@@ -1705,6 +1705,13 @@
       "why": "A scorecard is a count of decisions people already made, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `📊 groom-scorecard: <start>..<end>`, which no decision reader matches. One call site, once per week."
     },
     {
+      "file": "scripts/parts_weekly.py",
+      "anchor": "linear_ops.cmd_comment(card, render_comment(doc, missing))",
+      "kind": "not-an-act",
+      "means": "The CEO's weekly parts list, on the standing parts card in one comment: the parts approved in the week with the critic's reasoning and how to reject each, the parts that became permanent or were rejected, the rejection messages that did not count, and each repo's copies, with a fenced JSON block the console's Sunday briefing parses (DRE-9055).",
+      "why": "A list is a report of what the weekly sweep already counted and recorded, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `🪴 parts-weekly: <start>..<end>`, and the console parses its block, whose shape is a contract a trailer line would sit outside. One call site, once per week."
+    },
+    {
       "file": "scripts/linear_ops.py",
       "anchor": "agent_marker.actor_line(role)",
       "kind": "not-an-act",
