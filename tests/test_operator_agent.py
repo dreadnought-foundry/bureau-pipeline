@@ -222,7 +222,8 @@ def test_select_reads_the_three_lanes_in_one_board_read(tmp_path, monkeypatch):
     board = Board().install(monkeypatch)
     board.add("DRE-9001")
     _select(tmp_path)
-    assert board.board_reads == [("Intake", "Queued", "Hand-work")]
+    # Green Light rides the same read (DRE-9050), read by its own rules.
+    assert board.board_reads == [("Intake", "Queued", "Hand-work", "Green Light")]
 
 
 def test_select_over_the_fixture_takes_the_waiting_cards_and_leaves_three_kinds(
@@ -268,8 +269,8 @@ def test_a_card_titled_for_the_operator_is_taken_in_each_lane(tmp_path, monkeypa
     assert [row["card"] for row in _select(tmp_path)] == ["DRE-9001"]
 
 
-@pytest.mark.parametrize("lane", ["Planning", "Triage", "Green Light", "In Progress",
-                                  "In Review"])
+# Green Light is read since DRE-9050, by its own rules: tests/test_operator_agent_green_light.py.
+@pytest.mark.parametrize("lane", ["Planning", "Triage", "In Progress", "In Review"])
 def test_a_card_in_another_writers_lane_is_not_read(tmp_path, monkeypatch, lane):
     board = Board().install(monkeypatch)
     board.add("DRE-9001", lane=lane, title="OPERATOR: a step",
@@ -363,7 +364,9 @@ def test_a_row_carries_exactly_the_contracts_keys(tmp_path, monkeypatch):
     added = board.add("DRE-9001", description="Run the IAM change in the console.")
     row = _select(tmp_path)[0]
     assert set(row) == {"card", "repo", "lane", "title", "labels", "description",
-                        "fingerprint", "rule", "for_model", "action", "receipt", "trigger"}
+                        "fingerprint", "rule", "for_model", "action", "receipt", "trigger",
+                        "group"}
+    assert row["group"] == "waiting"
     assert row["fingerprint"] == _fp(added)
     assert row["rule"] == dataclasses.asdict(operator_rules.rule_outcome(
         added["title"], added["description"]))
@@ -893,7 +896,8 @@ def _linear_ops_names(source: str) -> set:
 
 def test_the_module_calls_no_linear_write_and_no_receipt():
     source = MODULE.read_text(encoding="utf-8")
-    assert _linear_ops_names(source) == {"comment_records", "lane_history"}
+    # `viewer_id` is the Green Light reading's viewer (DRE-9050), a read.
+    assert _linear_ops_names(source) == {"comment_records", "lane_history", "viewer_id"}
     assert "pipeline_act" not in source
     assert "mutation" not in source.lower()
 

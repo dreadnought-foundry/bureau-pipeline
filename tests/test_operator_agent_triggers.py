@@ -19,6 +19,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_operator_agent_triggers.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import re
 import sys
@@ -467,7 +468,11 @@ def test_the_triggers_make_no_read_and_one_thread_read_per_card(tmp_path, monkey
 def test_the_module_reads_no_lane_moves_and_no_viewer():
     source = Path(operator_agent.__file__).read_text(encoding="utf-8")
     code = source.split('"""', 2)[2]
-    assert "lane_moves" not in code and "viewer_id" not in code
+    assert "lane_moves" not in code
+    # The Green Light reading asks for the viewer (DRE-9050); the triggers never do.
+    for fn in (operator_agent.pending_trigger, operator_agent.trigger_line,
+               operator_agent._newest_opening):
+        assert "viewer" not in inspect.getsource(fn)
 
 
 def test_the_docstring_names_the_entries_the_trigger_covers_and_the_read_it_does_not_make():

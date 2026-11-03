@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """The operator agent's select and decide (DRE-8745, epic DRE-8738).
 
-Every card waiting on a person across the fleet is read in hourly turns, and
-each gets at most one decision per pass. This module holds the agent's two
+Every card waiting on a person across the fleet, and every `Green Light` row
+that is not a decision (DRE-9050), is read in hourly turns, and each gets at
+most one decision per pass. This module holds the agent's two
 read-only commands, modeled on `triage_repair.py`'s `select`: `select` finds
 the cards and only reads, and `decide` turns the model's answers into
 decisions, prints one line per card and touches nothing. The receipt that
@@ -11,11 +12,21 @@ spends a pass, and the writes that follow it, are `operator_agent_apply.py`'s
 
 ## Which cards (`select`)
 
-One board read, `board_snapshot.read_board`, of `LANES`. Every card in
-`Hand-work` is taken. In `Queued` or `Intake`, a card labeled `needs-human`
-or `operator-step` is taken. In any of the three, a card whose title opens
-`[OPERATOR]` or `OPERATOR:` is taken. A card in any other lane already
-belongs to another writer and is not read.
+One board read, `board_snapshot.read_board`, of `LANES` plus `GREEN_LIGHT`
+(`READ_LANES`). Every card in `Hand-work` is taken. In `Queued` or `Intake`,
+a card labeled `needs-human` or `operator-step` is taken. In any of the
+three, a card whose title opens `[OPERATOR]` or `OPERATOR:` is taken. A card
+in `Green Light` is read by the Green Light rules below, never by
+`waiting()`. A card in any other lane already belongs to another writer and
+is not read.
+
+A card whose title opens `SANDBOX_OPENER` — the opener every proof's sandbox
+fixture carries, this module's copy of `groom_verify_agent.
+SANDBOX_FIXTURE_TITLE_OPENER`, held equal by a test — is read only in `Green
+Light`. In any other lane it prints `operator-agent: <CARD> left alone — a
+sandbox fixture, read only in Green Light` and gets no row: a fixture a proof
+files in `Green Light` is there to be answered once, and wherever its
+planning run sends it next it is not part-1 work.
 
 The whole fleet: a card whose `repo:` label is a key of
 `config/repo-map.json`, read from the file on every run, and a card with no
@@ -28,7 +39,41 @@ Three kinds are left alone: a card whose title opens `PROOF:`, a card wearing
 — the switch that turns this agent on, and its off-reason — is named once in
 the log, `operator-agent: <CARD> left alone — <why>`, and gets no decision, so
 the agent never decides or closes the card that turns it on. Each list is
-read from its file and never copied.
+read from its file and never copied. The `repo:` rule, the three kinds and
+the `leave_alone` list apply to a `Green Light` card as to every card.
+
+## A Green Light row (DRE-9050)
+
+Each `Green Light` card's whole thread is read like every card's, and
+`operator_green_light.reading(card, records, viewer)` (DRE-9048) answers
+whether the row is the agent's. `viewer` is `linear_ops.viewer_id()`, asked
+once, at the first `Green Light` row: the value `comment_records` already
+read for this process to judge authorship, so it costs no read of its own. A
+viewer that cannot be read is None, and the reading takes no row
+(`operator_green_light.NO_VIEWER`). A row the reading does not take prints
+`operator-agent: <CARD> left in Green Light — <why>`, `why` one of
+`operator_green_light`'s constants, and gets no row, no card file and no
+decision. A taken row is `group: "green-light"`
+(`operator_decide.GREEN_LIGHT_GROUP`); every other row is `group: "waiting"`
+(`operator_decide.WAITING_GROUP`).
+
+A taken row is read by its own receipt rule, and never by the six below:
+
+  * the newest pipeline-authored `🛠️ operator-agent:` receipt, its act
+    trailer set aside, is a `repair` or an `answer` over the card's current
+    fingerprint: `spent`, whatever lane history follows it. The row came back
+    to `Green Light` after the agent sent it on, so the run that asked has had
+    the answer once, and the agent never sends it twice.
+  * any other standing receipt — one written while the card waited in another
+    lane — or none: `decide`.
+
+A row under a standing `keep` never reaches here unchanged: the reading
+leaves it out while `operator_decide.keep_stands` is True. A row whose `keep`
+has a comment after it is taken and is `decide`, whatever the model answers
+this time; its claim posts the new receipt (DRE-9051), so the next pass finds
+`keep_stands` True again, or a `repair` or `answer` receipt that makes it
+`spent`, and the row takes no slot on any later pass until the card gets
+another comment. No lane history is read for a `Green Light` row.
 
 ## Per card
 
@@ -121,13 +166,20 @@ marked `for_model` and keep `decide`; every other one is `unread` and gets no
 decision on this pass. First the rows with a pending trigger, oldest trigger
 first, then by card number; a triggered row beyond `--limit` is `unread` on
 this pass and still pending on the next, inside its `TRIGGER_HOURS`. Then
-the cards the rules class `ceo` or `studio`, sorted by card number. Then
-`slots = max(0, limit - <those marked>)` are filled from the rest, sorted by
-card number as the hourly ring of `n`, starting at `(h × slots) mod n`, where
-`h` is the whole hours from 1970-01-01 00:00 UTC to `--hour` (the clock by
-default), and wrapping round. So consecutive hourly passes read consecutive
-windows, and `ceil(n / slots)` hours read every card of an unchanging set at
-least once.
+the waiting cards the rules class `ceo` or `studio`, sorted by card number.
+Then at most `GREEN_LIGHT_SLOTS` of the slots left go to the `green-light`
+rows, taken as an hourly ring of their own by the arithmetic below. Then
+`slots = max(0, limit - <those marked>)` are filled from the rest of the
+waiting rows, sorted by card number as the hourly ring of `n`, starting at
+`(h × slots) mod n`, where `h` is the whole hours from 1970-01-01 00:00 UTC
+to `--hour` (the clock by default), and wrapping round. So consecutive hourly
+passes read consecutive windows, and `ceil(n / slots)` hours read every card
+of an unchanging set at least once.
+
+A `green-light` row that gets no decision on a pass — a failed guard, or a
+refused choices file — is read again only in its turn of that ring. So
+`Green Light` never holds more than `GREEN_LIGHT_SLOTS` of the slots, and the
+waiting ring always keeps the rest.
 
 A triggered row whose standing receipt gives another action — `spent`,
 `apply-only`, `continue`, `close-only`, `guard-returned` — keeps it: the
@@ -142,8 +194,10 @@ its author kind and time. Every value goes through
 `sanitize_untrusted.py`'s defang, and the file opens and closes with the
 untrusted-card-text sentinels. A `continue` card's file also holds its `do`
 receipt whole — every command, exit and output — however far back the
-comments it keeps start. It is written outside this repository — a
-directory inside it is refused — and never committed.
+comments it keeps start. A `green-light` row's file is written the same way,
+fenced and defanged, and its `Lane:` line reads `Green Light`. It is written
+outside this repository — a directory inside it is refused — and never
+committed.
 
 ## The reads, named
 
@@ -155,6 +209,10 @@ whole-thread read per card taken (`linear_ops.comment_records`), and one
 The triggers add no read: both are read off the whole thread already read,
 with no lane-history read (`routing_verdict.lane_moves` or
 `linear_ops.lane_history`), no viewer read and no second thread read.
+Green Light adds one whole-thread read per `Green Light` card, in the same
+`comment_records` call every card gets, and no lane-history or viewer read:
+the viewer `linear_ops.viewer_id()` answers is the one that thread read
+already named for this process.
 
 ## The decision (`decide`)
 
@@ -162,14 +220,22 @@ with no lane-history read (`routing_verdict.lane_moves` or
 
   * `decide`: `operator_decide.decide` is called once, with the card file as
     `card_text` (empty when the file is missing), `operator_rules.
-    host_limits_text()` as `as_built`, and `<answers>/<CARD>.choices.json` as
-    `choices_file`. A decision is written and printed with
+    host_limits_text()` as `as_built`, `<answers>/<CARD>.choices.json` as
+    `choices_file`, and `group=operator_decide.GREEN_LIGHT_GROUP` for a
+    `green-light` row and `WAITING_GROUP` otherwise (DRE-9047); the answer
+    file is read under the same group. A decision is written and printed with
     `operator_decide.log_line`; None prints `unread_line(UNREAD_NO_ANSWER)`.
+    A genuine decision in `Green Light` prints `operator-agent: <CARD> → keep
+    — a genuine decision — it stays with the CEO · step: <step>` and is
+    written as a `keep` decision, which the claim turns into its one receipt;
+    a `do` answer on a `green-light` row is no decision.
   * `unread`: never decided, nothing written, `unread_line(UNREAD_LIMIT)`.
   * `spent`, `apply-only`, `guard-returned`: rebuilt with
     `operator_decide.decision_from_receipt(row, row["receipt"])`, written and
     printed with the row's action, so the line ends ` · spent`,
     ` · apply-only` or ` · guard-returned` and never reads as a fresh `do`.
+    A `spent` `green-light` row is rebuilt the same way, from its `repair` or
+    `answer` receipt.
   * a row under a `do` comment — `spent`, `guard-returned`, `continue` or
     `close-only` — is rebuilt with `operator_decide.do_decision_from_receipt`
     and printed the same way; a `spent` row under a `continues:` receipt
@@ -183,7 +249,7 @@ Every row with a `trigger` prints one more line, after its own:
 with T written by `dead_run.pacific` and `<action>` the row's.
 
 `decisions.json` is a list of `Decision.to_json()` objects, each with the
-row's `action` added. `decide` holds no Linear key and makes no Linear call.
+row's `action` and `group` added. `decide` holds no Linear key and makes no Linear call.
 
 ## CLI
 
@@ -210,6 +276,7 @@ import dead_run  # noqa: E402 — the hold label's one spelling
 import lane_contract  # noqa: E402 — the queue lanes a promotion receipt names
 import linear_ops  # noqa: E402
 import operator_decide  # noqa: E402
+import operator_green_light  # noqa: E402 — which Green Light rows are the agent's
 import operator_rules  # noqa: E402
 import routing_verdict  # noqa: E402 — the operator-step and hand-built marks
 from sanitize_untrusted import sanitize_body, sanitize_line  # noqa: E402
@@ -226,6 +293,15 @@ HAND_WORK = "Hand-work"
 LANES = ("Intake", "Queued", HAND_WORK)
 GREEN_LIGHT = "Green Light"
 DONE = "Done"
+#: What the one board read reads: the waiting lanes, and Green Light.
+READ_LANES = LANES + (GREEN_LIGHT,)
+#: The most of the model's slots the `green-light` rows take on one pass.
+GREEN_LIGHT_SLOTS = 5
+#: The title every proof's sandbox fixture opens with — this module's copy of
+#: `groom_verify_agent.SANDBOX_FIXTURE_TITLE_OPENER`, held equal by a test, so
+#: `select` does not import the groomer.
+SANDBOX_OPENER = "SANDBOX FIXTURE (proof DRE-"
+SANDBOX_WHY = "a sandbox fixture, read only in Green Light"
 TAKE_LABELS = (dead_run.HOLD_LABEL, routing_verdict.OPERATOR_STEP_LABEL)
 TITLE_OPENS = ("[OPERATOR]", "OPERATOR:")
 PROOF_OPENS = "PROOF:"
@@ -414,6 +490,22 @@ def do_standing(records, fingerprint: str, now: datetime) -> tuple | None:
     return SPENT, record
 
 
+def green_light_standing(records, fingerprint: str, rules: dict) -> tuple:
+    """`(action, receipt)` for a `Green Light` row `reading` took: `spent`,
+    with the receipt read back without its trailer, when the newest receipt
+    is a `repair` or an `answer` over `fingerprint`; `decide`, with None,
+    for any other receipt or none. Reads no lane history."""
+    receipt = operator_decide.newest_receipt(records)
+    if receipt is None:
+        return DECIDE, None
+    body = operator_decide._without_trailer(receipt.get("body"))
+    recorded = operator_decide.decision_from_receipt({}, body, rules)
+    if (recorded is not None and recorded.outcome in operator_decide.MOVING_OUTCOMES
+            and recorded.fingerprint == fingerprint):
+        return SPENT, body
+    return DECIDE, None
+
+
 # --------------------------------------------------------------------------- #
 # the triggers                                                                 #
 # --------------------------------------------------------------------------- #
@@ -484,26 +576,38 @@ def _trigger_key(row: dict) -> tuple:
     return (_when(row["trigger"].get("at")) or _EPOCH, _id_key(row))
 
 
+def _ring(rows: list[dict], slots: int, hour: datetime) -> list[dict]:
+    """The hour's window of `slots` rows of the ring `rows`, sorted by card
+    number: from `(h × slots) mod n`, wrapping round."""
+    n = len(rows)
+    if not (n and slots):
+        return []
+    start = (hours_since_epoch(hour) * slots) % n
+    return [rows[(start + i) % n] for i in range(min(slots, n))]
+
+
 def mark(rows: list[dict], limit: int, hour: datetime) -> None:
     """Mark at most `limit` of the rows that would be `decide` for the model,
     in place: the triggered cards first, oldest trigger first, then the
-    rule-routed cards, then an hourly window of the ring of the rest. Every
-    other such row is `unread`."""
+    rule-routed cards, then at most `GREEN_LIGHT_SLOTS` `green-light` rows as
+    an hourly ring of their own, then an hourly window of the ring of the
+    rest. Every other such row is `unread`."""
     pending = [r for r in rows if r["action"] in (DECIDE, UNREAD)]
     for row in pending:
         row["action"], row["for_model"] = UNREAD, False
-    triggered = sorted((r for r in pending if r.get("trigger")), key=_trigger_key)
+    green = sorted((r for r in pending if r.get("group") == operator_decide.GREEN_LIGHT_GROUP),
+                   key=_id_key)
+    waiting = [r for r in pending if r.get("group") != operator_decide.GREEN_LIGHT_GROUP]
+    triggered = sorted((r for r in waiting if r.get("trigger")), key=_trigger_key)
     chosen = triggered[:max(0, limit)]
     taken = {id(r) for r in triggered}
-    routed = sorted((r for r in pending if id(r) not in taken
+    routed = sorted((r for r in waiting if id(r) not in taken
                      and (r.get("rule") or {}).get("outcome") in ROUTED), key=_id_key)
     chosen += routed[:max(0, limit - len(chosen))]
     taken |= {id(r) for r in routed}
-    rest = sorted((r for r in pending if id(r) not in taken), key=_id_key)
-    slots, n = max(0, limit - len(chosen)), len(rest)
-    if n and slots:
-        start = (hours_since_epoch(hour) * slots) % n
-        chosen += [rest[(start + i) % n] for i in range(min(slots, n))]
+    chosen += _ring(green, min(GREEN_LIGHT_SLOTS, max(0, limit - len(chosen))), hour)
+    rest = sorted((r for r in waiting if id(r) not in taken), key=_id_key)
+    chosen += _ring(rest, max(0, limit - len(chosen)), hour)
     for row in chosen:
         row["action"], row["for_model"] = DECIDE, True
 
@@ -563,15 +667,27 @@ def _skip(ident: str, why: str) -> None:
     print(f"{_NOTE} {ident} — {why}; skipped this pass", file=sys.stderr)
 
 
+def _viewer() -> str | None:
+    """The pipeline's own Linear user, for the Green Light reading: the value
+    `comment_records` already read for this process. A read that fails is no
+    viewer, and the reading takes no row."""
+    try:
+        return linear_ops.viewer_id()
+    except Exception as exc:  # noqa: BLE001 — no viewer, never the pass
+        print(f"{_NOTE} the pipeline's Linear user could not be read ({exc})", file=sys.stderr)
+        return None
+
+
 def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = None
            ) -> list[dict]:
-    """Every card waiting on a person, read and classed, in card-number order.
-    Writes each card's file to `cards_dir` and nothing to Linear."""
+    """Every card waiting on a person, and every Green Light row the agent may
+    take, read and classed, in card-number order. Writes each card's file to
+    `cards_dir` and nothing to Linear."""
     rules = operator_rules.load_rules(RULES_PATH)
     repos, standing = _repo_map(), _standing()
     leave_alone = {row["card"]: row["why"] for row in rules["leave_alone"]}
     try:
-        cards, _requests = board_snapshot.read_board(LANES)
+        cards, _requests = board_snapshot.read_board(READ_LANES)
     except Exception as exc:  # noqa: BLE001 — an unread board is not an empty board
         raise BoardUnread(str(exc)) from exc
     os.makedirs(cards_dir, exist_ok=True)
@@ -580,9 +696,14 @@ def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = N
         now = now.replace(tzinfo=UTC)
 
     rows: list[dict] = []
+    viewer: list = []  # read once, at the first Green Light row
     for card in sorted(cards, key=lambda c: _id_key({"card": c.get("identifier") or ""})):
         ident = card.get("identifier") or ""
-        if not waiting(card):
+        green = _lane(card) == GREEN_LIGHT
+        if not green and _title(card).startswith(SANDBOX_OPENER):
+            print(f"{operator_decide.LOG_TAG} {ident} left alone — {SANDBOX_WHY}")
+            continue
+        if not green and not waiting(card):
             continue
         repo = repo_of(card, repos)
         if repo is None or left_kind(card, standing):
@@ -602,12 +723,20 @@ def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = N
         match = operator_rules.rule_outcome(row["title"], row["description"], rules)
         receipt = operator_decide.newest_receipt(records)
         action, body = DECIDE, None
-        if receipt is not None and operator_decide.do_word(receipt):
-            standing = do_standing(records, fingerprint, now)
-            if standing is None:
+        if green:
+            if not viewer:
+                viewer.append(_viewer())
+            got = operator_green_light.reading(card, records, viewer[0])
+            if not got.taken:
+                print(f"{operator_decide.LOG_TAG} {ident} left in {GREEN_LIGHT} — {got.why}")
+                continue
+            action, body = green_light_standing(records, fingerprint, rules)
+        elif receipt is not None and operator_decide.do_word(receipt):
+            do_row = do_standing(records, fingerprint, now)
+            if do_row is None:
                 _skip(ident, "its standing do receipt does not read back")
                 continue
-            action, record = standing
+            action, record = do_row
             body = record.get("body") if record is not None else None
         elif receipt is not None:
             recorded = operator_decide.decision_from_receipt(row, receipt.get("body"), rules)
@@ -628,7 +757,9 @@ def select(cards_dir: str, limit: int = DEFAULT_LIMIT, hour: datetime | None = N
         row.update(fingerprint=fingerprint,
                    rule=dataclasses.asdict(match) if match is not None else None,
                    for_model=action == DECIDE, action=action, receipt=body,
-                   trigger=pending_trigger(records, row["lane"], now))
+                   trigger=pending_trigger(records, row["lane"], now),
+                   group=(operator_decide.GREEN_LIGHT_GROUP if green
+                          else operator_decide.WAITING_GROUP))
         with open(_card_path(cards_dir, ident), "w", encoding="utf-8") as fh:
             fh.write(card_file(row, records))
         rows.append(row)
@@ -672,6 +803,9 @@ def _decide_row(row: dict, cards_dir: str, answers_dir: str, rules: dict, as_bui
     """One row's decision, appended to `decisions`, and its one line. False
     when a routed row's receipt did not read back."""
     ident, action = row["card"], row["action"]
+    group = (operator_decide.GREEN_LIGHT_GROUP
+             if row.get("group") == operator_decide.GREEN_LIGHT_GROUP
+             else operator_decide.WAITING_GROUP)
     if action == UNREAD:
         print(operator_decide.unread_line(ident, operator_decide.UNREAD_LIMIT))
         return True
@@ -689,14 +823,16 @@ def _decide_row(row: dict, cards_dir: str, answers_dir: str, rules: dict, as_bui
                   "no decision this pass", file=sys.stderr)
             return False
     else:
-        answer = operator_decide.read_answer(os.path.join(answers_dir, f"{ident}.json"))
+        answer = operator_decide.read_answer(os.path.join(answers_dir, f"{ident}.json"),
+                                             group=group)
         decision = operator_decide.decide(
             row, answer, _read_text(_card_path(cards_dir, ident)), as_built=as_built,
-            rules=rules, choices_file=os.path.join(answers_dir, f"{ident}.choices.json"))
+            rules=rules, choices_file=os.path.join(answers_dir, f"{ident}.choices.json"),
+            group=group)
         if decision is None:
             print(operator_decide.unread_line(ident, operator_decide.UNREAD_NO_ANSWER))
             return True
-    decisions.append({**decision.to_json(), "action": action})
+    decisions.append({**decision.to_json(), "action": action, "group": group})
     line = operator_decide.log_line(decision, action)
     if (action == SPENT and ending is not None
             and ending["ending"] == operator_decide.CONTINUES):
