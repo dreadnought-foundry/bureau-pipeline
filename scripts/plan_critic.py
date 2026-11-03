@@ -142,9 +142,9 @@ CLI:
                                      The note and the record are TWO comments.
                                      `--escalation-file` is the one-off stage's
                                      CEO-facing reason, written only on
-                                     `escalate` — the critic's QUESTION, or a
-                                     critic that decided nothing (DRE-5376)
-                                     twice in a row (DRE-7491).
+                                     `escalate` — the critic's QUESTION. A
+                                     critic that decided nothing twice in a
+                                     row parks instead (DRE-8772).
                                      A QUESTION whose finding names card text
                                      is `revise`, recorded as SEND_BACK with
                                      the finding as its reason (DRE-6359).
@@ -1384,7 +1384,7 @@ def marker(stage: str, round_n: int, result: str, reason: str = "",
 
     `run_id` is the Actions run that decided the round (DRE-7491), written
     after `open=` and before the reason. The one-off stage writes it, so the
-    escalation after a second no-result in a row can name both runs.
+    park after a second no-result in a row can name both runs (DRE-8772).
     """
     line = (f"{MARKER_PREFIX} stage={stage} round={int(round_n)} "
             f"result={result} collisions={int(collisions)}")
