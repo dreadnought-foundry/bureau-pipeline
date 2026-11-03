@@ -16,11 +16,12 @@ with the patterns the critic's parts review already uses
 (`parts_review._declarations`), and the diff is read with its parser
 (`parts_review.parse_diff`).
 
-`check --diff` judges only the pull request's diff. It fails for a copy one of
-whose two declarations — the part's or the copy's — sits on a line the diff
-adds, and for a UI file the diff adds or changes, outside every declared
-folder and not a test, spec or story, that declares a component and imports
-none of the shared parts. A file imports a shared part when an `import`
+`check --diff` judges only what the pull request's diff adds (DRE-8949). It
+fails for a copy whose own declaration sits on a line the diff adds, or for
+which the diff adds the part's file, and for a UI file the diff adds, or in
+which it adds a line declaring a component, outside every declared folder and
+not a test, spec or story, that imports none of the shared parts. A file
+imports a shared part when an `import`
 statement binds a part's name (`import { Notice as N }` counts as `Notice`; a
 default import counts by its local name), or names a relative specifier that
 resolves, against the file's own folder, into a declared folder.
@@ -290,6 +291,11 @@ def _new_side(diff) -> str:
     return "\n".join(text for kind, text in diff.lines if kind != "-") + "\n"
 
 
+def _declares_on(text: str, lines) -> bool:
+    """Whether a component is declared in `text` on one of `lines`."""
+    return any(_line_of(text, match) in lines for match in parts_review._declarations(text))
+
+
 # ---------------------------------------------------------------------------
 # The check
 # ---------------------------------------------------------------------------
@@ -325,9 +331,11 @@ def check(diff_path, repo_root) -> tuple:
     if counted.reason is not None:
         return f"{CHECK_TAG} does not apply — {counted.reason}", [], 0
     added = added_lines(path.read_bytes().decode("utf-8"))
+    # The part's side counts only for a part file the diff adds: editing an
+    # existing part's declaration does not add the untouched copy elsewhere.
+    new_files = {diff.path for diff in files if diff.added}
     copies = [c for c in counted.copies
-              if c.copy_line in added.get(c.copy_path, ())
-              or c.part_line in added.get(c.part_path, ())]
+              if c.copy_line in added.get(c.copy_path, ()) or c.part_path in new_files]
     names = {part.name for part in design_parts.catalog(root)}
     folders = _folders(root)
     lonely = []
@@ -337,10 +345,12 @@ def check(diff_path, repo_root) -> tuple:
                 or any(mark in name for mark in design_parts.NOT_PARTS)):
             continue
         text = _read(root, diff.path)
+        on = added.get(diff.path, set())
         if text is None:
             text = _new_side(diff)
-        if parts_review._declarations(text) and not imports_a_part(
-                diff.path, text, names, folders):
+            kinds = [kind for kind, _ in diff.lines if kind != "-"]
+            on = {number for number, kind in enumerate(kinds, 1) if kind == "+"}
+        if _declares_on(text, on) and not imports_a_part(diff.path, text, names, folders):
             lonely.append(diff.path)
     findings = ([f"{CHECK_TAG} COPY {c.part} — shared part declared at "
                  f"{c.part_path}:{c.part_line}; copy declared at {c.copy_path}:{c.copy_line}"
