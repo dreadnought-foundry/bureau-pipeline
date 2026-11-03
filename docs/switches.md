@@ -28,6 +28,8 @@ This page is the version of that file a person reads.
 
 `OPERATOR_AGENT_LIVE`'s companion, `OPERATOR_AGENT_LIVE_OFF_UNTIL`, names DRE-8747 until the switch is turned on (DRE-8830 sets it, DRE-8748 deletes it).
 
+`OPERATOR_AGENT_DO_LIVE`'s companion, `OPERATOR_AGENT_DO_LIVE_OFF_UNTIL`, names DRE-8927 until the `do` step is turned on. The Operator Agent leaves DRE-8927 alone, beside DRE-8748 and DRE-8830 (`config/operator-agent.json`), and no plan it writes may name either variable (`config/operator-do.json`'s `never`).
+
 `config/switches.json` is the source. If this table and the file disagree, the
 file is right.
 
