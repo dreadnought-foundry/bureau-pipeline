@@ -51,6 +51,7 @@ WRITE_STEP = "Write the decision"
 DECIDE_STEPS = (
     "Check out bureau-pipeline",
     "Decide dry run",
+    "Decide do dry run",
     COPY_STEP,
     SELECT_STEP,
     "Mint the model-home read token",
@@ -237,7 +238,7 @@ class TestTheClock:
         on = _on(_doc())
         assert set(on) == {"schedule", "workflow_dispatch"}
         inputs = on["workflow_dispatch"]["inputs"]
-        assert set(inputs) == {"dry_run"}
+        assert set(inputs) == {"dry_run", "do_dry_run"}
         assert inputs["dry_run"]["type"] == "boolean"
         assert inputs["dry_run"]["default"] is True
 
@@ -246,10 +247,18 @@ class TestTheClock:
                                          "cancel-in-progress": False}
 
     def test_the_workflow_token_is_read_only(self):
+        """Part 1's jobs take the workflow's `contents: read`. The `do` job
+        (DRE-8928) restates it and nothing more, and the `close` job adds
+        only the OIDC token the console's doors answer."""
         doc = _doc()
         assert doc["permissions"] == {"contents": "read"}
         for name, job in doc["jobs"].items():
-            assert "permissions" not in job, name
+            if name == "do":
+                assert job["permissions"] == {"contents": "read"}
+            elif name == "close":
+                assert job["permissions"] == {"contents": "read", "id-token": "write"}
+            else:
+                assert "permissions" not in job, name
 
     def test_the_header_answers_the_vendor_premortem(self):
         header = _header()
@@ -381,7 +390,7 @@ _WRITE_CALLS = (
 
 
 class TestTheDecideJob:
-    def test_its_steps_are_the_cards_nine_in_order(self):
+    def test_its_steps_are_the_cards_in_order(self):
         names = [s.get("name") for s in _job("decide")["steps"]]
         assert names[:len(DECIDE_STEPS)] == list(DECIDE_STEPS), names
         # Anything after them only tidies up: it holds no key and runs no script.
@@ -421,10 +430,13 @@ class TestTheDecideJob:
         assert readers == ["Select the model"]
         assert _step("decide", MODEL_STEP)["with"]["github_token"] == "${{ github.token }}"
 
-    def test_it_declares_the_two_outputs(self):
+    def test_it_declares_the_outputs(self):
         assert _job("decide")["outputs"] == {
             "dry_run": "${{ steps.mode.outputs.dry_run }}",
             "cards": "${{ steps.decide.outputs.cards }}",
+            "do_dry_run": "${{ steps.do_mode.outputs.do_dry_run }}",
+            "do_cards": "${{ steps.decide.outputs.do_cards }}",
+            "close_cards": "${{ steps.decide.outputs.close_cards }}",
         }
 
     def test_it_spends_the_planners_linear_bucket(self):
@@ -658,11 +670,15 @@ class TestTrust:
         text = _text()
         assert not re.search(r"dreadnought-foundry/agent-bureau(?![\w-])", text)
         assert "StudioDeskStack" not in text
+        # The model-home mints read bureau-pipeline alone. The `do` job's step
+        # mints name the plan's one repository and the `close` job's pull
+        # request read names none (DRE-8928, tests/test_operator_do_workflow.py).
         for job in _doc()["jobs"].values():
             for step in job["steps"]:
                 if "create-github-app-token" in str(step.get("uses") or ""):
-                    assert step["with"]["repositories"] == "bureau-pipeline"
                     assert step["with"]["owner"] == "dreadnought-foundry"
+                    if str(step.get("id")).startswith("model_home"):
+                        assert step["with"]["repositories"] == "bureau-pipeline"
 
     def test_no_step_uploads_or_commits_the_card_or_answer_files(self):
         for job in _doc()["jobs"].values():
@@ -670,16 +686,20 @@ class TestTrust:
                 assert "upload-artifact" not in str(step.get("uses") or ""), step.get("name")
                 assert not re.search(r"\bgit\s", str(step.get("run") or "")), step.get("name")
 
-    def test_no_step_sets_the_read_door(self):
+    def test_no_step_but_the_close_sets_the_read_door(self):
+        """Only `do-close` reads through the door (DRE-8925), in the `close`
+        job, which holds the OIDC token it needs (DRE-8928)."""
         doc = _doc()
         scopes = [doc.get("env") or {}]
-        for job in doc["jobs"].values():
+        for name, job in doc["jobs"].items():
+            if name == "close":
+                continue
             scopes.append(job.get("env") or {})
             scopes += [s.get("env") or {} for s in job["steps"]]
+            assert not re.search(r"BUREAU_READ(_URL|_AUDIENCE)?\b", json.dumps(job)), name
         for env in scopes:
             for name in ("BUREAU_READ", "BUREAU_READ_URL", "BUREAU_READ_AUDIENCE"):
                 assert name not in env
-        assert not re.search(r"BUREAU_READ(_URL|_AUDIENCE)?\b", _text())
 
 
 # --------------------------------------------------------------------------- #
@@ -711,8 +731,9 @@ class TestDecide:
 
     def _hand_on(self, tmp_path, decisions, dry_run):
         (tmp_path / "decisions.json").write_text(json.dumps(decisions))
-        result, outputs, _ = _bash(_output_block(), {"DRY_RUN": dry_run}, tmp_path,
-                                   stub=False)
+        result, outputs, _ = _bash(_output_block(),
+                                   {"DRY_RUN": dry_run, "TRUSTED_PIPELINE": str(ROOT)},
+                                   tmp_path, stub=False)
         assert result.returncode == 0, result.stderr
         return outputs
 
@@ -738,11 +759,11 @@ class TestDecide:
         outputs = self._hand_on(tmp_path, rows, "true")
         assert outputs["cards"] == "[]"
 
-    def test_the_output_is_one_line(self, tmp_path):
+    def test_each_output_is_one_line(self, tmp_path):
         rows = [_decision("DRE-1", "ceo", "decide", question="Which one?\nReally?")]
         self._hand_on(tmp_path, rows, "false")
         written = (tmp_path / ".github_output").read_text().splitlines()
-        assert len(written) == 1 and written[0].startswith("cards=")
+        assert len(written) == 3 and written[0].startswith("cards=")
 
     # -- the model's Write reaches the workspace, so no inline interpreter
     #    after it may import from there ----------------------------------- #
@@ -754,12 +775,13 @@ class TestDecide:
             "    fh.write('cards=[{\"card\":\"DRE-9\",\"forged\":true}]\\n')\n"
             "raise SystemExit(0)\n")
         (tmp_path / "decisions.json").write_text("[]")
-        result, _outputs, _ = _bash(_output_block(), {"DRY_RUN": "false"}, tmp_path,
-                                    stub=False)
+        result, _outputs, _ = _bash(_output_block(),
+                                    {"DRY_RUN": "false", "TRUSTED_PIPELINE": str(ROOT)},
+                                    tmp_path, stub=False)
         assert result.returncode == 0, result.stderr
         written = (tmp_path / ".github_output").read_text()
         assert "forged" not in written
-        assert written.splitlines() == ["cards=[]"]
+        assert written.splitlines() == ["cards=[]", "do_cards=[]", "close_cards=[]"]
 
     def test_every_inline_python_after_the_model_runs_isolated(self):
         steps = _job("decide")["steps"]

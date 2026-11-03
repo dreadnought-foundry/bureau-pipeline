@@ -215,6 +215,21 @@ DOCUMENTED_EXCEPTIONS = {
         "the `apply` job makes every write from a fresh checkout. Pinned by "
         "tests/test_operator_agent_workflow.py."
     ),
+    (
+        "operator-agent.yml",
+        "Plan the step",
+    ): (
+        "The Operator Agent's `do` planner is denied Linear ON PURPOSE "
+        "(DRE-8928 + DRE-2696), as the part 1 reader beside it is. It reads "
+        "one card's untrusted text and writes one plan file, which "
+        "`operator_do.py check` checks against the card before anything "
+        "runs. Every Linear read and write of its leg is made by `read`, "
+        "`do-claim`, the run step and `do-post`, each holding the key on "
+        "its own step's env. Its tool set is \"Read,Glob,Grep,Write\" with "
+        "no Bash and no write token, and every step after it runs from a "
+        "read-only copy of bureau-pipeline taken before it. Pinned by "
+        "tests/test_operator_do_workflow.py."
+    ),
 }
 
 # The eight agent steps counted in the DRE-2696 sweep. More is fine (new
