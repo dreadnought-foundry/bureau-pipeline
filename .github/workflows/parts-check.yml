@@ -19,9 +19,13 @@
 # THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
 #   Q1 actor — a `pull_request` run from any author, `dependabot[bot]` and the
 #      pool bots included; nothing here gates on the actor.
-#   Q2 secrets — none. bureau-pipeline is public, so its checkout needs no
-#      token, and Dependabot's empty secrets store and read-only token change
-#      nothing.
+#   Q2 secrets — none read. The seven canonical secrets are declared, each
+#      optional, only so a caller whose guard maps them one by one
+#      (`explicit`) can call this (DRE-8999); no step reads any of them. A
+#      `secrets: inherit` caller and a stub passing nothing run the same.
+#      bureau-pipeline is public, so its checkout needs no token, and
+#      Dependabot's empty secrets store gives empty optional values nothing
+#      reads, so it and the read-only token change nothing.
 #   Q3 retry/rebase — every run recomputes from the head's files. There is no
 #      receipt or marker to go stale.
 #   Q4 command limits — none.
@@ -44,6 +48,27 @@ on:
           ref's scripts.
         type: string
         required: true
+    # The seven canonical secrets, accepted and never read (DRE-8999). A
+    # caller whose channel guard declares `secrets_style: explicit` must map
+    # each one, and GitHub refuses a call passing a secret the called
+    # workflow does not declare, so they are declared here only so that
+    # caller's guard passes. Each is optional and no step reads one: the job
+    # has no `env:` naming a secret.
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: false
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
+        required: false
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
 
 # Read only, and no OIDC token: the job reads two checkouts and writes
 # nothing (the documented exception in tests/test_reusable_id_token.py).
