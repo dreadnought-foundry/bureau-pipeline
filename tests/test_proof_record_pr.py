@@ -279,10 +279,10 @@ def test_a_restamped_waiting_record_is_held_again():
     assert decide(gh, thread) == "held"
     gh.records[HEAD] = record(WAITING_ROW.replace(STAMPED, later), MET_ROW)
     assert decide(gh, thread) == "held"
-    assert [_needs(h) for h in thread.holds()] == [f"not-before={STAMPED}",
-                                                   f"not-before={later}"]
-    assert len(thread.notes()) == 1
-    assert [_needs(h) for h in thread.open()] == [f"not-before={later}"]
+    first, note, second = thread.posted[CARD]
+    assert _needs(first) == f"not-before={STAMPED}"
+    assert note.startswith(proof_record.OBSERVED_MARK), "the earlier hold is retired first"
+    assert thread.open() == [second] and _needs(second) == f"not-before={later}"
 
 
 # --------------------------------------------------------------------------- #
