@@ -4,7 +4,7 @@
 a run that stopped, a question the facts answer — and those are the agent's.
 `scripts/operator_green_light.py` is the one pure reading that rules out, before
 any model reads a card, every row that is never the agent's: one the agent
-already read, a plan waiting for his approval, a growth question, a
+already read, a plan waiting for the CEO's approval, a growth question, a
 signed-answer park, a row the hygiene agent acts on, a notice, and a row already
 screened as a business choice.
 
@@ -440,9 +440,9 @@ def test_a_second_stall_the_hygiene_lane_leaves_is_still_not_taken():
                             HYGIENE_NOW - timedelta(hours=1))
     newest = card["comments"]["nodes"][0]
     card["comments"]["nodes"].insert(1, {"body": prior,
-                                         "createdAt": "2026-09-30T13:00:00.000Z",
+                                         "createdAt": "2026-09-30T15:30:00.000Z",
                                          "user": {"id": PIPELINE_USER}})
-    assert newest["createdAt"] > "2026-09-30T13:00:00.000Z"
+    assert newest["createdAt"] > "2026-09-30T15:30:00.000Z"
     assert isinstance(hygiene_green_light.plan_card(card, ctx, PIPELINE_USER), hygiene.Left)
     assert read(card) == module.Reading(taken=False, why=module.HYGIENE_WHY)
 
