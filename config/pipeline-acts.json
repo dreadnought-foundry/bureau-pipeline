@@ -2037,13 +2037,6 @@
     },
     {
       "file": "scripts/reconcile.py",
-      "anchor": "sent back to the merge gate — {why}.",
-      "kind": "undeclared-act",
-      "means": "An approved, verified, green, CLEAN pull request the gate has not merged is sent back to the merge gate once per head (DRE-9123): as soon as its checks finish green on a head the gate refreshed, otherwise once its last check finished REGATE_MINUTES ago. Its first line, `🔁 regate @<head>:`, is the once-per-head key `_regate_reason` reads.",
-      "why": "Act-shaped — the sweep dispatched the gate by itself — and the registry has no row for it, as for the review lane's gate nudge just above. A new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own, so the receipt ships as an undeclared act. Named here so the debt is countable rather than invisible."
-    },
-    {
-      "file": "scripts/reconcile.py",
       "anchor": "no critic verdict bound to this head after",
       "kind": "undeclared-act",
       "means": "An open PR with no verdict bound to its head past the review window re-triggers the critic, counted per head against REVIEW_NUDGE_CAP.",
@@ -2062,6 +2055,13 @@
       "kind": "not-an-act",
       "means": "The same question on the pull request, posted once per head as a fix-loop blocker (`review_cap_question.pr_blocker`): its first line opens the 🛑 blocker prefix, so a person's Operator decision after it is read by the sweep's answered-blocker restart and by agent-fix.yml's comment-started run (DRE-6181). On a proof-record pull request the blocker is the proof-record variant and the card is held `In Review`, not parked — not live until DRE-6841.",
       "why": "A question is not an act, for the reason the card-side question above gives: the hold is said by the stamp, and this comment only makes the decision that answers it reachable — without a blocker on the thread `fix_context.operator_decision` reads nothing. Its last line, `review-nudge-cap @<head>`, on a worker-bot comment, is the once-per-head key the sweep reads off the pull request before posting it again."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "sent back to the merge gate — {why}.",
+      "kind": "undeclared-act",
+      "means": "An approved, verified, green, CLEAN pull request the gate has not merged is sent back to the merge gate once per head (DRE-9123): as soon as its checks finish green on a head the gate refreshed, otherwise once its last check finished REGATE_MINUTES ago. Its first line, `🔁 regate @<head>:`, is the once-per-head key `_regate_reason` reads.",
+      "why": "Act-shaped — the sweep dispatched the gate by itself — and the registry has no row for it, as for the review lane's gate nudge just above. A new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own, so the receipt ships as an undeclared act. Named here so the debt is countable rather than invisible."
     },
     {
       "file": "scripts/reconcile.py",
