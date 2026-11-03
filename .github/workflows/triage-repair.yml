@@ -64,10 +64,11 @@
 #      posted, is not taken (DRE-8902): `claim` and `apply` then read Linear.
 #   Q4 command limits — while TRIAGE_REPAIR_LIVE is off the run selects and
 #      prints: one Triage board read and one whole-thread read per card in
-#      Triage (off the read door first, DRE-8902), at most 3 cards worked a run (`select`'s limit, oldest arrival
-#      first — 12 an hour against a few arrivals a day), one at a time. The
-#      `unrepaired` job adds one Triage board read, one whole-thread read per
-#      card in Triage and one door call a run, dry or live.
+#      Triage (off the read door first, DRE-8902), at most 3 cards worked
+#      a run (`select`'s limit, oldest arrival first — 12 an hour against a
+#      few arrivals a day), one at a time. The `unrepaired` job adds one
+#      Triage board read, one whole-thread read per card in Triage and one
+#      door call a run, dry or live.
 #   Q5 our crash — a crash after the claim leaves the card in Triage with a
 #      `started` receipt; `apply` runs under `!cancelled()`, so a dead planner
 #      still reaches the `unfinished` receipt. A job killed outright leaves

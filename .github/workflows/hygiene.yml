@@ -37,7 +37,9 @@
 #      the summary posts only when its digest moved or something was executed.
 #      The `hygiene` concurrency group queues a second pass behind the first,
 #      so a hand dispatch or a medic retry never reads the board while another
-#      pass has not yet posted its receipts.
+#      pass has not yet posted its receipts. A door answer older than the
+#      `keep` leg's start is not taken (DRE-8902): the seam then reads the
+#      card's thread from Linear.
 #   Q4 command limits — the App holds write on contents and on actions, so
 #      update-branch, rerun and dispatch are within its grant. A merge is kept
 #      out by the guard's shape rule, not by permission alone: the only
@@ -162,6 +164,14 @@ jobs:
       matrix:
         owner: ${{ fromJSON(needs.read.outputs.owners) }}
     steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so the seam finds the receipts the
+      # pass queued ahead of this one posted — the passes are serialized, so
+      # they were posted before this job began. Written to $GITHUB_ENV, and
+      # named by no `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the board

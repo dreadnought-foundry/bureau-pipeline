@@ -40,8 +40,9 @@
 #      agent step's allowed_bots admits, DRE-5123). Its only GitHub call is
 #      the OIDC mint for the read door (`id-token: write`): `select` reads the
 #      open alerts there, and `apply` reads the alert's title for its
-#      receipt. Each card's thread and the card itself are read there first
-#      too (DRE-8902); a card the door does not serve reads Linear. The model-home read token every model selection mints
+#      receipt. Each card's thread and the card itself are read there
+#      first too (DRE-8902); a card the door does not serve reads Linear.
+#      The model-home read token every model selection mints
 #      (scripts/check_model_home_scope.py) reads one variable. Nothing is
 #      pushed, dispatched or commented on GitHub; the agent's `github_token`
 #      is this run's read-only token.
