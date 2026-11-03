@@ -632,8 +632,10 @@ class TestWords:
 
 CONTRACT_SENTENCE = (
     "On the one-off route that is the critic's QUESTION, or the revising "
-    "planner's own, and a critic that decided nothing — never a card the critic "
-    "sent back for a defect, which the planner revises (DRE-5376). The round "
+    "planner's own — never a card the critic sent back for a defect, which the "
+    "planner revises (DRE-5376), and never a critic that decided nothing, which "
+    "is read once more and then parked in Triage for the operator (DRE-8772). "
+    "The round "
     "bound, on the one-off route and on the epic route alike, reaches this lane "
     "by one door only: the bound exit (scripts/plan_bound.py, DRE-6415) reads "
     "the worst finding of every send-back round on the attempt, the one its "
