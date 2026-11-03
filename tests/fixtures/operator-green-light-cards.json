@@ -1,0 +1,765 @@
+{
+ "r1-ceo": {
+  "serves": "rule 1",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a part-1 ceo receipt (a business choice), written by operator_decide.receipt_text over base B's fingerprint with the live escalation's escalation-choices block as its choices, posted 2026-11-02T17:00:00.000Z by the pipeline, wrapped in pipeline_act.receipt('operator-agent', …), the trailer the claim posts every receipt with"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🛠️ operator-agent: ceo — a business choice for the CEO · 09:00 PT\nfingerprint: f5fcef1b46b3\nstep: re-run the review the critic never finished, or settle the card\nact: business-choice\nchoices: {\"question\": \"Re-run the review, or settle the card yourself?\", \"context\": \"the critic produced no result\", \"choices\": [{\"id\": \"re-run-the-review\", \"label\": \"re-run the review\", \"effect\": \"the card is read again by the critic\", \"outcome\": \"replan\"}, {\"id\": \"settle-it-yourself\", \"label\": \"settle it yourself\", \"effect\": \"the card goes on without the reader's answer\", \"outcome\": \"proceed\"}], \"recommended\": \"re-run-the-review\", \"why\": \"the critic returned no result, and a no-result is a crash, not a rejection\"}\n\n📎 pipeline-act: operator-agent · kind: recovery · state: unchanged · next: operator · discharges: nothing · subscriber: operator-agent.yml · tag: operator-agent",
+      "createdAt": "2026-11-02T17:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r1-keep": {
+  "serves": "rule 1",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a keep receipt over base B's fingerprint, written by operator_decide.receipt_text, posted 2026-11-02T17:00:00.000Z by the pipeline, wrapped in pipeline_act.receipt('operator-agent', …), the trailer the claim posts every receipt with"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🛠️ operator-agent: keep — a genuine decision — it stays with the CEO · 09:00 PT\nfingerprint: f5fcef1b46b3\nstep: re-run the review the critic never finished, or settle the card\nact: business-choice\nstays: Green Light\n\n📎 pipeline-act: operator-agent · kind: recovery · state: unchanged · next: operator · discharges: nothing · subscriber: operator-agent.yml · tag: operator-agent",
+      "createdAt": "2026-11-02T17:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r1-keep-newer": {
+  "serves": "rule 1",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "one comment after the keep receipt, written by the builder, posted 2026-11-02T18:00:00.000Z, authored user-person"
+  ],
+  "removed": [
+   "nothing of r1-keep"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-green-light-cards.json",
+   "record": "r1-keep"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "Re-reading this one: the critic run that stopped is worth one more try before anyone settles it by hand.",
+      "createdAt": "2026-11-02T18:00:00.000Z",
+      "user": {
+       "id": "user-person"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r1-rekept": {
+  "serves": "rule 1",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a second keep receipt after that comment, written by operator_decide.receipt_text, posted 2026-11-02T19:00:00.000Z by the pipeline, wrapped in pipeline_act.receipt('operator-agent', …), the trailer the claim posts every receipt with"
+  ],
+  "removed": [
+   "nothing of r1-keep-newer"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-green-light-cards.json",
+   "record": "r1-keep-newer"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🛠️ operator-agent: keep — a genuine decision — it stays with the CEO · 11:00 PT\nfingerprint: f5fcef1b46b3\nstep: re-run the review the critic never finished, or settle the card\nact: business-choice\nstays: Green Light\n\n📎 pipeline-act: operator-agent · kind: recovery · state: unchanged · next: operator · discharges: nothing · subscriber: operator-agent.yml · tag: operator-agent",
+      "createdAt": "2026-11-02T19:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r2-plan": {
+  "serves": "rule 2",
+  "source": "DRE-6589",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-11T17:51:34.146Z",
+  "added": [
+   "nothing — the title, description, labels and lane are gl-answerable's, read at its own cut, and the thread is the live one up to this cut"
+  ],
+  "removed": [
+   "every comment after the cut",
+   "the body of each of the three Mechanical plan checks comments after its first line, each over 26,000 characters and none a receipt any rule reads"
+  ],
+  "withheld": [
+   "a person's name",
+   "a Linear user id",
+   "a console user id"
+  ],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-answerable"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "plan-critic: stage=post round=2 result=PASS collisions=0 open=0",
+      "createdAt": "2026-10-11T17:51:34.146Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "✅ **Second critic — before the CEO reads it** — round 2: the critic passed this plan\n\nsend-back rate at this critic so far on this planning attempt: 1/1 rounds",
+      "createdAt": "2026-10-11T17:51:33.614Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧮 review-turns: spent=25 ceiling=64 children=6 model=claude-sonnet-5-5",
+      "createdAt": "2026-10-11T17:51:31.475Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38161064583 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-11T17:48:45Z",
+      "createdAt": "2026-10-11T17:48:45.871Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "📄 The plan artifact is built. No document portal URL is configured for this repo, so read it from the run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38159838120",
+      "createdAt": "2026-10-11T17:47:28.026Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: released · card DRE-6589 · run 38159838120 · repo dreadnought-foundry/agent-bureau · trigger - · at 2026-10-11T17:46:44Z · because finished",
+      "createdAt": "2026-10-11T17:46:44.872Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: DRE-6930's thread memo is keyed on (count, max id, max edited_at), but the store rewrites event rows in place (author, author_kind, previous, external_id) without moving any of the three, so the \"nothing stale is shown\" claim is false. What the re-plan changed: The second critic sent this plan back with five findings on 2026-10-11. Every one is answered in this revision. No card was added and none was removed: the six cards are the same six, two rewritten and two extended.\n\n**What changed, card by card.**\n\nThe thread-memo card (DRE-6930) is rewritten. The critic found that the memo could show a stale comment or lane move: the database rewrites a thread's rows in place when it fills in who wrote a comment or what lane a card came from, and the memo's old check could not see those rewrites. The card now lists every way the backend writes to a thread (ten of them) and gives the memo a check that moves on each one, with a test replaying each case and a guard test that fails if a new way of writing is ever added without being covered. The card also says plainly the one case the check cannot see, and why nothing writes that case today, instead of claiming nothing stale is ever shown.\n\nThe board-rows card (DRE-6928) is rewritten. It strips the card body out of the rows the board reads, keeping it only where a card declares a short name. The critic found the way the card spelled that filter would have crashed every board read in production (the production database driver reads a percent sign as a placeholder) while the local tests stayed green. The filter is now passed as a value rather than written into the query, a test exercises the production dialect, and the list of columns the board keeps is read off the table itself rather than copied by hand, so a column added later cannot drop out.\n\nThe operator card (DRE-6927) gains one step and one criterion: the record it writes on DRE-6585 now carries an \"Instance decision\" paragraph stating the service's configured instance counts, that the one-server-or-two question is the CEO's and is asked outside this epic, and that no stack card is filed here.\n\nThe proof card (DRE-6931) gains one row: the record quotes that paragraph and lists the epic's cards with the statement that none touches the backend stack, so the epic's fourth criterion is answered in the proof's own table.\n\n**The five findings, in the critic's order.**\n\n1. The memo's check missed in-place rewrites of thread rows, so \"nothing stale is shown\" was false. FIXED: the check now reads every column a thread serves, every writer is enumerated and replayed in a test, a guard test catches new writers, and the card states the one boundary the check has rather than an absolute claim.\n\n2. The specific rewrite paths (the lane-history fill, the comment-identity fill, and the re-ingest that fills actor columns) needed a replay test each. FIXED: the replay list names each of those paths as its own case, including the fill of each column separately and the out-of-order edit a simpler check would miss.\n\n3. The short-name filter would crash board reads on the production database, and the column list was hand-written. FIXED: the filter is a bound value, a production-dialect test asserts no stray percent sign reaches the driver, and the column list is read off the table with a test that adds a column and sees it appear.\n\n4. The instance decision was recorded only in the plan comment, with no card or proof row carrying it. FIXED: the operator card writes it on DRE-6585 as an \"Instance decision\" paragraph, and the proof record quotes that paragraph and lists the cards in its own criterion table.\n\n5. The three store cards share files and are serialized, which the critic confirmed is correct, and the operator card touches nothing. LEFT, with nothing to change: this finding records that the ordering is right. The plan document now states the chain and names it as a serialization, and it records that no open card in the other in-flight epics touches these files.\n\nNothing here needs a decision from you. Once the second critic passes this revision the plan reaches you for a green light. To start it, move only the epic to In Progress and stop; the pipeline promotes the cards in order. The review is being run again by the pipeline, on its own, as round 2 — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator.",
+      "createdAt": "2026-10-11T17:46:44.261Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔎 **Mechanical plan checks** — 6 card(s), run before the critic reads the plan. These are the INPUT to its judgement, not a verdict of their own.",
+      "createdAt": "2026-10-11T17:46:40.622Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-critic: stage=post round=1 result=SEND_BACK collisions=0 — DRE-6930's thread memo is keyed on (count, max id, max edited_at), but the store rewrites event rows in place (author, author_kind, previous, external_id) without moving any of the three, so the \"nothing stale is shown\" claim is false",
+      "createdAt": "2026-10-11T17:33:02.819Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🛑 **Second critic — before the CEO reads it** — round 1: sent back — round 1 of 2: the planner is revising the plan, and the review re-runs on its own — nothing here waits on anyone\n\nReason: DRE-6930's thread memo is keyed on (count, max id, max edited_at), but the store rewrites event rows in place (author, author_kind, previous, external_id) without moving any of the three, so the \"nothing stale is shown\" claim is false\n\nEvery finding this round (5), ranked — the revision answers all of them, and the next round checks those fixes rather than finding these again:\n\n1. DRE-6930's thread memo is keyed on (count, max id, max edited_at), but the store rewrites event rows in place (author, author_kind, previous, external_id) without moving any of the three, so the \"nothing stale is shown\" claim is false\n2. DRE-6930: `Store.fill_state_event` (console/backend/store.py ~2630-2665) and the comment-identity fill (~2695-2710) run `UPDATE event SET author/author_kind/previous/external_id = COALESCE(...)` on existing rows. The `_add_event_sql` upsert also fills actor columns on conflict. None of these change…\n3. DRE-6928: the card spells the projection as `CASE WHEN description LIKE '%**Short name:**%' ...` inside a statement that is executed with bound params. In production the store runs on Postgres through `_to_pg`, so a literal `%` in the statement becomes a psycopg placeholder and the read raises. The…\n4. DRE-6931 / epic acceptance: epic criterion 4 says that if the CEO chose one instance, \"that is recorded\". The plan records that the question is undecided and that no stack card is filed, but only in the plan artifact comment. No card or proof row carries it, and the proof's per-criterion table has …\n5. DRE-6930 / DRE-6928 / DRE-6926 (sequencing): these three share store.py, tenant_store.py, board_reads.py and tests/isolation.py. They are serialized by Blocked-by (6926 → 6928 → 6930, and 6929 after 6928), so it is not a collision. 6927 has no Blocked-by and touches no files, which is fine.\n\nsend-back rate at this critic so far on this planning attempt: first round",
+      "createdAt": "2026-10-11T17:33:02.262Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧮 review-turns: spent=16 ceiling=64 children=6 model=claude-sonnet-5-5",
+      "createdAt": "2026-10-11T17:33:00.227Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38159838120 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-11T17:31:03Z",
+      "createdAt": "2026-10-11T17:31:04.170Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "📄 The plan artifact is built. No document portal URL is configured for this repo, so read it from the run: https://github.com/dreadnought-foundry/agent-bureau/actions/runs/38157043576",
+      "createdAt": "2026-10-11T17:30:05.703Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: released · card DRE-6589 · run 38157043576 · repo dreadnought-foundry/agent-bureau · trigger - · at 2026-10-11T17:29:12Z · because finished",
+      "createdAt": "2026-10-11T17:29:12.450Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "📨 The first critic passed this plan, so it is now with the second critic, which reads it before it can reach Green Light. The epic stays in Planning, and nothing here is yours to decide yet.",
+      "createdAt": "2026-10-11T17:29:11.774Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-critic: stage=pre round=2 result=PASS collisions=0",
+      "createdAt": "2026-10-11T17:29:05.706Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "✅ **First critic — before the CEO reads it** — round 2 of 2: the critic passed this plan\n\nsend-back rate at this critic so far on this planning attempt: 1/1 rounds",
+      "createdAt": "2026-10-11T17:29:05.148Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔎 **Mechanical plan checks** — 6 card(s), run before the critic reads the plan. These are the INPUT to its judgement, not a verdict of their own.",
+      "createdAt": "2026-10-11T17:27:34.899Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-critic: stage=pre round=1 result=SEND_BACK collisions=0 — DRE-6928 blanks card descriptions on a read the pipeline itself uses (pipeline_read.py), and the plan's \"readers were enumerated\" claim to the CEO is wrong",
+      "createdAt": "2026-10-11T17:11:35.113Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🛑 **First critic — before the CEO reads it** — round 1 of 2: sent back — round 1 of 2\n\nReason: DRE-6928 blanks card descriptions on a read the pipeline itself uses (pipeline_read.py), and the plan's \"readers were enumerated\" claim to the CEO is wrong\n\nEvery finding this round (7), ranked — the revision answers all of them, and the next round checks those fixes rather than finding these again:\n\n1. DRE-6928 blanks card descriptions on a read the pipeline itself uses (pipeline_read.py), and the plan's \"readers were enumerated\" claim to the CEO is wrong\n2. DRE-6928 (and the Risk paragraph of the artifact): the list of description readers is incomplete. `console/backend/pipeline_read.py` serves card bodies to the pipeline (`description` at about line 1105) through `cards_in_lanes` and `cards_by_ids`. For the fleet scope those call `store.cards_in_stat…\n3. DRE-6928, DRE-6931: the proof's bars are tighter than what the build card guarantees. DRE-6928 only requires the projected rows to be under one third of the full rows. One third of 65.9 MB is 22 MB, and the proof's `children_of_cards` bar is 16 MB. One third of 47.5 MB is 15.8 MB, and the proof's `…\n4. DRE-6926, DRE-6930, DRE-6931: the sampling rule can leave the proof with nothing to read. The instrument writes no line for a fetch under 100 rows and writes at most one line per name per minute. With the thread memo working, `events_for_cards` mostly fetches a handful of changed threads, so there …\n5. DRE-6930: the memo's size is left to the builder (\"a constant whose comment names the figure\"). The card says the budget must \"hold with room\" the production-shaped board, and the artifact's Outcome says memory \"no longer grows with the size of its tables\". If the memo holds every open card's threa…\n6. Artifact (all cards): the plan changes the CEO's own epic criteria in several places without listing them together. The hold is 1 hour, not 2. The bar is 3,072 MB, not 75% of the limit. The record lives in the repo and not on DRE-6585. \"Container exit code: 137\" in the service log is replaced by th…\n7. All cards: none states a rough size (XS, S or M) in its body or labels. The artifact calls the thread memo \"the largest\" and nothing else.\n\nsend-back rate at this critic so far on this planning attempt: first round",
+      "createdAt": "2026-10-11T17:11:34.304Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔎 **Mechanical plan checks** — 6 card(s), run before the critic reads the plan. These are the INPUT to its judgement, not a verdict of their own.",
+      "createdAt": "2026-10-11T17:09:51.836Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "Plan for DRE-6589, written against the diagnostic reading on DRE-6585 (2026-10-11), as the operator asked.\n\n**Where we stand.** The thing that was shutting the console down is already fixed. The reading found the server holding 4,140 to 4,969 MB with four pages open while the program's own data was about 161 MB; one free setting (live since 03:47 PT on 2026-10-11) brought the same four pages down to 1,352 to 1,674 MB. What is left is the slower part the reading named: every console refresh pulls whole tables into memory — every open card's full comment history (154 MB a refresh), every child of every epic with its full card body (66 MB), every card in a lane with its body (48 MB) — and two views fetch every card ever finished just to count them. These grow with the tables and are the next ceiling. This plan bounds them.\n\n**What gets built, in order.** Six cards, four of them code, about two days of agent work end to end.\n\n1. A reading. The backend writes one log line per board read saying how big it was, once a minute per kind. This ships first so the fix is measured in production, not guessed: the reading that found the sites came from a tracer that froze the server for 28 seconds and could only report once.\n2. Lighter rows. The board stops fetching each card's full written body on every refresh. The one place the board reads that text (the short name an epic shows) keeps it; the card's flyout is unchanged.\n3. Counting without fetching. Three places that fetch every finished card to count them ask the database for the count instead.\n4. Remembering threads. A card's comment history is fetched again only when it has changed, under a fixed memory budget, and checked against the database every time it is served so nothing stale is shown. This is the largest card and the one that removes the 154 MB read.\n5. An operator reading, in parallel: the stall that followed each kill on 2026-10-10 — a fresh server answering 3 to 46 requests a minute for ten minutes — is read off the server's own minute-by-minute metrics and explained on the record. The reading did not see a stall, so this is the card the epic asked for in that case.\n6. The proof: four console pages held open for an hour on the released build, with every board read under its bar, the server under 3,072 MB, and no kill in the window. One hour rather than two: the operator set that bar on 2026-10-11, and the proof run itself has a two-hour limit.\n\n**What could go wrong.** Card 4 keeps data between refreshes, so its risk is showing a stale comment; it checks every thread against the database before serving it and is tested against every way a thread changes. Card 2 could drop text some screen needed; the places that read it were listed and tested before this plan was written. Card 1 costs a little processor time; it is sampled to one line a minute. Everything is one pull request and reverts cleanly. Nothing here changes the database schema or the servers.\n\n**Two things recorded, not built.** The question of one server or two stays yours and is on your list separately; the operator asked that it not be folded in here, so no server card is filed. Your signed answer on this card (2026-10-10 10:58 PT) agreed to wait for the reading and was not a two-instance decision. Going back from the 6 GB stopgap server to 4 GB is a decision after a week of ordinary daytime use, outside this epic.\n\nTo start the build: move ONLY this epic to In Progress — the children promote automatically, in order. Do not move the children by hand.",
+      "createdAt": "2026-10-11T17:09:17.710Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧠 model-attempt: claude-fable-5-1 — planner agent starting. model-policy: claude-fable-5-1 chosen for planner (judgement kind) — top of the ladder, nothing above it was skipped — project agent-bureau: no exception, fleet ladder",
+      "createdAt": "2026-10-11T16:50:20.203Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-cycle: start epic=DRE-6589",
+      "createdAt": "2026-10-11T16:50:19.538Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "📋 A fresh planning attempt on DRE-6589 starts here. Both critics count their rounds from this point, so a re-planned epic gets its own revision round rather than inheriting a budget the last attempt already spent.",
+      "createdAt": "2026-10-11T16:50:18.263Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38157043576 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-11T16:50:05Z",
+      "createdAt": "2026-10-11T16:50:05.855Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "**2026-10-11 09:48 PT, operator session: sent back to Planning to be planned again from the reading. Nothing here needs the CEO.**\n\nThe question this card was parked on (\"wait for the first memory epic's reading, or plan now?\") is settled: he answered \"wait\" on 2026-10-10 at 10:58 PT, and the reading is in (the two notes above, 01:57 and 04:40 PT today). The cause that was shutting the server down is fixed by one setting (DRE-6887, live in v1.6.413 since 03:47 PT): the same four pages now hold 1,352 to 1,674 MB where they held 4,140 to 4,969 MB.\n\nWhat is left for this plan is the smaller part the reading named: the whole-table board reads on every refresh (`events_for_cards` 154 MB, `children_of_cards` 66 MB, `cards_in_states` 48 MB in `console/backend/board_reads.py`), which still grow with the tables. Plan against those, with a proof bar that measures one board read and not the whole process. The two-instance question stays the CEO's and is asked separately (it is on his list as \"one server or two\"); do not fold it into this plan.\n",
+      "createdAt": "2026-10-11T16:48:43.937Z",
+      "user": {
+       "id": "user-person"
+      }
+     },
+     {
+      "body": "**2026-10-11 04:40 PT, operator session: the one-setting test is read, and it changes this plan's urgency.** https://linear.app/dreadnoughtfoundry/issue/DRE-6585/agent-bureau-the-console-backend-stops-being-killed-for-memory-killed#comment-a140d2c3\n\nWith `MALLOC_ARENA_MAX=2` (DRE-6887, live in v1.6.413) the server held 1,352 to 1,674 MB under the same four pages that took it to 4,140 to 4,969 MB without it. So the memory that was shutting the server down was the allocator keeping what Python had freed, and that is now handed back. What is left for this plan is the smaller, slower part the reading named: the whole-table board reads on every refresh (`events_for_cards` and the others), which still grow with the tables. The proof bar I suggested (under 3,072 MB with four pages held for an hour) is already met by the setting alone; a bar that tests this plan's own work would be the size of one board read, not the process.\n",
+      "createdAt": "2026-10-11T11:40:42.041Z",
+      "user": {
+       "id": "user-person"
+      }
+     },
+     {
+      "body": "**2026-10-11 01:57 PT, operator session: the diagnostic reading this plan waited for is in.** https://linear.app/dreadnoughtfoundry/issue/DRE-6585/agent-bureau-the-console-backend-stops-being-killed-for-memory-killed#comment-8e9b27eb\n\nWhat it names: with four console pages open the server holds 4,140 to 4,969 MB while its live Python data is about 161 MB; the largest sites are whole-table `fetchall` board reads (`events_for_cards` 154 MB, `children_of_cards` 66 MB, `cards_in_states` 48 MB); module caches hold 13 MB; the process never hands memory back, and it was still stepping up after an hour. This plan was written before the reading, so it should be planned again from it. Two things to carry in: the proof bar in megabytes (I suggest under 3,072 MB with four pages held for an hour), and the free one-setting test already filed (DRE-6887, DRE-6888), whose result says whether the retained memory is the allocator's or the database driver's.\n",
+      "createdAt": "2026-10-11T08:57:42.170Z",
+      "user": {
+       "id": "user-person"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: released · card DRE-6589 · run 38074094968 · repo dreadnought-foundry/agent-bureau · trigger - · at 2026-10-10T18:08:02Z · because finished",
+      "createdAt": "2026-10-10T18:08:02.751Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🙋 planning-escalation: DRE-6589 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n🔎 Finding: This epic bounds whatever grows in the console's backend, explains the stall after a kill, and carries the two-instance stack change if you choose it. All three are written against the reading the first memory epic records, and that epic is approved and building with none of its cards done yet. Every button here sends the card back to planning, so the right move today is to press none of them.\n❓ Question: Should this memory-fix epic keep waiting for the first memory epic's diagnostic reading, or be planned now against today's clue?\n💡 Recommendation: Wait for the reading — The plan has to name the sites that grow and their sizes at plateau, and only the first epic's recorded reading can supply them, so there is nothing to press until that epic is done.\n\nYour earlier answer on this card, 2026-10-10 10:58 PT: \"Operator decision — I agree with your recommendation.\". It is on the record, and the question above was raised after it; nothing here asks you to answer it again.\n\n**Why it needs you:** This epic cannot be planned yet, and that is the same answer you already gave at 10:58 PT today. I am putting it back in your queue with one instruction: press nothing on it until the first memory epic is done.\n\nWhat this epic is for: the fix that stops the console's backend filling its memory and being killed, an explanation of why a fresh backend stalls for ten minutes after a kill, and the stack change to two instances if you choose it. Every one of those is written against a measurement the first memory epic produces, the operator's reading of what grows between a start and the plateau. As of this run that reading does not exist. The first epic is approved and building, and none of its seven cards is done. The operator reading in it has not been taken. Your answer on two instances, which that epic asked for with its approval, is not recorded anywhere I can read either.\n\nWhy I am not writing cards against today's evidence: the one lead we have says opening four console pages on a fresh backend added about 1.2 gigabytes that did not come back when three of the pages were closed. That is a clue, not a name. The boot report shows the obvious places hold almost nothing. Cards written now would name guesses, and this epic's own test is that each card names the thing that grew and the size it reached in the reading. We would write the plan twice, and you would approve it twice.\n\nWhy you are seeing this again: when you agreed with my recommendation this morning, the console sent the card back to planning, which is what every button on a planning question does. That started a second planning run, which is this one, and it can only say the same thing. The operator's note on the card said the same: nobody presses anything yet. I have filed a separate pipeline card so that an epic waiting on another epic is held automatically and never reaches a planner until its turn; it needs nothing from you.\n\nWhat getting this wrong costs: planning now spends a planner run, two critic readings and your approval on a plan that is rewritten within days. Pressing wait again today spends another planner run for nothing. Waiting costs nothing.\n\nMy recommendation: leave this card where it is and press nothing. When the first memory epic shows as done, press the wait choice once; that sends the card to planning and the plan is written against the real reading. If you would rather have a plan today, written against today's clue and rewritten later, choose to plan it now anyway.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.\n\n```escalation-choices\n{\n  \"question\": \"Should this memory-fix epic keep waiting for the first memory epic's diagnostic reading, or be planned now against today's clue?\",\n  \"context\": \"This epic bounds whatever grows in the console's backend, explains the stall after a kill, and carries the two-instance stack change if you choose it. All three are written against the reading the first memory epic records, and that epic is approved and building with none of its cards done yet. Every button here sends the card back to planning, so the right move today is to press none of them.\",\n  \"choices\": [\n    {\n      \"id\": \"wait-for-the-reading\",\n      \"label\": \"Wait for the reading\",\n      \"effect\": \"Press this only once the first memory epic shows as done. It sends the card to planning and the cards are written against the recorded reading. Pressed before then, the planner comes straight back with this same question.\",\n      \"outcome\": \"replan\"\n    },\n    {\n      \"id\": \"plan-now-on-todays-clue\",\n      \"label\": \"Plan it now anyway\",\n      \"effect\": \"The planner writes cards today against the kill, stall and four-page observations already recorded and a general memory bound, knowing they are likely rewritten once the reading names what grew.\",\n      \"outcome\": \"replan\"\n    },\n    {\n      \"id\": \"drop-this-epic\",\n      \"label\": \"Drop this epic\",\n      \"effect\": \"The card is canceled. The memory fix, the stall explanation and the two-instance change become nobody's work.\",\n      \"outcome\": \"close\"\n    }\n  ],\n  \"recommended\": \"wait-for-the-reading\",\n  \"why\": \"The plan has to name the sites that grow and their sizes at plateau, and only the first epic's recorded reading can supply them, so there is nothing to press until that epic is done.\"\n}\n```",
+      "createdAt": "2026-10-10T18:08:01.007Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧠 model-attempt: claude-fable-5-1 — planner agent starting. model-policy: claude-fable-5-1 chosen for planner (judgement kind) — top of the ladder, nothing above it was skipped",
+      "createdAt": "2026-10-10T18:02:23.025Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-cycle: start epic=DRE-6589",
+      "createdAt": "2026-10-10T18:02:22.454Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "📋 A fresh planning attempt on DRE-6589 starts here. Both critics count their rounds from this point, so a re-planned epic gets its own revision round rather than inheriting a budget the last attempt already spent.",
+      "createdAt": "2026-10-10T18:02:21.818Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38074094968 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T18:02:08Z",
+      "createdAt": "2026-10-10T18:02:08.803Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: dispatched · card DRE-6589 · run 38073484635 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T18:01:16Z",
+      "createdAt": "2026-10-10T18:01:17.839Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: waiting · card DRE-6589 · run 38073934780 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T17:59:54Z\nwaiting for a planner: place 1 of 1",
+      "createdAt": "2026-10-10T17:59:54.280Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38073934780 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T17:59:52Z",
+      "createdAt": "2026-10-10T17:59:52.827Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "Moved to Planning by the CEO ([withheld]) via the console",
+      "createdAt": "2026-10-10T17:58:58.163Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "Answer from the CEO (signed in to the console), 2026-10-10 10:58 PT:\n\nOperator decision — I agree with your recommendation.\n\n🔏 console-answer: v1 card=DRE-6589 sha256=544f9129ef34c171eb740e9372f30b76c59913b97af34f3c0b8f854027611a5f user=[withheld] at=2026-10-10T17:58:57Z kid=7d1f6e507b7bc4ad sig=_FDY0-poUMCkuxZmYgneJ1Ei7m-0Ae8_gUNk2S4ecGbhe8Szcgz8qOOtexnfdT2VXZqmyt-GyvbgWvgL2orOCA",
+      "createdAt": "2026-10-10T17:58:57.942Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "**Operator answer to the planning escalation, 2026-10-10 10:19 PT: wait for the reading. Nobody presses anything yet.**\n\nThis epic is the second child of DRE-6585, and it is planned only when DRE-6587 is Done, as its own description says. DRE-6587 is In Progress today. The planner's recommendation is the same, and the card's own choice text says pressing \"Wait for the reading\" before DRE-6587 is Done only brings the same question back.\n\nSo this card sits here until DRE-6587 closes. Then it goes back to Planning and is planned against the recorded reading. Nothing on it is the CEO's to decide today.",
+      "createdAt": "2026-10-10T17:19:20.633Z",
+      "user": {
+       "id": "user-person"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: released · card DRE-6589 · run 38042688582 · repo dreadnought-foundry/agent-bureau · trigger - · at 2026-10-10T09:58:17Z · because finished",
+      "createdAt": "2026-10-10T09:58:18.229Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r2-queued": {
+  "serves": "rule 2",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "the label epic-queued"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "labels": {
+    "nodes": [
+     {
+      "name": "epic-queued"
+     }
+    ]
+   }
+  }
+ },
+ "r3-growth": {
+  "serves": "rule 3",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "title: epic_growth.title_prefix(\"DRE-2498\") + base B's title"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "title": "Epic grew past its green light: DRE-2498 — The share panel tells the truth about documents Portico cannot gate"
+  }
+ },
+ "r4-proof": {
+  "serves": "rule 4",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "title: 'PROOF: ' + base B's title"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "title": "PROOF: The share panel tells the truth about documents Portico cannot gate"
+  }
+ },
+ "r4-press": {
+  "serves": "rule 4",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a 🔬 proof-waiting line naming proof_record.CEO_PRESS, written by linear_ops.proof_waiting_line, posted 2026-11-02T17:00:00.000Z by the pipeline"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🔬 proof-waiting: the share panel's disclosure line, read on the live portal — needs the CEO's press on the live share panel",
+      "createdAt": "2026-11-02T17:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r4-signed": {
+  "serves": "rule 4",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a console answer newer than the escalation, signed with the test key of tests/console_receipt_vectors.py the way tests/test_spoken_thread.py's answer() builds a verified one (console_receipt.answer_sha256, answer_signed_bytes, answer_trailer), signed 2026-11-02T20:00:00Z and posted 2026-11-02T20:00:05.000Z by the pipeline's key, as the console posts it"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "Answer from the CEO (signed in to the console), 2026-11-02 12:00 PT:\n\nRe-run the review.\n\n🔏 console-answer: v1 card=DRE-2498 sha256=01472606c3710e8a54a32dd6b58d5778622f0984e6472a94f8aa15972cbdd73f user=0f1e2d3c-4b5a-6978-8796-a5b4c3d2e1f0 at=2026-11-02T20:00:00Z kid=2edce07e90edcb4d sig=8KZfmWHH4ANHxbLEBezzgPWeyKQD16hEFSCjxqU45_zQTI_-qolVys6u18IqSai_zoNg7PaWOraaEfNHLTlrCA",
+      "createdAt": "2026-11-02T20:00:05.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r6-report": {
+  "serves": "rule 6",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "title: What broke the agents — week ending 2026-11-01"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "title": "What broke the agents — week ending 2026-11-01"
+  }
+ },
+ "r6-deferred": {
+  "serves": "rule 6",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "title: release_deferral.title(\"portico\", \"web\", \"the surface script printed a deferred line that names no re-arm minute\")"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "title": "portico: web release deferred — the surface script printed a deferred line that names no re-arm minute"
+  }
+ },
+ "r6-owner": {
+  "serves": "rule 6",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a park comment written by code_owner_hold.card_comment(616, code_owner_hold.hold_sentence(616, [([\"the CEO\"], [\"docs/design/system/\"])])), posted 2026-11-02T17:00:00.000Z by the pipeline, as the newest"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "⏸️ merge-gate: code-owner hold · PR #616\n\nPull request #616 has passed its checks and its review, but this repository's rules also need a review from the CEO for docs/design/system/ before GitHub will merge it. To release it, open the pull request, choose Review changes, pick Approve and submit — it then merges on its own.\n\n🔎 Finding: Pull request #616 has passed its checks and its review, but this repository's rules also need a review from the CEO for docs/design/system/ before GitHub will merge it.\n❓ Question: Open pull request #616 and submit an approving review so it merges, or leave it waiting?\n💡 Recommendation: approve the pull request — its checks and its review have passed, and the only thing holding it is the code-owner rule this repository sets",
+      "createdAt": "2026-11-02T17:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r6-design": {
+  "serves": "rule 6",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a comment opening design_answer.QUESTION_MARK, then the three lines console_escalation.render writes, posted 2026-11-02T17:00:00.000Z by the pipeline, as the newest"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🎨 design-question: `ShareSheet` at `src/share/ShareSheet.tsx`\n\n🔎 Finding: the share sheet's disclosure line can sit above or below the grant list\n❓ Question: Should the disclosure line sit above the grant list, or below it?\n💡 Recommendation: above the grant list — a moderator reads it before forming a belief about who can read what",
+      "createdAt": "2026-11-02T17:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r7-screened-2498": {
+  "serves": "rule 7",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "nothing — the newest comment is the live escalation in full, its escalation-choices block intact, in place of base B's copy without it"
+  ],
+  "removed": [
+   "every comment after the cut",
+   "the description's Decisions from the CEO section and everything after it, written after the cut",
+   "the history after the move to Green Light that followed the cut"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🙋 planning-escalation: DRE-2498 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n🔎 Finding: the critic produced no result\n❓ Question: Re-run the review, or settle the card yourself?\n💡 Recommendation: re-run the review — the critic returned no result, and a no-result is a crash, not a rejection\n\nThere is no earlier signed answer from you on this card.\n\n**Why it needs you:** This card was about to go to the build queue, and the reader that checks work of this size did not say an agent could finish it unattended.\n\nWhat happened: the reader did not answer at all, so nothing has checked this card. We treat that as a stop rather than a yes, because after this point the work is simply built.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.\n\n```escalation-choices\n{\n  \"question\": \"Re-run the review, or settle the card yourself?\",\n  \"context\": \"the critic produced no result\",\n  \"choices\": [\n    {\n      \"id\": \"re-run-the-review\",\n      \"label\": \"re-run the review\",\n      \"effect\": \"the card is read again by the critic\",\n      \"outcome\": \"replan\"\n    },\n    {\n      \"id\": \"settle-it-yourself\",\n      \"label\": \"settle it yourself\",\n      \"effect\": \"the card goes on without the reader's answer\",\n      \"outcome\": \"proceed\"\n    }\n  ],\n  \"recommended\": \"re-run-the-review\",\n  \"why\": \"the critic returned no result, and a no-result is a crash, not a rejection\"\n}\n```",
+      "createdAt": "2026-10-13T15:45:46.817Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "r7-screened-6589": {
+  "serves": "rule 7",
+  "source": "DRE-6589",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-10T09:58:16.475Z",
+  "added": [
+   "nothing — the newest comment is the live escalation in full, its escalation-choices block intact, in place of gl-answerable's copy without it"
+  ],
+  "removed": [
+   "every comment after the cut",
+   "the description's Decisions from the CEO section and everything after it, written after the cut",
+   "the history after the move to Green Light that followed the cut",
+   "the children created after the cut"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-answerable"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🙋 planning-escalation: DRE-6589 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n🔎 Finding: This epic bounds whatever is growing in the console's backend, explains the stall after a kill, and carries the two-instance stack change if you choose it. All three are written against a measurement the first memory epic produces, and that epic is still being planned. Nothing here can be named until that reading exists, so the plan would be written twice.\n❓ Question: Should this memory-fix epic wait for the first epic's diagnostic reading, or be planned now against today's evidence?\n💡 Recommendation: Wait for the reading — The plan has to name the sites that grow and their sizes at plateau, and only the first epic's recorded reading can supply them.\n\nThere is no earlier signed answer from you on this card.\n\n**Why it needs you:** This epic has reached planning before the thing it depends on exists, so I am not writing its cards today. I recommend holding it until the first memory epic, DRE-6587, is done, and then planning it against the reading that epic records.\n\nWhat this epic is for: the fix that stops the console's backend filling its 4 GB and being killed, an explanation of why a fresh instance stalls for ten minutes after a kill, and the stack change if you choose two instances. Every one of those is written against a measurement the first epic produces: the operator's diagnostic reading of what grows between a start and the plateau. That reading does not exist yet. The first epic is still being planned right now and has not reached you for approval, and the two-instance question comes to you with that epic's green light, so your answer to it does not exist yet either.\n\nWhy a plan written now would be wrong: the boot report shows the obvious places hold almost nothing, about 1.6 MB, while the process sits at 83 to 95% of its 4 GB. Whatever grows is not something anyone can point at today. Cards written now would name guesses, and this epic's own acceptance test is that each card names the site and the size it reached in the reading. We would write the plan twice, and the critic would send the first one back.\n\nWhy it reached planning early: when the parent card was split into three epics on 2026-10-10 at 02:48 PT, the pipeline sent all three to planning at once, including this one, which is marked as waiting on the first. The standard says a blocked epic waits in the backlog and is brought back for planning the day its blocker is done. I have filed a separate pipeline card for that gap, DRE-6591, so it does not happen again. It needs nothing from you.\n\nWhat getting this wrong costs: planning now spends a planner run, two critic readings and your time on a plan built on guesses that is rewritten within days. Waiting costs nothing: the first epic ends with the reading, and once this card is back in the backlog the pipeline brings it to planning on its own when the first epic is done.\n\nMy recommendation: wait. Leave this card here, or have it moved back to the backlog, until the first epic is done. There is no button to press today. If you press the wait choice now, the planner comes back with this same question until the reading exists. If you would rather have a plan now, written against today's evidence and rewritten later, choose to plan it now anyway.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.\n\n```escalation-choices\n{\n  \"question\": \"Should this memory-fix epic wait for the first epic's diagnostic reading, or be planned now against today's evidence?\",\n  \"context\": \"This epic bounds whatever is growing in the console's backend, explains the stall after a kill, and carries the two-instance stack change if you choose it. All three are written against a measurement the first memory epic produces, and that epic is still being planned. Nothing here can be named until that reading exists, so the plan would be written twice.\",\n  \"choices\": [\n    {\n      \"id\": \"wait-for-the-reading\",\n      \"label\": \"Wait for the reading\",\n      \"effect\": \"Nothing is planned today. The card waits until the first memory epic is done and is then planned against the real reading. Press this only once that epic is done; pressed earlier, the planner comes back with this same question.\",\n      \"outcome\": \"replan\"\n    },\n    {\n      \"id\": \"plan-now-on-todays-evidence\",\n      \"label\": \"Plan it now anyway\",\n      \"effect\": \"The planner writes cards today against the kill and stall observations already recorded and a general memory bound, knowing they are likely rewritten once the reading names the real sites.\",\n      \"outcome\": \"replan\"\n    },\n    {\n      \"id\": \"drop-this-epic\",\n      \"label\": \"Drop this epic\",\n      \"effect\": \"The card is canceled. The memory fix, the stall explanation and the two-instance change become nobody's work.\",\n      \"outcome\": \"close\"\n    }\n  ],\n  \"recommended\": \"wait-for-the-reading\",\n  \"why\": \"The plan has to name the sites that grow and their sizes at plateau, and only the first epic's recorded reading can supply them.\"\n}\n```",
+      "createdAt": "2026-10-10T09:58:16.475Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "taken-limit": {
+  "serves": "taken",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "a build-stage 🪦 limit-death: comment written by dead_run.limit_marker(\"claude\", \"build\", 2026-11-02T21:00:00Z, \"38900000001\"), posted 2026-11-02T17:00:00.000Z by the pipeline, as the newest"
+  ],
+  "removed": [
+   "nothing of base B"
+  ],
+  "withheld": [],
+  "base": {
+   "file": "tests/fixtures/operator-decide-green-light-cards.json",
+   "record": "gl-stopped-run"
+  },
+  "card": {
+   "comments": {
+    "nodes": [
+     {
+      "body": "🪦 limit-death: kind=claude stage=build reset=2026-11-02T21:00:00Z run=38900000001\n\nThis run hit the Claude account's usage limit during the build stage and stopped there. That is a wait, not a fault in this card, the model or the service: no strike is spent against this card's budget, no model is recorded as having failed, and the card is neither requeued into the same wall nor parked for a human. The reconcile sweep re-enters the build stage on its own once the window resets (at 2026-11-02 13:00 PT). If nothing has brought the card back within 6 hours of this marker — or, when the reset comes later than that, once the reset has passed — the sweep says so on the card and a person must act.",
+      "createdAt": "2026-11-02T17:00:00.000Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   }
+  }
+ }
+}
