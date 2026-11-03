@@ -389,15 +389,21 @@ def lift_due(stamp: dict | None, *, lane: str, labels, pr_head: str | None,
 
 
 def _read_card(card: str) -> tuple:
-    """The card's labels and its comment window (oldest→newest), in ONE read."""
+    """The card's labels and its comment window (oldest→newest), in ONE read:
+    the read door's node first (`linear_ops.card_via_door`, DRE-8900), the
+    same window in Linear's shape, and today's Linear read on None."""
     import linear_ops  # local: only the Linear commands need the seam
 
-    data = linear_ops.gql(
-        """query($id: String!) { issue(id: $id) {
-             labels { nodes { name } } %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
-        {"id": card},
-    )
-    issue = (data or {}).get("issue") or {}
+    served = linear_ops.card_via_door(card, comments=linear_ops.COMMENT_WINDOW)
+    if served is not None:
+        issue = served[0] or {}
+    else:
+        data = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 labels { nodes { name } } %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
+            {"id": card},
+        )
+        issue = (data or {}).get("issue") or {}
     bodies = [n.get("body") or "" for n in linear_ops.window_nodes(issue.get("comments"))]
     return linear_ops._label_names(issue), bodies
 

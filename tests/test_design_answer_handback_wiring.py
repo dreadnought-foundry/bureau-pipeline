@@ -126,10 +126,12 @@ def test_its_env_is_the_card_the_linear_keys_the_repo_and_the_workflow_token():
     step, guard = _step(), next(s for s in _steps() if s.get("id") == "dedupe")
     env = step["env"]
     assert set(env) == {"CARD", "LINEAR_API_KEY", "LINEAR_API_KEY_FALLBACK",
-                        "REPO", "GH_TOKEN"}
+                        "BUREAU_CARD_SNAPSHOT", "REPO", "GH_TOKEN"}
     assert env["CARD"] == "${{ github.event.client_payload.identifier }}"
     assert env["LINEAR_API_KEY"] == guard["env"]["LINEAR_API_KEY"]
     assert env["LINEAR_API_KEY_FALLBACK"] == guard["env"]["LINEAR_API_KEY_FALLBACK"]
+    # DRE-8900: the thread off the pre-agent card snapshot, the guard's own.
+    assert env["BUREAU_CARD_SNAPSHOT"] == guard["env"]["BUREAU_CARD_SNAPSHOT"]
     assert env["REPO"] == "${{ github.repository }}"
     # The App token holds no Actions permission (DRE-1254); the dispatch
     # rides the workflow's own token, which the stub grants `actions: write`.

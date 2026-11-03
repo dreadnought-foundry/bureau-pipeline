@@ -19,6 +19,8 @@ What stays live, on purpose:
     whole question there is whether it moved while this dispatch sat queued;
   * the In Progress move's DRE-2316 pre-write re-read and its read-back (BP-3:
     a held card, so its first read is the one dropped).
+  * on a door snapshot, the spoken thread's `viewer { id }`: the door's viewer
+    is the console's key, and authorship is judged against ours (DRE-8900).
 
 The counts here are taken at the transport, so they are the `linear-calls:`
 numbers (#683).
@@ -513,10 +515,13 @@ def test_off_the_pre_agent_steps_read_linear_four_times(monkeypatch, tmp_path):
     assert lin.writes == ["In Progress"]
 
 
-def test_on_the_pre_agent_steps_read_linear_three_times(monkeypatch, tmp_path):
+def test_on_the_pre_agent_steps_read_linear_four_times(monkeypatch, tmp_path):
     with linear(monkeypatch) as lin, door(monkeypatch, _door_card()):
         _pre_agent(monkeypatch, snapshot_path=tmp_path / "snap.json")
-    assert lin.reads == ["issue", "issue", "history"]
+    # The guard's fresh lane, the spoken thread's viewer — a door snapshot
+    # names the console's key, never ours (DRE-8900) — and the move's
+    # re-read and read-back.
+    assert lin.reads == ["issue", "viewer", "issue", "history"]
     assert lin.writes == ["In Progress"]
 
 

@@ -248,10 +248,15 @@ def read(card: str) -> list[Voice]:
     agent-task's card snapshot answers first when this step was handed one
     (Stage 2 #10) — the same window and the viewer it was read with. A
     snapshot that does not name the viewer is not used: without it the
-    pipeline's own comments could not be told from a person's."""
+    pipeline's own comments could not be told from a person's.
+
+    A snapshot the door served names the console's key, never this
+    process's (DRE-8900), so its viewer is read from Linear instead."""
     import agent_task_snapshot
 
     snap = agent_task_snapshot.load(card)
+    if snap is not None and snap.get("source") == "door":
+        return voices(snap["comments"], linear_ops.viewer_id(), card=card)
     if snap is not None and snap.get("viewer"):
         return voices(snap["comments"], snap["viewer"], card=card)
     nodes, viewer = linear_ops._thread_and_viewer(card, "body", "user",
