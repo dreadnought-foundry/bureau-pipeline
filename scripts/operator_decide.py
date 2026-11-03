@@ -20,6 +20,12 @@ as a receipt and reads it back, so no sibling restates the format.
     guard_returned(records, receipt) -> bool
     log_line(decision, action="decide") -> str
     unread_line(card, why) -> str
+    do_claim_text(decision, command_lines, now) -> str
+    do_receipt_text(decision, transcript, ending, now) -> str
+    do_close_failed_text(decision, what, now) -> str
+    do_ending_from_receipt(body) -> dict | None
+    do_commands_from_receipt(body) -> list | None
+    do_decision_from_receipt(row, record) -> Decision | None
 
 ## The answer
 
@@ -78,6 +84,37 @@ return it, and never forges a record to get past that guard. A comment opening
 `GUARD_RETURN_TAG` after the receipt is `guard_returned`, and the agent writes
 nothing more on that card.
 
+## A `do` card's three comments (DRE-8923)
+
+A `do` step runs commands that do not repeat safely, so a pass posts a claim,
+and the claim lands, before the first one runs:
+
+    🛠️ operator-agent: do-claim — <reason> · <HH:MM> PT
+    fingerprint: <12 hex>
+    step: <step>
+    will run: `<command line>`        (one per command, in order)
+    `CLAIM_LAST`
+
+and the receipt after: the same three lines with `do`, a `pull request:
+<url>` line when the transcript names one, then per command run a
+`command:`, an `exit:` and an `output:` line and the output in a fence, then
+— on a `failed:` ending only — one `left changed:` line per write that exited
+0 before the failure (`left changed: nothing` when none did), and one ending
+line: `close: <rule>`, `NONE_NAMED`, `failed: `<command>` — exit <n>; ...`,
+`NO_TRANSCRIPT`, or `continues: after <YYYY-MM-DDTHH:MMZ> — <what remains>`.
+Nothing is undone: an undo is another unreviewed write, so whoever picks the
+card up — the CEO or its owner — reads exactly what still stands. A run that
+wrote no transcript ran commands nobody can name, so its receipt carries no
+`left changed:` line: the claim above it lists what may have run.
+
+A close that can never land gets one more, `do-close`, with the fingerprint
+and `failed: <what> — the card is left where it was`. An output is cut at
+`OUTPUT_CHARS`, with `… cut, <n> characters` (the characters left out) after
+its fence; a value of `SECRET_ENV` in any line reads `TOKEN_MARK`; and an
+output line that would open `Outcome:` or `Released as` is written after
+`RECORD_GUARD`. `decision_from_receipt` answers None for all three words, so
+the agent reads them with `do_ending_from_receipt` and never part 1's rules.
+
 ## The log lines
 
 Every Operator Agent log line opens with `LOG_TAG`, declared in
@@ -97,7 +134,7 @@ import json
 import os
 import re
 import sys
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -134,7 +171,7 @@ HELD_GO_LIVE = "the card is the studio go-live itself"
 
 #: How a log line names a card the agent did not decide afresh. Each one's
 #: decision is rebuilt from its standing receipt, never re-made.
-ACTIONS = ("decide", "spent", "apply-only", "guard-returned")
+ACTIONS = ("decide", "spent", "apply-only", "guard-returned", "continue", "close-only")
 
 #: The act of a `ceo` decision the screen passed as a business choice.
 BUSINESS_CHOICE = "business-choice"
@@ -548,14 +585,23 @@ def _when(record: dict) -> datetime | None:
 
 def guard_returned(records, receipt: dict | None) -> bool:
     """True when a comment opening `GUARD_RETURN_TAG`, by any author, was
-    posted after the `done-already` receipt `receipt`. Its only effect is that
-    the agent writes nothing more, so its author is not asked. Times are
-    Linear's own; a record with no time is placed by its position."""
+    posted after the `done-already` receipt `receipt`, or after a `do`
+    receipt whose ending is a close the agent makes (`CLOSING_RULES`). Its
+    only effect is that the agent writes nothing more, so its author is not
+    asked. Times are Linear's own; a record with no time is placed by its
+    position."""
     if not receipt:
         return False
     first = (receipt.get("body") or "").strip().splitlines()[:1]
     found = _LINE_ONE.match(first[0]) if first else None
-    if not found or found.group("outcome") != DONE_ALREADY:
+    if not found:
+        return False
+    if found.group("outcome") == DO:
+        ending = do_ending_from_receipt(receipt.get("body"))
+        if (ending is None or ending["ending"] != CLOSED
+                or ending["rule"] not in CLOSING_RULES):
+            return False
+    elif found.group("outcome") != DONE_ALREADY:
         return False
     records = list(records or [])
     at = _when(receipt)
@@ -570,6 +616,333 @@ def guard_returned(records, receipt: dict | None) -> bool:
         elif place is not None and n > place:
             return True
     return False
+
+
+# --------------------------------------------------------------------------- #
+# a do card's claim and receipt (DRE-8923)                                     #
+# --------------------------------------------------------------------------- #
+
+DO_CLAIM, DO_CLOSE = "do-claim", "do-close"
+#: The first-line words of the three comments a `do` card can get.
+DO_WORDS = (DO_CLAIM, DO, DO_CLOSE)
+#: A `do` step's close rules, the strings DRE-8922's `operator_do_ops.py`
+#: declares, written again here so this module imports nothing from it.
+CLOSE_RULES = ("record-outcome", "card-done", "own-pr-merge", "none")
+NO_CLOSE_RULE = "none"
+#: The close rules whose close the agent makes, and the lane guard may return.
+CLOSING_RULES = tuple(rule for rule in CLOSE_RULES if rule != NO_CLOSE_RULE)
+#: What `do_ending_from_receipt` names a comment's ending.
+CLAIMED, CLOSED, FAILED, CONTINUES = "claimed", "close", "failed", "continues"
+
+OUTPUT_CHARS = 1500
+#: The variables whose values never reach a comment, and what they read as.
+SECRET_ENV = ("GH_TOKEN", "LINEAR_API_KEY")
+TOKEN_MARK = "[token]"
+#: The console's and the release train's records: no line of a `do` comment
+#: opens with either, so an output line that would is written after
+#: `RECORD_GUARD`.
+RECORD_OPENS = ("outcome:", "released as")
+RECORD_GUARD = "(output) "
+
+CLAIM_LAST = ("if no do receipt follows this, the pass died while running: the commands "
+              "above may have run in part, and nothing runs them again")
+NONE_NAMED = ("close: none named — the step is done and the card names no close rule; "
+              "left for its owner")
+NO_TRANSCRIPT = ("failed: the run wrote no transcript — the commands on the claim may "
+                 "have run in part; the card is left where it was")
+LEFT_NOTHING = "left changed: nothing"
+_LEFT_WHERE = "the card is left where it was"
+_AFTER_FORMAT = "%Y-%m-%dT%H:%MZ"
+
+_WILL_RUN = re.compile(r"^will run: `(?P<command>.*)`$")
+_PULL_REQUEST = re.compile(r"^pull request: (?P<url>\S+)$")
+_COMMAND = re.compile(r"^command: `(?P<command>.*)`$")
+_EXIT = re.compile(r"^exit: (?P<exit>-?\d+)$")
+_FENCE = re.compile(r"^`{3,}$")
+_CUT = re.compile(r"^… cut, (?P<n>\d+) characters$")
+_LEFT_CHANGED = re.compile(r"^left changed: `(?P<command>.*)`$")
+_CLOSE_ENDING = re.compile(r"^close: (?P<rule>%s)$" % "|".join(map(re.escape, CLOSING_RULES)))
+_FAILED_ENDING = re.compile(r"^failed: `(?P<command>.*)` — exit (?P<exit>-?\d+); "
+                            + re.escape(_LEFT_WHERE) + "$")
+_CONTINUES_ENDING = re.compile(r"^continues: after (?P<after>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z)"
+                               r" — (?P<remains>\S.*)$")
+_CLOSE_FAILED = re.compile(r"^failed: (?P<what>\S.*) — " + re.escape(_LEFT_WHERE) + "$")
+
+
+def _scrub(text: str) -> str:
+    """`text` with every value of `SECRET_ENV` read as `TOKEN_MARK`."""
+    values = {(os.environ.get(name) or "").strip() for name in SECRET_ENV} - {""}
+    for value in sorted(values, key=len, reverse=True):
+        text = text.replace(value, TOKEN_MARK)
+    return text
+
+
+def _one_line(text) -> str:
+    """`text` on one line: each line break a space, nothing else touched."""
+    return " ".join(str(text or "").splitlines()).strip()
+
+
+def _opens_record(line: str) -> bool:
+    return line.lstrip().lower().startswith(RECORD_OPENS)
+
+
+def _head(word: str, decision: Decision, now: datetime) -> list:
+    return [f"{RECEIPT_TAG} {word} — {_flat(decision.reason)} · {_clock(now)} PT",
+            f"fingerprint: {decision.fingerprint}"]
+
+
+def do_claim_text(decision: Decision, command_lines, now: datetime) -> str:
+    """The claim a pass posts on a `do` card before its first command runs:
+    one `will run:` line per command line, in order, and `CLAIM_LAST`."""
+    commands = [_one_line(line) for line in command_lines or []]
+    if not commands or not all(commands):
+        raise ValueError(f"{decision.card}: a claim names at least one command, none empty")
+    lines = _head(DO_CLAIM, decision, now) + [f"step: {_flat(decision.step)}"]
+    lines += [f"will run: `{command}`" for command in commands]
+    lines.append(CLAIM_LAST)
+    return _scrub("\n".join(lines))
+
+
+def _output_group(output) -> list:
+    """An output as the receipt quotes it: secrets read as `TOKEN_MARK`, cut
+    at `OUTPUT_CHARS`, in a fence longer than any run of backticks in it."""
+    text = "\n".join(_scrub(str(output or "")).splitlines())
+    cut = max(0, len(text) - OUTPUT_CHARS)
+    text = text[:OUTPUT_CHARS]
+    fence = "`" * max(3, 1 + max((len(run) for run in re.findall(r"`+", text)), default=0))
+    lines = ["output:", fence]
+    lines += [RECORD_GUARD + line if _opens_record(line) else line
+              for line in text.splitlines()]
+    lines.append(fence)
+    if cut:
+        lines.append(f"… cut, {cut} characters")
+    return lines
+
+
+def _failing(commands: list) -> int | None:
+    return next((n for n, ran in enumerate(commands) if ran.get("exit") != 0), None)
+
+
+def _stamp(after: datetime) -> str:
+    """`after` to the minute, in UTC, never earlier than it."""
+    if after.tzinfo is None:
+        after = after.replace(tzinfo=UTC)
+    after = after.astimezone(UTC)
+    if after.second or after.microsecond:
+        after = after.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    return after.strftime(_AFTER_FORMAT)
+
+
+def do_receipt_text(decision: Decision, transcript: dict | None, ending: dict,
+                    now: datetime) -> str:
+    """The receipt a pass posts on a `do` card after its commands ran.
+
+    `transcript` is `operator_do.py run`'s (DRE-8924), or None when the run
+    wrote none. `ending` is shaped as `do_ending_from_receipt` answers:
+    `{"ending": "close", "rule": <a CLOSE_RULES value>}`, `{"ending":
+    "failed"}` or `{"ending": "continues", "after": <datetime>, "remains":
+    <text>}`. A dry run writes no receipt, and a run that failed, or wrote no
+    transcript, takes the `failed` ending and no other."""
+    commands = []
+    if transcript is not None:
+        if transcript.get("dry_run"):
+            raise ValueError(f"{decision.card}: a dry run writes no receipt")
+        if (transcript.get("card") or decision.card) != decision.card:
+            raise ValueError(f"{decision.card}: the transcript is {transcript.get('card')}'s")
+        commands = list(transcript.get("commands") or [])
+        for ran in commands:
+            if (not isinstance(ran, dict) or not _one_line(ran.get("command"))
+                    or isinstance(ran.get("exit"), bool) or not isinstance(ran.get("exit"), int)):
+                raise ValueError(f"{decision.card}: {ran!r} is not a command the run wrote")
+    failing = _failing(commands)
+    failed = transcript is None or bool(transcript.get("failed")) or failing is not None
+    kind = (ending or {}).get("ending")
+    if (kind == FAILED) != failed:
+        raise ValueError(f"{decision.card}: a {'failed' if failed else 'finished'} run "
+                         f"cannot end {kind!r}")
+
+    lines = _head(DO, decision, now) + [f"step: {_flat(decision.step)}"]
+    pull_request = _one_line((transcript or {}).get("pull_request"))
+    if pull_request:
+        lines.append(f"pull request: {pull_request}")
+    for ran in commands:
+        lines += [f"command: `{_one_line(ran.get('command'))}`",
+                  f"exit: {ran['exit']}"]
+        lines += _output_group(ran.get("output"))
+
+    if kind == FAILED:
+        if transcript is not None:
+            if failing is None:
+                raise ValueError(f"{decision.card}: a failed run names no command that failed")
+            changed = [ran for ran in commands[:failing]
+                       if ran.get("writes") is True and ran.get("exit") == 0]
+            lines += ([f"left changed: `{_one_line(ran.get('command'))}`" for ran in changed]
+                      or [LEFT_NOTHING])
+            lines.append(f"failed: `{_one_line(commands[failing].get('command'))}` — exit "
+                         f"{commands[failing]['exit']}; {_LEFT_WHERE}")
+        else:
+            lines.append(NO_TRANSCRIPT)
+    elif kind == CLOSED and ending.get("rule") == NO_CLOSE_RULE:
+        lines.append(NONE_NAMED)
+    elif kind == CLOSED and ending.get("rule") in CLOSING_RULES:
+        lines.append(f"close: {ending['rule']}")
+    elif (kind == CONTINUES and isinstance(ending.get("after"), datetime)
+          and _flat(ending.get("remains"))):
+        lines.append(f"continues: after {_stamp(ending['after'])} — "
+                     f"{_flat(ending['remains'])}")
+    else:
+        raise ValueError(f"{decision.card}: {ending!r} is not a do receipt's ending")
+    return _scrub("\n".join(lines))
+
+
+def do_close_failed_text(decision: Decision, what: str, now: datetime) -> str:
+    """The line a `do` card gets, once, when its close can never land."""
+    what = _flat(what)
+    if not what:
+        raise ValueError(f"{decision.card}: a close failure names what failed")
+    if _opens_record(what):
+        what = RECORD_GUARD + what
+    lines = _head(DO_CLOSE, decision, now) + [f"failed: {what} — {_LEFT_WHERE}"]
+    return _scrub("\n".join(lines))
+
+
+def _do_comment(body) -> dict | None:
+    """Everything a claim, a receipt or a close-failure line says, or None
+    when `body` is not a whole one. An output is read inside its fence alone,
+    so nothing a command printed reads as a line of the receipt."""
+    lines = (body or "").strip().splitlines()
+    if len(lines) < 3:
+        return None
+    one, two = _LINE_ONE.match(lines[0]), _FINGERPRINT.match(lines[1])
+    if not (one and two) or one.group("outcome") not in DO_WORDS:
+        return None
+    said = {"word": one.group("outcome"), "reason": one.group("reason"),
+            "fingerprint": two.group("fp"), "step": "", "commands": [], "left_changed": [],
+            "ending": None, "rule": None, "after": None, "remains": None,
+            "pull_request": None, "what": None}
+
+    if said["word"] == DO_CLOSE:
+        failed = _CLOSE_FAILED.match(lines[2])
+        if len(lines) != 3 or not failed:
+            return None
+        return {**said, "ending": FAILED, "what": failed.group("what")}
+
+    step = _STEP.match(lines[2])
+    if not step:
+        return None
+    said["step"] = step.group("step")
+
+    if said["word"] == DO_CLAIM:
+        will = [_WILL_RUN.match(line) for line in lines[3:-1]]
+        if not will or not all(will) or lines[-1] != CLAIM_LAST:
+            return None
+        return {**said, "ending": CLAIMED,
+                "commands": [{"command": m.group("command")} for m in will]}
+
+    at, last = 3, len(lines) - 1
+    found = _PULL_REQUEST.match(lines[at])
+    if found:
+        said["pull_request"], at = found.group("url"), at + 1
+    while at < last and _COMMAND.match(lines[at]):
+        command = _COMMAND.match(lines[at]).group("command")
+        code = _EXIT.match(lines[at + 1]) if at + 1 < last else None
+        if not code or lines[at + 2:at + 3] != ["output:"] or at + 3 >= last \
+                or not _FENCE.match(lines[at + 3]):
+            return None
+        fence, start = lines[at + 3], at + 4
+        close = next((n for n in range(start, last) if lines[n] == fence), None)
+        if close is None:
+            return None
+        said["commands"].append({"command": command, "exit": int(code.group("exit")),
+                                 "output": "\n".join(lines[start:close])})
+        at = close + 1
+        if at < last and _CUT.match(lines[at]):
+            at += 1
+    while at < last and (lines[at] == LEFT_NOTHING or _LEFT_CHANGED.match(lines[at])):
+        found = _LEFT_CHANGED.match(lines[at])
+        said["left_changed"].append(found.group("command") if found else None)
+        at += 1
+    if at != last:
+        return None
+
+    end = lines[last]
+    close, cont = _CLOSE_ENDING.match(end), _CONTINUES_ENDING.match(end)
+    if close:
+        said.update(ending=CLOSED, rule=close.group("rule"))
+    elif end == NONE_NAMED:
+        said.update(ending=CLOSED, rule=NO_CLOSE_RULE)
+    elif end == NO_TRANSCRIPT or _FAILED_ENDING.match(end):
+        said.update(ending=FAILED)
+    elif cont:
+        after = datetime.strptime(cont.group("after"), _AFTER_FORMAT).replace(tzinfo=UTC)
+        said.update(ending=CONTINUES, after=after, remains=cont.group("remains"))
+    else:
+        return None
+    if said["left_changed"] and said["ending"] != FAILED:
+        return None
+    return said
+
+
+def do_ending_from_receipt(body) -> dict | None:
+    """What a `do` card's claim, receipt or close-failure line ends with, or
+    None when `body` is none of the three, whole: `{"word", "ending",
+    "rule", "after", "remains", "pull_request"}`. The time is its first
+    line's, read as every receipt's is."""
+    said = _do_comment(body)
+    if said is None:
+        return None
+    return {key: said[key] for key in ("word", "ending", "rule", "after", "remains",
+                                       "pull_request")}
+
+
+def do_commands_from_receipt(body) -> list | None:
+    """The commands a claim will run (`{"command"}` each) or a receipt ran
+    (`{"command", "exit", "output"}` each), in order; `[]` for a
+    close-failure line; None when `body` is none of the three, whole."""
+    said = _do_comment(body)
+    return None if said is None else said["commands"]
+
+
+def do_decision_from_receipt(row: dict, record) -> Decision | None:
+    """The `do` decision a claim, a receipt or a close-failure line stands
+    for, for the card `row` — `record` a comment record or its body — or None
+    when it is none of the three. The step is the `step:` line's; a
+    close-failure line has none, so its step names the close that failed."""
+    body = record.get("body") if isinstance(record, dict) else record
+    said = _do_comment(body)
+    if said is None:
+        return None
+    step = said["step"] or f"close the card — failed: {said['what']}"
+    return Decision(
+        card=row.get("card") or row.get("identifier") or "", repo=_repo(row),
+        lane=row.get("lane") or "", outcome=DO, reason=said["reason"], step=step, act="",
+        deploy=False, evidence=[], host_cannot=[], finding="", question="",
+        recommendation="", choices=None, held="", fingerprint=said["fingerprint"])
+
+
+def do_fingerprint(record) -> str | None:
+    """The fingerprint a `do` card's comment names on its second line, read
+    off that line alone, or None — so the newest one for a fingerprint is
+    found before it is read whole."""
+    body = record.get("body") if isinstance(record, dict) else record
+    lines = (body or "").strip().splitlines()[1:2]
+    found = _FINGERPRINT.match(lines[0]) if lines else None
+    return found.group("fp") if found else None
+
+
+def do_word(record) -> str | None:
+    """The `DO_WORDS` word a receipt-tagged comment's first line names, read
+    off that line alone, or None — so a `do` comment that does not read back
+    is still known for one."""
+    body = record.get("body") if isinstance(record, dict) else record
+    first = (body or "").strip().splitlines()[:1]
+    found = _LINE_ONE.match(first[0]) if first else None
+    return found.group("outcome") if found and found.group("outcome") in DO_WORDS else None
+
+
+def due_text(after: datetime) -> str:
+    """A `continues:` ending's time, as the receipt writes it."""
+    return _stamp(after)
 
 
 # --------------------------------------------------------------------------- #
