@@ -111,7 +111,8 @@ def _decide(record_id: str, answer: dict, **kwargs):
 
 
 def _repair(**extra):
-    return _answer("DRE-2498", "repair", evidence=[STOPPED, STOPPED_PARK], **extra)
+    extra.setdefault("evidence", [STOPPED, STOPPED_PARK])
+    return _answer("DRE-2498", "repair", **extra)
 
 
 def _answered(**extra):
