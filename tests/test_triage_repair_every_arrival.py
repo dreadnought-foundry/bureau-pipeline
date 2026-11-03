@@ -50,7 +50,11 @@ REPO_MAP = ROOT / "config" / "repo-map.json"
 
 #: Each table repair, and the action `select` answers for it on a card with
 #: no finding that names the CEO's choice.
-ACTION_OF = {"rewrite": "repair", "replan": "replan", "relabel": "relabel", "none": "none"}
+ACTION_OF = {"rewrite": "repair", "replan": "replan", "relabel": "relabel", "none": "none",
+             "wait": "wait"}
+#: The repair whose card select leaves alone: it waits on something the
+#: sweep lifts, so nothing is claimed and no receipt is posted (DRE-8849).
+WAITING = "wait"
 #: The repairs whose apply lifts the card's hold.
 LIFTING = ("rewrite", "replan", "relabel")
 
@@ -100,7 +104,7 @@ def _file_of(unit: str) -> str:
 
 def _stamp(unit: str, reason: str) -> str:
     at = {"no-route": "repo:retired-thing"}.get(reason)
-    if hold.CONTRACT_LIFTS[reason] == "new-head":
+    if hold.CONTRACT_LIFTS[reason] == "new-head" or reason == "inherited-red-main":
         at = SHA
     return hold.stamp_line(reason, at, _file_of(unit))
 
@@ -162,10 +166,10 @@ class TestTheTable:
         assert triage_repair.unhandled_units() == []
         assert set(units) == set(_declared_units())
 
-    def test_the_eighteen_split_twelve_one_two_three(self):
-        assert len(_rows()) == 18
+    def test_the_nineteen_split_twelve_one_two_three_one(self):
+        assert len(_rows()) == 19
         assert collections.Counter(r["repair"] for r in _rows()) == {
-            "rewrite": 12, "replan": 1, "relabel": 2, "none": 3}
+            "rewrite": 12, "replan": 1, "relabel": 2, "none": 3, "wait": 1}
 
     def test_a_unit_declared_tomorrow_with_no_row_is_named(self):
         reasons = json.loads(REASONS.read_text(encoding="utf-8"))
@@ -189,7 +193,7 @@ class TestTheTable:
             assert len(row["marker"]) == 1, row["unit"]
             (kind, value), = row["marker"].items()
             assert kind in ("hold", "tag", "description") and value.strip(), row["unit"]
-            assert bool(row.get("why")) is (row["repair"] == "none"), row["unit"]
+            assert bool(row.get("why")) is (row["repair"] in ("none", WAITING)), row["unit"]
 
     def test_rows_sharing_a_marker_share_a_repair(self):
         repairs: dict = {}
@@ -284,7 +288,11 @@ class TestEveryRow:
     def test_select_returns_every_row_with_the_action_it_names(self, tmp_path, capsys):
         board, cards = _board_of_every_row()
         rows = _select(board, tmp_path, limit=50)
-        assert sorted(r["card"] for r in rows) == sorted(cards)
+        assert sorted(r["card"] for r in rows) == sorted(
+            c for c, row in cards.items() if row["repair"] != WAITING)
+        printed = capsys.readouterr().out
+        for card, row in cards.items():
+            assert f"triage-repair: {card} → {ACTION_OF[row['repair']]} — " in printed, card
         for row in rows:
             assert row["action"] == ACTION_OF[cards[row["card"]]["repair"]], (
                 row["card"], cards[row["card"]]["unit"])
@@ -314,7 +322,7 @@ class TestEveryRow:
 
     def test_at_most_three_a_run_oldest_arrival_first(self, tmp_path):
         board, cards = _board_of_every_row()
-        order = sorted(cards)
+        order = sorted(c for c, row in cards.items() if row["repair"] != WAITING)
         for i, card in enumerate(order):
             _arrived(board, card, NOW - timedelta(days=2, minutes=i))
         rows = _select(board, tmp_path)

@@ -955,18 +955,29 @@ def card_facts(identifier: str, *, detail: bool = False) -> dict:
     previous life of the card, or with nothing at all, and the medic would
     retry a card the pipeline had just parked.
 
+    The read door answers first (DRE-8900): `linear_ops.card_via_door` with
+    the same fifty-comment window, under the job's
+    `BUREAU_READ_CARD_SEEN_AFTER` — the failed run's end, so a park the run
+    posted seconds before it ended is never missing from the answer. Its node
+    carries every field read below, in Linear's shape. On None this is
+    today's one Linear read.
+
     Imported locally so the decision core above stays importable (and testable)
     with no Linear key and no network.
     """
     import linear_ops  # local: only this function needs the Linear seam
 
-    data = linear_ops.gql(
-        """query($id: String!) { issue(id: $id) {
-             %sstate { name } labels { nodes { name } }
-             %s } }""" % ("title description " if detail else "",
-                          linear_ops.COMMENT_WINDOW_GQL),
-        {"id": identifier},
-    )["issue"] or {}
+    served = linear_ops.card_via_door(identifier, comments=linear_ops.COMMENT_WINDOW)
+    if served is not None:
+        data = served[0]
+    else:
+        data = linear_ops.gql(
+            """query($id: String!) { issue(id: $id) {
+                 %sstate { name } labels { nodes { name } }
+                 %s } }""" % ("title description " if detail else "",
+                              linear_ops.COMMENT_WINDOW_GQL),
+            {"id": identifier},
+        )["issue"] or {}
     facts = {
         "state": (data.get("state") or {}).get("name") or "",
         "labels": [

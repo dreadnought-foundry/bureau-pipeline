@@ -10,6 +10,11 @@
       "repo": "portico",
       "agent": "agent:frontend",
       "initiative": "initiative:foundry"
+    },
+    {
+      "repo": "foundry",
+      "agent": "agent:frontend",
+      "initiative": "initiative:foundry"
     }
   ]
 }

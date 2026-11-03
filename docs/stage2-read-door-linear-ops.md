@@ -49,6 +49,51 @@ not asked, whatever the max-age says.
 Every workflow that moves onto the door sets the variable on the jobs or steps
 it moves. A workflow that does not set it reads as before.
 
+**Agent Task, the Medic and Agent Fix (DRE-8900)** set the four variables and
+the max-age in the job-level `env:` of every job that reads Linear:
+
+| Job | Max-age | Floor (`BUREAU_READ_CARD_SEEN_AFTER`) |
+|---|---|---|
+| agent-task.yml `execute` | 60 | the job's start |
+| agent-fix.yml `fix` | 300 | the job's start |
+| medic.yml `classify`, `retry_declined`, `stall_record`, `backoff`, `environment_hold`, `diagnose` | 300 | the failed run's end, `${{ github.event.workflow_run.updated_at }}` |
+
+The Medic's retry gate must see the park, the turn-cap receipt or the hold
+receipt the failed run posted seconds before it ended. An age bound cannot
+promise that, and the failed run's end can. In `execute` and `fix` the first
+step, `Note the job's start for the read door`, writes the job's start (UTC,
+to the second) to `$GITHUB_ENV`. No `env:` block in either job names the
+variable, because a step-level entry would override it. An earlier run's
+receipt was posted before that instant. A receipt the job posts itself, the
+agent's ⏳ heartbeats included, is in the own-write record. Two of those jobs'
+card reads ask the door through `card_via_door` directly:
+`medic_retry.card_facts` (the retry gate and the diagnosis snapshot) and
+`hold._read_card` (`hold.py reason`, and a lift that reads the live stamp).
+Both read the same fifty-comment window as before and fall back to it on
+`None`. The tests are `tests/test_agent_runs_read_door.py`,
+`tests/test_medic_card_facts_door.py` and `tests/test_hold_read_door.py`.
+
+A standalone workflow — one that runs in bureau-pipeline and checks out no
+`pipeline_ref` — sets no `BUREAU_PIPELINE_REF`, and the client then makes no
+ref check (`bureau_read.pipeline_ref_problem`). Triage Repair, Alarm Repair
+and Hygiene are three (DRE-8902): `BUREAU_READ`, `BUREAU_READ_URL`,
+`BUREAU_READ_AUDIENCE` and `BUREAU_READ_CARD_MAX_AGE: 300` on the job-level
+`env:` of triage-repair.yml's `select`, `repair` and `unrepaired`,
+alarm-repair.yml's `select` and `repair`, and hygiene.yml's `read`, `keep`
+and `summary`, each of which can mint the OIDC token. The jobs that read a
+receipt posted before they began — triage-repair.yml's `repair` and
+`unrepaired`, alarm-repair.yml's `repair`, hygiene.yml's `keep` — open with
+the step `Note the job's start for the read door`, which writes
+`BUREAU_READ_CARD_SEEN_AFTER` to `$GITHUB_ENV`: a re-run's `claim` then finds
+the claim an earlier attempt posted, and a Hygiene pass finds the receipts
+the pass queued ahead of it posted. Hygiene's one door-reachable thread read
+is the seam's idempotency check (`hygiene._receipts_on`) on a card the board
+does not carry or whose window is partial; `read` reads the board and
+`summary` the standing card's window off Linear, and `summary`'s comment asks
+the door only for the card's `id`, which never changes. `alarm_repair.read_card` asks `card_via_door(card, comments=50,
+relations=True)` first. Those runs read cards of every repo; a card the door
+does not serve them reads Linear after one `read=cards reason=not-found` line.
+
 **Inside the Reconcile sweep nothing changes.** `reconcile.yml` sets no
 `BUREAU_READ_CARD_MAX_AGE`, so `card_via_door` is never asked in its steps.
 The pass cache answers first, as before, and a cache miss reaches
@@ -74,6 +119,23 @@ read was posted by an earlier run moments before. The door itself must name
 `github_oidc.ALLOWED_WORKFLOWS`). Until it does, their first card read is
 refused with `workflow` and they read Linear for the rest of the run, exactly
 as before.
+
+**Agent Plan opts in (DRE-8903).** `plan.yml`'s `plan` job sets the four door
+variables and `BUREAU_READ_CARD_MAX_AGE: 60` in its job-level `env:`, so every
+`linear_ops` thread read and comment pre-read in it asks the door first — the
+classifier's and router's whole-thread reads, `spoken_thread.py thread`,
+`plan_bound`, `escalation_answers` and `answer_into_card`'s thread among them.
+Two of the classifier's own reads ask too: `planning_classify.roll_up_parent`
+reads the card's `parent.identifier` off `card_via_door(card, comments=1)`, and
+`critic_score.read_card` reads a card off it when the door's node has no
+children (one with children still reads Linear, because the door lists them by
+internal id). In the `publish` job only the `Plan artifact — announce` step
+sets the five, for its `linear_ops.py comment` pre-read. Sixty seconds, because
+the planner needs its card as it is now. The planner's reads that stay on
+Linear — an epic's children, issue history, the card-validation gate's read,
+the review re-dispatch's read, the fleet-wide reads, the initiative context,
+the allowance's rate-limit probe and the write path's reads — are listed on
+DRE-8903, each by its `linear-read:` caller.
 
 ## The floor: a read sees every write it must see
 
@@ -133,6 +195,10 @@ critic's round counting trusts (DRE-2721). So:
   line;
 * a reader that needs no viewer (`_thread`, `comment_bodies`,
   `count_comments`, `comment_timeline`) makes no viewer read;
+* agent-task's card snapshot keeps the door's viewer as it came, so
+  `spoken_thread.read` never judges a door-served snapshot's comments against
+  it: it takes the viewer from `viewer_id()` instead (DRE-8900). A snapshot
+  read from Linear keeps the viewer it was read with;
 * outside a pass `viewer_id()` asks at most once per process and bucket, keyed
   by `spending_bucket()`, so a process that fell back to another key mid-run
   asks again. Inside a pass it asks once per pass, as before.
@@ -153,6 +219,29 @@ one Linear request, the viewer query.
 | `viewer_id` | Authorship is judged against this process's own key, and the door's viewer is the console's. |
 
 Each one's docstring says the same in one sentence.
+
+## Readers outside `linear_ops` (DRE-8904)
+
+Two of the planner's lookups call `card_via_door` themselves, in a step that
+names the max-age:
+
+* `planning_route._read_returned_child` reads the card, and its parent when it
+  has one, with `comments=1`. `_read_epic_wait` reads the epic with
+  `relations=True`, under `bureau_read.RELATIONS_MAX_AGE`. Either falls back to
+  its own query (`_FAMILY_QUERY`, `_WAIT_QUERY`) on `None`, and the epic's also
+  on `inverseRelations.pageInfo.hasNextPage`. The epic's lane history and its
+  blockers' own reads are unchanged.
+* `dedupe_dispatch`'s lane and label reads ask whether the card moved while
+  the dispatch sat in the queue. They pass the run's `created_at` as
+  `seen_after`, so the door's node is taken only when its `as_of` is at or
+  after the dispatch. A re-run, an unreadable `created_at` or no door answer
+  makes the live `get_issue(fresh=True)` read as before. `_one_off_card` reads
+  the card and its whole thread with `comments="all"`, under the same
+  `seen_after`, because its card is what the build is dispatched with. A
+  re-run or an unreadable `created_at` skips the door. If the door cannot
+  vouch for the thread, or its `as_of` is older than the dispatch, the card
+  falls back to today's two Linear reads, with one `read-fallback:` line. The
+  run's `created_at` is read off GitHub once per process.
 
 ## The fallback lines
 

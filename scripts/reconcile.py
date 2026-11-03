@@ -358,6 +358,10 @@ import sweep_holds  # noqa: E402 — DRE-7755: the hold record the held repo's p
 # Queued children are held until the cap is restored. The two passes live
 # there; the full sweep calls them right after its idle check (DRE-7755).
 import repo_held_epics  # noqa: E402
+# DRE-8849: a card the medic held in Triage because its pull request was red
+# only on checks `main` was red on too goes back to In Review once `main` is
+# green on them (`return_inherited_red_main_holds`, a full-sweep backstop).
+import inherited_red_main  # noqa: E402
 
 
 def resolve_max_wip(raw):
@@ -9700,6 +9704,226 @@ STALE_MERGE_REFRESH_SWEEP_CAP = 3
 STALE_MERGE_REF_TAG = stale_merge_ref.REFRESH_TAG
 
 
+def return_inherited_red_main_holds() -> None:
+    """DRE-8849: a card the medic held in Triage because its pull request was
+    red only on checks `main` was red on too goes back to In Review once
+    `main` is green on them.
+
+    Origin (live, 2026-11-01). Four foundry cards sat in Triage for four to
+    eight hours with nothing wrong with any of them: each had an approved
+    pull request that went red because foundry's own `main` was broken.
+    `main` was green again by 9:22 PM PT and nothing moved them back; an
+    operator moved each by hand at about 12:20 AM PT on 11-02. While a card
+    is in Triage it is human-parked (`fix_dispatch_blocked`), so the fix loop
+    and `refresh_stale_merge_refs` stay off its pull request.
+
+    THE CANDIDATES: this repo's Triage cards wearing the hold whose live
+    stamp is `inherited-red-main` (`medic.yml#Hold the card on an inherited
+    red main`), in one Linear read (`inherited_red_main.held_cards`, the
+    shape `repo_held_epics.lift_pass` reads with). A card in any other lane,
+    or held for any other reason, is not read further. Each card's open pull
+    request is found with `pr_for`.
+
+    THE DECISION is `stale_merge_ref.decide`, through the reads
+    `refresh_stale_merge_refs` makes (`_MergeRefReads`):
+
+      * the head still equals the stamped sha and `decide` answers `refresh`
+        — every failing check was red on `main` and is green on a newer
+        `main` commit — lift (`because=inherited-checks-green`), move to In
+        Review, one note naming the checks and where each is green;
+      * the head differs from the stamped sha — something pushed, and the
+        medic's reading no longer describes the head — lift
+        (`because=new-head`), move, one note naming both heads, with no
+        check-run read at all;
+      * any other answer (`main-still-red`, `unevaluated`, `cap-spent`, …) is
+        one log line: nothing is written and the card stays held.
+
+    The writes go in that order — the label and the lift line, then the
+    move, then the note — and a failed one stops the sequence and lands in
+    `_write_failures`. The lift and the move are the whole of re-arming the
+    fix loop: once the card is out of Triage with no label,
+    `refresh_stale_merge_refs`, next in this same pass, updates the branch
+    with `main`, and the fix loop reaches the pull request as any other.
+    This path dispatches nothing itself.
+
+    An unreadable read is handled as `refresh_stale_merge_refs` handles it:
+    a rate-limit refusal degrades (the next sweep reads it again), and any
+    other read failure goes to `_read_failures`. FULL SWEEPS ONLY, run right
+    before the refresh, for the reason the refresh gives.
+    """
+    prefix = inherited_red_main.LOG_PREFIX
+    try:
+        found = inherited_red_main.held_cards(REPO_SLUG, gql=linear_ops.gql)
+    except linear_ops.LinearRateLimited as e:
+        _degrade("inherited-red-main", "this repo's held Triage cards", e,
+                 then="nothing returned this sweep; the next sweep retries")
+        return
+    except linear_ops.LinearError as e:
+        _read_failures.append(f"inherited-red-main: held Triage cards: {e}")
+        print(f"ERROR: {prefix} this repo's held Triage cards unreadable — {e}",
+              file=sys.stderr)
+        return
+    reads = _MergeRefReads(prefix.rstrip(":"))
+    for entry in found:
+        ident = entry.get("identifier") or ""
+        if entry.get("unread"):
+            _read_failures.append(f"inherited-red-main on {ident}: {entry['unread']} unreadable")
+            print(f"ERROR: {prefix} {ident} — {entry['unread']} unreadable; held",
+                  file=sys.stderr)
+            continue
+        stamped = (entry["stamp"].get("at") or "").lower()
+        try:
+            pr = pr_for(ident)
+            if not pr or (pr.get("state") or "").upper() != "OPEN":
+                print(f"{prefix} {ident} — no open pull request read back; held")
+                continue
+            head = (pr.get("headRefOid") or "").lower()
+            if not head:
+                print(f"{prefix} {ident} — PR #{pr.get('number')} has no head read "
+                      "back; held")
+                continue
+            decision = None
+            if head != stamped:
+                because = inherited_red_main.NEW_HEAD
+            else:
+                decision = reads.decide(pr)
+                if decision is None:
+                    continue  # the compare named no merge base; said above
+                if decision.action != stale_merge_ref.REFRESH:
+                    print(f"{prefix} {ident} — PR #{pr.get('number')} "
+                          f"{decision.action}: {decision.reason}; held")
+                    continue
+                because = inherited_red_main.LIFT_KIND
+        except ReconcileRateLimited as e:
+            _degrade("inherited-red-main", ident, e,
+                     then="left held; the next sweep reads it again")
+            continue
+        except (ReconcileReadError, ValueError) as e:
+            _read_failures.append(f"inherited-red-main on {ident}: {e}")
+            print(f"ERROR: {prefix} {ident} unevaluated — {e}", file=sys.stderr)
+            continue
+        try:
+            _return_inherited_red_main(ident, pr, stamped, because, decision)
+        except Exception as e:  # noqa: BLE001 — one card must not cost the rest
+            _write_failures.append(f"inherited-red-main on {ident}: {e}")
+            print(f"ERROR: {prefix} {ident}: {e}", file=sys.stderr)
+
+
+def _return_inherited_red_main(ident: str, pr: dict, stamped: str, because: str,
+                               decision) -> None:
+    """The lift (the label, then the lift line), the move, then the note. In
+    that order and no other; a write that fails raises and stops the rest."""
+    hold.lift(ident, because=because, by=inherited_red_main.WRITER,
+              reason=inherited_red_main.HOLD_REASON)
+    if not linear_ops.cmd_advance(ident, REVIEW_LANE, PARKED_STATE):
+        raise ReconcileWriteError(
+            f"{ident} was not moved to {REVIEW_LANE}: it is no longer in "
+            f"{PARKED_STATE}")
+    head = pr.get("headRefOid") or ""
+    body = pipeline_act.receipt(inherited_red_main.ACT, inherited_red_main.return_note(
+        ident,
+        pr_number=pr.get("number"),
+        old_head=stamped,
+        decision=decision,
+        new_head=head if because == inherited_red_main.NEW_HEAD else None,
+    ))
+    linear_ops.cmd_comment(ident, body)
+    print(f"{inherited_red_main.LOG_PREFIX} {ident} — lifted ({because}) and returned "
+          f"to {REVIEW_LANE}; PR #{pr.get('number')} at {head[:8]}")
+
+
+class _MergeRefReads:
+    """The reads `stale_merge_ref.decide()` needs for one pull request, made
+    once and shared by the two backstops that ask it (DRE-8849):
+    `refresh_stale_merge_refs` and `return_inherited_red_main_holds`.
+
+    THE READS (DRE-6513), in order and all through `gh_read`: the compare;
+    the head's check runs; and only when the head has a failing check and
+    `main` has moved, the merge base's runs of each failing check BY NAME,
+    `main`'s commit listing at the compared tip, and each first-parent
+    commit's runs of each failing check by name. The listing and the by-name
+    reads are cached on this object for one sweep, keyed by what was read —
+    the listing per tip sha, a by-name read per `(sha, check name)`. A read
+    that fails raises out of `decide`, and the caller decides which ledger it
+    lands on."""
+
+    def __init__(self, step: str):
+        self.step = step
+        self.listings: dict = {}  # main sha -> `commits?sha=` listing
+        self.named_runs: dict = {}  # (sha, check name) -> that check's runs on sha
+
+    def runs_named(self, sha: str, name: str) -> list:
+        """Every run of one check on one commit, paged, read once a sweep."""
+        key = (sha, name)
+        if key not in self.named_runs:
+            payload = json.loads(gh_read(
+                "api", f"repos/{REPO}/commits/{sha}/check-runs"
+                f"?check_name={urllib.parse.quote(name, safe='')}"
+                "&per_page=100") or "{}")
+            self.named_runs[key] = stale_merge_ref._check_runs(payload)
+        return self.named_runs[key]
+
+    def runs_for(self, sha: str, names: list) -> dict:
+        return {"check_runs": [run for name in names
+                               for run in self.runs_named(sha, name)]}
+
+    def decide(self, pr: dict):
+        """`stale_merge_ref.decide()` for the pull request as the listing
+        read it, or None when the compare names no merge base or no `main`
+        tip — said in one line, never guessed at."""
+        number = pr.get("number")
+        head, base = pr.get("headRefOid") or "", pr.get("baseRefName") or ""
+        compare = json.loads(gh_read(
+            "api", f"repos/{REPO}/compare/{base}...{head}") or "{}")
+        # The module's own reader, borrowed for the same reason it borrows
+        # `unfixable_checks._check_runs`: the two shas below address the next
+        # three reads, and a second derivation of "what this compare says" is
+        # how two readers come to disagree about one payload. `decide()` reads
+        # it again and is the authority; this only picks the URLs.
+        read = stale_merge_ref._read_compare(compare)
+        if read is None:
+            print(
+                f"{self.step}: PR #{number} — the compare payload carries no "
+                "merge base or no `main` tip; unevaluated"
+            )
+            return None
+        behind, base_sha, main_sha = read
+        head_checks = json.loads(gh_read(
+            "api", f"repos/{REPO}/commits/{head}/check-runs?per_page=100")
+            or "{}")
+        try:
+            names = stale_merge_ref.failing_set(head_checks)
+        except ValueError:
+            names = []  # decide() reads the head again and says so
+        base_checks: dict = {"check_runs": []}
+        main_window: list = []
+        # Nothing more is read when nothing could come of it: decide()
+        # answers `current` or `no-failure` before it looks at either.
+        if names and behind > 0:
+            base_checks = self.runs_for(base_sha, names)
+            if main_sha not in self.listings:
+                self.listings[main_sha] = json.loads(gh_read(
+                    "api", f"repos/{REPO}/commits?sha={main_sha}"
+                    "&per_page=100") or "[]")
+            main_window = [
+                (sha, self.runs_for(sha, names))
+                for sha in stale_merge_ref.first_parent_window(
+                    self.listings[main_sha], tip_sha=main_sha,
+                    base_sha=base_sha)
+            ]
+        return stale_merge_ref.decide(
+            compare=compare,
+            head_checks=head_checks,
+            base_checks=base_checks,
+            main_window=main_window,
+            # Only the worker bot's own receipts are read back: a forged
+            # comment must not be able to freeze a branch (DRE-1998).
+            receipts=[c.get("body") or "" for c in pr.get("comments") or []
+                      if is_worker_bot_comment(c)],
+            cap=STALE_MERGE_REFRESH_CAP,
+        )
+
+
 def refresh_stale_merge_refs() -> None:
     """DRE-3144: `main` fixed the fault this PR is red on — give it a fresh
     merge ref, once, and say so.
@@ -9720,7 +9944,9 @@ def refresh_stale_merge_refs() -> None:
     payloads it needs, makes the write, and posts the body it composed. Every
     answer other than `refresh` is one line of log.
 
-    THE READS (DRE-6513), in order and all through `gh_read`: the compare;
+    THE READS (DRE-6513) are `_MergeRefReads`', which
+    `return_inherited_red_main_holds` makes too (DRE-8849), in order and all
+    through `gh_read`: the compare;
     the head's check runs; and only when the head has a failing check and
     `main` has moved, the merge base's runs of each failing check BY NAME,
     `main`'s commit listing at the compared tip, and each first-parent
@@ -9777,24 +10003,7 @@ def refresh_stale_merge_refs() -> None:
         print(f"ERROR: stale-merge-ref: PR listing failed: {e}", file=sys.stderr)
         return
 
-    listings: dict = {}  # main sha -> `commits?sha=` listing, this sweep only
-    named_runs: dict = {}  # (sha, check name) -> that check's runs on sha
-
-    def runs_named(sha: str, name: str) -> list:
-        """Every run of one check on one commit, paged, read once a sweep."""
-        key = (sha, name)
-        if key not in named_runs:
-            payload = json.loads(gh_read(
-                "api", f"repos/{REPO}/commits/{sha}/check-runs"
-                f"?check_name={urllib.parse.quote(name, safe='')}"
-                "&per_page=100") or "{}")
-            named_runs[key] = stale_merge_ref._check_runs(payload)
-        return named_runs[key]
-
-    def runs_for(sha: str, names: list) -> dict:
-        return {"check_runs": [run for name in names
-                               for run in runs_named(sha, name)]}
-
+    reads = _MergeRefReads("stale-merge-ref")
     eligible = []  # (pr, decision) — refreshed paced below, oldest PR first
     for pr in prs:
         number = pr.get("number")
@@ -9811,56 +10020,9 @@ def refresh_stale_merge_refs() -> None:
                 continue
             if fix_dispatch_blocked(pr):
                 continue  # human-parked card (DRE-2024)
-            compare = json.loads(gh_read(
-                "api", f"repos/{REPO}/compare/{base}...{head}") or "{}")
-            # The module's own reader, borrowed for the same reason it
-            # borrows `unfixable_checks._check_runs`: the two shas below
-            # address the next three reads, and a second derivation of
-            # "what this compare says" is how two readers come to disagree
-            # about one payload. `decide()` reads it again and is the
-            # authority; this only picks the URLs.
-            read = stale_merge_ref._read_compare(compare)
-            if read is None:
-                print(
-                    f"stale-merge-ref: PR #{number} — the compare payload "
-                    "carries no merge base or no `main` tip; unevaluated"
-                )
-                continue
-            behind, base_sha, main_sha = read
-            head_checks = json.loads(gh_read(
-                "api", f"repos/{REPO}/commits/{head}/check-runs?per_page=100")
-                or "{}")
-            try:
-                names = stale_merge_ref.failing_set(head_checks)
-            except ValueError:
-                names = []  # decide() reads the head again and says so
-            base_checks: dict = {"check_runs": []}
-            main_window: list = []
-            # Nothing more is read when nothing could come of it: decide()
-            # answers `current` or `no-failure` before it looks at either.
-            if names and behind > 0:
-                base_checks = runs_for(base_sha, names)
-                if main_sha not in listings:
-                    listings[main_sha] = json.loads(gh_read(
-                        "api", f"repos/{REPO}/commits?sha={main_sha}"
-                        "&per_page=100") or "[]")
-                main_window = [
-                    (sha, runs_for(sha, names))
-                    for sha in stale_merge_ref.first_parent_window(
-                        listings[main_sha], tip_sha=main_sha,
-                        base_sha=base_sha)
-                ]
-            decision = stale_merge_ref.decide(
-                compare=compare,
-                head_checks=head_checks,
-                base_checks=base_checks,
-                main_window=main_window,
-                # Only the worker bot's own receipts are read back: a forged
-                # comment must not be able to freeze a branch (DRE-1998).
-                receipts=[c.get("body") or "" for c in pr.get("comments") or []
-                          if is_worker_bot_comment(c)],
-                cap=STALE_MERGE_REFRESH_CAP,
-            )
+            decision = reads.decide(pr)
+            if decision is None:
+                continue  # the compare named no merge base; said above
             if decision.action != stale_merge_ref.REFRESH:
                 print(
                     f"stale-merge-ref: PR #{number} — {decision.action}: "
@@ -15954,6 +16116,11 @@ def main(
         for backstop in (
             drain_retiring_lanes,
             unstick_conflicts,
+            # DRE-8849, immediately before the refresh: a card the medic held
+            # in Triage on a red `main` is returned to In Review once `main`
+            # is green, and the refresh below then updates its branch on this
+            # same pass. Full sweeps only, for the refresh's reason.
+            return_inherited_red_main_holds,
             # DRE-3144, beside the conflict sweep because they answer the same
             # question — why is this pull request stuck with nothing coming?
             # FULL sweeps only: on the merge event `main`'s CI has not

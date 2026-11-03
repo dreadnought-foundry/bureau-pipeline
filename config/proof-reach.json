@@ -265,6 +265,24 @@
       "when": "every `read` run since DRE-8950, one line on stdout: the repo, then `yes` with the source and part count, `undeclared` with the layer folders, or `no` with the reason, each with whether its count and stub are on; or `UNKNOWN` with the problem"
     },
     {
+      "tag": "parts-sweep:",
+      "printed_by": "scripts/parts_sweep.py",
+      "constant": "TAG",
+      "when": "every `count` and `record` run since DRE-8944, and on a failed `roster`, one line on stderr per repo: the copies now and a week ago with the change, `skipped`, `unread`, `archived` or `failed` with the reason, or `UNKNOWN` with the problem; since DRE-8945 in the Parts Sweep run's log, one per leg"
+    },
+    {
+      "tag": "parts-provisional:",
+      "printed_by": "scripts/parts_provisional.py",
+      "constant": "TAG",
+      "when": "every `scan` run since DRE-8941, on stderr: one line per part — still provisional with its days, permanent with the pull request it was recorded on, rejected with its replacement card, already recorded, or a duplicate — the rejections read on the parts card, and the repo's summary line; or `UNKNOWN` with the problem. Since DRE-8945 in the Parts Sweep run's log, for each counted repo"
+    },
+    {
+      "tag": "parts-weekly:",
+      "printed_by": "scripts/parts_weekly.py",
+      "constant": "TAG",
+      "when": "every `post` run since DRE-9055, on stderr: `posted`, `already posted`, `would post` or `not posted` with the week, and for `not posted` the reason, `the roster named no repos` among them; the count of parts whose reasoning could not be read; or `UNKNOWN` with the problem. Since DRE-8945 in the Parts Sweep run's `weekly` job's log"
+    },
+    {
       "tag": "read-fallback:",
       "printed_by": "scripts/bureau_read.py",
       "constant": "FALLBACK_TAG",
@@ -304,7 +322,7 @@
       "tag": "operator-agent:",
       "printed_by": "scripts/operator_decide.py",
       "constant": "LOG_TAG",
-      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step"
+      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines)"
     }
   ],
   "causes": [

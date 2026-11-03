@@ -23,6 +23,9 @@
 #      Reconcile and Nightly Watch schedules already run as. Each
 #      write goes out on the App installation token minted per owner, so a
 #      dispatch it makes starts as the App, the actor the fleet's stubs admit.
+#      Every job mints the OIDC token for the console's read door
+#      (`id-token: write`, DRE-8902), which serves a card's thread first; a
+#      card it does not serve reads Linear, as before.
 #   Q2 secrets — a schedule-triggered run in THIS repo reads the repo's normal
 #      secrets store, so the Linear key and the App keys resolve. The
 #      cross-repo reads and writes cannot use `github.token`, which is scoped
@@ -34,7 +37,9 @@
 #      the summary posts only when its digest moved or something was executed.
 #      The `hygiene` concurrency group queues a second pass behind the first,
 #      so a hand dispatch or a medic retry never reads the board while another
-#      pass has not yet posted its receipts.
+#      pass has not yet posted its receipts. A door answer older than the
+#      `keep` leg's start is not taken (DRE-8902): the seam then reads the
+#      card's thread from Linear.
 #   Q4 command limits — the App holds write on contents and on actions, so
 #      update-branch, rerun and dispatch are within its grant. A merge is kept
 #      out by the guard's shape rule, not by permission alone: the only
@@ -67,9 +72,13 @@ on:
         default: true
 
 # READ ONLY. The writes go out on the per-owner App token, through the guard.
+# `id-token: write` is the OIDC token the console's read door takes
+# (DRE-8902), for every job: no job declares its own block, which would
+# replace this one.
 permissions:
   contents: read
   actions: read
+  id-token: write
 
 # One pass at a time, queued and never canceled: a pass in flight posts its
 # receipts before the next one reads the board.
@@ -82,6 +91,15 @@ jobs:
     name: Read the board
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # The read door (DRE-8902): reconcile.yml's three variables, and the
+    # max-age that opts this job's card reads in (`linear_ops.card_via_door`,
+    # DRE-8898). A standalone workflow checks out no `pipeline_ref`, so it
+    # sets no BUREAU_PIPELINE_REF and the client makes no ref check.
+    env:
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     outputs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
       go: ${{ steps.board.outputs.go }}
@@ -135,11 +153,25 @@ jobs:
     if: needs.read.outputs.go == 'true'
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
+    # The read door, as the read job's env has it (DRE-8902).
+    env:
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     strategy:
       fail-fast: false
       matrix:
         owner: ${{ fromJSON(needs.read.outputs.owners) }}
     steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so the seam finds the receipts the
+      # pass queued ahead of this one posted — the passes are serialized, so
+      # they were posted before this job began. Written to $GITHUB_ENV, and
+      # named by no `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Fetch the board
@@ -188,6 +220,12 @@ jobs:
     if: always() && needs.read.outputs.go == 'true'
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # The read door, as the read job's env has it (DRE-8902).
+    env:
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

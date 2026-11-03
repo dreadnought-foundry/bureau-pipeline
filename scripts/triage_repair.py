@@ -30,7 +30,7 @@ fifteen comments before the first critic's pass and more after it.
 leaves and the one repair it gets. The card's live stamp (`hold.read_stamp`)
 is matched first, then its newest pipeline-authored note opening a row's tag,
 then its description; a card matching no row is `rewrite`. The table's
-repairs are `rewrite`, `replan`, `relabel` and `none`.
+repairs are `rewrite`, `replan`, `relabel`, `none` and `wait`.
 
 The findings come off the newest park note: the newest pipeline-authored
 comment opening `🛑`, and every numbered item under `What the critic found:`
@@ -47,6 +47,12 @@ One action per card:
     anywhere on the thread. Once per card, never once per arrival. A
     receipt-shaped comment from any other author grants nothing, by
     `plan_critic.trusted_bodies`' rule, as `plan_bound._is_receipt` reads its own.
+  * `wait` — the row's repair is `wait` (DRE-8849): the card waits on
+    something a sweep lifts. The medic's `inherited-red-main` hold waits on
+    `main`'s red checks, and the sweep returns the card to In Review once
+    they are green, so rewriting it changes nothing. Nothing is claimed and
+    nothing is written — not even an `unrepairable` receipt, which would
+    page a person over a card that needs none.
   * `none` — the row's repair is `none`: rewriting the card changes nothing
     that holds it (a red check, a spent fix budget, a blocker line naming a
     card the board does not hold, which only its author may reword — nothing
@@ -271,7 +277,8 @@ REPLAN = "replan"
 RELABEL = "relabel"
 NONE = "none"
 SPENT = "spent"
-#: A card a hygiene Triage rule settles, in its first `SETTLE_HOURS`.
+#: A card a hygiene Triage rule settles, in its first `SETTLE_HOURS` — or
+#: one whose row's repair is `wait`, which a sweep lifts (DRE-8849).
 WAIT = "wait"
 ACTIONS = (REPAIR, ESCALATE, REPLAN, RELABEL, NONE, SPENT, WAIT)
 #: The actions the workflow acts on, and so the ones `--out` carries.
@@ -287,10 +294,14 @@ TABLE_PATH = os.path.join(ROOT, "config", "triage-repair.json")
 #: Every Triage writer, which the table must cover (DRE-7525).
 REASONS_PATH = os.path.join(ROOT, "config", "triage-reasons.json")
 REPO_MAP_PATH = os.path.join(ROOT, "config", "repo-map.json")
-#: A table row's repair. `replan`, `relabel` and `none` are also select's
-#: actions; `rewrite` is select's `repair`, `escalate` or `replan`.
+#: A table row's repair. `replan`, `relabel`, `none` and `wait` are also
+#: select's actions; `rewrite` is select's `repair`, `escalate` or `replan`.
+#: `wait` (DRE-8849) is a card that waits on something a sweep lifts — the
+#: medic's `inherited-red-main` hold waits on `main`'s red checks — so no
+#: planner runs, nothing is claimed and nothing is written. Never `none`:
+#: that posts an `unrepairable` receipt, the word the console alerts on.
 REWRITE = "rewrite"
-REPAIR_KINDS = (REWRITE, REPLAN, RELABEL, NONE)
+REPAIR_KINDS = (REWRITE, REPLAN, RELABEL, NONE, WAIT)
 
 #: The hygiene agent's Triage rules that settle a card mechanically
 #: (`hygiene_triage.py`), in its order, and how long they own a card first.
@@ -659,6 +670,8 @@ def decide(card: dict, records, table: dict | None = None) -> dict:
         word = outcome_of(spent[-1]) or "unreadable"
         action, why = SPENT, (f"the card has had its one automatic repair — a "
                               f"`{word}` receipt stands on its thread")
+    elif kind == WAIT:
+        action, why = WAIT, row.get("why") or "it waits on something a sweep lifts"
     elif kind == NONE:
         action, why = NONE, _unrepairable_why(row, card, records)
     elif kind == RELABEL:
