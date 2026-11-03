@@ -5292,6 +5292,10 @@ def _thread_and_viewer(identifier: str, *needs: str, whole: bool = False,
         return nodes, viewer_id()
     nodes, me = _fetch_thread(identifier, whole=whole, door=False)
     _remember(identifier, nodes, me)
+    if me and not _pass["open"]:
+        # The thread query named the viewer, so `viewer_id()` outside a pass
+        # answers it without a read of its own (DRE-9050).
+        _budget["viewers"][spending_bucket()] = me
     return nodes, me
 
 
@@ -5310,7 +5314,9 @@ def viewer_id() -> str | None:
     """Who `LINEAR_API_KEY` is — read at most once per pass, and outside a
     pass at most once per process and bucket (DRE-8898), keyed by
     `spending_bucket()`, so a process that fell back to another key asks
-    again. A viewer Linear did not name is asked again next time.
+    again. A viewer Linear did not name is asked again next time. Outside a
+    pass, a thread `comment_records` read off Linear names the viewer too, and
+    that answer is the bucket's: no second read (DRE-9050).
 
     It stays on Linear (DRE-8898): authorship is judged against this
     process's own key, and the door's viewer is the console's."""
