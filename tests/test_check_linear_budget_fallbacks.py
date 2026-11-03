@@ -90,10 +90,13 @@ def _drive(monkeypatch, capsys, fake: _FakeGh,
 
 
 def _fallback_section(out: str) -> list[str]:
-    """Every line printed after the spend table's TOTAL line."""
+    """Every line printed after the spend table's TOTAL line, up to the
+    direct-read table that follows the fallback table (DRE-8897)."""
     lines = out.splitlines()
     total = next(i for i, line in enumerate(lines) if line.startswith("TOTAL"))
-    return [line for line in lines[total + 1:] if line.strip()]
+    end = next((i for i, line in enumerate(lines)
+                if line.startswith("direct Linear reads")), len(lines))
+    return [line for line in lines[total + 1:end] if line.strip()]
 
 
 def _two_repos() -> tuple[_FakeGh, dict[str, str]]:

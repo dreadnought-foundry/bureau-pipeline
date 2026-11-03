@@ -723,7 +723,10 @@ def test_the_exit_hook_prints_both_lines_once_on_stderr(transport, capsys,
     linear_ops._report_budget_at_exit()
     out, err = capsys.readouterr()
     assert out == "", "stdout is parsed by $(...) callers — the line must not land there"
-    assert err.splitlines() == [linear_ops.budget_line(), _calls(2, "fleet")]
+    lines = err.splitlines()
+    assert lines[:2] == [linear_ops.budget_line(), _calls(2, "fleet")]
+    # The reads among those requests follow, on lines of their own (DRE-8897).
+    assert [line.split(" ", 1)[0] for line in lines[2:]] == ["linear-read:"]
 
 
 def test_the_calls_line_carries_no_key_and_no_url(transport, monkeypatch):
