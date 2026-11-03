@@ -677,6 +677,18 @@ KPI_PRESSES = (
     ("confirmKpi", "confirm a proposed KPI", "the run confirms a proposed KPI",
      "the run confirmed the proposed KPI", "confirming a proposed KPI"),
 )
+#: The three loop presses DRE-9034 added for the Loops 3 epic (DRE-8700), after
+#: the KPI eight, in agent-bureau's order: each operation, its plain words as
+#: the standard's bullet gives them, and the press as a criterion writes it in
+#: the present, past and -ing.
+LOOP_ASK_PRESSES = (
+    ("followUpLoop", "send a follow-up on a loop", "the run sends a follow-up on the loop",
+     "the run sent a follow-up on a loop", "sending a follow-up on a loop"),
+    ("askLoopStatus", "ask a loop for a status", "the run asks a loop for a status",
+     "the run asked the loop for a status", "asking a loop for a status"),
+    ("askLoopAgain", "ask a gone-quiet loop again", "the run asks a gone-quiet loop again",
+     "the run asked the gone-quiet loop again", "asking a gone-quiet loop again"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -765,7 +777,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(42, len(listed), listed)
+        self.assertEqual(45, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -850,8 +862,8 @@ class TheListIsCopied(unittest.TestCase):
         """DRE-8937: the eight KPI presses, after `markNotALoop`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
         self.assertEqual(["reviseKpi", "closeKpi", "retireKpi", "moveKpi", "linkKpiLoop",
-                          "unlinkKpiLoop", "proposeKpi", "confirmKpi"], ours[34:])
-        self.assertEqual([op for op, *_ in KPI_PRESSES], ours[34:])
+                          "unlinkKpiLoop", "proposeKpi", "confirmKpi"], ours[34:42])
+        self.assertEqual([op for op, *_ in KPI_PRESSES], ours[34:42])
 
     def test_the_kpi_presses_name_only_themselves(self):
         """DRE-8937: each KPI press's plain words, in a criterion and in its
@@ -885,6 +897,42 @@ class TheListIsCopied(unittest.TestCase):
             for text in texts:
                 with self.subTest(op=op, text=text):
                     self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_the_loop_ask_presses_follow_the_kpis_in_order(self):
+        """DRE-9034: the three loop presses, after `confirmKpi`."""
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual(["followUpLoop", "askLoopStatus", "askLoopAgain"], ours[42:])
+        self.assertEqual([op for op, *_ in LOOP_ASK_PRESSES], ours[42:])
+
+    def test_the_loop_ask_presses_name_only_themselves(self):
+        """DRE-9034: each press's plain words, in a criterion and in its forms,
+        and its operation name only that press."""
+        for op, words, present, past, ing in LOOP_ASK_PRESSES:
+            for text in (words, present, past, ing, op,
+                         f"Sandbox press: on agent-bureau-demo, {present}"):
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_no_existing_pattern_matches_a_loop_ask_press(self):
+        """DRE-9034: none of the forty-two earlier patterns reads one of the
+        three presses' words, and each of the three reads only its own."""
+        for op, *texts in LOOP_ASK_PRESSES:
+            for text in texts:
+                for other, pattern in ppr.SANDBOX_PRESSES:
+                    with self.subTest(op=op, text=text, pattern=other):
+                        self.assertEqual(other == op,
+                                         re.search(pattern, text, re.IGNORECASE) is not None)
+
+    def test_a_nudge_is_not_an_ask(self):
+        """DRE-9034: `nudgeLoop` does not take an `askLoopStatus` criterion, and
+        a nudge still names only `nudgeLoop`."""
+        nudge = dict(ppr.SANDBOX_PRESSES)["nudgeLoop"]
+        for text in ("ask a loop for a status", "the run asks a loop for a status"):
+            with self.subTest(text=text):
+                self.assertIsNone(re.search(nudge, text, re.IGNORECASE))
+        for text in ("the run nudges a loop", "nudgeLoop"):
+            with self.subTest(text=text):
+                self.assertEqual(["nudgeLoop"], ppr.sandbox_presses(text))
 
 
 class TheSandboxPressRule(_Cli):
