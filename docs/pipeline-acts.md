@@ -910,6 +910,22 @@ line opens `Outcome:` or `Released as`: a close the relay's lane guard returns
 for a person. The tag is the bare act name, because this act lifts no hold
 and no lift line carries its name.
 
+**A `do` card (DRE-8925).** The same act covers a `do` card's three comments,
+written by DRE-8923's composers in `operator_decide.py` and posted by the same
+`_post`: `do-claim` posts the claim, `🛠️ operator-agent: do-claim — …` with
+one `will run:` line per checked command, before the step's first command
+runs; `do-post` posts the receipt, `🛠️ operator-agent: do — …`, after it,
+ending `close: <rule>`, `close: none named`, `failed:` or `continues:`; and
+`do-close` makes the close the receipt names — a `no-code` card through the
+console's outcome door (`scripts/console_outcome.py`), whose own `Outcome:`
+record is what the lane guard reads, any other card by the move to Done — or,
+when that close can never land (the door's 400 or 409, a pull request closed
+unmerged or open past `pr_wait_days`), posts the one close-failure line,
+`🛠️ operator-agent: do-close — …`. Each is the card's spent pass: `select`
+reads the newest back, so a step never runs twice and a close that can never
+land is not retried. Every reader of these comments sets the act's trailer
+line aside.
+
 The console must learn this act before this row merges, as for every row.
 
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
