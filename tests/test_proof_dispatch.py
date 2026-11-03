@@ -54,6 +54,7 @@ import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_dispatch  # noqa: E402
 import proof_record  # noqa: E402
+import proof_record_pr  # noqa: E402
 import proof_release  # noqa: E402
 import proof_run_state  # noqa: E402
 import spoken_thread  # noqa: E402
@@ -3959,6 +3960,29 @@ def test_rearm_the_pipelines_own_notes_re_arm_nothing(monkeypatch, capsys, user)
     assert h.fired == [] and h.posted == []
     assert h.holds == [("DRE-5930", *GATE_FILED)]
     assert any(NEVER_ANOTHER in line for line in lines), lines
+
+
+def test_rearm_the_records_retire_note_re_arms_nothing(monkeypatch, capsys):
+    # The record's hold writer retires superseded holds with a note posted
+    # after the receipt that spent the budget (DRE-8680): it is the
+    # pipeline's own, so it is no re-arm event.
+    retired = observed_note(
+        300, proof_record_pr.RETIRED_NOTE.format(sha7="abc1234", n=2), user=VIEWER)
+    thread = _sent_back(*SPENT, retired)
+    h, tally = _rearm_pass(monkeypatch, thread=thread,
+                           text=record_md(MET_ROW, NOT_MET_ROW))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_FILED)]
+    assert any(NEVER_ANOTHER in line for line in lines), lines
+    receipts = [(proof_dispatch._when(c["createdAt"]), proof_run_state.receipt(c["body"]))
+                for c in thread if proof_run_state.receipt(c["body"]) is not None]
+    voices = [spoken_thread.Voice(kind=spoken_thread.PIPELINE, label="x",
+                                  created_at=c["createdAt"], body=c["body"])
+              for c in thread]
+    assert sum(1 for _, r in receipts
+               if r.count.startswith("re-run")) == proof_dispatch.RERUN_BUDGET
+    assert proof_dispatch._Pass._new_note(None, voices, receipts) is None
 
 
 def test_rearm_an_unread_record_the_critic_sent_back_is_re_armed_only_by_a_note(

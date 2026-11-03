@@ -407,6 +407,8 @@ def test_the_note_is_not_the_dispatchers_own_lift():
     assert upto[-1].body == note and upto[-1].kind == spoken_thread.PIPELINE
     assert proof_dispatch._lifted_at(upto) is None
     assert proof_dispatch.LIFTED_BY not in note
+    # It is still the pipeline's own: the re-run budget reads no re-arm off it.
+    assert proof_dispatch._pipeline_note(note)
 
 
 def test_an_unread_thread_posts_no_hold_and_closes_nothing():
