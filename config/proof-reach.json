@@ -295,6 +295,12 @@
       "when": "every full reconcile pass since DRE-8798, one line on stdout in the sweep step's log: the notice door's outcome (raised, repeat, escalated, resolved, not-open, resolve-refused or lost, or `door <mode>` when the read door is not on), the repo, and each reader, read and reason that fell back with its count; an idle pass says it was not settled, and the card-scoped, promote-only and close-only passes print none"
     },
     {
+      "tag": "no-code-in-build-lane:",
+      "printed_by": "scripts/reconcile.py",
+      "constant": null,
+      "when": "every full reconcile pass since DRE-9154, one line on stdout in the sweep step's log per `no-code` card a path held back from a build: the card, its lane and the path (`reconcile` for the not-started re-dispatch, `limit-recovery` for a build-stage limit death's re-entry). The tag is spelled once, as `NO_CODE_TAG` in `scripts/limit_recovery.py`, which the sweep prints with"
+    },
+    {
       "tag": "read-door:",
       "printed_by": "scripts/bureau_read.py",
       "constant": null,

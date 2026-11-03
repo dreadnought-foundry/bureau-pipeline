@@ -16785,6 +16785,16 @@ def main(
                 # No receipt: this is a quiet wait, and a comment every fifteen
                 # minutes for the hours a run can sit queued is noise on the
                 # card. flag_stranded still says it once, in plain English.
+                #
+                # NO-CODE FIRST (DRE-9154). A person builds a `no-code` card,
+                # and the relay refuses to dispatch one; on 2026-11-03 this
+                # branch re-dispatched DRE-7083 anyway. No dispatch, no
+                # comment, and the card keeps its lane: one
+                # `no-code-in-build-lane:` line (limit_recovery.NO_CODE_TAG,
+                # declared in config/proof-reach.json) says it was held back.
+                if limit_recovery.no_code(card):
+                    print(limit_recovery.no_code_line(ident, state, "reconcile"))
+                    continue
                 refusal = build_run_refusal(ident)
                 if refusal:
                     print(f"live: {ident} — {refusal}; not re-dispatching")
