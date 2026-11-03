@@ -101,7 +101,9 @@ export function {name}() {{
 
 
 def _pages(n: int) -> dict:
-    return {f"web/src/pages/Page{i}.tsx": _page(f"Page{i}") for i in range(1, n + 1)}
+    """Pages 1 to `n` each holding a copy, and any page past `n` deleted."""
+    return {f"web/src/pages/Page{i}.tsx": _page(f"Page{i}") if i <= n else None
+            for i in range(1, 7)}
 
 
 def _with_copies(n: int) -> dict:
@@ -123,7 +125,7 @@ def _commit(root: Path, files: dict, when: str) -> str:
     for path, text in files.items():
         target = root / path
         if text is None:
-            target.unlink()
+            target.unlink(missing_ok=True)
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
