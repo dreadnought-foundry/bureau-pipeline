@@ -53,8 +53,11 @@ it and that refusal never fires now. Get it right and the gate is a no-op.
 - **`**Design:** <png path>`** — UI cards ONLY (e.g.
   `console/design/images/screens/desktop/board.png`). **Forbidden** on non-UI
   cards; its absence is normal. (See `standards/design.md`.)
-- **`**Spec:** openspec/changes/<id>/`** — only when the work needs a
-  cross-component contract; read it before coding.
+- **`**Spec:** docs/specs/<slug>.md`** — only when the work needs a
+  cross-component contract; read it before coding. A spec is one Markdown
+  file in the product repo. A line naming a directory instead — the older
+  `openspec/changes/<id>/` shape — is still read, for cards filed before
+  2026-11-02.
 - **A dependency is a Linear `blockedBy` relation.** That relation is the
   dependency — the only thing the promotion gate, the epic gate, the console
   and the auto-close path read. Linear models dependencies natively and renders
