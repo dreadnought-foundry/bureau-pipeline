@@ -49,6 +49,18 @@ the cause as unknown (the channel-staleness alarm did, until DRE-6053 retired
 it). Three more names cover the refusals that already existed and were equally
 silent: `channel-held`, `no-harness-stamp`, `not-ahead-of-channel`.
 
+A FAILED RUN IS NOT ALWAYS A RED TRUNK (DRE-9068)
+-------------------------------------------------
+On 2026-11-02 run 41581663622 passed every code scenario and lost two —
+`gate_paths`' cleanup and `proof_task_parses`' exercise — to GitHub's `403 API
+rate limit exceeded for installation ID 123249480`, the worker's shared hour.
+The decision read the run's `failure` conclusion as `harness-failed`, and
+`stable` held until a person promoted by hand. A run whose refusal outlasted
+the client's wait now stamps `RATE_LIMIT_MARKER`, and the decision reads it
+as `harness-inconclusive` / rate-limited: re-run the harness, not repair the
+trunk. promote-channel.yml fetches the stamp on a failed harness run for that,
+so the marker reaches the decision at all.
+
 THE BY-HAND PATH, AND THE LINE IT MUST NOT CROSS (DRE-4111)
 -----------------------------------------------------------
 Everything above is reached by exactly one trigger: a `workflow_run` on the
@@ -162,6 +174,14 @@ BLOCKED_MARKER = "harness blocked:"
 #: GitHub's queue rather than the sandbox's machinery.
 QUEUE_STALL_MARKER = f"{BLOCKED_MARKER} GitHub queue stall"
 
+#: The receipt for a run GitHub refused for a RATE LIMIT that outlasted the
+#: client's wait (DRE-9068), written by `harness/__main__.py`. It opens with
+#: `BLOCKED_MARKER` for the queue stall's reason — every reader that knows a
+#: block (the stamp step, red-main repair's back-off, the by-hand proof read)
+#: keeps knowing this one — and the words after it let `evaluate` name it
+#: `harness-inconclusive` / rate-limited rather than a dead sandbox.
+RATE_LIMIT_MARKER = f"{BLOCKED_MARKER} GitHub rate limit"
+
 #: GitHub's compare API vocabulary (base=channel, head=candidate).
 AHEAD = "ahead"
 BEHIND = "behind"
@@ -189,6 +209,11 @@ OUTCOME_NOT_MAIN = "harness-run-not-on-main"
 OUTCOME_HELD = "channel-held"
 OUTCOME_BLOCKED = "harness-blocked-by-sandbox"
 OUTCOME_QUEUE_STALL = "harness-blocked-by-github-queue"
+#: DRE-9068: GitHub refused the harness for a rate limit, so the run proved
+#: nothing either way. The cause leads the reason, so the receipt reads
+#: `harness-inconclusive: rate-limited — …`.
+OUTCOME_INCONCLUSIVE = "harness-inconclusive"
+INCONCLUSIVE_RATE_LIMITED = "rate-limited"
 OUTCOME_UNPROVEN = "no-harness-stamp"
 OUTCOME_NOT_AHEAD = "not-ahead-of-channel"
 
@@ -539,6 +564,17 @@ def evaluate(
     #    proven and nothing is disproven, so this is neither a promotion nor a
     #    defect.
     blocked = blocked_by_sandbox(combined)
+    if blocked and blocked.startswith(RATE_LIMIT_MARKER):
+        # GitHub's meter, not the commit (DRE-9068). On 2026-11-02 run
+        # 41581663622 passed every code scenario and lost two to the worker
+        # installation's empty hour, and this read as a red trunk.
+        return Decision(False, (
+            f"{INCONCLUSIVE_RATE_LIMITED} — not promoting {sha}: GitHub "
+            f"refused the harness for a rate limit that outlasted its wait, "
+            f"so it never finished judging this commit — {blocked}. Not a "
+            f"red trunk: re-run the harness on {sha}, or let the next push "
+            f"to {TRUNK} re-prove the trunk."
+        ), OUTCOME_INCONCLUSIVE)
     if blocked and blocked.startswith(QUEUE_STALL_MARKER):
         # The narrower block (DRE-6147): GitHub's own queue, not the sandbox's
         # machinery. On 2026-10-07 this read as a red trunk and the channel
