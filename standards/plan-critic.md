@@ -302,16 +302,21 @@ nothing else does. A crash, an unusable result, an unavailable model and a read
 that ran out of turns are a critic that decided nothing, and the first such
 read is re-run once (`rerun`, DRE-7491): the card stays in Planning and a fresh
 planning run reads it again, as it stands, with nothing asked of the CEO. The
-second in a row takes the escalation exit to `Green Light` with the reason in
-business terms — the review failed twice — naming both runs. "In a row" is
-read off the card's own round records, which carry the run that wrote them:
-the newest `stage=one-off` record being a `NO_RESULT` is what spends the
-re-run, so a card the CEO sends back from that escalation and that decides
-nothing again goes straight back to him. One automatic re-run per unbroken run
-of no-results, and the loop ends in a lane only a person leaves. It spends no
-send-back round, as no no-result does. The second critic's own once-more rule,
-below, is the precedent. DRE-2498 went to the CEO on 2026-10-13 from one empty
-result, and the read after his answer passed it. That does not contradict "a
+second in a row parks (`park`, DRE-8772) for the operator, the way the second
+critic's second no-result does: its note says the review was started twice and
+the critic produced no result either time, naming both runs, and that the card
+is the operator's and not the CEO's, and the park step runs the bound exit and
+then parks in `Triage`. "Re-run the review, or settle it yourself?" is a
+re-run, not a decision, and DRE-8752 and DRE-8755 reached the CEO with exactly
+that on 2026-11-01. "In a row" is read off the card's own round records, which
+carry the run that wrote them: the newest `stage=one-off` record being a
+`NO_RESULT` is what spends the re-run, so a card a person sends back from that
+park and that decides nothing again parks again. One automatic re-run per
+unbroken run of no-results, and the loop ends in a lane only a person leaves.
+It spends no send-back round, as no no-result does. The second critic's own
+once-more rule, below, is the precedent. DRE-2498 went to the CEO on
+2026-10-13 from one empty result, and the read after his answer passed it.
+That does not contradict "a
 crash is not a rejection" — it is the same rule read in a different place.
 On the epic route, a first critic that decided nothing must not stop the plan,
 because the second critic reads it next. On the
@@ -412,7 +417,7 @@ is deterministic. So:
   grammar the second critic's review writes on an epic, under `stage=one-off` —
   and the next read of that card takes the next ceiling up, `ceil(ceiling ×
   1.5)` capped at 135, **once**. The re-read is the automatic re-run above
-  (DRE-7491) — or the CEO's answer coming back round through Planning — and
+  (DRE-7491) — or a person sending the card back round through Planning — and
   neither may be spent on a repeat of the same death. A second death does not
   raise it again: two reads that could not finish is a card for a person, not
   a third ceiling.
