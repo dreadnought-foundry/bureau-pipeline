@@ -117,15 +117,16 @@ class GitHub:
 
     def __init__(self):
         self.pulls = {}
+        self.pages = []
         self.comment_reads = []
         self.posted = []
         self.refuse = False
 
-    def add(self, number: int, merged: datetime | None, comments=()):
+    def add(self, number: int, merged: datetime | None, comments=(), updated=None):
         self.pulls[number] = {
             "number": number,
             "merged_at": iso(merged) if merged else None,
-            "updated_at": iso(merged or NOW - timedelta(days=1)),
+            "updated_at": iso(updated or merged or NOW - timedelta(days=1)),
             "html_url": f"https://github.com/{FULL}/pull/{number}",
             "comments": list(comments),
         }
@@ -144,6 +145,7 @@ class GitHub:
             assert query["state"] == "closed", query
             assert (query["sort"], query["direction"]) == ("updated", "desc"), query
             size, page = int(query["per_page"]), int(query["page"])
+            self.pages.append(page)
             rows = sorted(self.pulls.values(), key=lambda p: p["updated_at"], reverse=True)
             return json.dumps([self._public(p) for p in
                                rows[(page - 1) * size:page * size]])
@@ -698,6 +700,63 @@ class SinceTest(ScanCase):
                        for n in range(linear_ops.COMMENT_WINDOW)]
         run = self.scan()
         self.assertEqual(0, run.code, run.err)
+
+
+class PageTest(ScanCase):
+    """The closed pull requests come a page of `PER_PAGE` at a time, newest
+    updated first: every page that can hold a merge since `since` is read,
+    and the walk stops at the first page that ends before it."""
+
+    def fill(self, first, count, newest):
+        """`count` merged pull requests with no verdict, numbered from `first`,
+        one a minute back from `newest`."""
+        for n in range(count):
+            self.gh.add(first + n, newest - timedelta(minutes=n))
+
+    def test_an_approval_on_the_second_page_is_made_permanent(self):
+        self.fill(5000, parts_provisional.PER_PAGE + 20, ago(2))
+        approved = ago(20)
+        self.approve(4601, 20)
+        run = self.scan()
+        self.assertEqual(0, run.code, run.err)
+        self.assertEqual([1, 2], self.gh.pages)
+        badge = run.part("Badge")
+        self.assertEqual("permanent", badge["status"])
+        self.assertEqual(4601, badge["pr"])
+        self.assertEqual([(4601, f"🪴 part-permanent: Badge at {BADGE} — "
+                                 f"{pacific(approved + timedelta(days=14))}")],
+                         self.gh.posted)
+
+    def test_a_rejection_of_an_approval_on_the_second_page_files_a_card(self):
+        self.fill(5000, parts_provisional.PER_PAGE + 20, ago(2))
+        self.approve(4601, 10)
+        self.voices.append(ceo("reject agent-bureau/Badge", ago(5)))
+        run = self.scan()
+        self.assertEqual(0, run.code, run.err)
+        self.assertEqual([1, 2], self.gh.pages)
+        self.assertEqual("rejected", run.part("Badge")["status"])
+        self.assertEqual(1, len(self.board.created))
+        self.assertEqual(4601, self.gh.posted[0][0])
+
+    def test_the_walk_stops_at_the_first_page_that_ends_before_since(self):
+        since = datetime.fromisoformat(parts_provisional.PROVISIONAL_SINCE).replace(
+            hour=20, tzinfo=UTC)
+        size = parts_provisional.PER_PAGE
+        self.fill(5000, size - 2, ago(1))                 # page 1, all since `since`
+        # merged before `since`, updated since: on page 1, never an approval
+        early = since - timedelta(days=3)
+        self.gh.add(4602, early + timedelta(hours=1),
+                    [verdict(early, (("Chip", "ui/atoms/Chip.tsx"),))],
+                    updated=ago(1, hours=12))
+        self.fill(6000, 2 * size, since - timedelta(days=5))   # pages 2 and 3, before it
+        self.approve(4601, 20)                            # page 1
+        run = self.scan()
+        self.assertEqual(0, run.code, run.err)
+        self.assertEqual(parts_provisional.PROVISIONAL_SINCE, run.doc["since"])
+        self.assertEqual([1, 2], self.gh.pages)
+        self.assertEqual(["Badge"], [p["name"] for p in run.doc["parts"]])
+        self.assertNotIn(4602, self.gh.comment_reads)
+        self.assertFalse(any(n >= 6000 for n in self.gh.comment_reads))
 
 
 class NoCardTest(ScanCase):
