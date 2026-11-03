@@ -459,8 +459,18 @@ def test_check_refuses_a_plan_that_is_not_json(tmp_path):
     assert json.loads(out.read_text(encoding="utf-8"))["ok"] is False
 
 
+def test_check_still_writes_its_file_when_the_card_file_is_missing(tmp_path, capsys):
+    plan_path = _write(tmp_path / "DRE-8637.plan.json", ALARM_PLAN)
+    out = tmp_path / "DRE-8637.check.json"
+    code = operator_do.main(["check", "DRE-8637", "--plan", str(plan_path),
+                             "--card", str(tmp_path / "missing.md"), "--out", str(out)])
+    assert code == 1
+    assert json.loads(out.read_text(encoding="utf-8"))["ok"] is False
+    assert _tag_lines(capsys.readouterr().out)[0].startswith(f"{TAG} DRE-8637 do refused — plan ·")
+
+
 # --------------------------------------------------------------------------- #
-# read                                                                         #
+# read                                                                       #
 # --------------------------------------------------------------------------- #
 
 
