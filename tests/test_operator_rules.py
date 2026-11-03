@@ -186,7 +186,7 @@ def test_the_kept_acts_are_exactly_the_six_ids_with_a_label_each():
         assert act["label"].strip()
 
 
-def test_leave_alone_holds_exactly_the_three_switch_steps():
+def test_leave_alone_holds_exactly_the_three_switch_steps_and_the_proof_fixture():
     rows = _table()["leave_alone"]
     assert [row["card"] for row in rows] == ["DRE-8748", "DRE-8830", "DRE-8927",
                                              "DRE-9053"]
