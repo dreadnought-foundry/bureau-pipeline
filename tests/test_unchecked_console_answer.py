@@ -428,7 +428,9 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: unchecked answer after it spends nothing and the alarm says so (DRE-7741).
 #: `design_answer.py` reads the CEO's answer to the critic's design question,
 #: and an unchecked one reads `unknown` — never `asked` — and hands nothing
-#: back (DRE-8722).
+#: back (DRE-8722). `parts_provisional.py` reads the CEO's rejections of a
+#: provisional part, and an unchecked one may be a rejection, so the scan is
+#: `UNKNOWN` and writes nothing (DRE-8941).
 OTHER_READERS = {
     "answer_into_card.py": "tests/test_answer_into_card.py::"
     "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
@@ -444,6 +446,8 @@ OTHER_READERS = {
     "test_an_unchecked_console_answer_reads_withheld_and_shows_none_of_its_text",
     "groom_priority.py": "tests/test_groom_priority.py::"
     "test_an_unchecked_console_confirmation_keeps_the_band_and_names_the_card",
+    "parts_provisional.py": "tests/test_parts_provisional.py::"
+    "test_an_unchecked_message_is_unknown_even_for_a_part_twenty_days_old",
     "planning_escalation.py": "tests/test_planning_escalation_prior_answer.py::"
     "test_an_unchecked_answer_is_the_third_form_naming_the_key",
     "proof_dispatch.py": "tests/test_proof_dispatch.py::"

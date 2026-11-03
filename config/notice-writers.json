@@ -254,6 +254,14 @@
       "reason": "work: one cleanup card per copy of a shared part already in a repo, filed in Intake by the one-time count for the groomer to propose, never twice for the same copy (DRE-8843)"
     },
     {
+      "id": "parts-provisional",
+      "repo": "bureau-pipeline",
+      "file": "scripts/parts_provisional.py",
+      "title": "<repo>: remove the rejected part <Name> and replace its uses",
+      "disposition": "kept",
+      "reason": "work: one replacement card per provisional part the CEO rejected from the console inside its 14 days, filed in Intake by the weekly parts sweep, never twice for the same part (DRE-8941)"
+    },
+    {
       "id": "fix-result-stranded",
       "repo": "bureau-pipeline",
       "file": "scripts/report_fix_result.sh",
