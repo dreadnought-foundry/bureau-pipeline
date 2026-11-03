@@ -82,6 +82,12 @@ def _refused(refusals, index: int, op: str, reason: str) -> bool:
     return any(r.startswith(head) and reason in r for r in refusals)
 
 
+#: The variable DRE-8623 deletes, read from its card rather than spelled here:
+#: it is the retired planner cap's name, which `test_no_planner_cap.py` refuses
+#: in every tracked file outside the fixtures.
+VARIABLE = re.search(r"gh variable delete (\S+) -R", _description("DRE-8623")).group(1)
+
+
 # --- the file ---------------------------------------------------------------
 
 
@@ -172,8 +178,8 @@ def test_the_shipped_file_loads():
 RENDERED = [
     ({"op": "variable-set", "repo": DEMO, "name": "ALARM_REPAIR_LIVE", "value": "true"},
      ["gh", "variable", "set", "ALARM_REPAIR_LIVE", "--body", "true", "-R", DEMO], True),
-    ({"op": "variable-delete", "repo": DEMO, "name": "PLANNER_MAX_RUNNING"},
-     ["gh", "variable", "delete", "PLANNER_MAX_RUNNING", "-R", DEMO], True),
+    ({"op": "variable-delete", "repo": DEMO, "name": VARIABLE},
+     ["gh", "variable", "delete", VARIABLE, "-R", DEMO], True),
     ({"op": "variable-list", "repo": DEMO},
      ["gh", "variable", "list", "-R", DEMO], False),
     ({"op": "branch-create", "repo": DEMO, "branch": "agent/DRE-7978-control", "from": SHA},
@@ -257,7 +263,7 @@ def test_plan_repo_is_the_plans_one_repository():
     assert operator_do_ops.plan_repo(_plan("DRE-8623", "variable",
                                            {"op": "variable-list", "repo": DEMO},
                                            {"op": "variable-delete", "repo": DEMO,
-                                            "name": "PLANNER_MAX_RUNNING"})) == DEMO
+                                            "name": VARIABLE})) == DEMO
 
 
 def test_plan_repo_is_none_for_a_linear_admin_plan():
@@ -279,7 +285,7 @@ def test_plan_repo_refuses_two_repositories():
 
 def test_check_passes_a_quoted_repository_on_dre_8623():
     ok, refusals = _check("DRE-8623", "variable",
-                          {"op": "variable-delete", "repo": DEMO, "name": "PLANNER_MAX_RUNNING"},
+                          {"op": "variable-delete", "repo": DEMO, "name": VARIABLE},
                           {"op": "variable-list", "repo": DEMO})
     assert (ok, refusals) == (True, [])
 
@@ -389,9 +395,9 @@ def test_check_refuses_a_repo_neither_the_labels_nor_quoted():
 def test_check_refuses_a_plan_naming_two_repositories():
     ok, refusals = _check("DRE-8623", "variable",
                           {"op": "variable-delete", "repo": "dreadnought-foundry/agent-bureau",
-                           "name": "PLANNER_MAX_RUNNING"},
+                           "name": VARIABLE},
                           {"op": "variable-delete", "repo": "dreadnought-foundry/portico",
-                           "name": "PLANNER_MAX_RUNNING"})
+                           "name": VARIABLE})
     assert not ok
     assert _refused(refusals, 2, "variable-delete", "a second repository")
 
