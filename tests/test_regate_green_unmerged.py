@@ -120,8 +120,14 @@ def workflow_run(path: str, suite: int, status: str = "completed") -> dict:
             "conclusion": "success" if status == "completed" else None}
 
 
-GREEN_CHECKS_20 = [check("scripts unit tests", 25, suite=1),
-                   check("call / verify", 20, suite=2)]
+def green_checks() -> list[dict]:
+    """Every check green, the last finished 20 minutes ago — stamped when the
+    sweep runs, never at import: a suite that reaches this file late would
+    otherwise read an older head than the one written here (DRE-6630)."""
+    return [check("scripts unit tests", 25, suite=1),
+            check("call / verify", 20, suite=2)]
+
+
 GREEN_RUNS = [workflow_run(CI_PATH, 1), workflow_run(VERIFY_PATH, 2)]
 
 
@@ -154,9 +160,11 @@ class Sweep:
     (`None` = the read failed); `compare` / `commits` answer the carry's two
     reads; `gate_busy` is the gate workflow's run listing."""
 
-    def __init__(self, prs, *, checks=GREEN_CHECKS_20, runs=GREEN_RUNS,
+    def __init__(self, prs, *, checks=..., runs=GREEN_RUNS,
                  compare=None, commits=None, gate_busy=False,
                  dispatch_fails=False):
+        if checks is ...:
+            checks = green_checks()
         self.dispatches: list[tuple] = []
         self.notes: list[tuple] = []
         self.reads: list[tuple] = []
