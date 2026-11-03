@@ -655,7 +655,7 @@ class WorkflowShapeTest(unittest.TestCase):
 
     def test_the_look_back_settles_the_candidate_before_any_record_is_read(self):
         at = self._look_back()
-        self.assertIn("promote_channel.py look-back", self.steps[at]["run"])
+        self.assertIn("promote_channel look-back", self.steps[at]["run"])
         later = (
             lambda s: s.get("id") == "resolve",
             lambda s: s.get("name") == "Fetch the candidate's combined commit status",
