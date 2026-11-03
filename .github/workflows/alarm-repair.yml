@@ -40,7 +40,8 @@
 #      agent step's allowed_bots admits, DRE-5123). Its only GitHub call is
 #      the OIDC mint for the read door (`id-token: write`): `select` reads the
 #      open alerts there, and `apply` reads the alert's title for its
-#      receipt. The model-home read token every model selection mints
+#      receipt. Each card's thread and the card itself are read there first
+#      too (DRE-8902); a card the door does not serve reads Linear. The model-home read token every model selection mints
 #      (scripts/check_model_home_scope.py) reads one variable. Nothing is
 #      pushed, dispatched or commented on GitHub; the agent's `github_token`
 #      is this run's read-only token.
@@ -56,7 +57,9 @@
 #      raise stands on its card, and the leg ends green with no model run.
 #      `apply` acts only while the newest receipt for the pair is the
 #      `started` claim, so a repeat never writes twice. The `alarm-repair`
-#      concurrency group queues a run behind one in flight.
+#      concurrency group queues a run behind one in flight. A door answer
+#      older than the job's start, or than the claim this job posted, is not
+#      taken (DRE-8902): `claim` and `apply` then read Linear.
 #   Q4 command limits — while ALARM_REPAIR_LIVE is off the run selects and
 #      prints only: one open-alerts read at the door, and one whole-thread
 #      read and one card read per alert in scope. At most 3 alerts are worked
@@ -111,6 +114,14 @@ jobs:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door (DRE-8902): reconcile.yml's three variables, and the
+      # max-age that opts this job's card reads in (`linear_ops.card_via_door`,
+      # DRE-8898). A standalone workflow checks out no `pipeline_ref`, so it
+      # sets no BUREAU_PIPELINE_REF and the client makes no ref check.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     outputs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
       alerts: ${{ steps.alerts.outputs.alerts }}
@@ -167,7 +178,8 @@ jobs:
     runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # ALARM_REPAIR_MAX_TURNS is 60.
     timeout-minutes: 60
-    # The door again, for `apply`'s read of the alert's title.
+    # The door again, for `apply`'s read of the alert's title, and every
+    # card read in the job.
     permissions:
       id-token: write
       contents: read
@@ -176,12 +188,25 @@ jobs:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, as the select job's env has it (DRE-8902).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     strategy:
       max-parallel: 1
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.select.outputs.alerts) }}
     steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so a re-run's `claim` finds the
+      # claim an earlier attempt posted — the runs are serialized, so it was
+      # posted before this job began. Written to $GITHUB_ENV, and named by no
+      # `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - name: Check out bureau-pipeline
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

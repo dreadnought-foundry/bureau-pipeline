@@ -43,7 +43,9 @@
 #      dispatched or commented on GitHub. `select` also reads, on the
 #      read-only workflow token, whether a young card's repo is archived — the
 #      hygiene rule it defers to (DRE-8647); a read that token cannot make
-#      skips that card for the pass, never the run.
+#      skips that card for the pass, never the run. Every job mints the OIDC
+#      token for the console's read door (`id-token: write`, DRE-8902), which
+#      serves each card's thread first; a card it does not serve reads Linear.
 #   Q2 secrets — a schedule run in THIS repo reads this repo's secrets store:
 #      the Claude credential CLAUDE_AUTH_MODE selects, given to the agent step
 #      and to the model selection's probe; LINEAR_PLANNER_KEY falling back to
@@ -58,9 +60,11 @@
 #      the leg ends green with no model run. `apply` acts only while the
 #      newest receipt is the `started` claim, so a repeat never writes twice.
 #      The `triage-repair` concurrency group queues a run behind one in flight.
+#      A door answer older than the job's start, or than the claim this job
+#      posted, is not taken (DRE-8902): `claim` and `apply` then read Linear.
 #   Q4 command limits — while TRIAGE_REPAIR_LIVE is off the run selects and
 #      prints: one Triage board read and one whole-thread read per card in
-#      Triage, at most 3 cards worked a run (`select`'s limit, oldest arrival
+#      Triage (off the read door first, DRE-8902), at most 3 cards worked a run (`select`'s limit, oldest arrival
 #      first — 12 an hour against a few arrivals a day), one at a time. The
 #      `unrepaired` job adds one Triage board read, one whole-thread read per
 #      card in Triage and one door call a run, dry or live.
@@ -101,6 +105,11 @@ jobs:
     name: Select the cards
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # The read door's OIDC token (DRE-8902), as reconcile.yml's jobs have it. A
+    # job-level block replaces the workflow's, so the read is restated.
+    permissions:
+      contents: read
+      id-token: write
     # Whose Linear bucket the key steps spend, plan.yml's job env: the
     # planner's OAuth token when the console has published one (the card
     # work is the planner's), the fleet key otherwise, and the token's
@@ -109,6 +118,14 @@ jobs:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door (DRE-8902): reconcile.yml's three variables, and the
+      # max-age that opts this job's card reads in (`linear_ops.card_via_door`,
+      # DRE-8898). A standalone workflow checks out no `pipeline_ref`, so it
+      # sets no BUREAU_PIPELINE_REF and the client makes no ref check.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     outputs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
       cards: ${{ steps.cards.outputs.cards }}
@@ -169,17 +186,34 @@ jobs:
     # REPAIR_MAX_TURNS is 120; hygiene's TRIAGE_REPAIR_RUNNING_HOURS (2) is
     # this timeout plus margin.
     timeout-minutes: 100
+    # The read door's OIDC token, as the select job has it.
+    permissions:
+      contents: read
+      id-token: write
     # The select job's Linear bucket, for the same reason.
     env:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, as the select job's env has it (DRE-8902).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     strategy:
       max-parallel: 1
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.select.outputs.cards) }}
     steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so a re-run's `claim` finds the
+      # claim an earlier attempt posted — the runs are serialized, so it was
+      # posted before this job began. Written to $GITHUB_ENV, and named by no
+      # `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       # `owner/name` off the matrix row, for the mint: an expression has no
       # split. A row with no `owner/` (a slug config/repo-map.json does not
       # carry) fails here, before anything is claimed.
@@ -550,8 +584,8 @@ jobs:
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
     # The workflow's read, and `id-token: write`: the OIDC token the console's
-    # notice door reads, as nightly-watch.yml's watch job has it. A job-level
-    # block replaces the workflow's, so the read is restated.
+    # notice door and read door take, as nightly-watch.yml's watch job has it.
+    # A job-level block replaces the workflow's, so the read is restated.
     permissions:
       contents: read
       id-token: write
@@ -560,12 +594,24 @@ jobs:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, as the select job's env has it (DRE-8902).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so this job sees the outcome
+      # receipts the `repair` legs posted before it began. Written to
+      # $GITHUB_ENV, and named by no `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Reads only on Linear — the Triage lane once, each card's whole
-      # thread — with the key the receipts were posted under, so the
-      # pipeline's own receipts read as its own.
+      # Reads only on Linear — the Triage lane once, and each card's whole
+      # thread off the read door first — with the key the receipts were
+      # posted under, so the pipeline's own receipts read as its own.
       - name: Raise or resolve the unrepaired-cards alert
         env:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
