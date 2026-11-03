@@ -58,6 +58,23 @@ variable (DRE-8899). There a thread read asks the door. A `pull_request` run's
 token is refused for any card but the one its head branch names, so that read
 goes to Linear with `reason=pull-request`.
 
+**Agent Plan opts in (DRE-8903).** `plan.yml`'s `plan` job sets the four door
+variables and `BUREAU_READ_CARD_MAX_AGE: 60` in its job-level `env:`, so every
+`linear_ops` thread read and comment pre-read in it asks the door first — the
+classifier's and router's whole-thread reads, `spoken_thread.py thread`,
+`plan_bound`, `escalation_answers` and `answer_into_card`'s thread among them.
+Two of the classifier's own reads ask too: `planning_classify.roll_up_parent`
+reads the card's `parent.identifier` off `card_via_door(card, comments=1)`, and
+`critic_score.read_card` reads a card off it when the door's node has no
+children (one with children still reads Linear, because the door lists them by
+internal id). In the `publish` job only the `Plan artifact — announce` step
+sets the five, for its `linear_ops.py comment` pre-read. Sixty seconds, because
+the planner needs its card as it is now. The planner's reads that stay on
+Linear — an epic's children, issue history, the card-validation gate's read,
+the review re-dispatch's read, the fleet-wide reads, the initiative context,
+the allowance's rate-limit probe and the write path's reads — are listed on
+DRE-8903, each by its `linear-read:` caller.
+
 ## The floor: a read sees every write it must see
 
 An age bound cannot vouch for a write made seconds before the read. The door's
