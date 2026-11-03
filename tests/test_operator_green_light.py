@@ -91,10 +91,9 @@ WHYS = ("SENT_WHY", "KEPT_WHY", "PLAN_WHY", "GROWTH_WHY", "SIGNED_WHY", "HYGIENE
 def load():
     if not MODULE.exists():
         return None
-    spec = importlib.util.spec_from_file_location("operator_green_light", MODULE)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    import operator_green_light
+
+    return operator_green_light
 
 
 ogl = load()
