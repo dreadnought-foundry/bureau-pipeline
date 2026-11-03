@@ -49,6 +49,30 @@ not asked, whatever the max-age says.
 Every workflow that moves onto the door sets the variable on the jobs or steps
 it moves. A workflow that does not set it reads as before.
 
+**Agent Task, the Medic and Agent Fix (DRE-8900)** set the four variables and
+the max-age in the job-level `env:` of every job that reads Linear:
+
+| Job | Max-age | Floor (`BUREAU_READ_CARD_SEEN_AFTER`) |
+|---|---|---|
+| agent-task.yml `execute` | 60 | the job's start |
+| agent-fix.yml `fix` | 300 | the job's start |
+| medic.yml `classify`, `retry_declined`, `stall_record`, `backoff`, `environment_hold`, `diagnose` | 300 | the failed run's end, `${{ github.event.workflow_run.updated_at }}` |
+
+The Medic's retry gate must see the park, the turn-cap receipt or the hold
+receipt the failed run posted seconds before it ended. An age bound cannot
+promise that, and the failed run's end can. In `execute` and `fix` the first
+step, `Note the job's start for the read door`, writes the job's start (UTC,
+to the second) to `$GITHUB_ENV`. No `env:` block in either job names the
+variable, because a step-level entry would override it. An earlier run's
+receipt was posted before that instant. A receipt the job posts itself, the
+agent's ⏳ heartbeats included, is in the own-write record. Two of those jobs'
+card reads ask the door through `card_via_door` directly:
+`medic_retry.card_facts` (the retry gate and the diagnosis snapshot) and
+`hold._read_card` (`hold.py reason`, and a lift that reads the live stamp).
+Both read the same fifty-comment window as before and fall back to it on
+`None`. The tests are `tests/test_agent_runs_read_door.py`,
+`tests/test_medic_card_facts_door.py` and `tests/test_hold_read_door.py`.
+
 **Inside the Reconcile sweep nothing changes.** `reconcile.yml` sets no
 `BUREAU_READ_CARD_MAX_AGE`, so `card_via_door` is never asked in its steps.
 The pass cache answers first, as before, and a cache miss reaches
