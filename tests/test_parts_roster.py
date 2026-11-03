@@ -117,9 +117,28 @@ class Trees(unittest.TestCase):
             "parts-roster: portico — no — no .github/bureau/design-system.json and no "
             "design/LOCK.json; count off; stub off", self.line())
 
-    def test_a_part_one_folder_down_does_not_make_the_layer_folder(self):
+    def test_a_non_index_file_one_folder_down_does_not_make_the_layer_folder(self):
         _write(self.repo, f"{ATOMS}/Button/Button.tsx")
         self.assertEqual("no", parts_roster.read("portico", self.repo, self.pipeline).state)
+
+    def test_an_index_file_one_folder_down_makes_the_layer_folder(self):
+        _write(self.repo, "web/atoms/Button/index.tsx")
+        self.assertEqual(
+            "parts-roster: portico — undeclared — layer folder(s) web/atoms; "
+            "count off; stub off", self.line())
+
+    def test_an_index_folder_under_a_skipped_segment_is_not_a_part(self):
+        _write(self.repo, "web/atoms/__fixtures__/index.tsx")
+        self.assertEqual("no", parts_roster.read("portico", self.repo, self.pipeline).state)
+
+    def test_a_slug_with_control_characters_still_prints_one_line(self):
+        _write(self.repo, f"{ATOMS}/Button.tsx")
+        line = self.line("por\ntico\r")
+        self.assertEqual([line], line.splitlines())
+        self.assertTrue(line.startswith("parts-roster: por tico  — undeclared — "), line)
+        _write(self.repo, DECLARATION, "{not json")
+        unknown = self.line("por\ntico")
+        self.assertEqual([unknown], unknown.splitlines())
 
     def test_no_carries_the_reason_design_parts_gives(self):
         _declare(self.repo, atoms=["web/missing"])
@@ -178,7 +197,8 @@ class UndeclaredFolders(unittest.TestCase):
     def test_a_folder_under_a_skipped_segment_is_never_named(self):
         with TemporaryDirectory() as tmp:
             repo = Path(tmp) / "repo"
-            for skipped in ("node_modules", ".git", ".bureau-pipeline", "tests/fixtures"):
+            for skipped in ("node_modules", ".git", ".bureau-pipeline", "tests/fixtures",
+                            "src/__fixtures__"):
                 _write(repo, f"{skipped}/web/atoms/Button.tsx")
             reading = parts_roster.read("portico", repo, _pipeline(Path(tmp) / "pipeline"))
         self.assertEqual("no", reading.state, reading.line)
