@@ -37,10 +37,14 @@ The stub's `secrets:` follows the caller's own channel guard, read from its
 `.github/bureau/pipeline-guard.json`. Where `secrets_style` is `inherit`, add
 `secrets: inherit` to the `call` job. It passes nothing the check reads, and a
 Dependabot pull request runs it the same way. Where it is `explicit` (a repo
-outside `dreadnought-foundry`), the guard requires the canonical secrets
-mapped one per line. GitHub refuses a call that passes a secret the called
-workflow does not declare, and this one declares none. So plan that repo's
-stub against its guard rather than copying this page.
+outside `dreadnought-foundry`), the guard names every secret a stub passes.
+So an `explicit` caller maps the seven canonical
+secrets one per line, as the guard asks, under a `secrets:` key on the `call`
+job: `ANTHROPIC_API_KEY`, `CLAUDE_CODE_OAUTH_TOKEN`, `LINEAR_API_KEY`,
+`BUREAU_APP_ID`, `BUREAU_APP_PRIVATE_KEY`, `BUREAU_QA_APP_ID` and
+`BUREAU_QA_APP_PRIVATE_KEY`, each as `${{ secrets.<NAME> }}`. The reusable
+declares each one optional and reads none (DRE-8999), so the check runs the
+same as it does for a stub that passes nothing.
 
 ## What it does
 
