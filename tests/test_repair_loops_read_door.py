@@ -12,7 +12,9 @@ and the thread is what the read door serves whole. So:
    `as_of` is at or after the claim `claim` posted (the job's own-write
    record), and `claim` only when it is at or after the job's start
    (`BUREAU_READ_CARD_SEEN_AFTER`, written by the job's first step), so a
-   re-run still finds the claim an earlier attempt posted.
+   re-run still finds the claim an earlier attempt posted. Hygiene's `keep`
+   holds the door to its start the same way, so a pass finds the receipts
+   the pass queued before it posted.
 3. `alarm_repair.read_card` asks the door for the card first.
 
 No test reaches Linear or the console. Linear is `LinearBoard`: a urlopen
@@ -43,6 +45,7 @@ sys.path.insert(0, str(TESTS))
 import alarm_repair  # noqa: E402
 import bureau_read  # noqa: E402
 import hold  # noqa: E402
+import hygiene  # noqa: E402
 import linear_ops  # noqa: E402
 import pipeline_act  # noqa: E402
 import triage_repair  # noqa: E402
@@ -76,6 +79,7 @@ DOOR_VARS = {
 SEEN_AFTER_JOBS = {
     "triage-repair.yml": ("repair", "unrepaired"),
     "alarm-repair.yml": ("repair",),
+    "hygiene.yml": ("keep",),
 }
 SEEN_AFTER_STEP = "Note the job's start for the read door"
 #: Every permission each block named before this card.
@@ -631,7 +635,134 @@ def test_alarm_apply_reads_linear_when_the_door_is_older_than_the_claim(
 
 
 # --------------------------------------------------------------------------- #
-# 3. Alarm Repair's card read asks the door                                    #
+# Hygiene's `keep`: a pass finds the receipt the pass before it posted         #
+# --------------------------------------------------------------------------- #
+
+#: A lane that asks to name the cause on every Triage card in the leg, with
+#: one receipt — what the idempotency key must hold to once.
+HYGIENE_LANE = '''\
+import hygiene
+
+LANE = "Triage"
+CAUSE = "the card names no cause"
+
+
+def plan(board, ctx):
+    return [hygiene.Action(
+        lane=LANE, target=c["identifier"], act="hygiene-cause-name", cause=CAUSE,
+        evidence=["its thread"],
+        writes=[hygiene.linear_comment(c, hygiene.receipt(
+            "hygiene-cause-name", CAUSE, ["its thread"], ctx.now))])
+        for c in board.cards(ctx, LANE)]
+'''
+
+#: `hygiene.py run`, with the lane above as the only lane and a `gh` that
+#: lists no pull requests; every other read and write is the real code's.
+_HYGIENE_STEP = r'''
+import os, sys, urllib.request
+tests, scripts, lanes = sys.argv[1], sys.argv[2], sys.argv[3]
+sys.path[:0] = [scripts, tests]
+from test_repair_loops_read_door import LinearBoard
+urllib.request.urlopen = LinearBoard(os.environ["LINEAR_BOARD"]).urlopen
+import hygiene
+hygiene.LANE_DIR = lanes
+hygiene.GH_RUNNER = lambda argv: "[]"
+sys.exit(hygiene.main(sys.argv[4:]))
+'''
+
+
+def noted_start(name: str, job: str, tmp_path: Path) -> dict:
+    """What the job's first step leaves in `$GITHUB_ENV` when it is the step
+    that notes the job's start, run as the runner runs it; nothing when the
+    job opens with another step."""
+    first = _job(name, job)["steps"][0]
+    if first.get("name") != SEEN_AFTER_STEP:
+        return {}
+    github_env = tmp_path / "github-env"
+    github_env.write_text("")
+    subprocess.run(["bash", "-e", "-c", first["run"]], check=True, timeout=30,
+                   env={**os.environ, "GITHUB_ENV": str(github_env)})
+    return dict(ln.split("=", 1) for ln in github_env.read_text().splitlines())
+
+
+def _hygiene_keep(board, tmp_path, runner_temp, door, issuer, noted: dict):
+    """`hygiene.py run` over DRE-7, live, with the `keep` job's env and what
+    its first step noted; the process and the leg's ledger."""
+    lanes = tmp_path / "lanes"
+    lanes.mkdir()
+    (lanes / "hygiene_cause_name.py").write_text(HYGIENE_LANE)
+    state = board.load()
+    node = board.linear_node(state, "DRE-7")
+    # More than the fifty newest comments: the board's window is partial, so
+    # the seam reads the whole thread for the receipt (`hygiene._receipts_on`).
+    node["comments"]["pageInfo"]["hasNextPage"] = True
+    board_json = tmp_path / "board.json"
+    board_json.write_text(json.dumps({"taken_at": _iso(datetime.now(UTC)),
+                                      "lanes": {"Triage": [node]}}))
+    ledger = tmp_path / "ledger.json"
+    env = {**job_door_env("hygiene.yml", "keep", door, issuer), **noted,
+           "RUNNER_TEMP": str(runner_temp), "LINEAR_BOARD": str(board.path),
+           "LINEAR_API_KEY": "test-key", "LINEAR_IDENTITY": "fleet"}
+    env = {**{k: v for k, v in os.environ.items()
+              if k not in _SCRUBBED and k not in ("HYGIENE_CARD", "HYGIENE_DRY_RUN")}, **env}
+    board.clear_sent()
+    proc = subprocess.run(
+        [sys.executable, "-c", _HYGIENE_STEP, str(TESTS), str(ROOT / "scripts"), str(lanes),
+         "run", "--board", str(board_json), "--owner", "dreadnought-foundry",
+         "--ledger", str(ledger)],
+        capture_output=True, text=True, env=env, timeout=120)
+    return proc, json.loads(ledger.read_text()) if ledger.exists() else None
+
+
+def _prior_pass(board: LinearBoard, at: datetime) -> None:
+    board.add("DRE-7", lane="Triage", labels=("repo:agent-bureau",))
+    board.say("DRE-7", hygiene.receipt("hygiene-cause-name", "the card names no cause",
+                                       ["its thread"], at), _iso(at))
+
+
+def test_hygiene_keep_finds_the_prior_pass_receipt_the_door_has_not_caught(
+        board, runner_temp, tmp_path):
+    """The previous pass, queued ahead of this one by the `hygiene`
+    concurrency group, posted its receipt a minute before this leg began; the
+    door's record is older still. The act is not sent twice."""
+    now = datetime.now(UTC)
+    _prior_pass(board, now - timedelta(seconds=60))
+    with FakeIssuer() as issuer, FakeDoor({}, repository=REPOSITORY) as door:
+        door.world = board.door_world(upto=now - timedelta(seconds=90))
+        door.as_of = _iso(now - timedelta(seconds=90))
+        assert door.world["DRE-7"]["comments"]["nodes"] == []
+        noted = noted_start("hygiene.yml", "keep", tmp_path)
+        proc, ledger = _hygiene_keep(board, tmp_path, runner_temp, door, issuer, noted)
+        asked = [r["query"]["ids"] for r in door.asked("/cards")]
+    assert proc.returncode == 0, proc.stderr
+    assert board.comments_posted() == []
+    assert [a["outcome"] for a in ledger["actions"]] == ["suppressed"]
+    assert asked == ["DRE-7"]
+    assert callers(proc.stderr).get("linear_ops._fetch_thread") == 1
+    (line,) = fallback_lines(proc.stderr)
+    assert "read=cards reason=older-than-needed" in line
+
+
+def test_hygiene_keep_reads_the_thread_off_the_door_when_it_holds_the_receipt(
+        board, runner_temp, tmp_path):
+    _prior_pass(board, datetime.now(UTC) - timedelta(seconds=60))
+    with FakeIssuer() as issuer, FakeDoor({}, repository=REPOSITORY) as door:
+        noted = noted_start("hygiene.yml", "keep", tmp_path)
+        door.world = board.door_world()
+        door.as_of = _iso(datetime.now(UTC))
+        proc, ledger = _hygiene_keep(board, tmp_path, runner_temp, door, issuer, noted)
+        asked = [r["query"] for r in door.asked("/cards")]
+    assert proc.returncode == 0, proc.stderr
+    assert board.comments_posted() == []
+    assert [a["outcome"] for a in ledger["actions"]] == ["suppressed"]
+    assert [q["comments"] for q in asked] == ["all"]
+    assert board.thread_reads() == []
+    assert "linear_ops._fetch_thread" not in callers(proc.stderr)
+    assert fallback_lines(proc.stderr) == []
+
+
+# --------------------------------------------------------------------------- #
+# 3. Alarm Repair's card read asks the door                                  #
 # --------------------------------------------------------------------------- #
 
 #: One alarm class per relation and parent case: `(lane, description, parent,
