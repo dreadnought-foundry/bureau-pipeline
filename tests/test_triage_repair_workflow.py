@@ -814,6 +814,7 @@ class TestTheUnrepairedAlert:
         assert result.returncode == 0, result.stderr
         assert argvs == [["scripts/triage_unrepaired.py"]]
 
-    def test_it_checks_out_the_repo_first(self):
-        first = _job(UNREPAIRED_JOB)["steps"][0]
-        assert str(first.get("uses", "")).startswith("actions/checkout@")
+    def test_it_checks_out_the_repo_after_noting_its_start(self):
+        steps = _job(UNREPAIRED_JOB)["steps"]
+        assert steps[0]["name"] == "Note the job's start for the read door"
+        assert str(steps[1].get("uses", "")).startswith("actions/checkout@")
