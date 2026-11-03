@@ -654,6 +654,29 @@ LOOP_PRESSES = (
     ("markNotALoop", "mark a loop not a loop", "the run marks a loop not a loop",
      "the run marked a loop as not a loop", "marking a loop not a loop"),
 )
+#: The eight KPI presses DRE-8937 added for the Loops 2 epic (DRE-8699), after
+#: the loop eight, in agent-bureau's order: each operation, its plain words as
+#: the standard's bullet gives them, and the press as a criterion writes it in
+#: the present, past and -ing.
+KPI_PRESSES = (
+    ("reviseKpi", "revise a KPI", "the run revises a KPI", "the run revised a KPI",
+     "revising a KPI"),
+    ("closeKpi", "close a KPI at its goal", "the run closes a KPI at its goal",
+     "the run closed a KPI", "closing a KPI at its goal"),
+    ("retireKpi", "retire a KPI", "the run retires a KPI", "the run retired a KPI",
+     "retiring a KPI"),
+    ("moveKpi", "move a KPI to Later or Focus", "the run moves a KPI to Later",
+     "the run moved a KPI to Focus", "moving a KPI to Later"),
+    ("linkKpiLoop", "link a KPI and a loop", "the run links a KPI and a loop",
+     "the run linked a KPI to a loop", "linking a KPI and a loop"),
+    ("unlinkKpiLoop", "unlink a KPI and a loop", "the run unlinks a KPI and a loop",
+     "the run unlinked a KPI from a loop", "unlinking a KPI and a loop"),
+    ("proposeKpi", "propose a KPI from plain words",
+     "the run proposes a KPI from plain words", "the run proposed a KPI",
+     "proposing a KPI from plain words"),
+    ("confirmKpi", "confirm a proposed KPI", "the run confirms a proposed KPI",
+     "the run confirmed the proposed KPI", "confirming a proposed KPI"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -742,7 +765,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(34, len(listed), listed)
+        self.assertEqual(42, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -794,8 +817,8 @@ class TheListIsCopied(unittest.TestCase):
         """DRE-8727: the eight loop presses, after `deleteInitiativeFile`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
         self.assertEqual(["recordLoop", "answerLoop", "trackThis", "moveLoop", "snoozeLoop",
-                          "nudgeLoop", "closeLoop", "markNotALoop"], ours[26:])
-        self.assertEqual([op for op, *_ in LOOP_PRESSES], ours[26:])
+                          "nudgeLoop", "closeLoop", "markNotALoop"], ours[26:34])
+        self.assertEqual([op for op, *_ in LOOP_PRESSES], ours[26:34])
 
     def test_the_loop_presses_name_only_themselves(self):
         """DRE-8727: each loop press's plain words, in a criterion and in its
@@ -822,6 +845,46 @@ class TheListIsCopied(unittest.TestCase):
                      "Sandbox press: on agent-bureau-demo, the run snoozed a task"):
             with self.subTest(text=text):
                 self.assertEqual(["snoozeTask"], ppr.sandbox_presses(text))
+
+    def test_the_kpi_presses_follow_the_loops_in_order(self):
+        """DRE-8937: the eight KPI presses, after `markNotALoop`."""
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual(["reviseKpi", "closeKpi", "retireKpi", "moveKpi", "linkKpiLoop",
+                          "unlinkKpiLoop", "proposeKpi", "confirmKpi"], ours[34:])
+        self.assertEqual([op for op, *_ in KPI_PRESSES], ours[34:])
+
+    def test_the_kpi_presses_name_only_themselves(self):
+        """DRE-8937: each KPI press's plain words, in a criterion and in its
+        forms, and its operation name only that press."""
+        for op, words, present, past, ing in KPI_PRESSES:
+            for text in (words, present, past, ing, op,
+                         f"Sandbox press: on agent-bureau-demo, {present}"):
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_no_existing_pattern_matches_a_kpi_press(self):
+        """DRE-8937: none of the thirty-four earlier patterns reads a KPI
+        press's words, and each KPI pattern reads its own."""
+        for op, *texts in KPI_PRESSES:
+            for text in texts:
+                for other, pattern in ppr.SANDBOX_PRESSES:
+                    with self.subTest(op=op, text=text, pattern=other):
+                        self.assertEqual(other == op,
+                                         re.search(pattern, text, re.IGNORECASE) is not None)
+
+    def test_a_loop_press_still_names_only_the_loop_press(self):
+        """DRE-8937: `closeKpi` and `moveKpi` do not take a `closeLoop` or a
+        `moveLoop` criterion, and the link presses not a loop's."""
+        for op, texts in (
+                ("closeLoop", ("the run closes a loop with an ending", "the run closed a loop",
+                               "closeLoop", "Sandbox press: on agent-bureau-demo, the run "
+                               "closes a loop with an ending")),
+                ("moveLoop", ("the run moves a loop to Later", "the run moved a loop to Focus",
+                              "moveLoop", "Sandbox press: on agent-bureau-demo, the run "
+                              "moves a loop to Later"))):
+            for text in texts:
+                with self.subTest(op=op, text=text):
+                    self.assertEqual([op], ppr.sandbox_presses(text))
 
 
 class TheSandboxPressRule(_Cli):

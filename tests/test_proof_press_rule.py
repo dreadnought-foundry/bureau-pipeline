@@ -106,7 +106,11 @@ ADDED = ("startInitiativeDraft", "saveInitiativeDraft", "discardInitiativeDraft"
 #: the twenty, in agent-bureau's order.
 LOOPS = ("recordLoop", "answerLoop", "trackThis", "moveLoop", "snoozeLoop", "nudgeLoop",
          "closeLoop", "markNotALoop")
-PRESSES = tuple(p for p in ASKED if p not in DROPPED) + ADDED + LOOPS
+#: The eight KPI presses DRE-8937 added for the Loops 2 epic (DRE-8699), after
+#: the loop eight, in agent-bureau's order.
+KPIS = ("reviseKpi", "closeKpi", "retireKpi", "moveKpi", "linkKpiLoop", "unlinkKpiLoop",
+        "proposeKpi", "confirmKpi")
+PRESSES = tuple(p for p in ASKED if p not in DROPPED) + ADDED + LOOPS + KPIS
 #: The presses DRE-8305 left off agent-bureau's list: the CEO's own answers.
 LEFT_OFF = ("approveInitiativeDraft", "answerInitiativeDraftQuestion",
             "answerInitiativeDraftQuestions", "answerDecision")
@@ -147,6 +151,14 @@ PLAIN_WORDS = {
     "nudgeLoop": "nudge a loop",
     "closeLoop": "close a loop",
     "markNotALoop": "mark a loop not a loop",
+    "reviseKpi": "revise a KPI",
+    "closeKpi": "close a KPI",
+    "retireKpi": "retire a KPI",
+    "moveKpi": "move a KPI",
+    "linkKpiLoop": "link a KPI and a loop",
+    "unlinkKpiLoop": "unlink a KPI and a loop",
+    "proposeKpi": "propose a KPI",
+    "confirmKpi": "confirm a proposed KPI",
 }
 
 #: The reach declaration will quote this sentence as its `brief` (the contract).
@@ -383,8 +395,8 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
                                    f"'- `<operation>` — <press>': {line!r}")
             ops.append(found.group(1))
         self.assertEqual(list(PRESSES), ops,
-                         f"{self.NAME}: the list is not the presses DRE-7776, DRE-8305 "
-                         "and DRE-8727 shipped, in order")
+                         f"{self.NAME}: the list is not the presses DRE-7776, DRE-8305, "
+                         "DRE-8727 and DRE-8937 shipped, in order")
         for op in DROPPED:
             self.assertNotIn(f"`{op}`", "\n".join(bullets),
                              f"{self.NAME} lists `{op}`, which DRE-7776 dropped")
@@ -405,6 +417,10 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
                                        "DRE-8698"),
                         f"{self.NAME} does not say DRE-8727 added the eight loop presses "
                         "for the Loops 1 epic, DRE-8698")
+        self.assertTrue(_says_together(self.raw, "DRE-8937", "eight", "KPI presses",
+                                       "DRE-8699", "CEO's own answers"),
+                        f"{self.NAME} does not say DRE-8937 added the eight KPI presses "
+                        "for the Loops 2 epic, DRE-8699, and left the CEO's answers off")
 
     def test_the_list_is_the_copy_of_agent_bureaus(self):
         for needle in ("`SANDBOX_PRESS_MUTATIONS`", "`console/backend/proof_reader_presses.py`"):
