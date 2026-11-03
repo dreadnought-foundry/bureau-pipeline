@@ -203,6 +203,26 @@ jobs:
     # 2026-10-02 that was the fleet's hour, the one that ran out.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door for every card read in the job (DRE-8900): reconcile.yml's
+      # four variables, and the max-age that opts `linear_ops`' card and thread
+      # reads in (DRE-8898) — 300 seconds, the bound the epic's survey set for
+      # the medic. An age bound is the wrong guard here on its own: the retry
+      # gate must see the park, the turn-cap receipt or the hold receipt the
+      # failed run posted seconds before it ended, or it retries a card the
+      # pipeline has just parked. So the floor is the failed run's end,
+      # `workflow_run.updated_at`: every card and thread read in the job —
+      # `medic_retry.card_facts`, `dump-comments`, `count-comments`,
+      # `spoken_thread`, the comment's pre-read — takes the door's answer only
+      # when its `as_of` is at or after that end, and otherwise reads Linear
+      # with `reason=older-than-needed`. The calling stub grants
+      # `id-token: write`; with `BUREAU_READ` off every read goes to Linear as
+      # before. `tests/test_agent_runs_read_door.py`.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
       # DRE-2488/DRE-2923: the failure's class — environment_crash |
@@ -677,6 +697,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -735,6 +762,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -829,6 +863,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1054,6 +1095,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1116,6 +1164,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - name: Mint bot token
         id: app
