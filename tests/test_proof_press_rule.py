@@ -116,8 +116,11 @@ LOOP_ASKS = ("followUpLoop", "askLoopStatus", "askLoopAgain")
 #: The one press DRE-9044 added for the Loops 4 epic (DRE-8701), after the
 #: three asks.
 THOUGHTS = ("saveThought",)
+#: The one press DRE-9077 added for the KPI page epic (DRE-8702), after the
+#: saved thought.
+KPI_WHYS = ("askKpiWhy",)
 PRESSES = (tuple(p for p in ASKED if p not in DROPPED) + ADDED + LOOPS + KPIS + LOOP_ASKS
-           + THOUGHTS)
+           + THOUGHTS + KPI_WHYS)
 #: The presses DRE-8305 left off agent-bureau's list: the CEO's own answers.
 LEFT_OFF = ("approveInitiativeDraft", "answerInitiativeDraftQuestion",
             "answerInitiativeDraftQuestions", "answerDecision")
@@ -170,6 +173,7 @@ PLAIN_WORDS = {
     "askLoopStatus": "ask a loop for a status",
     "askLoopAgain": "ask a gone-quiet loop again",
     "saveThought": "save a thought for later",
+    "askKpiWhy": "ask why a KPI moved",
 }
 
 #: The reach declaration will quote this sentence as its `brief` (the contract).
@@ -407,7 +411,7 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
             ops.append(found.group(1))
         self.assertEqual(list(PRESSES), ops,
                          f"{self.NAME}: the list is not the presses DRE-7776, DRE-8305, "
-                         "DRE-8727, DRE-8937, DRE-9034 and DRE-9044 shipped, in order")
+                         "DRE-8727, DRE-8937, DRE-9034, DRE-9044 and DRE-9077 shipped, in order")
         for op in DROPPED:
             self.assertNotIn(f"`{op}`", "\n".join(bullets),
                              f"{self.NAME} lists `{op}`, which DRE-7776 dropped")
@@ -440,6 +444,10 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
                                        "DRE-8701", "CEO's own answers"),
                         f"{self.NAME} does not say DRE-9044 added `saveThought` "
                         "for the Loops 4 epic, DRE-8701, and left the CEO's answers off")
+        self.assertTrue(_says_together(self.raw, "DRE-9077", "`askKpiWhy`",
+                                       "DRE-8702", "CEO's own answers"),
+                        f"{self.NAME} does not say DRE-9077 added `askKpiWhy` "
+                        "for the KPI page epic, DRE-8702, and left the CEO's answers off")
 
     def test_the_list_is_the_copy_of_agent_bureaus(self):
         for needle in ("`SANDBOX_PRESS_MUTATIONS`", "`console/backend/proof_reader_presses.py`"):
