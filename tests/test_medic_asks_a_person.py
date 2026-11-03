@@ -327,7 +327,8 @@ class TheAskStepTest(unittest.TestCase):
         self.assertEqual(
             "always() && steps.target.outputs.kind == 'card' && "
             "steps.verdict.outputs.step == 'ask-person' && "
-            "steps.waiting.outputs.waiting != 'true'", _flat(self.step["if"]))
+            "steps.waiting.outputs.waiting != 'true' && "
+            "steps.redmain.outputs.held != 'true'", _flat(self.step["if"]))
         cond = self.step["if"]
         base = {"steps.target.outputs.kind": "card",
                 "steps.verdict.outputs.step": "ask-person",
@@ -338,6 +339,9 @@ class TheAskStepTest(unittest.TestCase):
         for kind in ("repair-card", "notice", "", None):
             self.assertFalse(_runs(cond, {**base, "steps.target.outputs.kind": kind}))
         self.assertFalse(_runs(cond, {**base, "steps.waiting.outputs.waiting": "true"}))
+        # A card the medic held on an inherited red main is not asked about
+        # (DRE-8849): the hold step parked it, and the two never both run.
+        self.assertFalse(_runs(cond, {**base, "steps.redmain.outputs.held": "true"}))
 
     def test_the_three_lines_come_from_the_question_reader_alone(self):
         self.assertIn(QUESTION_CALL, self.run_)

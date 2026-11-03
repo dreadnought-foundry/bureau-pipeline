@@ -322,6 +322,24 @@
       }
     },
     {
+      "name": "inherited-red-main-returned",
+      "tag": "inherited-red-main-return",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A card the medic held in Triage because every failing check on its pull request had failed on the merge base too — the fault was on `main` — was returned to In Review by the sweep, its `inherited-red-main` hold lifted: `main` is green again on those checks, or the pull request has a new head the medic's reading no longer describes.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: nothing is dispatched back whose run could be late — the card is In Review's again, and scripts/reconcile.py's stale-merge-ref refresh on the same pass, then the checks and the review on the refreshed head, are what move it next, each on its own act.",
+      "why": "DRE-8849, from 2026-11-01. Four foundry cards (DRE-8069, DRE-8064, DRE-8068, DRE-8074) sat in Triage for four to eight hours with nothing wrong with any of them: each had an approved pull request that went red because foundry's own `main` was broken, the medic asked a person, and its housekeeping question parked the card where the fix loop and the stale-merge-ref refresh do not reach. `main` was green by 9:22 PM PT and an operator moved the cards by hand at about 12:20 AM PT on 11-02. Now the medic holds such a card with an `inherited-red-main` stamp at the head it read, and `reconcile.return_inherited_red_main_holds` lifts it — the label and the lift line, then the move to In Review, then this one note — when `stale_merge_ref.decide` answers `refresh`, or when the head has moved. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the move is one the lane contract admits `reconcile.py` to make, and this receipt is the record of it. The lift line spends the stamp, so a second pass returns nothing twice. It discharges nothing.",
+      "emits": {
+        "file": "scripts/inherited_red_main.py",
+        "anchor": "waited on `main`, not on a person"
+      }
+    },
+    {
       "name": "reviewer-unavailable",
       "tag": "reviewer-down",
       "adopted": true,
