@@ -113,6 +113,27 @@ ends. A run started by the suite carries the SUITE's conclusion, so
 conclusion is not handed to `evaluate` — a red suite read as `harness-failed`
 would name the wrong run — and the harness proof is the commit's own
 `integration-harness` status, as on the by-hand route.
+
+A REFUSED RUN LOOKS BACK FOR THE NEWEST PROVEN COMMIT (DRE-9069)
+----------------------------------------------------------------
+Each automatic run judges one commit, the one whose own run started it, and
+nothing ever looked at an older proven commit again. So a proven commit A
+whose promote run was canceled while pending — the `promote-channel` group
+keeps one pending run, and GitHub drops it when a newer one queues (runs
+41583518423 and 41560513828 on 2026-11-02) — or was refused for a reason that
+clears on its own, had no run left to promote it, and `stable` stayed behind
+A whenever every newer commit failed.
+
+Now an automatic run that refuses its own commit B at the HARNESS proof —
+`LOOK_BACK_OUTCOMES`, never the hold, the trunk, the ancestry rail, the unit
+suite or the mirror check — walks main's first-parent chain from main's head,
+newest first, at most `LOOK_BACK_LIMIT` commits, stopping at `stable`, and the
+first `proven` commit becomes the candidate. It then gets every gate, read for
+A, under the outcome words that already exist; the look-back only says where
+to look, and A's own stamp is re-read as the proof. `look-back` is the one
+command here that reads anything itself, because the first proven commit ends
+the search and the reads have to stop there: the chain from `git`, each stamp
+from `gh`. A by-hand dispatch never looks back, so force stays its alone.
 """
 
 from __future__ import annotations
@@ -121,6 +142,7 @@ import argparse
 import fnmatch
 import json
 import os
+import subprocess
 import sys
 from typing import NamedTuple
 
@@ -222,6 +244,28 @@ UNIT_RED_CONCLUSIONS = ("failure", "timed_out")
 
 #: The outcomes that move the channel — the only ones the mirror check reads.
 PROMOTING_OUTCOMES = (OUTCOME_PROMOTING, OUTCOME_BY_HAND, OUTCOME_BY_HAND_FORCED)
+
+#: The refusals at the harness proof — the only ones that look back for an
+#: older proven commit (DRE-9069). Every other refusal says something about
+#: the channel or the commit that a look-back must not talk over: the hold
+#: still wins, and a commit refused by its unit suite or the mirror check is
+#: offered again when that record changes.
+LOOK_BACK_OUTCOMES = (OUTCOME_CANCELLED, OUTCOME_FAILED, OUTCOME_BLOCKED,
+                      OUTCOME_QUEUE_STALL, OUTCOME_UNPROVEN)
+
+#: How many commits of main's first-parent chain the look-back reads, from
+#: main's head. The deepest lag seen so far was 22 commits behind on
+#: 2026-11-02, a count that includes branch commits, so fewer first-parent ones.
+LOOK_BACK_LIMIT = 20
+
+#: The record the look-back leaves for the two decision steps after it.
+LOOK_BACK_FILE = "look_back.json"
+
+#: Where the walk ended.
+STOP_FOUND = "found"
+STOP_CHANNEL = "channel"
+STOP_LIMIT = "limit"
+STOP_END = "end"
 
 #: The bound on the mirror check's one-line summary (DRE-6683). Promote
 #: Channel run 38076381376 moved `stable` and then went red: its summary named
@@ -770,6 +814,180 @@ def with_unit_suite(
     return Decision(False, refusal, outcome)
 
 
+def proven(combined: dict | None) -> bool:
+    """Did the harness prove this commit (DRE-9069)? A green
+    `integration-harness` stamp whose description does not lead with
+    `BLOCKED_MARKER`, and nothing else: pending, failure, error, a blocked
+    stamp, no stamp and a read that failed are all passed over."""
+    if not isinstance(combined, dict):
+        return False
+    return _harness_verdict(combined) == SUCCESS and not blocked_by_sandbox(combined)
+
+
+def looks_back(decision: Decision, *, manual: bool) -> bool:
+    """Does this decision about the run's own commit look back (DRE-9069)?
+    Only an automatic refusal at the harness proof does."""
+    return (not manual and not decision.promote
+            and decision.outcome in LOOK_BACK_OUTCOMES)
+
+
+class LookBack(NamedTuple):
+    """What the walk found: the run's own commit and its refusal word, the
+    candidate (`""` when nothing proven was found), how many commits of the
+    chain it read, and where it stopped."""
+
+    own: str
+    own_outcome: str
+    candidate: str
+    read: int
+    stopped: str
+
+
+def look_back(
+    chain: list[str],
+    read_status,
+    *,
+    own: str,
+    own_outcome: str,
+    channel_head: str | None,
+    limit: int = LOOK_BACK_LIMIT,
+) -> LookBack:
+    """Walk `chain` — main's first-parent chain, newest first — for the newest
+    proven commit (DRE-9069).
+
+    It stops at `channel_head`, which it does not consider, and after `limit`
+    commits; the first proven commit ends it. The run's own commit counts as
+    read and is passed over without a status read: its own run was refused,
+    and a canceled run never promotes on a stamp an earlier run left behind.
+    A newer commit still running is passed over too — promoting an older
+    proven one is safe, the channel only moves forward, and the newer one
+    still promotes when its own run ends.
+    """
+    read = 0
+    for sha in chain:
+        if channel_head and sha == channel_head:
+            return LookBack(own, own_outcome, "", read, STOP_CHANNEL)
+        if read >= limit:
+            return LookBack(own, own_outcome, "", read, STOP_LIMIT)
+        read += 1
+        if sha == own:
+            continue
+        try:
+            combined = read_status(sha)
+        except Exception:  # noqa: BLE001 — an unread stamp proves nothing
+            combined = None
+        if proven(combined):
+            return LookBack(own, own_outcome, sha, read, STOP_FOUND)
+    return LookBack(own, own_outcome, "", read,
+                    STOP_LIMIT if read >= limit else STOP_END)
+
+
+def look_back_note(look: LookBack) -> str:
+    """The sentence a look-back adds to the decision line: B and its refusal
+    word, A or that nothing was found, and how many commits were read."""
+    count = f"{look.read} commit{'' if look.read == 1 else 's'} read"
+    head = f"Looked back from {look.own}, refused as {look.own_outcome}"
+    if look.candidate:
+        return (f"{head}: {look.candidate} is the newest proven commit on "
+                f"{TRUNK}'s first-parent chain — {count}.")
+    where = {
+        STOP_CHANNEL: f"the search stopped at {CHANNEL}",
+        STOP_LIMIT: f"the search stopped at {LOOK_BACK_LIMIT}, its limit",
+    }.get(look.stopped, f"{TRUNK}'s history ended")
+    return (f"{head}: no proven commit was found on {TRUNK}'s first-parent "
+            f"chain — {count}, {where}.")
+
+
+def with_look_back(decision: Decision, look: LookBack | None) -> Decision:
+    """The decision, its line carrying the look-back's sentence."""
+    if look is None:
+        return decision
+    return Decision(decision.promote,
+                    f"{decision.reason} {look_back_note(look)}",
+                    decision.outcome)
+
+
+def _read_look_back(path: str | None, *, sha: str) -> LookBack | None:
+    """The look-back record, or None. A record is only about this decision
+    when it names this sha as its candidate, or — nothing found — as the
+    run's own commit; anything else is ignored, never trusted."""
+    if not path:
+        return None
+    try:
+        data = json.loads(open(path).read())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        look = LookBack(str(data["own"]), str(data["own_outcome"]),
+                        str(data.get("candidate") or ""), int(data["read"]),
+                        str(data["stopped"]))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if look.own_outcome not in LOOK_BACK_OUTCOMES:
+        return None
+    if look.candidate != sha and not (not look.candidate and look.own == sha):
+        return None
+    return look
+
+
+def _gh_json(path: str) -> dict | None:
+    """One `gh api` read, or None on any failure."""
+    try:
+        done = subprocess.run(["gh", "api", path], capture_output=True,
+                              text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    try:
+        data = json.loads(done.stdout)
+    except ValueError:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _read_status(repo: str, sha: str) -> dict | None:
+    """A commit's combined status — the stamp the look-back weighs."""
+    return _gh_json(f"repos/{repo}/commits/{sha}/status")
+
+
+def _read_channel_head(repo: str) -> str:
+    """Where `stable` stands, or `""` when it cannot be read."""
+    data = _gh_json(f"repos/{repo}/git/ref/tags/{CHANNEL}") or {}
+    return str((data.get("object") or {}).get("sha") or "")
+
+
+def first_parent_chain(rev: str, limit: int, *, cwd: str | None = None) -> list[str]:
+    """`rev` and its first parents, newest first, at most `limit` — so a
+    commit reachable only through a merged branch's second parent is never
+    on it. `[]` when git cannot answer."""
+    try:
+        done = subprocess.run(
+            ["git", "rev-list", "--first-parent", f"--max-count={limit}", rev],
+            cwd=cwd, capture_output=True, text=True, timeout=60, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if done.returncode != 0:
+        return []
+    return [line.strip() for line in done.stdout.splitlines() if line.strip()]
+
+
+def _first_parent_chain(branch: str, limit: int) -> list[str]:
+    """Main's first-parent chain as `origin` has it now. The checkout is
+    shallow, so `limit` commits are fetched first — a depth of `limit` holds
+    the first-parent chain that long. A fetch that fails leaves no
+    `FETCH_HEAD`, and the chain is empty."""
+    try:
+        subprocess.run(["git", "fetch", "--quiet", "--no-tags",
+                        f"--depth={limit}", "origin", branch],
+                       capture_output=True, text=True, timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return first_parent_chain("FETCH_HEAD", limit)
+
+
 def _read_unit_suite(path: str) -> dict | None:
     """The unit-suite record file, or None — a file that is absent or is not
     JSON is the unproven case, and `with_unit_suite` says so."""
@@ -791,7 +1009,9 @@ def _read_mirror(path: str | None) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def main(argv: list[str] | None = None) -> int:
+def _parser(*, look_back_command: bool = False) -> argparse.ArgumentParser:
+    """The decision's arguments. `look-back` takes the same ones, so it judges
+    the run's own commit on exactly the records the proof is handed."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sha", required=True)
     parser.add_argument("--statuses-file", required=True)
@@ -843,6 +1063,35 @@ def main(argv: list[str] | None = None) -> int:
              "refusal names so the operator does not have to go and look.",
     )
     parser.add_argument(
+        "--woken-by", default=None,
+        help=f"the name of the workflow whose run started this one (DRE-6993). "
+             f"{UNIT_SUITE!r} means --conclusion is the unit suite's, so it is "
+             "not read as the harness's: the harness proof is then the "
+             "commit's own status, as on the by-hand route. Absent, empty or "
+             "the harness's name, --conclusion is the harness run's.",
+    )
+    if look_back_command:
+        parser.add_argument(
+            "--repo", default=os.environ.get("GITHUB_REPOSITORY", ""),
+            help="owner/name, whose statuses and channel the look-back reads.",
+        )
+        parser.add_argument(
+            "--default-branch", default=TRUNK,
+            help="the branch whose first-parent chain is walked.",
+        )
+        parser.add_argument(
+            "--out", default=LOOK_BACK_FILE,
+            help="where the look-back record is written, when it looked back.",
+        )
+        return parser
+    parser.add_argument(
+        "--look-back", default=None,
+        help=f"the record `look-back` wrote ({LOOK_BACK_FILE}, DRE-9069). "
+             "Ignored on a by-hand run and when it is not about --sha; read, "
+             "the harness proof is the candidate's own status and the line "
+             "says where the walk went.",
+    )
+    parser.add_argument(
         "--mirror-result", default=None,
         help="scripts/mirror_check.py's result file (DRE-6496). Given, the "
              "decision weighs agent-bureau's mirror tests, and a file that is "
@@ -858,27 +1107,83 @@ def main(argv: list[str] | None = None) -> int:
              "that is absent or not JSON proves nothing. Not given, the unit "
              "suite is not weighed.",
     )
-    parser.add_argument(
-        "--woken-by", default=None,
-        help=f"the name of the workflow whose run started this one (DRE-6993). "
-             f"{UNIT_SUITE!r} means --conclusion is the unit suite's, so it is "
-             "not read as the harness's: the harness proof is then the "
-             "commit's own status, as on the by-hand route. Absent, empty or "
-             "the harness's name, --conclusion is the harness run's.",
-    )
-    args = parser.parse_args(argv)
-    # A unit-suite start (DRE-6993): the conclusion it carries says nothing
-    # about the harness, and a red suite reported as `harness-failed` would
-    # send a reader to the wrong run. `with_unit_suite` weighs the suite.
-    conclusion = args.conclusion or None
-    if (args.woken_by or "").strip() == UNIT_SUITE:
-        conclusion = None
+    return parser
 
+
+def _conclusion(args: argparse.Namespace) -> str | None:
+    """The harness run's conclusion, when the harness started this run.
+
+    A unit-suite start (DRE-6993): the conclusion it carries says nothing
+    about the harness, and a red suite reported as `harness-failed` would
+    send a reader to the wrong run. `with_unit_suite` weighs the suite."""
+    if (args.woken_by or "").strip() == UNIT_SUITE:
+        return None
+    return args.conclusion or None
+
+
+def _read_combined(path: str) -> dict:
     try:
-        combined = json.loads(open(args.statuses_file).read() or "{}")
+        return json.loads(open(path).read() or "{}")
     except (OSError, ValueError):
         # Unreadable is the same as unverifiable.
-        combined = {}
+        return {}
+
+
+def _write_output(**values: str) -> None:
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as fh:
+            for key, value in values.items():
+                fh.write(f"{key}={value}\n")
+
+
+def look_back_main(argv: list[str]) -> int:
+    """`promote_channel.py look-back` (DRE-9069): judge the run's own commit
+    as the proof would, and on a refusal at the harness proof walk main's
+    first-parent chain for the newest proven commit.
+
+    Writes `candidate=<sha>` (empty when there is none, or no look-back) and,
+    when it looked back, the record the decision reads. Exit 0 always."""
+    args = _parser(look_back_command=True).parse_args(argv)
+    candidate = ""
+    if args.manual:
+        print("no look-back: a by-hand dispatch never looks back.")
+    else:
+        own = evaluate(
+            _read_combined(args.statuses_file), args.sha, hold=args.hold,
+            conclusion=_conclusion(args), branch=(args.branch or None),
+        )
+        if not looks_back(own, manual=False):
+            print(f"no look-back: {own.outcome} is not a refusal at the "
+                  f"harness proof.")
+        else:
+            chain = _first_parent_chain(args.default_branch, LOOK_BACK_LIMIT)
+            look = look_back(
+                chain, lambda sha: _read_status(args.repo, sha),
+                own=args.sha, own_outcome=own.outcome,
+                channel_head=_read_channel_head(args.repo),
+            )
+            with open(args.out, "w") as fh:
+                json.dump(look._asdict(), fh)
+            candidate = look.candidate
+            print(f"look-back: {look_back_note(look)}")
+    _write_output(candidate=candidate)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["look-back"]:
+        return look_back_main(argv[1:])
+    args = _parser().parse_args(argv)
+    conclusion = _conclusion(args)
+    combined = _read_combined(args.statuses_file)
+    # A look-back candidate (DRE-9069) is judged as a unit-suite start is: the
+    # starting run's conclusion was about the run's own commit, never this
+    # one, so the proof is this commit's own stamp. Never on a by-hand run.
+    look = None if args.manual else _read_look_back(args.look_back, sha=args.sha)
+    if look is not None and look.candidate:
+        conclusion = None
 
     decision = evaluate(
         combined,
@@ -917,6 +1222,8 @@ def main(argv: list[str] | None = None) -> int:
             force=args.manual and args.force,
             actor=(args.actor or None), reason=(args.reason or None),
         )
+    # Last, so whichever gate answered, the line still names both commits.
+    decision = with_look_back(decision, look)
     # The receipt: the token first so it can be grepped out of a run log, the
     # prose after it so a human never has to.
     print(f"{decision.outcome}: {decision.reason}")
