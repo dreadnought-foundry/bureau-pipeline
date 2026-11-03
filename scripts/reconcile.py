@@ -1962,6 +1962,11 @@ _door_wip: list[bool] = [False]
 # Set when the door said Linear is held (`linear-hold`): every read of the work
 # lanes this pass raises BoardHeld, and its phase is skipped (item 34).
 _door_hold: list[str] = []
+# Set when the busy-thread read (`_door_busy_threads`) was told `linear-hold`
+# (DRE-8907): the board it completes still serves, but the epic-thread read
+# this pass is held off that answer instead of spending a second `/cards`
+# request on the same held key.
+_thread_hold: list[str] = []
 # Intake and Planning (`DOOR_LINEAR_LANES`) when the work-lane read fell back
 # to Linear's whole-board read, which carries them too (DRE-5848).
 _linear_lane_cards: list[dict] | None = None
@@ -1984,6 +1989,104 @@ _idle_pass: list[str] = []
 # receipt, or a hand-off receipt (DRE-5841). The board snapshot still shows
 # their old marker, so the Planning watchdog reads this set, not the thread.
 _limit_recovered: set[str] = set()
+
+# How old an answer from the read door each Sweep decision can take, in
+# seconds (DRE-8907), sent as `X-Bureau-Max-Age`. A quiet board is about 35 to
+# 95 seconds old (DRE-8810), so a read that leads to a dispatch holds the
+# board's 120; one that only feeds an alarm, a comment or a lane-conditional
+# move can take longer and stay on the door while the store briefly lags.
+# Relations keep `bureau_read.RELATIONS_MAX_AGE`, and the shadow comparison
+# (`_shadow_board`) keeps `bureau_read.BOARD_MAX_AGE`.
+DOOR_MAX_AGES: dict[str, int] = {
+    # `_door_work_cards`: the WIP count, the nudges and the dispatches read it.
+    "work-lanes": 120,
+    # `_door_backlog_read`: the promotion candidates; each promotion still
+    # re-reads its card live (`live_promotion_refusal`).
+    "queue": 120,
+    # `sweep_idle`: decides whether the pass runs at all.
+    "idle-check": 120,
+    # `_fleet_or_linear`: the Urgent fast path and the planning clocks; every
+    # move from it is lane-conditional (`_door_guard`).
+    "planning-intake": 300,
+    # `_door_epic_threads`: the gated epics' threads, read for refusals and
+    # receipts already posted.
+    "epic-threads": 300,
+    # `_door_retiring_cards`: the retiring lanes' drain; its moves are
+    # lane-conditional.
+    "retiring-lanes": 900,
+    # `_unlanded_door_lanes`: the unlanded-work alarm only.
+    "unlanded-lanes": 900,
+    # `card_parked_for_human`: the last check before a fix agent is
+    # dispatched (`bureau_read.DISPATCH_CARDS_MAX_AGE`'s bound).
+    "parked-check": 60,
+    # `_release_card`: read just before a label is removed.
+    "release-card": 60,
+    # `_blocker_card`: holds or releases a promotion.
+    "blocker-card": 120,
+    # `advance_unblocked_epics`: returns waiting epics to Planning.
+    "epic-dependents": 120,
+    # `_door_busy_threads`: the same bound as the work-lanes board whose
+    # windows it completes.
+    "busy-threads": 120,
+}
+
+
+def door_read_line(decision: str, max_age: int, *, read=None, error=None) -> str:
+    """The one line a Sweep door read prints, printed (stdout) and returned:
+
+        read-door: read decision=<d> verdict=<FRESH|UNKNOWN> age=<s|-> max-age=<s> reason=<r|->
+
+    FRESH for `read` (a `bureau_read.DoorRead`), its age rounded to a whole
+    second, or `-` when the door sent none; UNKNOWN for `error` (a
+    `bureau_read.ReadUnknown`), with its reason. A contract (DRE-8907): the
+    workflow's Sweep summary lifts every `^read-door` line, and the epic's
+    proof cards read these."""
+    if error is not None:
+        verdict, age, reason = "UNKNOWN", "-", error.reason
+    else:
+        seconds = getattr(read, "age_seconds", None)
+        verdict, reason = "FRESH", "-"
+        age = "-" if seconds is None else str(int(round(seconds)))
+    line = (f"read-door: read decision={decision} verdict={verdict} age={age} "
+            f"max-age={max_age} reason={reason}")
+    print(line, flush=True)
+    return line
+
+
+def _door_asked(decision: str, read, *args, **kwargs):
+    """`read(*args, max_age=DOOR_MAX_AGES[decision], **kwargs)` — one door
+    request — and its `door_read_line`, printed after the answer and before
+    the caller falls back to anything. The ReadUnknown is re-raised for the
+    caller to decide on. A read never sent to the door prints nothing: mode
+    `off` and `shadow` (Linear is the source there), and a door already
+    stopped for the run, whose `read-fallback:` line names that case."""
+    max_age = DOOR_MAX_AGES[decision]
+    sent = bureau_read.mode() == "on" and bureau_read.enabled()
+    try:
+        answer = read(*args, max_age=max_age, **kwargs)
+    except bureau_read.ReadUnknown as e:
+        if sent:
+            door_read_line(decision, max_age, error=e)
+        raise
+    if sent:
+        door_read_line(decision, max_age, read=answer)
+    return answer
+
+
+def _door_card(decision: str, identifier: str, **kwargs) -> dict | None:
+    """`identifier`'s node off ONE door `/cards` read for `decision` in
+    `BUREAU_READ=on` (DRE-8907) — the node a Linear `issue(id:)` read selects
+    the same fields of. None in `off` and `shadow`, which ask nothing, and on
+    any UNKNOWN: the caller then makes the Linear read it always made, so its
+    fail-safe is where it was."""
+    if bureau_read.mode() != "on":
+        return None
+    try:
+        read = _door_asked(decision, bureau_read.cards, [identifier], relations=False,
+                           **kwargs)
+    except bureau_read.ReadUnknown:
+        return None
+    return read.nodes[0] if read.nodes else None
 
 
 class BoardNotRead(Exception):
@@ -2028,6 +2131,7 @@ def reset_sweep_cards() -> None:
     _door_sourced.clear()
     _door_wip[0] = False
     _door_hold.clear()
+    _thread_hold.clear()
     _shadow_door.clear()
     _idle_pass.clear()
     _limit_recovered.clear()
@@ -2288,8 +2392,7 @@ def _door_work_cards() -> list[dict]:
     if _swept_cards is not None:
         return _swept_cards
     try:
-        read = bureau_read.board(DOOR_WORK_LANES, scope="repo",
-                                 max_age=bureau_read.BOARD_MAX_AGE)
+        read = _door_asked("work-lanes", bureau_read.board, DOOR_WORK_LANES, scope="repo")
     except bureau_read.ReadUnknown as e:
         if e.skip:
             _door_hold.append(e.reason)
@@ -2305,7 +2408,42 @@ def _door_work_cards() -> list[dict]:
         _door_sourced.add(card["identifier"])
         linear_ops.remember_comments(card.get("identifier"), card.get("comments"))
     _door_wip[0] = True
+    _door_busy_threads(_swept_cards)
     return _swept_cards
+
+
+def _door_busy_threads(cards: list[dict]) -> None:
+    """Put the WHOLE thread of every card in `cards` whose comment window is
+    partial in the pass cache from the door (DRE-8907), so a card past fifty
+    comments costs no Linear thread read when a later phase asks for its
+    comments. `_door_epic_threads`' rules: one `/cards?comments=all` read;
+    `thread-incomplete` naming some leaves those to Linear and asks the door
+    once more for the rest, at most two door reads a pass; any other UNKNOWN
+    leaves every one to Linear, read as today when a reader asks. A
+    `linear-hold` here skips nothing — the board read it completes already
+    served — and the threads are Linear's, as they were; it is kept in
+    `_thread_hold`, so `_door_epic_threads` skips its phase this pass with no
+    second `/cards` request on the held key."""
+    ask = sorted({c["identifier"] for c in cards
+                  if c.get("identifier") and linear_ops.window_is_partial(c.get("comments"))})
+    for attempt in (1, 2):
+        if not ask or not bureau_read.enabled():
+            return
+        try:
+            read = _door_asked("busy-threads", bureau_read.cards, ask,
+                               comments="all", relations=False)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                _thread_hold.append(e.reason)
+                return
+            named = set(_IDENTIFIER.findall(e.detail)) & set(ask)
+            if e.reason != "thread-incomplete" or not named or attempt == 2:
+                return
+            ask = [ident for ident in ask if ident not in named]
+            continue
+        for node in read.nodes:
+            linear_ops.remember_comments(node.get("identifier"), node.get("comments"))
+        return
 
 
 def _linear_lanes() -> list[dict]:
@@ -2350,7 +2488,7 @@ def _fleet_or_linear(lanes: tuple[str, ...], label: str) -> list[dict]:
     cards = None
     if bureau_read.enabled():
         try:
-            read = bureau_read.board(lanes, scope="fleet", max_age=bureau_read.BOARD_MAX_AGE)
+            read = _door_asked("planning-intake", bureau_read.board, lanes, scope="fleet")
         except bureau_read.ReadUnknown as e:
             if e.skip:
                 _fleet_hold[lanes] = e.reason
@@ -2395,8 +2533,8 @@ def _door_retiring_cards() -> list[dict]:
             stopped = bureau_read.disabled_reason() or "unavailable"
             break
         try:
-            read = bureau_read.board(RETIRING_LANES, scope=scope,
-                                     max_age=bureau_read.BOARD_MAX_AGE)
+            read = _door_asked("retiring-lanes", bureau_read.board, RETIRING_LANES,
+                               scope=scope)
         except bureau_read.ReadUnknown as e:
             if e.skip:
                 raise BoardHeld(e.reason) from e
@@ -4861,17 +4999,23 @@ def card_parked_for_human(identifier: str) -> bool:
     `hold.respects(…, "fix-dispatch")` (DRE-6182): the labels and the comment
     window come back on the ONE read, so the stamp costs no request. Fails
     SAFE on an unreadable card: treat as parked (skip this sweep; the next one
-    retries) rather than dispatch into a possibly-parked card."""
-    try:
-        issue = linear_ops.gql(
-            """query($id: String!) { issue(id: $id) {
-                 state { name } labels { nodes { name } } %s } }"""
-            % linear_ops.COMMENT_WINDOW_GQL,
-            {"id": identifier},
-        )["issue"] or {}
-    except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
-        print(f"park-gate: could not read {identifier}: {e} — skipping dispatch")
-        return True
+    retries) rather than dispatch into a possibly-parked card.
+
+    In `BUREAU_READ=on` the read is the door's first (DRE-8907): the same
+    state, labels and fifty-comment window, at most `parked-check` old. An
+    UNKNOWN reads Linear as before, and a Linear failure is still parked."""
+    issue = _door_card("parked-check", identifier, comments=linear_ops.COMMENT_WINDOW)
+    if issue is None:
+        try:
+            issue = linear_ops.gql(
+                """query($id: String!) { issue(id: $id) {
+                     state { name } labels { nodes { name } } %s } }"""
+                % linear_ops.COMMENT_WINDOW_GQL,
+                {"id": identifier},
+            )["issue"] or {}
+        except Exception as e:  # noqa: BLE001 — any Linear/transport error -> fail safe
+            print(f"park-gate: could not read {identifier}: {e} — skipping dispatch")
+            return True
     if ((issue.get("state") or {}).get("name")) in PARKED_STATES:
         return True
     return hold.respects(
@@ -6493,9 +6637,9 @@ def _door_backlog_children(only: list[str] | None) -> list[dict]:
 
 def _door_backlog_read(only: list[str] | None):
     if only is not None:
-        return bureau_read.cards(only, max_age=bureau_read.BOARD_MAX_AGE, relations=True)
-    return bureau_read.board(list(QUEUE_LANES), scope="repo",
-                             max_age=bureau_read.BOARD_MAX_AGE, relations=True)
+        return _door_asked("queue", bureau_read.cards, only, relations=True)
+    return _door_asked("queue", bureau_read.board, list(QUEUE_LANES), scope="repo",
+                       relations=True)
 
 
 def _shadow_backlog(only: list[str] | None):
@@ -6530,7 +6674,7 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
     What this does NOT re-read, said so nobody assumes it: the epic-level gate
     and the epic's green light (read from Linear already, `epic_records`),
     the stale-verdict lane history (a Linear read already), and the WIP count
-    (the door's board, up to BOARD_MAX_AGE old).
+    (the door's board, up to `DOOR_MAX_AGES["work-lanes"]` old).
     """
     ident = card["identifier"]
     try:
@@ -6939,11 +7083,18 @@ def _blocker_card(identifier: str) -> dict | None:
     """The blocker's title and parent, read once per pass; None when it could
     not be read, with the reason in `_blocker_card_gaps`. Isolated like
     `_blocker_epic`: an unreadable blocker holds the epics it blocks, and is
-    never asked for twice in a pass."""
+    never asked for twice in a pass. In `BUREAU_READ=on` the door is asked
+    first (DRE-8907) and the query's fields are taken off its node; an
+    UNKNOWN reads Linear as before."""
     if identifier in _blocker_cards:
         return _blocker_cards[identifier]
     if identifier in _blocker_card_gaps:
         return None
+    node = _door_card("blocker-card", identifier)
+    if node is not None:
+        _blocker_cards[identifier] = {
+            key: node.get(key) for key in ("identifier", "title", "state", "parent")}
+        return _blocker_cards[identifier]
     try:
         issue = (linear_ops.gql(_BLOCKER_CARD_QUERY, {"id": identifier}) or {}).get("issue")
     except Exception as e:  # noqa: BLE001 — the reason travels to the epic-gate line
@@ -7246,26 +7397,39 @@ def advance_unblocked_epics(done_epic: str) -> None:
     closes a blocker epic. `return_waiting_epics` is the full sweep's backstop
     for every other way a blocker closes; both move through
     `_return_epic_to_planning`, so both post the one receipt.
+
+    In `BUREAU_READ=on` the dependents are the door's first (DRE-8907): its
+    `/dependents` nodes are exactly the cards `done_epic` blocks. An UNKNOWN
+    reads the forward relations from Linear as before.
     """
-    try:
-        data = linear_ops.gql(
-            """query($id: String!) { issue(id: $id) {
-                 relations(first: 20) { nodes {
-                   type issue { identifier }
-                 } } } }""",
-            {"id": done_epic},
-        )
-    except Exception as e:  # noqa: BLE001 — fail safe
-        print(f"epic-advance: could not read forward relations for {done_epic}: {e}")
-        return
-    issue = (data or {}).get("issue")
-    if not issue:
-        return  # fail safe — nothing to advance
-    dependents = {
-        rel["issue"]["identifier"]
-        for rel in (issue.get("relations") or {}).get("nodes", [])
-        if rel["type"] == "blocks"
-    }
+    dependents = None
+    if bureau_read.mode() == "on":
+        try:
+            read = _door_asked("epic-dependents", bureau_read.dependents, done_epic)
+        except bureau_read.ReadUnknown:
+            pass
+        else:
+            dependents = {node["identifier"] for node in read.nodes}
+    if dependents is None:
+        try:
+            data = linear_ops.gql(
+                """query($id: String!) { issue(id: $id) {
+                     relations(first: 20) { nodes {
+                       type issue { identifier }
+                     } } } }""",
+                {"id": done_epic},
+            )
+        except Exception as e:  # noqa: BLE001 — fail safe
+            print(f"epic-advance: could not read forward relations for {done_epic}: {e}")
+            return
+        issue = (data or {}).get("issue")
+        if not issue:
+            return  # fail safe — nothing to advance
+        dependents = {
+            rel["issue"]["identifier"]
+            for rel in (issue.get("relations") or {}).get("nodes", [])
+            if rel["type"] == "blocks"
+        }
     for dep in sorted(dependents):
         if card_state(dep) not in QUEUE_LANES:
             continue  # idempotent: only ever advance a still-Backlog epic
@@ -7788,7 +7952,9 @@ def _door_epic_threads(epic_ids: Iterable[str]) -> None:
       to Linear this pass; the client's own rules decide whether the door is
       used again.
     * `linear-hold` (or a 429 with the key held) — BoardHeld: the phase is
-      skipped with no Linear call (Stage 2 item 34).
+      skipped with no Linear call (Stage 2 item 34). A hold the busy-thread
+      read already got this pass (`_thread_hold`, DRE-8907) is that answer,
+      with no request at all.
 
     The viewer is never taken from the door: its `viewer.id` is the
     console's key, and authorship is judged against THIS process's.
@@ -7802,6 +7968,8 @@ def _door_epic_threads(epic_ids: Iterable[str]) -> None:
     })
     if not wanted:
         return
+    if _thread_hold:
+        raise BoardHeld(_thread_hold[0])
     served: list[str] = []
     to_linear: list[str] = []
     incomplete: list[str] = []
@@ -7815,8 +7983,8 @@ def _door_epic_threads(epic_ids: Iterable[str]) -> None:
             other, to_linear = "door unavailable", to_linear + ask
             break
         try:
-            read = bureau_read.cards(ask, max_age=bureau_read.BOARD_MAX_AGE,
-                                     comments="all", relations=False)
+            read = _door_asked("epic-threads", bureau_read.cards, ask,
+                               comments="all", relations=False)
         except bureau_read.ReadUnknown as e:
             if e.skip:
                 raise BoardHeld(e.reason) from e
@@ -7879,6 +8047,19 @@ def _newest_limit_marker_at(records: list) -> datetime | None:
     return None
 
 
+def _planning_read_card(identifier: str) -> dict | None:
+    """`identifier` off this pass's Planning/Intake board read
+    (`_fleet_or_linear`'s cached answer) in `BUREAU_READ=on`, for no request
+    at all (DRE-8907) — or None: `off` and `shadow`, a pass that has not made
+    that read, or a card not on it."""
+    if bureau_read.mode() != "on":
+        return None
+    for card in _fleet_lane_cards.get(DOOR_LINEAR_LANES) or ():
+        if card.get("identifier") == identifier:
+            return card
+    return None
+
+
 def clock_planning_epics(candidates: list[dict], now: str) -> None:
     """The epic its children wait on, read back as a clock (DRE-8815).
 
@@ -7893,12 +8074,14 @@ def clock_planning_epics(candidates: list[dict], now: str) -> None:
     in Planning, never one per child. Cheapest first: the children's oldest
     receipt comes off the pass's board read, and an epic under
     `STALL_MINUTES` or undated stops there. Only past that gate are the epic
-    (`get_issue`, for its lane and labels), its thread and the plan stub's
-    runs read. It is clocked when the epic is this sweep's (its `repo:` label
-    names this repo, where the relay dispatches its plan runs), carries
-    neither `needs-human` nor `hand-built`, has no limit-death marker still
-    inside its wait (the Planning watchdog's reading), and its newest plan run
-    is dead or absent. Then the epic gets one `🚨 promotion-stalled:` receipt
+    (`get_issue`, for its lane and labels — in `BUREAU_READ=on` taken off the
+    pass's Planning board read when the epic is on it, DRE-8907), its thread
+    and the plan stub's runs read. It is clocked when the epic is this
+    sweep's (its `repo:` label names this repo, where the relay dispatches
+    its plan runs), carries neither `needs-human` nor `hand-built`, has no
+    limit-death marker still inside its wait (the Planning watchdog's
+    reading), and its newest plan run is dead or absent. Then the epic gets
+    one `🚨 promotion-stalled:` receipt
     per newest run and one ledger entry per pass, which
     `standing_defect_alert.settle` raises as one console alert for the epic.
 
@@ -7929,13 +8112,15 @@ def clock_planning_epics(candidates: list[dict], now: str) -> None:
                                           len(kids), receipt_at, None)
         if not promotion_stall.receipt_aged(record, now):
             continue  # young or undated: nothing more is read for it
-        try:
-            issue = linear_ops.get_issue(epic)
-        except linear_ops.LinearError as e:
-            print(f"ERROR: could not read epic {epic}, which {len(kids)} Queued "
-                  f"card(s) wait on — not clocked this sweep: {e}", file=sys.stderr)
-            _ledger_unread.append(f"epic {epic} ({type(e).__name__})")
-            continue
+        issue = _planning_read_card(epic)
+        if issue is None:
+            try:
+                issue = linear_ops.get_issue(epic)
+            except linear_ops.LinearError as e:
+                print(f"ERROR: could not read epic {epic}, which {len(kids)} Queued "
+                      f"card(s) wait on — not clocked this sweep: {e}", file=sys.stderr)
+                _ledger_unread.append(f"epic {epic} ({type(e).__name__})")
+                continue
         lane = (issue.get("state") or {}).get("name")
         if lane != promotion_stall.EPIC_CLOCKED_LANE:
             continue  # it left Planning since the board read: nothing to clock
@@ -10801,8 +10986,7 @@ def _unlanded_door_lanes(cards: list[str]) -> dict[str, str]:
         bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
         return {}
     try:
-        read = bureau_read.cards(cards, max_age=bureau_read.BOARD_MAX_AGE,
-                                 relations=False)
+        read = _door_asked("unlanded-lanes", bureau_read.cards, cards, relations=False)
     except bureau_read.ReadUnknown as e:
         if e.skip:
             _door_hold.append(e.reason)
@@ -12310,7 +12494,8 @@ def _release_card(pr: dict, note: str) -> None:
     So the hold's reason is read first, labels and comment window in ONE
     read, and on `review-cap-spent` only the note is posted. Every other
     answer — no label, a bare label, `fix-dispute`, a spent stamp — releases
-    exactly as before."""
+    exactly as before. In `BUREAU_READ=on` that one read is the door's first
+    (DRE-8907), and an UNKNOWN reads Linear as before."""
     card = branch_card(pr.get("headRefName") or "")
     if not card:
         return
@@ -12318,11 +12503,13 @@ def _release_card(pr: dict, note: str) -> None:
     # be recorded (the run goes red, medic sees it) and must NOT abort the
     # remaining backstops in this sweep.
     try:
-        issue = linear_ops.gql(
-            """query($id: String!) { issue(id: $id) {
-                 labels { nodes { name } } %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
-            {"id": card},
-        )["issue"] or {}
+        issue = _door_card("release-card", card, comments=linear_ops.COMMENT_WINDOW)
+        if issue is None:
+            issue = linear_ops.gql(
+                """query($id: String!) { issue(id: $id) {
+                     labels { nodes { name } } %s } }""" % linear_ops.COMMENT_WINDOW_GQL,
+                {"id": card},
+            )["issue"] or {}
         reason = hold.reason_of(
             (issue.get("labels") or {}).get("nodes", []),
             card_comment_bodies(issue),
@@ -15617,8 +15804,8 @@ def sweep_idle() -> str | None:
         bureau_read.note_fallback("board", bureau_read.disabled_reason() or "unavailable")
     elif bureau_read.mode() == "on":
         try:
-            read = bureau_read.board(DOOR_WORK_LANES + QUEUE_LANES, scope="repo",
-                                     max_age=bureau_read.BOARD_MAX_AGE)
+            read = _door_asked("idle-check", bureau_read.board,
+                               DOOR_WORK_LANES + QUEUE_LANES, scope="repo")
         except bureau_read.ReadUnknown as e:
             if e.skip:
                 _door_hold.append(e.reason)

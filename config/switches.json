@@ -35,6 +35,18 @@
       "means": "The scheduled Alarm Repair claims console alerts open for 2 hours and has an agent make one repair attempt on each alert's card, instead of printing what it would repair."
     },
     {
+      "name": "OPERATOR_AGENT_LIVE",
+      "reader": ".github/workflows/operator-agent.yml",
+      "step": "Decide dry run",
+      "means": "The scheduled Operator Agent run posts a receipt on each card it routes studio, ceo or done-already and makes that outcome's write, instead of printing what it would decide."
+    },
+    {
+      "name": "OPERATOR_AGENT_DO_LIVE",
+      "reader": ".github/workflows/operator-agent.yml",
+      "step": "Decide do dry run",
+      "means": "On a scheduled Operator Agent run that is live itself, the agent claims each do card it hands on, runs the step's checked commands with a token for the one repository the plan names, posts the receipt, and closes each card whose receipt owes a close, instead of printing what it would run (DRE-8928)."
+    },
+    {
       "name": "NAME_GUARD_LIVE",
       "reader": ".github/workflows/proof-task.yml",
       "step": "Install the name guard",

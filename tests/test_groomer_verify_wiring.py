@@ -68,7 +68,9 @@ PROPOSE_DOOR = ("BUREAU_READ_URL", "BUREAU_READ_AUDIENCE", "BUREAU_PIPELINE_REF"
 #: `  lookup:` line to the next line at job indent. Its nine minutes are sized
 #: against `groom_lookups.MAX_SECONDS` alone (tests/test_groomer_wiring.py),
 #: so the routing read is a job of its own and this one is never edited.
-LOOKUP_SHA256 = "eb628ff408d7b7eea6092bfa603475ab41b035058dd27c0f43fd4b71bf18b572"
+#: Re-taken once for DRE-8857, whose only change to the job is its token
+#: mint's pin moving from create-github-app-token v3.2.0 to v3.3.0.
+LOOKUP_SHA256 = "24c888d412f11efe496ad987f6f17023d1ab40b1616b8747682342d49114e28c"
 
 GROOM_STEP = "Groom"
 CHECK_REF_STEP = "Refuse a pipeline_ref the stub did not call"

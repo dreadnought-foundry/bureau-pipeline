@@ -253,7 +253,7 @@ jobs:
       # both need it.
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -428,6 +428,13 @@ jobs:
         run: python3 scripts/unit_test_parts.py check "$RUNNER_TEMP/unit-parts"
       - name: Workflow YAML parses
         run: python3 -c "import yaml, glob; [yaml.safe_load(open(f)) for f in glob.glob('.github/workflows/*.yml')]; print('yaml ok')"
+      # Valid YAML is not a valid workflow (DRE-8913): `parts-count.yml` named
+      # `runner` in a job's own `env:`, where GitHub provides no such context,
+      # and GitHub refused the whole file on `main` — every run held no jobs.
+      # This reads each expression against GitHub's context-availability
+      # table, so the next one fails here, on the pull request.
+      - name: Workflow expressions name only contexts their key provides
+        run: python3 scripts/check_workflow_contexts.py
       # Release-channel integrity (DRE-2026): every internal checkout of
       # bureau-pipeline must thread the pipeline_ref input, or a stub pinned
       # to @vN silently runs scripts/briefs/standards from @main.
@@ -614,7 +621,7 @@ jobs:
         id: console
         if: steps.actsreg.outputs.touched == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}

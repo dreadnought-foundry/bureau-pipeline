@@ -241,6 +241,30 @@
       "when": "every `review` run since DRE-8719, one line on stderr: the review's first line with `PARTS REVIEW: ` taken off, and `, <m> finding(s)` where it applies; since DRE-8721 in qa-review.yml's `Assemble critic context` step's log on every review"
     },
     {
+      "tag": "parts-check:",
+      "printed_by": "scripts/parts_check.py",
+      "constant": "CHECK_TAG",
+      "when": "every `check` run since DRE-8841, one line on stderr: pass, does not apply, fail or UNKNOWN; on fail, also one stdout line per finding, `COPY` or `NO-SHARED-PART`"
+    },
+    {
+      "tag": "parts-count:",
+      "printed_by": "scripts/parts_check.py",
+      "constant": "COUNT_TAG",
+      "when": "every `count` run since DRE-8841, one line on stderr: the repo, then the number of copies of shared parts and the declaration source, `none` with the reason, or `UNKNOWN` with the problem"
+    },
+    {
+      "tag": "parts-cleanup:",
+      "printed_by": "scripts/parts_cleanup.py",
+      "constant": "TAG",
+      "when": "every `file` run since DRE-8843, one line on stderr: the repo, then the copies counted, the cards filed and the cards already filed, or `UNKNOWN` with the problem; before it, one stdout line per copy naming the card filed, already filed or (with `--dry-run`) that would be filed"
+    },
+    {
+      "tag": "parts-roster:",
+      "printed_by": "scripts/parts_roster.py",
+      "constant": "TAG",
+      "when": "every `read` run since DRE-8950, one line on stdout: the repo, then `yes` with the source and part count, `undeclared` with the layer folders, or `no` with the reason, each with whether its count and stub are on; or `UNKNOWN` with the problem"
+    },
+    {
       "tag": "read-fallback:",
       "printed_by": "scripts/bureau_read.py",
       "constant": "FALLBACK_TAG",
@@ -263,6 +287,24 @@
       "printed_by": "scripts/linear_ops.py",
       "constant": null,
       "when": "every process that sent Linear a request through `linear_ops.py`, at exit on stderr: one line per budget bucket it spent, with the request count this run, the process token and the bucket; a process that never called Linear prints none"
+    },
+    {
+      "tag": "linear-read:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": "READ_TAG",
+      "when": "every process that sent Linear a read through `linear_ops.py`, since DRE-8897, at exit on stderr after its `linear-calls:` lines: one line per (site, caller, bucket), naming the reader (workflow, job and script), the site that asked, the count, the bucket, the process token and the function that sent the query; a process that sent only mutations, or nothing, prints none"
+    },
+    {
+      "tag": "linear-door:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": "DOOR_TAG",
+      "when": "every process whose read-door mode was `on`, since DRE-8897, at exit on stderr after its `linear-read:` lines, whether or not it sent Linear a request: one line naming the reader, the reads the door served, each read and reason that fell back with its count (`-` for none), the bucket and the process token; never in `off` or `shadow`"
+    },
+    {
+      "tag": "operator-agent:",
+      "printed_by": "scripts/operator_decide.py",
+      "constant": "LOG_TAG",
+      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines)"
     }
   ],
   "causes": [

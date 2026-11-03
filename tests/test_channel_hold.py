@@ -17,6 +17,9 @@ What these pin:
 * the 11-02 replay (DRE-8778): a merge train kept the hold past 2 hours while
   the newest run was 15 minutes old, and the pass names no job, says no
   "Failing job" and asks for no re-run of failed jobs;
+* the 11-02 6:10 AM replay (DRE-8863): the newest commit's unit suite was
+  seven minutes in, and the pass says `next=wait` and that nobody needs to
+  act, never "a re-run" — until a job has run 2 hours, when it is stuck;
 * the next step: attempt 2 is a person's, a failed test is a fix, a hold by
   hand is a person's with the `CHANNEL_HOLD` text quoted;
 * Promote Channel's reason, and every unread read, go into `Needs:` whole
@@ -635,6 +638,93 @@ class TestTheSecondOfNovember:
         assert seen.body.splitlines()[3] == "Waiting on stable: 5 commit(s), oldest 5595f7d"
 
 
+# ── the 11-02 morning: a unit suite still running is a wait (DRE-8863) ──────
+
+WAIT_STABLE = "7e57ab1e00000000000000000000000000000000"
+WAIT_CHAIN = (   # first-parent, oldest first, as `main` took them
+    ("305d940000000000000000000000000000000000", "2026-11-02T13:10:52Z", 41450000001),
+    ("884986d200000000000000000000000000000000", "2026-11-02T13:41:20Z", 41450000002),
+    ("e78f89b000000000000000000000000000000000", "2026-11-02T14:03:08Z", 41458314664),
+)
+WAIT_NEWEST, WAIT_RUN = WAIT_CHAIN[-1][0], WAIT_CHAIN[-1][2]
+WAIT_CREATED = "2026-11-02T14:03:14Z"
+#: The pass that raised the notice: 6:10 AM PT, seven minutes after the
+#: newest commit's `Pipeline Tests` run was created.
+WAIT_PASS = "2026-11-02T14:10:00Z"
+WAIT_LINE = (
+    f"unit-suite-not-finished: not promoting {WAIT_NEWEST}: its own unit suite "
+    f"on main, Pipeline Tests run {WAIT_RUN}, has not finished "
+    "(status=in_progress). stable waits for it.")
+
+
+def nov02_morning():
+    """The 11-02 6:10 AM state: three commits `stable` lacks, the oldest at
+    5:10 AM PT, the two older ones' unit suites green, the newest's run
+    created at 14:03:14Z with every job running, and the newest decision
+    `unit-suite-not-finished`."""
+    commits = [commit(WAIT_STABLE, "2026-11-02T12:30:00Z",
+                      "2222222000000000000000000000000000000000")]
+    runs, parent = [], WAIT_STABLE
+    for sha, date, run_id in WAIT_CHAIN:
+        commits.append(commit(sha, date, parent))
+        parent = sha
+        if sha == WAIT_NEWEST:
+            jobs = [job(3000 + n, f"{ROLLUP} (part {n})", None,
+                        f"2026-11-02T14:03:{20 + n:02d}Z", None,
+                        status="in_progress") for n in range(1, 5)]
+            runs.append(run(run_id, "tests.yml", "Pipeline Tests", sha,
+                            WAIT_CREATED, [attempt(WAIT_CREATED, WAIT_PASS, None,
+                                                   jobs, status="in_progress")]))
+        else:
+            created = date[:-3] + f"{int(date[-3:-1]) + 4:02d}Z"
+            runs.append(run(run_id, "tests.yml", "Pipeline Tests", sha, created, [
+                attempt(created, created, "success", nov02_jobs("success"))]))
+    return FakeGitHub(
+        stable=WAIT_STABLE, main=WAIT_NEWEST, commits=commits, runs=runs,
+        promotions=[
+            promotion(41440000001, "2026-11-02T12:40:00Z", "2026-11-02T12:44:00Z",
+                      f"harness-passed-promoting: promoting stable to {WAIT_STABLE} "
+                      "— harness green, strictly ahead."),
+            promotion(41459893595, "2026-11-02T14:05:00Z", "2026-11-02T14:05:40Z",
+                      WAIT_LINE),
+        ])
+
+
+class TestAUnitSuiteStillRunning:
+    def test_the_six_ten_pass_says_wait_and_asks_nobody_to_act(self):
+        seen = replay(nov02_morning(), WAIT_PASS)
+        assert seen.step == channel_hold.WAIT
+        assert seen.action == "morning-raise"
+        assert "next=wait" in seen.line, seen.line
+        assert seen.job == "no failing job — unit-suite-not-finished"
+        lines = seen.body.splitlines()
+        assert lines[1].startswith("Needs: a wait — "), lines[1]
+        assert "nobody needs to act" in lines[1]
+        assert "re-run" not in lines[1]
+        assert WAIT_LINE.split(": ", 1)[1] in lines[1]
+        assert lines[2] == "Held since: 2026-11-02T13:10:52Z (5:10 AM PT)"
+        assert lines[3] == "Waiting on stable: 3 commit(s), oldest 305d940"
+
+    def test_a_job_running_two_hours_is_still_a_stuck_job_to_re_run(self):
+        # The same suite, its first part started at 14:03:21Z: two hours by
+        # its own clock at 16:03:21Z.
+        seen = replay(nov02_morning(), "2026-11-02T16:03:21Z")
+        assert seen.step == channel_hold.RERUN
+        assert seen.job == f"{ROLLUP} (part 1)"
+        assert seen.body.startswith(f"Stuck job: {ROLLUP} (part 1) (")
+        assert "next=re-run" in seen.line
+
+    def test_one_second_short_of_two_hours_is_still_a_wait(self):
+        seen = replay(nov02_morning(), "2026-11-02T16:03:20Z")
+        assert seen.step == channel_hold.WAIT
+        assert "Stuck job" not in seen.body
+
+    def test_the_docstring_names_the_wait(self):
+        doc = channel_hold.__doc__
+        assert "* a wait —" in doc
+        assert "next=<re-run|fix|person|wait>" in doc
+
+
 # ── the reason, whole (DRE-8797) ────────────────────────────────────────────
 
 BY_HAND_SHA = "83ee19d0c80f5b5a85b9cfb861ca7ff4e07a142f"
@@ -825,8 +915,28 @@ class TestEveryOutcome:
             *promote_channel.PROMOTING_OUTCOMES,
             promote_channel.OUTCOME_NOT_MAIN, promote_channel.OUTCOME_NOT_AHEAD}
 
+    def test_an_unfinished_unit_suite_is_a_wait_and_nothing_else_moved(self):
+        pc, ch = promote_channel, channel_hold
+        assert ch.WAIT == "a wait"
+        assert ch.OUTCOME_NEXT == {
+            pc.OUTCOME_CANCELLED: ch.RERUN,
+            pc.OUTCOME_FAILED: ch.FIX,
+            pc.OUTCOME_HELD: ch.PERSON,
+            pc.OUTCOME_BLOCKED: ch.RERUN,
+            pc.OUTCOME_QUEUE_STALL: ch.RERUN,
+            pc.OUTCOME_UNPROVEN: ch.RERUN,
+            pc.OUTCOME_FORCE_NEEDS_REASON: ch.PERSON,
+            pc.OUTCOME_FORCE_NOT_OPERATOR: ch.PERSON,
+            pc.OUTCOME_NOT_ON_TRUNK: ch.PERSON,
+            pc.OUTCOME_MIRROR_FAILED: ch.FIX,
+            pc.OUTCOME_MIRROR_BLOCKED: ch.PERSON,
+            pc.OUTCOME_UNIT_RED: ch.FIX,
+            pc.OUTCOME_UNIT_NOT_FINISHED: ch.WAIT,
+            pc.OUTCOME_UNIT_UNPROVEN: ch.RERUN,
+        }
+
     def test_the_contract_constants(self):
-        assert channel_hold.NEXT_STEPS == ("a re-run", "a fix", "a person")
+        assert channel_hold.NEXT_STEPS == ("a re-run", "a fix", "a person", "a wait")
         assert channel_hold.TAG == "channel-hold:"
         assert channel_hold.NOTICE_KEY == "channel_hold:stable"
         assert pipeline_notice.KEY_PATTERN.match(channel_hold.NOTICE_KEY)

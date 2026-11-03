@@ -147,8 +147,10 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: The sandbox presses, the copy of `standards/card-quality.md`'s one list
 #: (DRE-7772), in its order: each console operation, and the press in plain
 #: words. The epic's PROOF holds both equal to agent-bureau's
-#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the last twenty, the Initiatives
-#: page's writes.
+#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the twenty after the six, the
+#: Initiatives page's writes; DRE-8727 the eight after those, the Loops 1
+#: epic's (DRE-8698) loop presses; DRE-8937 the last eight, the Loops 2 epic's
+#: (DRE-8699) KPI presses.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
 _S = r"['’]s"
 SANDBOX_PRESSES = (
@@ -182,6 +184,22 @@ SANDBOX_PRESSES = (
     ("addInitiativeFile", rf"\badd(?:s|ed|ing)?\s+{_A}file\s+to\s+{_A}initiative\b"),
     ("updateInitiativeFile", rf"\bupdat(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
     ("deleteInitiativeFile", rf"\bdelet(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
+    ("recordLoop", rf"\brecord(?:s|ed|ing)?\s+{_A}loop\b"),
+    ("answerLoop", rf"\banswer(?:s|ed|ing)?\s+{_A}loop\b"),
+    ("trackThis", rf"\btrack(?:s|ed|ing)?\s+{_A}ask\s+as\s+{_A}loop\b"),
+    ("moveLoop", rf"\bmov(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("snoozeLoop", rf"\bsnooz(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("nudgeLoop", rf"\bnudg(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("closeLoop", rf"\bclos(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("markNotALoop", rf"\bmark(?:s|ed|ing)?\s+{_A}loop\s+(?:as\s+)?not\s+a\s+loop\b"),
+    ("reviseKpi", rf"\brevis(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("closeKpi", rf"\bclos(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("retireKpi", rf"\bretir(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("moveKpi", rf"\bmov(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("linkKpiLoop", rf"\blink(?:s|ed|ing)?\s+{_A}kpi\s+(?:and|to|with)\s+{_A}loop\b"),
+    ("unlinkKpiLoop", rf"\bunlink(?:s|ed|ing)?\s+{_A}kpi\s+(?:and|from)\s+{_A}loop\b"),
+    ("proposeKpi", rf"\bpropos(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("confirmKpi", rf"\bconfirm(?:s|ed|ing)?\s+{_A}kpi\b"),
 )
 
 #: The rows that send a press to a person.

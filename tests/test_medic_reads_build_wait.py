@@ -368,6 +368,7 @@ def compose(writer: str, argv: list) -> list:
 
     script, command = writer.split()
     with mock.patch.object(linear_ops, "get_issue", return_value={"id": "uuid"}), \
+            mock.patch.object(linear_ops, "_comment_target", return_value="uuid"), \
             mock.patch.object(linear_ops, "gql", side_effect=gql), \
             contextlib.redirect_stdout(io.StringIO()), \
             contextlib.redirect_stderr(io.StringIO()):

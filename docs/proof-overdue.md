@@ -108,6 +108,33 @@ A record pull request that changes an existing record file under `docs/` or
 `architecture/`, instead of adding one, is still read here (DRE-5357's #3876).
 The gate still refuses that shape.
 
+## Where it is read from (DRE-8909)
+
+With `BUREAU_READ` set to `on`, both steps read the board through the read
+door, every request at a 15-minute max-age (`OVERDUE_MAX_AGE`, 900 seconds). A
+proof is overdue after seven days and told once a PT day, so a 15-minute-old
+answer changes nothing either step decides. In `off` and `shadow` every read is
+Linear's, exactly as before.
+
+- The PROOF cards in the lanes the sweep already reads from the door —
+  In Progress, In Review, Hand-work, Queued and Backlog — come from one board
+  read. Those in Intake, Planning, Green Light and Triage
+  (`PROOF_LINEAR_LANES`) come from one Linear query, and are never named to the
+  door. When the board read is UNKNOWN, every lane is read from Linear and no
+  card is named to the door.
+- Each door card's card and whole thread come from one door read for all of
+  them. When that read cannot prove one thread whole, each card is asked again
+  on its own; any other UNKNOWN reads every card from Linear.
+- The two fields the door does not serve are read from Linear only when the
+  decision needs them: the lane history when a card has no `🔬 proof-run`
+  receipt and no open record pull request, and the epic's children only for the
+  release reading.
+- The once-a-day check looks for today's comment in the thread it already
+  holds. Without it, the thread is read again — from the door at a one-minute
+  max-age, else from Linear — so nothing is posted on an older thread.
+
+Each door request prints one `read-door: read decision=proof-overdue-…` line.
+
 ## The replay
 
     python3 scripts/proof_overdue.py replay --repo <slug>

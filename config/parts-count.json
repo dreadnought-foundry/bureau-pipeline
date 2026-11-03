@@ -1,0 +1,15 @@
+{
+  "repos": [
+    {
+      "repo": "agent-bureau",
+      "agent": "agent:frontend",
+      "initiative": "initiative:bureau",
+      "owned_by": "DRE-8536"
+    },
+    {
+      "repo": "portico",
+      "agent": "agent:frontend",
+      "initiative": "initiative:foundry"
+    }
+  ]
+}

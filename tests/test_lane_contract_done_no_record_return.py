@@ -113,6 +113,8 @@ class TestNothingElseMoves:
             "hygiene.py",
             "model-adoption.yml",
             "release-train.yml",
+            # The operator agent's close (DRE-8746), which the guard may return.
+            "operator_agent_apply.py",
         )
 
     def test_queued_keeps_its_fields(self):

@@ -1,0 +1,173 @@
+# The Parts Roster run (DRE-8953): one line per roster repo saying where its
+# design system stands, read from its files.
+#
+# Every key of `config/repo-map.json` is read. Per repo, the `read` leg mints
+# a read-only App token for that one repository, checks the repo out at the
+# workspace root with no credential left on disk, checks this run's own commit
+# out at `.bureau-pipeline` (on the push, the merge commit), and runs
+# `scripts/parts_roster.py read` (DRE-8950), which prints one `parts-roster:`
+# line: `yes`, `undeclared`, `no` or `UNKNOWN`.
+#
+# THE RECORD is this run's log: each leg's one `parts-roster:` line,
+# unchanged. The rollout past Portico is planned from it (DRE-8955), every
+# repo read `no` named there as skipped, with its reason.
+#
+# A REPO THE TOKEN CANNOT REACH still gets its line, and its leg passes. The
+# mint may fail — the App may not be installed on another organization's
+# repos (EveryBite/atlas, DeltaSolv/deltasolv), and nothing in this repo can
+# fix that — so the mint is `continue-on-error`, the repo checkout runs only
+# on a minted token, and the read step prints the workflow's own
+# `parts-roster: <slug> — UNKNOWN — the read token could not be minted for
+# <owner>/<name>` and exits 0.
+#
+# WHAT TURNS A LEG RED. The read step passes when the reader's stdout is
+# exactly one line opening `parts-roster: <slug> — `, whatever its exit code:
+# the reader's own `UNKNOWN` exits 1, and that is a defect in the other repo's
+# file, not in this one. The leg fails only when no such line was printed — a
+# crash in this repo's reader or workflow. So the run's expected conclusion is
+# `success`, every `Read <slug>` leg `success`, whatever the roster reads.
+#
+# This file only wires the reader; what each state means lives in it and its
+# tests. The wiring is held by tests/test_parts_roster_workflow.py.
+#
+# WHAT IF THE RUN GOES RED: "Parts Roster" is in the Red-Main Repair caller's
+# and the medic's watch lists (self-red-main-repair.yml, self-medic.yml), and
+# scripts/check_workflow_watchers.py fails the build if it ever leaves them.
+#
+# THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
+#   Q1 actor — a push to `main` initiates as the merger, a dispatch as the
+#      person or `github-actions`. No step gates on the actor.
+#   Q2 secrets — a push or dispatch in this repository reads its own full
+#      store. Only BUREAU_APP_ID and BUREAU_APP_PRIVATE_KEY are used, on the
+#      mint step only. It writes nothing: no Linear key, no comment, no commit.
+#   Q3 retry — a re-run reads the files again and writes nothing, so it is
+#      always safe.
+#   Q4 command limits — the App must be installed on each repo's
+#      organization. One where it is not gets an `UNKNOWN` line on a green leg.
+#   Q5 crash — a crashed reader prints no `parts-roster:` line. That leg is
+#      red with its own log, and the others still run.
+name: Parts Roster
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/parts_roster.py
+      - .github/workflows/parts-roster.yml
+      - config/repo-map.json
+  workflow_dispatch:
+
+# READ ONLY. Each roster repo is read on its own minted App token.
+permissions:
+  contents: read
+
+jobs:
+  select:
+    name: Select the repos
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    outputs:
+      repos: ${{ steps.select.outputs.repos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # One row per roster repo, with the owner and name the mint needs: an
+      # expression has no split. A value with no owner fails here, before
+      # anything is minted.
+      - name: Select every roster repo
+        id: select
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          repo_map = json.load(open("config/repo-map.json"))
+          rows = []
+          for slug, full in repo_map.items():
+              owner, _, name = str(full).partition("/")
+              if not owner or not name:
+                  print(f"::error::{slug!r} maps to {full!r}, not an owner/name in config/repo-map.json")
+                  sys.exit(1)
+              rows.append({"repo": slug, "owner": owner, "name": name})
+          for row in rows:
+              print(f"to read: {row['repo']} ({row['owner']}/{row['name']})")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"repos={json.dumps(rows)}\n")
+          PY
+
+  # One leg per repo, four at a time. The leg lays out what the reader reads:
+  # the repo at the workspace root and this repo at `.bureau-pipeline`, a
+  # path segment the reader never reads.
+  read:
+    name: Read ${{ matrix.repo }}
+    needs: select
+    if: needs.select.outputs.repos != '' && needs.select.outputs.repos != '[]'
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
+    strategy:
+      max-parallel: 4
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.repos) }}
+    steps:
+      # Per repo, because an App installation token is scoped to ONE
+      # installation — parts-count.yml's mint. A mint that fails, for an
+      # organization the App is not installed on, leaves the leg running so
+      # the read step can print that repo's line.
+      - name: Mint a read-only token for the repository
+        id: app
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.name }}
+          permission-contents: read
+
+      # The default branch, and no credential left on disk. First, because a
+      # checkout at the workspace root clears it. Only on a minted token.
+      - name: Check out the repository
+        if: steps.app.outcome == 'success'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.owner }}/${{ matrix.name }}
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+
+      # This run's own commit: on the push, the merge commit, so the reader
+      # is the one that merge carried.
+      - name: Check out bureau-pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .bureau-pipeline
+          persist-credentials: false
+
+      # The leg's one `parts-roster:` line. A failed mint prints the
+      # workflow's own line and passes. Otherwise the reader's stdout is kept
+      # and printed, and the step passes when it is exactly one line opening
+      # `parts-roster: <slug> — `, whatever the reader's exit code; anything
+      # else is a crash here, and the leg is red.
+      - name: Read the repository's design system
+        env:
+          SLUG: ${{ matrix.repo }}
+          OWNER: ${{ matrix.owner }}
+          NAME: ${{ matrix.name }}
+          MINT_OUTCOME: ${{ steps.app.outcome }}
+        run: |
+          if [ "$MINT_OUTCOME" != "success" ]; then
+            echo "parts-roster: $SLUG — UNKNOWN — the read token could not be minted for $OWNER/$NAME"
+            exit 0
+          fi
+          code=0
+          out="$(python3 .bureau-pipeline/scripts/parts_roster.py read --repo "$SLUG" --repo-root . --pipeline-root .bureau-pipeline)" || code=$?
+          printf '%s\n' "$out"
+          case "$out" in
+            *$'\n'*) ;;
+            "parts-roster: $SLUG — "*)
+              echo "parts_roster.py exited $code"
+              exit 0
+              ;;
+          esac
+          echo "::error::parts_roster.py exited $code and printed no single 'parts-roster: $SLUG — ' line"
+          exit 1

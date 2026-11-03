@@ -10,9 +10,12 @@ What these pin, each against the failure it exists to stop:
 * `BUREAU_READ` off: exactly ONE Linear request, and the same answers the two
   reads gave — the description verbatim, the labels, the fifty-newest window
   oldest→newest (the order `last_attempt_model` scans from the end of).
-* The door is never asked from a `pull_request` / `pull_request_target` run:
-  the door refuses those tokens by design (S7), so asking costs a refusal the
-  door counts toward its refused-and-never-served alarm (M2) and buys nothing.
+* A `pull_request` run on an `agent/` or `repair/DRE-<n>-…` branch asks the
+  door for its own card and nothing else (agent-bureau DRE-8807, DRE-8812).
+  A `pull_request_target` run, and a `pull_request` run whose branch names no
+  card, never ask: the door refuses those tokens by design (S7), so asking
+  costs a refusal the door counts toward its refused-and-never-served alarm
+  (M2) and buys nothing.
 * In `on`, a `workflow_dispatch` run is served by the door with no Linear
   call; a door that cannot give the WHOLE answer (UNKNOWN, closed, a thread it
   cannot prove complete) falls back to one Linear read; `linear-hold` makes no
@@ -216,6 +219,8 @@ def test_on_a_dispatched_run_is_served_by_the_door(monkeypatch):
 
 @pytest.mark.parametrize("event", ["pull_request", "pull_request_target"])
 def test_on_a_pull_request_run_never_asks_the_door(monkeypatch, event, capsys):
+    """No `GITHUB_HEAD_REF` here (conftest clears the runner's), so the run's
+    branch names no card and even a `pull_request` run has nothing to ask."""
     linear = FakeLinear()
     with FakeIssuer() as issuer, FakeDoor(DOOR_WORLD) as door:
         _point(monkeypatch, door, issuer)
@@ -225,6 +230,33 @@ def test_on_a_pull_request_run_never_asks_the_door(monkeypatch, event, capsys):
         assert door.requests == [] and issuer.requests == []
     assert len(linear.calls) == 1 and snap["source"] == "linear"
     assert f"{event}" in capsys.readouterr().err
+
+
+def test_on_a_pull_request_run_its_own_card_is_served_by_the_door(monkeypatch):
+    """QA Review's and Verify's real path: the branch names the card read."""
+    linear = FakeLinear()
+    with FakeIssuer() as issuer, FakeDoor(DOOR_WORLD) as door:
+        _point(monkeypatch, door, issuer)
+        monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
+        monkeypatch.setenv("GITHUB_HEAD_REF", "agent/DRE-7-build-the-board")
+        snap = _take(linear)
+        sent = door.asked("/cards")
+    assert linear.calls == []
+    assert snap["source"] == "door"
+    assert snap["description"] == DESIGN and snap["comments"] == THREAD
+    assert sent[0]["query"] == {"ids": "DRE-7", "comments": "all", "relations": "0"}
+
+
+@pytest.mark.parametrize("event", ["pull_request", "pull_request_target"])
+def test_on_a_run_whose_branch_names_another_card_never_asks_the_door(monkeypatch, event):
+    linear = FakeLinear()
+    with FakeIssuer() as issuer, FakeDoor(DOOR_WORLD) as door:
+        _point(monkeypatch, door, issuer)
+        monkeypatch.setenv("GITHUB_EVENT_NAME", event)
+        monkeypatch.setenv("GITHUB_HEAD_REF", "agent/DRE-8-another-card")
+        snap = _take(linear)
+        assert door.requests == [] and issuer.requests == []
+    assert len(linear.calls) == 1 and snap["source"] == "linear"
 
 
 @pytest.mark.parametrize("event", ["pull_request", "pull_request_target"])

@@ -1600,11 +1600,27 @@ class TestTheActRegistry:
             "hygiene-branch-refresh": "merge-gate.yml",
             "hygiene-check-rerun": "merge-gate.yml",
             "hygiene-resend-to-planning": "plan.yml",
-            "hygiene-triage-return": "reconcile.py",
+            "hygiene-triage-return": "plan.yml",
             "hygiene-review-move": "reconcile.py",
             "hygiene-hold-clear": "reconcile.py",
         })
         assert {n: r["next_actor"] for n, r in rows.items()} == expected
+
+    def test_the_triage_return_names_both_lanes_it_sends_to(self):
+        # DRE-8862: Planning when the verdict is stale, Queued only when a
+        # verdict was written after the card's last trip through Triage.
+        row = next(r for r in acts_doc()["acts"] if r["name"] == "hygiene-triage-return")
+        for field in ("means", "why", "cadence_why"):
+            assert "Planning" in row[field], field
+            assert "Queued" in row[field], field
+        assert "DRE-8862" in row["why"]
+
+    def test_the_page_names_the_next_actor_the_registry_declares(self):
+        rows = {r["name"]: r for r in acts_doc()["acts"] if r["name"] in ACTS}
+        page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+        for name, row in rows.items():
+            assert (f"| `{name}` | `{row['tag']}` | {row['kind']} | "
+                    f"`{row['next_actor']}` |") in page, name
 
     def test_three_holds_and_the_rest_recoveries(self):
         rows = {r["name"]: r for r in acts_doc()["acts"] if r["name"] in ACTS}

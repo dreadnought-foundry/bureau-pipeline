@@ -1,0 +1,15 @@
+# The exact line DRE-8819 removed from plan.yml's shape (DRE-8698, exit 126):
+# a note read whole into one argument. tests/test_check_argv_bodies.py holds
+# the argv-bodies check to exactly one site here, on that line.
+name: exit-126
+on: workflow_dispatch
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post the note to the epic
+        env:
+          EPIC: DRE-8698
+          NOTE: /tmp/epic-note.md
+        run: |
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$(cat "$NOTE")"

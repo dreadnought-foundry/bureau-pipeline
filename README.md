@@ -704,6 +704,21 @@ variable: the console's runner-pool fail-back deletes exactly `BUREAU_RUNS_ON`,
 pool. Reading the chain the fleet's CI already reads, byte for byte, is what
 makes the fail-back cover this lane too. Widening it to a fourth job is a card.
 
+**And the build lane asks for a machine AWS cannot take back** (DRE-8890). These
+three are the longest jobs in the fleet, so a Spot reclaim costs the most on
+them, but the variable they read is the one the repo's own CI reads, and CI
+stays on Spot. So each of the three `runs-on` values wraps the chain: when the
+value's first label opens `runs-on`, it gains RunsOn's `spot=false` — one
+`/spot=false` segment on a single-string label, one `spot=false` element on the
+array form — the shape agent-bureau's `ci.yml` uses on `push` (DRE-6879). A
+value that already carries a `spot=`, as the console's order writes it during
+Spot pressure, is used as it stands, and any other value (`ubuntu-latest`, the
+Mac pool, nothing set) renders exactly what the plain chain renders. The chain
+inside it is still the exact string above, so the grep still finds the site;
+`tests/test_build_runs_on_lane.py` evaluates the whole expression. The product
+repos reach it only through `stable`, so it takes effect there once the
+channel's promotion (the `stable` section below) advances the tag past it.
+
 **Setting the variable is the consuming repo's operator step**, never this
 repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
 the command, the rollback and the runner-class reasoning for the fleet.

@@ -212,8 +212,20 @@ jobs:
     # boundedness that killed the four build and fix runs on 2026-09-24.
     # `BUREAU_CI_RUNS_ON` is the variable the repo's own `ci.yml` already reads,
     # so the console's pool fail-back covers this lane and a repo that sets
-    # neither variable renders what it rendered before.
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # neither variable renders what it rendered before. It asks RunsOn for a
+    # machine AWS cannot take back (DRE-8890): this is among the longest jobs
+    # in the fleet, so a Spot reclaim costs the most here, and the variable
+    # stays on Spot for the repo's CI — a RunsOn label gains `spot=false` as
+    # agent-bureau's `ci.yml` adds it on `push` (DRE-6879), one that already
+    # says `spot=` is used as it stands, and any other value renders as
+    # before. `tests/test_build_runs_on_lane.py` pins it.
+    runs-on: >-
+      ${{ fromJSON(startsWith(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0], 'runs-on')
+      && !contains(join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), ','), 'spot=')
+      && (fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[1]
+      && format('["{0}","spot=false"]', join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), '","'))
+      || format('["{0}/spot=false"]', fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0]))
+      || vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 65, raised from 25 with the file-list strategy (DRE-2466). A large
     # review deliberately takes more, smaller steps, and the budget has to
     # hold the WHOLE cycle this job can run — not just the first attempt:
@@ -374,7 +386,7 @@ jobs:
       # heavy reads after the decision run on the selected pool app below.
       - name: Mint qa-bot token (separate quota from relay dispatch)
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
@@ -665,7 +677,7 @@ jobs:
         id: probe_2
         if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -673,7 +685,7 @@ jobs:
         id: probe_3
         if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -681,7 +693,7 @@ jobs:
         id: probe_4
         if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -720,7 +732,7 @@ jobs:
       - name: Mint read token (selected pool app)
         id: reader
         if: steps.decide.outputs.review == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -915,14 +927,15 @@ jobs:
       # give the whole answer, else ONE Linear read of the description and the
       # same comment window the old thread read took.
       #
-      # THE DOOR NEVER SERVES A pull_request RUN, and that is the door's rule,
-      # not ours to loosen: it refuses every token minted for a pull_request or
-      # pull_request_target event, so a fork's pull request can never mint
-      # one (agent-bureau github_oidc.py check 7, review S7). The client does
-      # not even ask from one. Nearly every review is a pull_request run, so for
-      # them this is one Linear read where there were two; only a
-      # workflow_dispatch re-review (the sweep's, the refutation's, an
-      # operator's) can be served by the door.
+      # A pull_request RUN GETS ONE READ FROM THE DOOR: its own card, the one
+      # its `agent/` or `repair/DRE-<n>-…` head branch names (agent-bureau
+      # DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review is
+      # such a run, so this read is served by the door like a workflow_dispatch
+      # re-review's (the sweep's, the refutation's, an operator's). Every
+      # other pull_request run, and every pull_request_target run, still reads
+      # Linear once where there were two reads: the door refuses those tokens,
+      # so a fork's pull request can never mint one (agent-bureau
+      # github_oidc.py check 7, review S7), and the client does not ask.
       #
       # A read that fails writes no file, and each reader then degrades exactly
       # as its own failed read did: no Design line (visual QA skips) and
@@ -1432,7 +1445,7 @@ jobs:
         id: console
         if: steps.actsreg.outputs.touched == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1569,7 +1582,7 @@ jobs:
         id: model_home
         if: steps.decide.outputs.review == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -2998,7 +3011,7 @@ jobs:
         # A shadow replay (DRE-7193) publishes no check, so it mints no
         # token that could.
         if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '') && !inputs.shadow
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}

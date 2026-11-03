@@ -647,6 +647,36 @@ def _drive_alarm_repair(mp):
     alarm_repair.claim("DRE-1", "pipeline_stuck:DRE-1", "2026-11-01T10:00:00Z")
 
 
+@site("operator-agent", "operator-agent")
+def _drive_operator_agent(mp):
+    """The Operator Agent's claim (DRE-8746): a `studio` decision on a card
+    with no receipt on its thread, read from a one-entry decisions file.
+    Frozen from its first render: there was no earlier wording to read it
+    off."""
+    import tempfile  # noqa: PLC0415 — only this driver needs it
+
+    import operator_agent_apply  # noqa: PLC0415
+    import operator_decide  # noqa: PLC0415
+
+    decision = operator_decide.Decision(
+        card="DRE-1", repo="agent-bureau", lane="Hand-work", outcome="studio",
+        reason="the step needs production deploy, production access no test "
+               "environment gives",
+        step="run the production deploy", act="", deploy=True, evidence=[],
+        host_cannot=["In this child the studio user can do everything but deploy."],
+        finding="", question="", recommendation="", choices=None, held="",
+        fingerprint="0123456789ab")
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "decisions.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump([dict(decision.to_json(), action="decide")], fh)
+    mp.setattr(operator_agent_apply.linear_ops, "comment_records", lambda *_a, **_k: [])
+    mp.setattr(operator_agent_apply, "_now",
+               lambda: datetime(2026, 11, 2, 17, 5, tzinfo=UTC))
+    _card_recorder(mp)
+    operator_agent_apply.claim("DRE-1", path)
+
+
 @site("failure-tally", "failure-tally")
 def _drive_failure_tally(mp):
     """The failure tally's count (DRE-8635): a stranded-fix card a person
@@ -1011,7 +1041,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(linear_ops, "gql", fake_gql)
-            mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
+            mp.setattr(linear_ops, "_comment_target", lambda _i: "uuid")
             linear_ops.cmd_comment("DRE-1", "a body", "--act=fix-attempt-landed")
         assert sent["body"] == (
             "a body\n\n" + pipeline_act.trailer("fix-attempt-landed")
@@ -1026,6 +1056,6 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(linear_ops, "gql", lambda q, v=None, **_kw: sent.update(
                 body=v["input"]["body"]) or {"commentCreate": {"success": True}})
-            mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
+            mp.setattr(linear_ops, "_comment_target", lambda _i: "uuid")
             linear_ops.cmd_comment("DRE-1", "a body")
         assert sent["body"] == "a body"

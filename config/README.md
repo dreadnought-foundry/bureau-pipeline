@@ -47,6 +47,14 @@ mints (see `models.yaml` below).
   run's checkout and lets two cards that share only a ledger be ordered only
   where their lines touch. A ledger renamed or split out of its glob is a
   one-line edit here.
+- **`parts-count.json`** — the repos whose one-time parts count is switched on
+  (DRE-8844): `repos`, one entry per repo with `repo` (a key of
+  `repo-map.json`), the `agent` and `initiative` labels its cleanup cards
+  carry, and an optional `owned_by`, the `DRE-<n>` epic already deleting the
+  copies, handed to `scripts/parts_cleanup.py file` as `--owned-by`. A push to
+  `main` that changes it runs `.github/workflows/parts-count.yml` over every
+  repo listed; the filer files nothing twice, so a repo already counted is
+  counted again and files nothing new.
 - **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
   (DRE-3009): every code commit needs a test commit since the previous code
   commit, and any code commit after the first may instead carry one of these.
@@ -238,6 +246,36 @@ mints (see `models.yaml` below).
   wins, then the first kind matched, and no match is a person's. The hygiene
   lane `scripts/hygiene_hand_step.py` labels each Hand-work operator step
   `hand-step:machine` or `hand-step:person` by it, and nothing else reads it.
+- **`operator-agent.json`** — the operator agent's fixed routes (DRE-8743,
+  epic DRE-8738): exactly six keys, no `_readme`. `ceo_acts`, the six acts the
+  CEO kept on 2026-10-30 (`{"id", "label", "phrases"}` each);
+  `destructive_go`, two phrase lists that must both match; `studio_access`;
+  `deploy`; `studio`, the `blocker`, `deploy_epic` and `never_blocker` ids the
+  apply reads, and `host_limits`, this repo's one copy of what the studio host
+  cannot do as built, with its `source` and the day it was `read_on`; and
+  `leave_alone`, the cards the agent never takes (`{"card", "why"}`). Read only
+  through `scripts/operator_rules.py`, whose `load_rules` refuses a table that
+  breaks the shape. A kept act wins over `destructive-go`, which wins over
+  studio access; no match is the model's to read. A phrase's last word matches
+  in the singular or the plural, so each phrase is listed once, as its fixture
+  sentence writes it. Every phrase is quoted from
+  a sentence of `tests/fixtures/operator-agent-board-2026-11-01.json`, and
+  `tests/test_operator_rules.py` pins every fixture card the table sends to
+  the CEO or to the studio host.
+- **`operator-do.json`** — the steps the operator agent may carry out itself
+  (DRE-8922, epic DRE-8738): a `_readme`; `max_ops` (20, one plan's cap),
+  `max_do_per_pass` (3), `max_close_per_pass` (10) and `pr_wait_days` (14);
+  `org`, the one organization a plan's repository may open; `never`, the
+  agent's own switches and their `_OFF_UNTIL` companions; `never_branches`;
+  `scripts`, the one script a `script` op may run and its one argument form;
+  and `kinds` — exactly `variable`, `bot-pr`, `linear-admin` and `script`,
+  each with its `credential` (`GH_TOKEN` or `LINEAR_API_KEY`), its `mint` and
+  its `ops`, each op with `fields` (name to type), `writes` and the argv
+  `command` it becomes. Read only through `scripts/operator_do_ops.py`, whose
+  `load` refuses `deploy`, a kind outside `operator_step_kind.MACHINE_KINDS`,
+  any other credential and a command naming an undeclared field, and whose
+  `check` refuses a plan that names an op not in the file, a second
+  repository, or a target the card's own text does not quote.
 - **`notice-writers.json`** — every writer that files a Linear card
   automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
   writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,

@@ -26,7 +26,10 @@ day in Pacific time, daylight saving included. The once-a-day key is a
 comment on the card that `linear_ops.comment_records` marks
 `authored_by_pipeline` and whose first line opens `MARK` followed by today's
 PT day: with one, the card is told already and nothing is posted. The same
-line from anyone else counts for nothing.
+line from anyone else counts for nothing. Today's mark is looked for first in
+the thread the card was read with; without it, the thread is read again — off
+the read door at a one-minute max-age in `BUREAU_READ=on`, else from Linear —
+before anything is posted (DRE-8909).
 
 It never comments on a card in `Green Light`, the CEO's queue: such a card is
 counted in the note and named there as in Green Light, and nothing is posted
@@ -63,6 +66,11 @@ text — is named as skipped on its own line and read on the next pass, the way
 the main sweep records a throttled read as degraded. No retry: an empty hourly
 bucket does not refill in the minute a retry waits, and the next pass is the
 retry. The note names it as not read, and the previous day's alert stays open.
+
+A repo that is not a key of `config/repo-map.json` is not red either
+(DRE-8709): a new repo runs Reconcile before its routing pull request merges,
+so the pass prints one line saying it is not on the routing rail and reads
+nothing, as the main sweep's off-rail phases do (DRE-3632).
 
 CLI (the step's own call; reads `REPO` and `PROOF_DISPATCH_LIVE`):
 
@@ -194,11 +202,17 @@ def _why(error) -> str:
 
 
 class _Lanes:
-    """`proof_overdue.LinearReads`, keeping the lane of each card off the one
-    card read `reading` makes, so the lane costs no read of its own."""
+    """`proof_overdue.DoorReads`, keeping the lane of each card off the one
+    card read `reading` makes, so the lane costs no read of its own. Any
+    other read the reader offers (`_lane_entry`, `held`, …) is its own."""
 
     def __init__(self, inner):
         self.inner, self.lanes = inner, {}
+
+    def __getattr__(self, name):
+        if name == "inner":
+            raise AttributeError(name)
+        return getattr(self.inner, name)
 
     def proofs(self, slug):
         return self.inner.proofs(slug)
@@ -215,15 +229,38 @@ class _Lanes:
         return self.inner.states(identifiers)
 
 
-def _tell(d, day: str, live: bool) -> str | None:
-    """Post the day's comment on one overdue card; the failure, or None."""
+def records(nodes, viewer) -> list:
+    """A thread's comments as `linear_ops.comment_records` returns them."""
+    return [{"body": n.get("body") or "",
+             "authored_by_pipeline": bool(viewer) and (n.get("user") or {}).get("id") == viewer,
+             "created_at": n.get("createdAt") or None} for n in nodes or ()]
+
+
+def _offered(reads, name: str, card: str):
+    """`reads.<name>(card)` when the reader offers it, else None."""
+    read = getattr(reads, name, None) if reads is not None else None
+    return read(card) if read else None
+
+
+def _tell(d, day: str, live: bool, reads=None) -> str | None:
+    """Post the day's comment on one overdue card; the failure, or None.
+
+    Today's mark is looked for first in the thread `reads` already holds
+    (`proof_overdue.DoorReads.held`, DRE-8909). Only without it is the thread
+    read again — off the door at a minute's max-age (`told_thread`), else
+    `linear_ops.comment_records` — so nothing is posted on an older one."""
+    held = _offered(reads, "held", d.card)
+    if held is not None and told_today(records(*held), day):
+        print(f"{TAG} {d.card} · told on {day} already")
+        return None
     try:
-        records = linear_ops.comment_records(d.card)
+        fresh = _offered(reads, "told_thread", d.card)
+        said = records(*fresh) if fresh is not None else linear_ops.comment_records(d.card)
     except Exception as error:  # noqa: BLE001 — unread posts nothing, and is red
         print(f"{TAG} {d.card} · its comments could not be read — {_why(error)} — "
               "nothing posted")
         return f"{d.card}'s comments could not be read"
-    if told_today(records, day):
+    if told_today(said, day):
         print(f"{TAG} {d.card} · told on {day} already")
         return None
     line = first_line(d, day)
@@ -279,7 +316,7 @@ def sweep(slug: str, *, now: datetime | None = None, live: bool | None = None,
     day = pt_day(now)
     print(f"{TAG} {LIVE_VARIABLE} is {'true — live' if live else 'not true — dry run'}; "
           f"PT day {day}")
-    lanes = _Lanes(linear or proof_overdue.LinearReads())
+    lanes = _Lanes(linear or proof_overdue.DoorReads())
     try:
         cards = lanes.proofs(slug)
     except Exception as error:  # noqa: BLE001 — nothing known, nothing written
@@ -308,7 +345,7 @@ def sweep(slug: str, *, now: datetime | None = None, live: bool | None = None,
             print(f"{TAG} {d.card} · in {GREEN_LIGHT} — counted in the note, nothing posted")
             green.append(d.card)
             continue
-        failure = _tell(d, day, live)
+        failure = _tell(d, day, live, lanes)
         if failure:
             failures.append(failure)
     note = note_line(slug, overdue, green, skipped)
@@ -325,6 +362,12 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--repo", required=True, help="a slug of config/repo-map.json")
     args = parser.parse_args(argv)
+    # A new repo runs Reconcile before its routing pull request merges, the
+    # main sweep's off-rail case (DRE-3632): skip it, never red (DRE-8709).
+    if args.repo not in proof_overdue._repo_map():
+        print(f"{TAG} {args.repo!r} is not on the routing rail (config/repo-map.json), "
+              "so there is nothing to read yet — skipped")
+        return 0
     try:
         # `proof_overdue` reaches `reconcile`, which reads `REPO` on import.
         os.environ.setdefault("REPO", proof_overdue._full(args.repo))

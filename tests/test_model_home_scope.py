@@ -28,7 +28,7 @@ import check_model_home_scope as scope  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 TOKEN = "${{ steps.model_home.outputs.token }}"
-PINNED = "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"
+PINNED = "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"
 
 # The twenty steps the card names, as (workflow, step name).
 NAMED_STEPS = {
@@ -242,7 +242,7 @@ MINT = {
     "name": "Mint the model-home read token",
     "id": "model_home",
     "continue-on-error": True,
-    "uses": f"{PINNED} # v3.2.0",
+    "uses": f"{PINNED} # v3.3.0",
     "with": {
         "app-id": "${{ secrets.BUREAU_APP_ID }}",
         "private-key": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",
@@ -463,9 +463,10 @@ def test_a_write_mint_no_step_reads_is_still_held(tmp_path, key, value, says):
 
 
 def test_every_live_model_home_mint_asks_for_no_subset():
-    """All of them — the 24 read mints and the one write mint, the daily
+    """All of them — the 26 read mints and the one write mint, the daily
     adoption's. The carry's two went with it (DRE-8021); the Alarm Repair's
-    leg added one (DRE-8634)."""
+    leg added one (DRE-8634), the Operator Agent's `decide` job one
+    (DRE-8747), and its `do` job one (DRE-8928)."""
     found = []
     for path in sorted(WORKFLOWS.glob("*.yml")):
         doc = yaml.safe_load(path.read_text())
@@ -475,7 +476,7 @@ def test_every_live_model_home_mint_asks_for_no_subset():
                 assert step["uses"].startswith(PINNED), (path.name, step["id"])
                 assert not [k for k in step["with"] if k.startswith("permission-")], \
                     (path.name, job_id, step["id"], step["with"])
-    assert len(found) == 25, found
+    assert len(found) == 27, found
     assert sum(mint_id == "model_home_write" for *_, mint_id in found) == 1
 
 

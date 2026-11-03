@@ -255,7 +255,7 @@ jobs:
           echo "bureau-card: $CARD"
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -495,7 +495,7 @@ jobs:
         id: probe_2
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -503,7 +503,7 @@ jobs:
         id: probe_3
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -511,7 +511,7 @@ jobs:
         id: probe_4
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -543,7 +543,7 @@ jobs:
       - name: Mint read token (selected pool app)
         id: reader
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -639,7 +639,7 @@ jobs:
         id: model_home
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1697,7 +1697,7 @@ jobs:
       - name: Re-mint bot token — one-off no-result re-read
         id: app_oorerun
         if: steps.oneoff.outputs.action == 'rerun'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -1809,7 +1809,7 @@ jobs:
       - name: Re-mint bot token — one-off revision
         id: app_oorevise
         if: steps.oneoff.outputs.action == 'revise'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -1977,7 +1977,7 @@ jobs:
       - name: Re-mint bot token — one-off re-read
         id: app_oorereading
         if: steps.oorevised.outputs.outcome == 'revised'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2051,7 +2051,7 @@ jobs:
       - name: Re-mint bot token — one-off park
         id: app_oopark
         if: steps.oneoff.outputs.action == 'park' || steps.oorevised.outputs.outcome == 'unfinished'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2146,7 +2146,7 @@ jobs:
       - name: Re-mint bot token — planner
         id: app_plan
         if: steps.route.outputs.mode == 'plan'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2400,7 +2400,7 @@ jobs:
         id: model_home_plan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'plan') && steps.claude.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -2429,7 +2429,7 @@ jobs:
       - name: Re-mint bot token — Plan epic on the next rung
         id: app_plan_retry
         if: (steps.route.outputs.mode == 'plan') && steps.plan_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2983,7 +2983,7 @@ jobs:
         id: model_home_premodel
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -3153,7 +3153,7 @@ jobs:
       - name: Re-mint bot token — first critic
         id: app_prea
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3328,7 +3328,7 @@ jobs:
       - name: Re-mint bot token — re-plan
         id: app_replan
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3409,7 +3409,7 @@ jobs:
         id: model_home_replan_cap
         if: "!cancelled() && (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -3438,7 +3438,7 @@ jobs:
       - name: Re-mint bot token — Re-plan after send-back on the next rung
         id: app_replan_retry
         if: (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3670,7 +3670,7 @@ jobs:
       - name: Re-mint bot token — first critic round 2
         id: app_preb
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3825,7 +3825,7 @@ jobs:
       - name: Re-mint bot token — hand-off to the second critic
         id: app_handoff
         if: steps.route.outputs.mode == 'plan' && (steps.pre1.outputs.action == 'proceed' || steps.pre2.outputs.action == 'proceed')
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3997,7 +3997,7 @@ jobs:
       - name: Re-mint bot token — the first critic's bound
         id: app_prepark
         if: steps.route.outputs.mode == 'plan' && (steps.pre1.outputs.bound == 'true' || steps.pre2.outputs.bound == 'true')
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4056,7 +4056,7 @@ jobs:
         id: model_home_postmodel
         if: steps.route.outputs.mode == 'review'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -4241,7 +4241,7 @@ jobs:
       - name: Re-mint bot token — second critic
         id: app_posta
         if: steps.route.outputs.mode == 'review'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4462,7 +4462,7 @@ jobs:
       - name: Re-mint bot token — after the second critic
         id: app_post
         if: steps.route.outputs.mode == 'review'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4716,7 +4716,7 @@ jobs:
       - name: Re-mint bot token — the held plan's bound
         id: app_heldpark
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4848,7 +4848,7 @@ jobs:
       - name: Mint bot token — portal checkout (review)
         id: app_portal
         if: vars.PLAN_PORTAL_REPO != '' && steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -5052,7 +5052,7 @@ jobs:
         id: model_home_postreplan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.allowance.outputs.start == 'true') && steps.postreplan.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -5081,7 +5081,7 @@ jobs:
       - name: Re-mint bot token — Re-plan after the second critic sent it back on the next rung
         id: app_post_retry
         if: (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.allowance.outputs.start == 'true') && steps.postreplan_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5223,7 +5223,7 @@ jobs:
       - name: Re-mint bot token — re-check (review mode)
         id: app_recheck_review
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5457,7 +5457,7 @@ jobs:
       - name: Re-mint bot token — send-back
         id: app_sendback
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5493,12 +5493,19 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          # What the re-plan changed goes into a file, and each comment is
+          # composed around it and posted with `--body-file` (DRE-8819): the
+          # summary is the planner's own, with no bound on its size, and Linux
+          # refuses one argument over 128 KiB (E2BIG, exit 126). `printf` and
+          # `$(< …)` are bash's own, so the summary is never an argument.
+          CHANGED_FILE="$RUNNER_TEMP/post-replan-changed.md"
+          COMMENT_FILE="$RUNNER_TEMP/post-replan-review-comment.md"
           if [ -s "$SUMMARY" ]; then
-            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+            printf 'What the re-plan changed: %s' "$(< "$SUMMARY")" > "$CHANGED_FILE"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
-            CHANGED="The re-plan ran but wrote no summary."
+            printf '%s' "The re-plan ran but wrote no summary." > "$CHANGED_FILE"
           else
-            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+            printf '%s' "The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it." > "$CHANGED_FILE"
           fi
           case "$ROUND" in ''|*[!0-9]*) ROUND=1;; esac
           NEXT=$((ROUND + 1))
@@ -5506,11 +5513,19 @@ jobs:
                --epic "$EPIC" \
                --repo "$GITHUB_REPOSITORY" \
                --reason re-review --trigger-state planning; then
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+            {
+              printf '%s' "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. "
+              cat "$CHANGED_FILE"
+              printf '%s' " The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+            } > "$COMMENT_FILE"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
           else
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. ${CHANGED} This run is red, so the medic picks it up; nothing here is yours to do."
+            {
+              printf '%s' "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. "
+              cat "$CHANGED_FILE"
+              printf '%s' " This run is red, so the medic picks it up; nothing here is yours to do."
+            } > "$COMMENT_FILE"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
             exit 1
           fi
 
@@ -5520,7 +5535,7 @@ jobs:
       - name: Re-mint bot token — the second critic's bound
         id: app_postpark
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.bound == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5553,12 +5568,16 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          # Into a file and posted with `--body-file`, never an argument
+          # (DRE-8819) — the re-review step above says why.
+          CHANGED_FILE="$RUNNER_TEMP/post-replan-changed.md"
+          COMMENT_FILE="$RUNNER_TEMP/post-replan-bound-comment.md"
           if [ -s "$SUMMARY" ]; then
-            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+            printf 'What the re-plan changed: %s' "$(< "$SUMMARY")" > "$CHANGED_FILE"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
-            CHANGED="The re-plan ran but wrote no summary — read the children before re-planning."
+            printf '%s' "The re-plan ran but wrote no summary — read the children before re-planning." > "$CHANGED_FILE"
           else
-            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+            printf '%s' "The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it." > "$CHANGED_FILE"
           fi
           if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
           if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
@@ -5567,8 +5586,12 @@ jobs:
           fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
-          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} ${CHANGED} When it is settled, ${HOW}."
+          {
+            printf '%s' "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} "
+            cat "$CHANGED_FILE"
+            printf '%s' " When it is settled, ${HOW}."
+          } > "$COMMENT_FILE"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
 
       # --- APPROVE MEANS GO (DRE-5281) --------------------------------------
       #
@@ -5586,7 +5609,7 @@ jobs:
       - name: Re-mint bot token — activate
         id: app_activate
         if: steps.route.outputs.mode == 'activate'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5774,7 +5797,7 @@ jobs:
       - name: Re-mint bot token — roll-up
         id: app_rollup
         if: steps.shape.outputs.route == 'roll-up'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5915,7 +5938,7 @@ jobs:
         id: model_home_rollup_cap
         if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && steps.rollup.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -5945,7 +5968,7 @@ jobs:
       - name: Re-mint bot token — Roll-up route — split into child epics on the next rung
         id: app_rollup_retry
         if: (steps.shape.outputs.route == 'roll-up') && steps.rollup_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -6317,7 +6340,7 @@ jobs:
       - name: Re-mint bot token — the GitHub-calls reading
         id: app_calls
         if: always() && steps.calls_before.outcome == 'success'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -6464,7 +6487,7 @@ jobs:
     steps:
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
