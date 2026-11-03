@@ -141,9 +141,12 @@ OPERATOR_PRESS = "the operator's press"
 #: all wait on an event.
 RECORD_HOLD_OPENING = "not ready to merge:"
 #: The `🔬 proof-observed` note that retires the holds the record supersedes,
-#: posted just before the hold that replaces them (DRE-8680).
-RETIRED_NOTE = ("the proof record at {sha7} was read again — the hold that follows "
-                "replaces the {n} earlier hold(s) on this card")
+#: posted just before the hold that replaces them (DRE-8680). `RETIRED_BY` is
+#: the wording the proof dispatcher reads it off as the pipeline's own note, so
+#: it re-arms no spent re-run budget (`proof_dispatch._pipeline_note`).
+RETIRED_BY = "the hold that follows replaces"
+RETIRED_NOTE = ("the proof record at {sha7} was read again — " + RETIRED_BY
+                + " the {n} earlier hold(s) on this card")
 
 #: What closes an open record pull request whose record cannot merge.
 CLOSE_COMMENT = ("Closed while the proof waits — the record on {branch} cannot merge "
