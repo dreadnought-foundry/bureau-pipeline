@@ -526,8 +526,12 @@ def _cmd_check(args) -> int:
         unreadable = [f"plan: {args.plan} is not readable JSON ({exc.__class__.__name__})"]
     else:
         unreadable = []
-    with open(args.card, encoding="utf-8") as fh:
-        card_md = fh.read()
+    try:
+        with open(args.card, encoding="utf-8") as fh:
+            card_md = fh.read()
+    except OSError as exc:
+        unreadable.append(f"plan: the card file {args.card} is not readable "
+                          f"({exc.__class__.__name__})")
     if unreadable:
         checked = {"ok": False, "kind": "", "repo": None, "command_lines": []}
         refusals = unreadable
