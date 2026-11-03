@@ -32,6 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import check_workflow_watchers  # noqa: E402
+import operator_agent  # noqa: E402
 import operator_decide  # noqa: E402
 import switch_reason  # noqa: E402
 
@@ -268,6 +269,38 @@ class TestTheClock:
                      "CLAUDE_AUTH_MODE", SWITCH, "exits 3", "apply-only", "DRE-2696",
                      "one board read", "whole-thread read", "20 cards"):
             assert fact in header, f"the header does not say {fact!r}"
+
+    def test_the_header_names_the_three_triggers_and_the_green_light_group(self):
+        header = " ".join(_header().replace("#", " ").split())
+        assert "three triggers" in header
+        for fact in ("hourly schedule", "`Hand-work`", "`🚨 hand-work-overdue:`",
+                     "next scheduled pass", "DRE-9046", "`Green Light`", "DRE-9048",
+                     "DRE-9050", "`Planning`", "DRE-9051"):
+            assert fact in header, fact
+
+    def test_the_header_names_the_reads_part_3_adds_and_where_they_move(self):
+        q4 = " ".join(_header().split("Q4", 1)[1].split("Q5", 1)[0].replace("#", " ").split())
+        for fact in ("four lanes", "one more whole-thread read for each `Green Light` card",
+                     "`linear_ops.comment_records`", "no lane-history read",
+                     "no viewer read of its own", "DRE-8745", "DRE-8783", "DRE-8789",
+                     "`BUREAU_READ_CARD_MAX_AGE`", "DRE-8898", "DRE-8790",
+                     "no new kind of read"):
+            assert fact in q4, fact
+        assert "The model's ceiling is 100 turns" in q4
+
+    def test_the_proof_can_read_what_part_3_prints(self):
+        row = next(r for r in json.loads(
+            (ROOT / "config" / "proof-reach.json").read_text())["log_lines"]
+            if r["tag"] == operator_decide.LOG_TAG)
+        for line in ("`operator-agent: <CARD> triggered — <hand-work entry|hand-work-overdue "
+                     "alarm> at <YYYY-MM-DD HH:MM> PT · <action>`",
+                     "`operator-agent: <CARD> left in Green Light — <why>`",
+                     "`operator-agent: <CARD> moved — Green Light → Planning`",
+                     "`operator-agent: <CARD> not moved — it is in <lane> now`"):
+            assert line in row["when"], line
+        done = subprocess.run([sys.executable, str(ROOT / "scripts" / "proof_reach.py"),
+                               "check"], cwd=ROOT, capture_output=True, text=True)
+        assert done.returncode == 0, done.stdout + done.stderr
 
     def test_the_medic_watches_it(self):
         workflows = _on(yaml.safe_load(MEDIC_STUB.read_text()))["workflow_run"]["workflows"]
@@ -552,10 +585,17 @@ class TestTheModelStep:
         assert step["env"] == {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
         assert "LINEAR" not in json.dumps(step)
 
-    def test_its_turn_ceiling_is_a_literal_80(self, step):
+    def test_its_turn_ceiling_is_a_literal_sized_against_the_limits(self, step):
+        """One read of the host's limits, three tool calls per card, and the
+        file reads a Green Light card may make (DRE-9052): a constant raised
+        without the ceiling fails here."""
+        ceiling = 100
         args = step["with"]["claude_args"]
-        assert re.search(r"^--max-turns 80$", args, re.MULTILINE), args
+        assert re.search(rf"^--max-turns {ceiling}$", args, re.MULTILINE), args
         assert args.count("--max-turns") == 1
+        needed = (1 + 3 * operator_agent.DEFAULT_LIMIT
+                  + operator_agent.GREEN_LIGHT_SLOTS * operator_decide.MAX_PATH_EVIDENCE)
+        assert ceiling >= needed, (ceiling, needed)
 
     def test_its_arguments(self, step):
         args = step["with"]["claude_args"]
@@ -623,10 +663,81 @@ class TestTheModelStep:
         assert "`unread`" in prompt and "never `do`" in prompt
 
     def test_it_names_no_person_email_or_sign_in(self, step):
+        when = next(r["when"] for r in json.loads(
+            (ROOT / "config" / "proof-reach.json").read_text())["log_lines"]
+            if r["tag"] == operator_decide.LOG_TAG)
+        for text in (step["with"]["prompt"], _header(), when):
+            assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
+            for word in ("Sid", "sign in", "sign-in", "signin", "log in", "login", "password"):
+                assert not re.search(rf"\b{re.escape(word)}\b", text, re.IGNORECASE), word
+
+    # -- a card in Green Light (DRE-9052) --------------------------------- #
+
+    def _green_light_section(self, step) -> str:
+        prompt = " ".join(step["with"]["prompt"].split())
+        assert "`Lane:` line reads `Green Light`" in prompt
+        return prompt
+
+    def test_a_green_light_card_takes_one_of_its_three_outcomes(self, step):
+        prompt = self._green_light_section(step)
+        for outcome in operator_decide.GREEN_LIGHT_OUTCOMES:
+            assert f"`{outcome}`" in prompt, outcome
+        assert "the CEO's decision queue" in prompt
+        # `ceo` is written as today, with its choices file, and its receipt says `keep`.
+        assert "exactly one of three" in prompt
+        assert ("The `do`, `studio` and `done-already` outcomes are for the other cards "
+                "only, and a Green Light card never takes them.") in prompt
+        assert "its one receipt says so (`keep`)" in prompt
+        # The old line that said no card here is one is gone.
+        assert "no card here is one" not in prompt
+
+    def test_the_answer_key_and_the_file_evidence_form(self, step):
+        prompt = self._green_light_section(step)
+        assert "answer" in operator_decide.ANSWER_KEYS
+        assert "`answer`" in prompt
+        assert '`{"path", "quote"}`' in prompt
+        assert "word for word" in prompt
+        for never in ("`runner.temp`", "absolute path", "`..`"):
+            assert never in prompt, never
+
+    def test_the_file_cap_is_the_guards(self, step):
+        prompt = self._green_light_section(step)
+        words = {3: "three"}
+        cap = words[operator_decide.MAX_PATH_EVIDENCE]
+        assert f"at most {cap} repository files" in prompt
+        assert "`Read`, `Glob` or `Grep`" in prompt
+        assert f"quoting more than {cap} files is not used" in prompt
+
+    def test_the_example_path_is_one_the_guard_reads(self, step):
+        """The prompt's one example `path` opens `CHECKOUT_DIR/`, and the guard
+        turns a `green-light` `answer` quoting this file's own `cron:` line
+        through that path into a decision."""
         prompt = step["with"]["prompt"]
-        assert not re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", prompt)
-        for word in ("Sid", "sign in", "sign-in", "signin", "log in", "login", "password"):
-            assert not re.search(rf"\b{re.escape(word)}\b", prompt, re.IGNORECASE), word
+        found = re.findall(r'\{"path": "([^"]+)", "quote": "…"\}', prompt)
+        assert len(found) == 1, found
+        path = found[0]
+        assert path.startswith(operator_decide.CHECKOUT_DIR + "/"), path
+        cron = next(line.strip().removeprefix("- ") for line in _text().splitlines()
+                    if line.strip().startswith("- cron:"))
+        assert cron.startswith("cron: ")
+        card = {"card": "DRE-77", "repo": "bureau-pipeline", "lane": "Green Light",
+                "title": "When does the Operator Agent run?",
+                "description": "Which minute of the hour does the pass start on?"}
+        answer = {"card": "DRE-77", "outcome": operator_decide.ANSWER,
+                  "step": "which minute of the hour the pass starts on",
+                  "answer": "It starts at 27 minutes past each hour.",
+                  "evidence": [{"path": path, "quote": cron}]}
+        decision = operator_decide.decide(card, answer, "card text",
+                                          group=operator_decide.GREEN_LIGHT_GROUP)
+        assert decision is not None
+        assert decision.outcome == operator_decide.ANSWER
+        assert decision.evidence == [{"path": ".github/workflows/operator-agent.yml",
+                                      "quote": cron}]
+        # The same answer under a path the prompt says never to write is refused.
+        for wrong in (str(WORKFLOW), "../" + path, "${{ runner.temp }}/x.yml"):
+            bad = {**answer, "evidence": [{"path": wrong, "quote": cron}]}
+            assert operator_decide.decide(card, bad, "card text",
+                                          group=operator_decide.GREEN_LIGHT_GROUP) is None, wrong
 
 
 # --------------------------------------------------------------------------- #
@@ -759,6 +870,68 @@ class TestDecide:
         outputs = self._hand_on(tmp_path, rows, "true")
         assert outputs["cards"] == "[]"
 
+    # -- a Green Light row (DRE-9052) ------------------------------------- #
+
+    def _green(self, card, outcome, action="decide", **extra):
+        extra.setdefault("lane", "Green Light")
+        return {**_decision(card, outcome, action, **extra),
+                "group": operator_decide.GREEN_LIGHT_GROUP}
+
+    def test_a_live_run_hands_on_a_repair_an_answer_and_a_keep(self, tmp_path):
+        repair = self._green("DRE-11", "repair", evidence=["the run died"])
+        answer = self._green("DRE-12", "answer", finding="It starts at :27.",
+                             evidence=[{"path": "config/operator-do.json", "quote": "x"}])
+        keep = self._green("DRE-13", "keep", act="business-choice")
+        spent = self._green("DRE-14", "answer", "spent")
+        outputs = self._hand_on(tmp_path, [repair, answer, keep, spent], "false")
+        assert _cards_output(outputs) == [
+            {"card": "DRE-11", "action": "decide", "decision": repair},
+            {"card": "DRE-12", "action": "decide", "decision": answer},
+            {"card": "DRE-13", "action": "decide", "decision": keep}]
+        # `do` and `close` never carry a Green Light row.
+        assert json.loads(outputs["do_cards"]) == []
+        assert json.loads(outputs["close_cards"]) == []
+
+    def test_a_dry_run_hands_on_no_green_light_row(self, tmp_path):
+        rows = [self._green("DRE-11", "repair"), self._green("DRE-12", "answer"),
+                self._green("DRE-13", "keep")]
+        outputs = self._hand_on(tmp_path, rows, "true")
+        assert outputs["cards"] == "[]"
+        assert outputs["do_cards"] == "[]" and outputs["close_cards"] == "[]"
+
+    def test_the_written_outcomes_are_read_from_the_trusted_copy(self, tmp_path):
+        """No outcome is typed into the block: it reads `operator_decide`'s
+        constants off `$TRUSTED_PIPELINE`, so a copy that drops one hands
+        that one on no more."""
+        block = _output_block()
+        for outcome in operator_decide.OUTCOMES + operator_decide.GREEN_LIGHT_OUTCOMES:
+            assert not re.search(rf"[\"']{re.escape(outcome)}[\"']", block.split(
+                "do_rows", 1)[0]), outcome
+        assert "operator_decide.GREEN_LIGHT_OUTCOMES" in block
+        trusted = tmp_path / "trusted"
+        (trusted / "scripts").mkdir(parents=True)
+        (trusted / "config").mkdir()
+        (trusted / "config" / "operator-do.json").write_text(
+            (ROOT / "config" / "operator-do.json").read_text())
+        (trusted / "scripts" / "operator_decide.py").write_text(
+            'STUDIO, CEO, DONE_ALREADY = "studio", "ceo", "done-already"\n'
+            'GREEN_LIGHT_OUTCOMES = ("repair",)\n')
+        work = tmp_path / "work"
+        work.mkdir()
+        rows = [self._green("DRE-11", "repair"), self._green("DRE-12", "answer"),
+                _decision("DRE-1", "ceo", "decide")]
+        (work / "decisions.json").write_text(json.dumps(rows))
+        result, outputs, _ = _bash(block, {"DRY_RUN": "false", "TRUSTED_PIPELINE": str(trusted)},
+                                   work, stub=False)
+        assert result.returncode == 0, result.stderr
+        assert [c["card"] for c in _cards_output(outputs)] == ["DRE-11", "DRE-1"]
+
+    def test_an_operator_decide_the_model_wrote_is_never_imported(self, tmp_path):
+        (tmp_path / "operator_decide.py").write_text(
+            'STUDIO = CEO = DONE_ALREADY = "do"\nGREEN_LIGHT_OUTCOMES = ("do",)\n')
+        outputs = self._hand_on(tmp_path, [_decision("DRE-5", "do", "decide")], "false")
+        assert _cards_output(outputs) == []
+
     def test_each_output_is_one_line(self, tmp_path):
         rows = [_decision("DRE-1", "ceo", "decide", question="Which one?\nReally?")]
         self._hand_on(tmp_path, rows, "false")
@@ -851,6 +1024,36 @@ class TestDecide:
         assert "DRE-103" not in outputs["cards"]
         written = json.loads((tmp_path / "decisions.json").read_text())
         assert cards[0]["decision"] == next(d for d in written if d["card"] == "DRE-102")
+
+    def test_the_real_decide_hands_on_green_light_rows_on_a_live_run(self, step, tmp_path):
+        rows = [self._row("DRE-301", "Rerun the plan", "Status: the plan run died."),
+                self._row("DRE-302", "Which minute?", "Which minute does the pass start on?"),
+                self._row("DRE-303", "Check the banner", "Look at the banner.")]
+        for row in rows:
+            row.update(lane="Green Light", group=operator_decide.GREEN_LIGHT_GROUP)
+        cron = next(line.strip().removeprefix("- ") for line in _text().splitlines()
+                    if line.strip().startswith("- cron:"))
+        answers = {
+            "DRE-301": {"card": "DRE-301", "outcome": "repair", "step": "the plan run",
+                        "evidence": ["the plan run died."]},
+            "DRE-302": {"card": "DRE-302", "outcome": "answer",
+                        "step": "Which minute does the pass start on?",
+                        "answer": "At 27 minutes past the hour.",
+                        "evidence": [{"path": ".bureau-pipeline/.github/workflows/"
+                                              "operator-agent.yml", "quote": cron}]},
+            # A `do` on a Green Light row is no decision.
+            "DRE-303": {"card": "DRE-303", "outcome": "do", "step": "look at it"},
+        }
+        log, outputs = self._run_decide(step, tmp_path, rows, answers)
+        assert "operator-agent: DRE-301 → repair" in log
+        assert "operator-agent: DRE-302 → answer" in log
+        cards = _cards_output(outputs)
+        assert [(c["card"], c["action"], c["decision"]["outcome"]) for c in cards] == [
+            ("DRE-301", "decide", "repair"), ("DRE-302", "decide", "answer")]
+        assert json.loads(outputs["do_cards"]) == []
+        assert json.loads(outputs["close_cards"]) == []
+        _log, dry = self._run_decide(step, tmp_path / "dry", rows, answers, dry_run="true")
+        assert dry["cards"] == "[]"
 
     def test_a_card_left_unread_by_the_limit_is_never_handed_on(self, step, tmp_path):
         rows = [self._row("DRE-201", "Look at the banner", "Look at it.", action="unread")]
