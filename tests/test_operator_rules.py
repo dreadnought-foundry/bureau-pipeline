@@ -186,9 +186,10 @@ def test_the_kept_acts_are_exactly_the_six_ids_with_a_label_each():
         assert act["label"].strip()
 
 
-def test_leave_alone_holds_exactly_the_three_switch_steps():
+def test_leave_alone_holds_exactly_the_three_switch_steps_and_the_proof_fixture():
     rows = _table()["leave_alone"]
-    assert [row["card"] for row in rows] == ["DRE-8748", "DRE-8830", "DRE-8927"]
+    assert [row["card"] for row in rows] == ["DRE-8748", "DRE-8830", "DRE-8927",
+                                             "DRE-9053"]
     assert rows[0]["why"] == ("the switch that turns this agent on — a person "
                               "closes it once the first live run's URL is "
                               "recorded on it")
@@ -198,6 +199,11 @@ def test_leave_alone_holds_exactly_the_three_switch_steps():
     assert rows[2]["why"] == ("the switch that turns the agent's `do` step on "
                               "(OPERATOR_AGENT_DO_LIVE, DRE-8928) — the agent "
                               "never decides it")
+    assert rows[3]["why"] == ("the proof's fixture step — a person files one "
+                              "sandbox question in Green Light and cancels it "
+                              "once its planning run has finished; the agent "
+                              "never decides the card that sets up its own "
+                              "proof")
 
 
 def test_the_studio_ids_are_read_from_the_table():
