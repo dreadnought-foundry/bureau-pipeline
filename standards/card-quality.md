@@ -628,6 +628,9 @@ The sandbox presses, the one list (DRE-7772):
 - `unlinkKpiLoop` — unlink a KPI and a loop
 - `proposeKpi` — propose a KPI from plain words
 - `confirmKpi` — confirm a proposed KPI
+- `followUpLoop` — send a follow-up on a loop
+- `askLoopStatus` — ask a loop for a status
+- `askLoopAgain` — ask a gone-quiet loop again
 
 The list is the copy of agent-bureau's `SANDBOX_PRESS_MUTATIONS`
 (`console/backend/proof_reader_presses.py`), which bureau-pipeline cannot read,
@@ -640,8 +643,10 @@ twenty bullets after `answerDeskPermission`, and left `approveInitiativeDraft`,
 answers. DRE-8727 (2026-11-02) added the eight loop presses, the eight
 bullets after `deleteInitiativeFile`, for the Loops 1 epic (DRE-8698), and left
 the CEO's own answers off too. DRE-8937 (2026-11-03) added the eight KPI
-presses, the last eight bullets, for the Loops 2 epic (DRE-8699), and left the
-CEO's own answers off as before.
+presses, the eight bullets after `markNotALoop`, for the Loops 2 epic
+(DRE-8699), and left the CEO's own answers off as before. DRE-9034 (2026-11-03)
+added the three loop presses, the last three bullets, for the Loops 3 epic
+(DRE-8700), and left the CEO's own answers off as well.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run
