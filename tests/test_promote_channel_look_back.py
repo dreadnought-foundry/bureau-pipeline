@@ -77,6 +77,11 @@ SANDBOX_GREEN = _stamp("success", "harness blocked: the sandbox never ran")
 ABSENT = {"state": "pending", "statuses": []}
 #: A status read that failed.
 UNREADABLE = None
+#: A green stamp naming the harness run that set it, as the harness does.
+PROVING_RUN = "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/41583116900"
+PROVED_BY_RUN = {"state": "success", "statuses": [{
+    "context": promote_channel.STATUS_CONTEXT, "state": "success",
+    "description": "harness passed", "target_url": PROVING_RUN}]}
 
 UNIT_GREEN = {"run_id": 41583116977, "status": "completed", "conclusion": "success"}
 UNIT_RED = {"run_id": 41583116978, "status": "completed", "conclusion": "failure"}
@@ -311,6 +316,38 @@ class LooksBackTest(_RunCase):
         _candidate, printed, _written = self.run_once(trunk, B)
         self.assertNotIn("harness run failed", printed)
 
+    def test_the_look_back_hands_on_the_run_that_proved_a(self):
+        """The decision record and the summary name A's own proving run, read
+        off A's stamp — never B's failed or canceled run (DRE-9069 review)."""
+        trunk = Trunk((STABLE, PASSED, UNIT_GREEN), (A, PROVED_BY_RUN, UNIT_GREEN),
+                      (B, FAILED, UNIT_GREEN))
+        run = Run(trunk, B)
+        self.addCleanup(run.close)
+        _printed, looked = run.look_back()
+        self.assertEqual(looked["candidate"], A)
+        self.assertEqual(looked["proving_run"], PROVING_RUN)
+        self.assertEqual(trunk.reads.count(A), 1, "A's stamp is read once")
+
+    def test_no_look_back_candidate_hands_on_no_proving_run(self):
+        for trunk, own, conclusion in (
+                (Trunk((STABLE, PASSED, UNIT_GREEN), (A, PENDING, UNIT_GREEN),
+                       (B, FAILED, UNIT_GREEN)), B, "failure"),
+                (Trunk((STABLE, PASSED, UNIT_GREEN),
+                       (B, PROVED_BY_RUN, UNIT_GREEN)), B, "success")):
+            with self.subTest(conclusion=conclusion):
+                run = Run(trunk, own, conclusion=conclusion)
+                self.addCleanup(run.close)
+                _printed, looked = run.look_back()
+                self.assertEqual(looked["candidate"], "")
+                self.assertEqual(looked["proving_run"], "")
+
+    def test_the_proving_run_is_a_proven_stamps_own_run_and_nothing_else(self):
+        self.assertEqual(promote_channel.proving_run(PROVED_BY_RUN), PROVING_RUN)
+        failed = _stamp("failure", "harness failed")
+        failed["statuses"][0]["target_url"] = PROVING_RUN
+        for stamp in (failed, PASSED, ABSENT, UNREADABLE):
+            self.assertEqual(promote_channel.proving_run(stamp), "")
+
 
 class NothingProvenTest(_RunCase):
     UNPROVEN = (("pending", PENDING), ("failure", FAILED), ("error", ERROR),
@@ -413,6 +450,31 @@ class HowFarTest(_RunCase):
             own_outcome=promote_channel.OUTCOME_FAILED, channel_head=STABLE)
         self.assertEqual(empty.candidate, "")
         self.assertEqual(empty.read, 0)
+        self.assertEqual(empty.stopped, promote_channel.STOP_UNREAD)
+
+    def test_an_unread_chain_says_unknown_never_that_history_ended(self):
+        """`_first_parent_chain` answers `[]` when the fetch or `rev-list`
+        fails; the line says the chain was not read, because main's history
+        did not end (standards/console-honesty.md rule 1)."""
+        trunk = Trunk((STABLE, PASSED, UNIT_GREEN), (A, PASSED, UNIT_GREEN),
+                      (B, FAILED, UNIT_GREEN))
+        trunk.chain = lambda branch, limit: []
+        candidate, printed, written = self.run_once(trunk, B)
+        self.assertEqual(candidate, B)
+        self.assertEqual(written["promote"], "false")
+        self.assertEqual(written["outcome"], promote_channel.OUTCOME_FAILED)
+        self.assertEqual(trunk.reads, [])
+        self.assertNotIn("history ended", printed)
+        self.assertNotIn("no proven commit was found", printed)
+        self.assertIn("could not be read", printed)
+        self.assertIn(B, printed)
+
+    def test_a_read_chain_that_runs_out_still_says_history_ended(self):
+        look = promote_channel.look_back(
+            [B, A], {A: FAILED}.get, own=B,
+            own_outcome=promote_channel.OUTCOME_FAILED, channel_head=STABLE)
+        self.assertEqual(look.stopped, promote_channel.STOP_END)
+        self.assertIn("history ended", promote_channel.look_back_note(look))
 
 
 class FirstParentTest(unittest.TestCase):
@@ -461,6 +523,56 @@ class FirstParentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             self.assertEqual(
                 promote_channel.first_parent_chain("HEAD", 20, cwd=tmp), [])
+
+    def _shallow_clone_behind(self, tmp):
+        """A bare `origin`, a shallow clone of it one commit deep, and then
+        more of main pushed to `origin` — the workflow's checkout, with main
+        moved on since. Returns the clone and origin's first-parent chain."""
+        work, origin, clone = (str(Path(tmp) / n) for n in ("work", "origin", "clone"))
+        git = lambda *a: self._git(*a, cwd=work)  # noqa: E731
+        self._git("init", "-q", "--bare", "-b", "main", origin, cwd=tmp)
+        self._git("init", "-q", "-b", "main", work, cwd=tmp)
+        git("remote", "add", "origin", origin)
+        for n in range(3):
+            git("commit", "-q", "--allow-empty", "-m", f"base {n}")
+        git("push", "-q", "origin", "main")
+        self._git("clone", "-q", "--depth=1", f"file://{origin}", clone, cwd=tmp)
+        git("checkout", "-q", "-b", "feature")
+        git("commit", "-q", "--allow-empty", "-m", "branch work")
+        branch = git("rev-parse", "HEAD")
+        git("checkout", "-q", "main")
+        git("commit", "-q", "--allow-empty", "-m", "another merge")
+        git("merge", "-q", "--no-ff", "-m", "merge feature", "feature")
+        git("commit", "-q", "--allow-empty", "-m", "head")
+        git("push", "-q", "origin", "main")
+        chain = git("rev-list", "--first-parent", "main").split()
+        self.assertNotIn(branch, chain)
+        return clone, chain
+
+    def test_the_shallow_fetch_reads_origins_first_parent_chain(self):
+        """`_first_parent_chain` — the fetch half the look-back relies on:
+        from a one-commit-deep checkout it reads origin's main as it is now,
+        first parents only, newest first."""
+        with tempfile.TemporaryDirectory() as tmp:
+            clone, chain = self._shallow_clone_behind(tmp)
+            self.assertEqual(self._git("rev-list", "HEAD", cwd=clone).split(),
+                             chain[3:4], "the clone starts one commit deep")
+            with contextlib.chdir(clone):
+                self.assertEqual(promote_channel._first_parent_chain("main", 20),
+                                 chain)
+                self.assertEqual(promote_channel._first_parent_chain("main", 2),
+                                 chain[:2])
+
+    def test_a_failed_fetch_reads_no_chain(self):
+        """A fetch that fails empties `FETCH_HEAD`, so the chain is `[]` —
+        never the checkout's own stale one-commit history."""
+        with tempfile.TemporaryDirectory() as tmp:
+            clone, _chain = self._shallow_clone_behind(tmp)
+            with contextlib.chdir(clone):
+                self.assertTrue(promote_channel._first_parent_chain("main", 20))
+                self._git("remote", "set-url", "origin",
+                          str(Path(tmp) / "gone"), cwd=clone)
+                self.assertEqual(promote_channel._first_parent_chain("main", 20), [])
 
 
 # --------------------------------------------------------------------------- #
@@ -719,6 +831,75 @@ class WorkflowShapeTest(unittest.TestCase):
         # The release reads the proving run off the candidate's own status.
         self.assertIn("--statuses-file combined_status.json",
                       self.steps[self.names.index("Write the Linear release")]["run"])
+
+    def test_no_step_after_the_look_back_names_b_s_run_as_a_s(self):
+        """Every step that passes the starting run's URL on blanks it once the
+        look-back settled on another commit — the release, the decision
+        record and the summary alike (DRE-9069 review)."""
+        after = self.steps[self._look_back() + 1:]
+        seen = []
+        for step in after:
+            for key, value in (step.get("env") or {}).items():
+                if "workflow_run.html_url" in str(value):
+                    seen.append(step["name"])
+                    with self.subTest(step=step["name"], key=key):
+                        self.assertIn("steps.lookback.outputs.candidate == ''",
+                                      _flat(value))
+        self.assertGreaterEqual(set(seen), {"Write the Linear release",
+                                            "Record the decision",
+                                            "Say what happened"})
+
+    def test_the_record_and_summary_name_a_s_proving_run(self):
+        for name in ("Record the decision", "Say what happened"):
+            with self.subTest(step=name):
+                value = _flat(self.steps[self.names.index(name)]["env"]["HARNESS_RUN"])
+                self.assertTrue(
+                    value.endswith("|| steps.lookback.outputs.proving_run }}"), value)
+
+    def _say(self, **env):
+        say = self.steps[self.names.index("Say what happened")]
+        values = {key: "" for key in say["env"]}
+        values.update(env)
+        with tempfile.TemporaryDirectory() as tmp:
+            summary = Path(tmp) / "summary.md"
+            summary.write_text("")
+            values["GITHUB_STEP_SUMMARY"] = str(summary)
+            values["PATH"] = os.environ.get("PATH", "/usr/bin:/bin")
+            proc = subprocess.run(["bash", "-e", "-c", say["run"]], env=values,
+                                  capture_output=True, text=True, timeout=30)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            return summary.read_text()
+
+    def test_a_look_back_summary_names_the_run_that_proved_a(self):
+        say = self.steps[self.names.index("Say what happened")]
+        self.assertIn("steps.lookback.outputs.candidate", _flat(say["env"]["LOOK_BACK"]))
+        for woken_by in (HARNESS, promote_channel.UNIT_SUITE):
+            with self.subTest(woken_by=woken_by):
+                text = self._say(OUTCOME="promoted", REASON="promoted.",
+                                 PROMOTED="true", CANDIDATE=A, LOOK_BACK=A,
+                                 HARNESS_RUN=PROVING_RUN, WOKEN_BY=woken_by,
+                                 EVENT="workflow_run", BRANCH="main")
+                self.assertIn(f"Harness run: {PROVING_RUN}", text)
+                self.assertIn(A[:7], text)
+                self.assertNotIn("Woken by", text)
+                self.assertNotIn("by-hand dispatch", text)
+
+    def test_a_refused_look_back_candidate_is_never_called_a_dispatch(self):
+        """A refused at a later gate, its stamp naming no run: the summary
+        says no run is on record for A, not that a person dispatched it."""
+        text = self._say(OUTCOME=promote_channel.OUTCOME_UNIT_RED, REASON="refused.",
+                         PROMOTED="false", CANDIDATE=A, LOOK_BACK=A, HARNESS_RUN="",
+                         WOKEN_BY=HARNESS, EVENT="workflow_run", BRANCH="main")
+        self.assertIn("## Did not promote", text)
+        self.assertNotIn("by-hand dispatch", text)
+        self.assertIn(f"none on record for {A[:7]}", text)
+
+    def test_a_run_that_did_not_look_back_reads_as_before(self):
+        text = self._say(OUTCOME=promote_channel.OUTCOME_FAILED, REASON="refused.",
+                         PROMOTED="false", CANDIDATE=B, HARNESS_RUN="https://x/runs/1",
+                         WOKEN_BY=HARNESS, EVENT="workflow_run", BRANCH="main")
+        self.assertIn("Harness run: https://x/runs/1", text)
+        self.assertIn("- gating run: https://x/runs/1", text)
 
 
 class DocsTest(unittest.TestCase):
