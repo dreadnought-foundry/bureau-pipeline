@@ -437,7 +437,8 @@ class TestNoCodeAloneIsNotAPersonsCard:
     still author its runbook (`linear_ops.auto_done_skip_reason`). Before this
     card `hand_built` read `hand-built` alone, so a card carrying `no-code` and
     nothing else was alarmed, redispatched and requeued like any other — and
-    it still is, under both vocabularies."""
+    it still is, under both vocabularies, except that DRE-9154 stops the
+    not-started re-dispatch: a person builds it, so the sweep holds it back."""
 
     def test_hand_built_is_false(self, vocabulary):
         assert not reconcile.hand_built(_card(_RUNBOOK))
@@ -492,13 +493,17 @@ class TestNoCodeAloneIsNotAPersonsCard:
             reconcile._flag_hand_built_idle([], set())
         assert [i for i, _b in posted] == ["DRE-6301"]
 
-    def test_the_nudge_loop_still_redispatches_it(self, vocabulary):
+    def test_the_nudge_loop_no_longer_redispatches_it(self, vocabulary, capsys):
+        """DRE-9154: the not-started re-dispatch holds a `no-code` card back
+        — no dispatch, no comment, one `no-code-in-build-lane:` line."""
         import test_hand_built_not_stranded as harness
 
         s = harness._run_sweep([_card(_RUNBOOK, state="In Progress")])
-        s.redispatch.assert_called_once()
-        assert any(reconcile._TODO_REDISPATCH_NOTE in c.args[1]
-                   for c in s.cmd_comment.call_args_list)
+        s.redispatch.assert_not_called()
+        assert not any(reconcile._TODO_REDISPATCH_NOTE in c.args[1]
+                       for c in s.cmd_comment.call_args_list)
+        assert ("no-code-in-build-lane: DRE-6301 in In Progress"
+                in capsys.readouterr().out)
 
     def test_the_nudge_loop_still_requeues_its_dead_run(self, vocabulary):
         import test_hand_built_not_stranded as harness
