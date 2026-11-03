@@ -347,6 +347,59 @@ class TestStartedKeepsTodaysPath:
 
 
 # --------------------------------------------------------------------------
+# 1b: a `no-code` card is never re-dispatched (DRE-9154)
+# --------------------------------------------------------------------------
+NO_CODE_LINE = (
+    f"no-code-in-build-lane: {CARD} in In Progress — carries no-code, so "
+    "reconcile dispatched nothing; a person moves it to Hand-work"
+)
+
+
+class TestNoCodeIsNeverRedispatched:
+    """DRE-7083, 2026-11-03: the not-started branch re-dispatched a card a
+    person builds. The relay refuses to dispatch one; the sweep now agrees,
+    prints one tagged line, and leaves the card in its lane."""
+
+    def _run(self, card, capsys):
+        spy = MagicMock(side_effect=reconcile.redispatch)
+        with patch.object(reconcile, "redispatch", spy):
+            sweep = _Sweep(card).run(capsys)
+        return sweep, spy
+
+    @pytest.mark.parametrize("label", ["no-code", "No-Code"])
+    def test_a_no_code_card_is_not_redispatched_and_says_so_once(self, label, capsys):
+        card = _card("In Progress", idle=START + 15, labels=("agent:engineer", label))
+        sweep, spy = self._run(card, capsys)
+        spy.assert_not_called()
+        assert sweep.fires == []
+        assert sweep.bodies() == [], "no comment on the card"
+        assert sweep.moves == [], "the card is left in its lane"
+        tagged = [ln for ln in sweep.out.splitlines()
+                  if ln.startswith("no-code-in-build-lane: ")]
+        assert tagged == [NO_CODE_LINE]
+
+    def test_the_same_card_without_no_code_is_redispatched_as_today(self, capsys):
+        card = _card("In Progress", idle=START + 15, labels=("agent:engineer",))
+        sweep, spy = self._run(card, capsys)
+        spy.assert_called_once()
+        assert sweep.refired() == [(CARD, plan_run.EXECUTE_EVENT)]
+        assert sweep.bodies() == [REDISPATCH_RECEIPT]
+        assert "no-code-in-build-lane:" not in sweep.out
+
+    def test_the_line_is_declared_to_the_proof_run(self):
+        """The epic's proof run reads the line off the reconcile run's log, so
+        `config/proof-reach.json` declares it, and its check holds."""
+        import json
+
+        import proof_reach
+
+        doc = json.loads((ROOT / "config" / "proof-reach.json").read_text(encoding="utf-8"))
+        tags = {e["tag"]: e for e in doc["log_lines"]}
+        assert tags["no-code-in-build-lane:"]["printed_by"] == "scripts/reconcile.py"
+        assert [p for p in proof_reach.check(ROOT) if "no-code" in p] == []
+
+
+# --------------------------------------------------------------------------
 # 2: held on the runner line
 # --------------------------------------------------------------------------
 class TestHeldOnTheRunnerLine:
