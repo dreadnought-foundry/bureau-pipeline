@@ -947,6 +947,18 @@ their words and the fix it pushes is that head; the holds lane then lifts the
 hold and returns the card to `In Review`, and the new commit re-arms the
 budget. `REVIEW_NUDGE_CAP=0` parks the card on the first stale sweep.
 
+Before that question goes on an approved head (DRE-9191), the sweep looks at
+what is red. When every check that is not green was stopped rather than failed
+— a canceled CI job with no failed test in any log of its run, a summary job
+red only because of one, or a Verify run that finished without posting a
+verdict — it re-runs each of those runs once (`gh run rerun <id> --failed`),
+posts one `review-nudge-cap-rerun @<head>` note naming the jobs and run ids, and
+holds, asks and parks nothing. That count is once per head and its own, apart
+from the approved-but-red sweep's canceled-check re-run. While a run it re-ran
+is still going the sweep writes nothing; once they have all finished, a check
+still not green sends the question as above, and its Finding names each job
+re-run once at the cap. A proof record at the cap is unchanged.
+
 A draft pull request spends neither budget (DRE-6423): the critic skips drafts
 by design (DRE-5801) and the merge gate never merges one, so the sweep
 re-triggers nothing, holds nothing — not even a draft already at the cap — and

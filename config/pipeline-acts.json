@@ -2079,6 +2079,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "f\"🧹 Reconcile: {REVIEW_NUDGE_CAP_RERUN_KEY} @{head} — the merge-gate \"",
+      "kind": "undeclared-act",
+      "means": "At the merge-gate nudge cap, a head the critic approved whose only non-green checks were stopped rather than failed — a canceled CI job, a summary job red only because of one, a Verify run that finished without posting a verdict — has each of those runs re-run once, and the card says so under `review-nudge-cap-rerun @<head>`, naming the jobs and run ids, instead of being parked in Green Light with a question nobody can answer (DRE-9191).",
+      "why": "Act-shaped — it reports a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its `review-nudge-cap-rerun @<head>` key is the once-per-head count the next sweep reads back before it would re-run that head again, and the run ids it names are what that sweep waits on, so a trailer is a change to that key; the card that declares the act owns both. Spelled `_KEY`, not `_TAG`, so pipeline_act does not read it as a declared act."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "{REVIEW_LANE} with no PR after {dead}",
       "kind": "undeclared-act",
       "means": "A review-lane card whose PR keeps reading as gone parks for a human once the requeue cap is spent.",

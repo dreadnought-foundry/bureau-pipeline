@@ -458,6 +458,15 @@ REVIEW_NUDGE_CAP_KEY = "review-nudge-cap"
 # request ready restarts the budget at the same head. Spelled with no `(`
 # after the head, so `_review_nudge_key` never reads it as a spend.
 REVIEW_NUDGE_DRAFT_KEY = "review-nudge-draft"
+# At the gate's cap, a head whose only non-green checks were stopped rather
+# than failed — a canceled job, a summary job red only because of one, a
+# Verify run that finished with no verdict — is re-run once instead of asked
+# about (DRE-9191). Its own count, once per head, off the card's notes: the
+# approved-but-red sweep's re-run count (`canceled_check.RERUN_TAG`) is never
+# read here. Spelled so it matches none of the four keys above.
+REVIEW_NUDGE_CAP_RERUN_KEY = "review-nudge-cap-rerun"
+#: The Verify stub whose runs the cap reads at the head (DRE-9191).
+VERIFY_WORKFLOW = "verify.yml"
 
 # Per-card isolation for the dependency gate (DRE-2035). One bad "Blocked by:"
 # reference used to kill the WHOLE sweep: card_state() on a nonexistent id made
@@ -5874,7 +5883,8 @@ def waiting_proof_off_pr(card: dict, pr: dict | None) -> str | None:
 
 
 def hand_review_nudge_to_person(
-    card: dict, pr: dict, tag: str, critic: str, verifier: str
+    card: dict, pr: dict, tag: str, critic: str, verifier: str,
+    rerun_jobs: tuple = (),
 ) -> None:
     """REVIEW_NUDGE_CAP is spent on this head: dispatch nothing, hold the card,
     ask a person, and park it In Review → Green Light (DRE-5231, DRE-6181) —
@@ -5923,6 +5933,10 @@ def hand_review_nudge_to_person(
     The card stays In Review under the hold, where held() keeps the nudge
     loop off it, and a held, asked record In Review is a finished hold — the
     held-card path that brings it back here writes nothing on it.
+
+    `rerun_jobs` names the jobs the cap re-ran once on this head and found
+    still not green (`review_cap_rerun`, DRE-9191); the question's Finding
+    says so. Empty, the question is as it was.
     """
     if proof_record_owned_by_proof_run(card, pr, tag, critic):
         return
@@ -5985,6 +5999,8 @@ def hand_review_nudge_to_person(
                             if tag == GATE_NUDGE_KEY else None),
             cap=REVIEW_NUDGE_CAP,
         )
+        if rerun_jobs:
+            evidence["rerun_jobs"] = tuple(rerun_jobs)
         if told:
             print(f"review-nudge: {ident} already asked on the card for {head}")
         else:
@@ -6034,6 +6050,292 @@ def review_cap_park_unfinished(card: dict) -> str | None:
     if hold.reason_of(labels, bodies) != "review-cap-spent":
         return None
     return hold.read_stamp(bodies)["at"]
+
+
+class CapRerun(NamedTuple):
+    """`review_cap_rerun`'s answer (DRE-9191). `handled`: the cap re-ran the
+    head's runs or waits on them, and this pass writes nothing more on the
+    card. Otherwise the question goes, and `rerun_jobs` names each job the
+    cap re-ran once on this head that is still not green, for its Finding."""
+
+    handled: bool
+    rerun_jobs: tuple = ()
+
+
+#: The question goes as it did before DRE-9191.
+_CAP_ASK = CapRerun(False)
+#: Nothing is written on this pass; the next one reads again.
+_CAP_WAIT = CapRerun(True)
+
+#: How the cap's note names what it re-ran (DRE-9191): a CI run by the
+#: `(run <id>)` after its jobs, the Verify run by its own words. The second
+#: pass reads the run ids back off the note.
+_CAP_RERUN_CI = re.compile(r"\(run (\d+)\)")
+_CAP_RERUN_VERIFY = re.compile(r"the Verify run (\d+)")
+
+
+def _cap_rerun_noted(card: dict, head: str) -> tuple[list, int | None] | None:
+    """The CI run ids and the Verify run id the newest `review-nudge-cap-rerun
+    @<head>` note names, or None when the card carries no note for `head`."""
+    key = f"{REVIEW_NUDGE_CAP_RERUN_KEY} @{head}"
+    for body in reversed(card_comment_bodies(card)):
+        if key in body:
+            verify = _CAP_RERUN_VERIFY.search(body)
+            return ([int(i) for i in _CAP_RERUN_CI.findall(body)],
+                    int(verify.group(1)) if verify else None)
+    return None
+
+
+def _cap_read_run(run_id) -> dict | None:
+    """GitHub's record of one workflow run, or None when it could not be read
+    — on the Actions read `_tend_canceled_runs` uses."""
+    out, detail = _actions_read(("api", f"repos/{REPO}/actions/runs/{run_id}"))
+    try:
+        run = json.loads(out) if detail is None and out else None
+    except ValueError:
+        run = None
+    return run if isinstance(run, dict) else None
+
+
+def _verify_run_at_head(sha: str) -> dict | None:
+    """The newest `verify.yml` run at `sha`, as `gh run list --json` gives it,
+    or None when the listing cannot be read or finds no run — read the way
+    `_crashed_review_run_at_head` reads the critic's. A repository with no
+    Verify stub has no run to find, so a failed read is said and not recorded:
+    no Verify run is re-runnable, and the question goes as before."""
+    out, detail = _actions_read((
+        "run", "list", "--repo", REPO, "--workflow", VERIFY_WORKFLOW,
+        "--commit", sha, "--limit", "20",
+        "--json", "databaseId,status,conclusion,createdAt,attempt",
+    ))
+    if detail is not None:
+        print(f"review-nudge-cap-rerun: the {VERIFY_WORKFLOW} runs at "
+              f"{sha[:7]} could not be read ({detail}) — no Verify run is re-run")
+    try:
+        runs = json.loads(out) if detail is None and out else []
+    except ValueError:
+        runs = []
+    runs = [r for r in runs if isinstance(r, dict)
+            and str(r.get("databaseId") or "").isdigit()] if isinstance(runs, list) else []
+    if not runs:
+        return None
+    return max(runs, key=lambda r: r.get("createdAt") or "")
+
+
+def _not_green(check_runs) -> list:
+    """The head's finished check runs whose conclusion the gate does not count
+    as green (`merge_gate.GREEN_CONCLUSIONS`)."""
+    return [c for c in check_runs or () if isinstance(c, dict)
+            and c.get("status") == "completed"
+            and (c.get("conclusion") or "") not in merge_gate.GREEN_CONCLUSIONS]
+
+
+def _cap_still_red(card: dict, pr: dict, head: str, ci: list,
+                   verify: int | None) -> CapRerun:
+    """The second pass at the cap (DRE-9191): the note stands, so nothing is
+    re-run again on this head. While a run it names is still going, nothing
+    is written; once every one has finished, the question goes, naming each
+    job still not green in them."""
+    ident, number = card["identifier"], pr["number"]
+    records = {}
+    for run_id in [*ci, *([verify] if verify else [])]:
+        run = _cap_read_run(run_id)
+        if run is not None and run.get("status") != "completed":
+            print(f"review-nudge-cap-rerun: {ident} PR #{number} run {run_id} "
+                  f"re-run at the cap is still {run.get('status') or 'going'} — "
+                  "nothing written this pass")
+            return _CAP_WAIT
+        records[run_id] = run
+    checks = _head_check_runs(head)
+    named: list = []
+    for check in _not_green(checks or ()):
+        if canceled_check.run_of(check) in ci:
+            named.append(str(check.get("name") or f"job {check.get('id')}"))
+    if verify and (checks is None or (records.get(verify) or {}).get("conclusion")
+                   not in merge_gate.GREEN_CONCLUSIONS):
+        named.append(f"the Verify run {verify}")
+    if checks is None:
+        # The head's checks could not be read: the runs are named instead.
+        named[:0] = [f"run {i}" for i in ci]
+    named = list(dict.fromkeys(named))
+    print(f"review-nudge-cap-rerun: {ident} PR #{number} was re-run once at the "
+          f"cap on {head[:7]}, and {', '.join(named) or 'nothing it re-ran'} "
+          "is still not green — the question goes")
+    return CapRerun(False, tuple(named))
+
+
+def review_cap_rerun(card: dict, pr: dict, tag: str) -> CapRerun:
+    """Before the gate's cap asks a person, re-run what was stopped rather
+    than failed (DRE-9191).
+
+    agent-bureau #4663, 2026-11-03: the critic approved head e911378, CI run
+    41708617138 lost only `Console backend shard 3` to a cancel, `Console
+    backend (pytest)` was red only because it sums that shard, and Verify run
+    41708617694 finished three times without posting a verdict. The cap spent
+    three nudges over 6.3 h and asked the CEO whether "the red check" was to
+    be fixed. There was nothing to fix and nothing for him to decide.
+
+    Asked only when `tag` is GATE_NUDGE_KEY (a critic verdict is bound to the
+    head), the newest critic verdict is APPROVE, and the pull request is not
+    a proof record (those stay the operator's, DRE-6841). The readings are
+    the approved-but-red sweep's (DRE-3072, DRE-6780, DRE-7018): the head's
+    check runs (`_head_check_runs`), split by `canceled_check.split`, and the
+    log of every `cancelled` and `failure` check in each run `split` puts in
+    `unknown` (`_read_job_log`). Such a run is re-runnable when it has
+    finished and no log shows a failed test. The newest `verify.yml` run at
+    the head is re-runnable when it finished `failure`, `timed_out` or
+    `cancelled` (`_REVIEW_CRASH_CONCLUSIONS`) and no verifier verdict is
+    bound to the head. A Verify run whose own job was canceled is both, and
+    is re-run once and named as the Verify run.
+
+    When every non-green check belongs to a re-runnable run, each is re-run
+    once (`gh run rerun <id> --failed`, through `gh_dispatch`) and one note
+    names the jobs and run ids — no hold, no question, no blocker, no park. A
+    re-run GitHub refuses is recorded on `_write_failures`; when none went
+    through, the question goes. The answer is `_CAP_ASK`, the question as
+    before, for a failed test in a log, a log or a run record that could not
+    be read, a `timed_out` check, a red check outside a re-runnable run, a
+    verifier FAIL, or a run under a held receipt (`canceled_check.held_at`)
+    `canceled_check.HELD_HOURS` old or more. It is `_CAP_WAIT`, nothing
+    written, while a run or the Verify run is still going, or under a held
+    receipt younger than that.
+
+    Once per head, on its own count: the note carries
+    `review-nudge-cap-rerun @<head>`, read off the card, and neither of
+    `canceled_check`'s two receipts is read as that count —
+    by the cap, hours after the cancel, the run is past the attempt
+    `canceled_check.decide` re-runs. With the note standing, `_cap_still_red`
+    answers. A new head re-arms it, as it does the nudge budget."""
+    import proof_record  # noqa: PLC0415 — see proof_record_owned_by_proof_run
+
+    head = pr.get("headRefOid") or ""
+    if (not head or tag != GATE_NUDGE_KEY or critic_token(pr) != "APPROVE"
+            or proof_record.proof_record_branch(pr.get("headRefName"))):
+        return _CAP_ASK
+    ident, number = card["identifier"], pr["number"]
+    noted = _cap_rerun_noted(card, head)
+    if noted is not None:
+        return _cap_still_red(card, pr, head, *noted)
+
+    def ask(why: str) -> CapRerun:
+        print(f"review-nudge-cap-rerun: {ident} PR #{number} @{head[:7]} — {why}; "
+              "the question goes")
+        return _CAP_ASK
+
+    def wait(why: str) -> CapRerun:
+        print(f"review-nudge-cap-rerun: {ident} PR #{number} @{head[:7]} — {why}; "
+              "nothing written this pass")
+        return _CAP_WAIT
+
+    _tag, _critic, verifier = review_standing(pr)
+    if verifier == "FAIL":
+        return ask("the verifier failed this head")
+    checks = _head_check_runs(head)
+    if checks is None:
+        return ask("the head's check runs could not be read")
+    not_green = _not_green(checks)
+    if not not_green:
+        return ask("no check on the head is red")
+    limits = _collateral_limits(checks)
+    failed_inside = _failed_inside(pr, checks, limits)
+    split = canceled_check.split(checks, limits, failed_inside)
+    worker = [{"body": c.get("body") or "", "createdAt": c.get("createdAt")}
+              for c in pr.get("comments") or [] if is_worker_bot_comment(c)]
+    now = datetime.now(UTC)
+    rerun: dict = {}
+    waits: list = []
+    for run_id, run_checks in split.unknown.items():
+        if run_id is None:
+            return ask("a canceled check has no workflow run to re-run")
+        held = canceled_check.held_at(worker, head, run_id)
+        if held is not None:
+            if held is canceled_check.HELD_UNTIMED or (
+                    now - held < timedelta(hours=canceled_check.HELD_HOURS)):
+                waits.append(f"run {run_id} is held off its runner service")
+                continue
+            return ask(f"run {run_id} was held {canceled_check.HELD_HOURS} or more "
+                       "hours ago and is an operator's")
+        run = _cap_read_run(run_id)
+        if run is None:
+            return ask(f"run {run_id} could not be read")
+        if run.get("status") != "completed":
+            waits.append(f"run {run_id} is still {run.get('status') or 'going'}")
+            continue
+        jobs = []
+        for check in run_checks:
+            name = str(check.get("name") or f"job {check.get('id')}")
+            conclusion = check.get("conclusion")
+            if conclusion not in (canceled_check.CANCELLED, canceled_check.FAILURE):
+                return ask(f"{name!r} concluded {conclusion}")
+            tests = failed_inside.get(check.get("id"))
+            if tests is None:
+                text, why = _read_job_log(check)
+                if text is None:
+                    return ask(f"the log of {name!r} could not be read ({why})")
+                tests = canceled_check.failed_tests(text)
+            if tests:
+                return ask(f"{name!r} shows a failed test: {', '.join(tests)}")
+            jobs.append(name)
+        rerun[run_id] = jobs
+    verify_id = going_verify = None
+    found = _verify_run_at_head(head)
+    if found is not None:
+        if found.get("status") != "completed":
+            going_verify = int(found["databaseId"])
+            waits.append(f"Verify run {going_verify} is still "
+                         f"{found.get('status') or 'going'}")
+        elif (found.get("conclusion") in _REVIEW_CRASH_CONCLUSIONS
+              and verifier not in ("PASS", "FAIL", "SKIP")):
+            verify_id = int(found["databaseId"])
+            # Its own job may be the canceled one, so `split` named it too:
+            # it is re-run once, and noted as the Verify run.
+            rerun.pop(verify_id, None)
+    for check in not_green:
+        owner = canceled_check.run_of(check)
+        if owner in rerun or (owner is not None and owner == verify_id):
+            continue
+        if owner in split.unknown or (owner is not None and owner == going_verify):
+            continue  # waited on
+        return ask(f"{check.get('name')!r} concluded {check.get('conclusion')} "
+                   "outside any run the cap re-runs")
+    if waits:
+        return wait(", ".join(waits))
+    went_ci, went_verify = {}, None
+    for run_id in [*rerun, *([verify_id] if verify_id else [])]:
+        try:
+            gh_dispatch("run", "rerun", str(run_id), "--failed", "--repo", REPO)
+        except ReconcileWriteError as e:
+            _write_failures.append(
+                f"review-nudge-cap-rerun: re-running run {run_id} on PR "
+                f"#{number} was refused: {e}")
+            print(f"ERROR: review-nudge-cap-rerun: re-running run {run_id} on PR "
+                  f"#{number} was refused ({e})", file=sys.stderr)
+            continue
+        if run_id == verify_id:
+            went_verify = run_id
+        else:
+            went_ci[run_id] = rerun[run_id]
+    if not went_ci and went_verify is None:
+        return ask("no re-run went through")
+    ran = [f"{', '.join(f'`{j}`' for j in jobs)} (run {run_id})"
+           for run_id, jobs in went_ci.items()]
+    if went_verify is not None:
+        ran.append(f"the Verify run {went_verify}, which finished without "
+                   "posting a verdict")
+    linear_ops.cmd_comment(
+        ident,
+        f"🧹 Reconcile: {REVIEW_NUDGE_CAP_RERUN_KEY} @{head} — the merge-gate "
+        f"re-trigger budget is spent on PR #{number}, and nothing holding the "
+        f"merge failed: {'; '.join(ran)}. The sweep re-ran each once, failed "
+        "and canceled jobs only, rather than ask a person about a check with "
+        "nothing in it to fix. If a job is still not green once these runs "
+        "finish, the question goes to Green Light; while one is still going, "
+        "nothing more is said. Said once per commit (DRE-9191).",
+    )
+    print(f"review-nudge-cap-rerun: {ident} PR #{number} @{head[:7]} re-ran "
+          f"{len(went_ci) + (went_verify is not None)} run(s) at the cap — no hold, "
+          "no question, no park")
+    return CapRerun(True)
 
 
 # DRE-6414: the lane the growth question is created in — the CEO's "needs you"
@@ -12289,8 +12591,129 @@ REGATE_KEY = "regate"
 REGATE_MINUTES = int(os.environ.get("REGATE_MINUTES", "15"))
 
 
+#: How far either side of the first receipt the gate run its dispatch started
+#: is looked for (DRE-9205). The dispatch goes out seconds before the receipt
+#: is posted; any regate passed REGATE_MINUTES of quiet before it, so nothing
+#: else this close is the same head's.
+REGATE_RUN_WINDOW_MINUTES = 5
+
+#: The gate's last `decision=` / `reason=` lines in a run log, and its wait on
+#: a fix run in `stranded_fix.lane_refusal`'s own words — the reading
+#: `hygiene_prs_held` makes of the same log (DRE-9205).
+_GATE_DECISION_LINE = re.compile(r"(?:^|\s)decision=([a-z_]+)\s*$")
+_GATE_REASON_LINE = re.compile(r"(?:^|\s)reason=(.*)$")
+_GATE_FIX_WAIT = re.compile(r"Agent Fix run (\d+) is queued or running FOR #(\d+)\b")
+
+
 def _regate_receipt_opener(head: str) -> str:
     return f"🔁 {REGATE_KEY} @{head}:"
+
+
+def _regate_again_opener(head: str) -> str:
+    """The second, and last, send-back's opener for a head (DRE-9205)."""
+    return f"🔁 {REGATE_KEY} @{head} again:"
+
+
+def _regate_receipts(pr: dict, head: str) -> tuple[dict | None, bool]:
+    """The head's first regate receipt, or None, and whether it has been
+    sent back the second time. Only the worker pool's receipts count."""
+    first, again = None, False
+    opener, again_opener = _regate_receipt_opener(head), _regate_again_opener(head)
+    for c in pr.get("comments") or []:
+        if not is_worker_pool_comment(c):
+            continue
+        line = merge_gate.first_line(c.get("body") or "")
+        if line.startswith(again_opener):
+            again = True
+        elif line.startswith(opener) and first is None:
+            first = c
+    return first, again
+
+
+def _gate_waited_on_fix(log: str, number: int) -> int | None:
+    """The Agent Fix run a gate run's log says it waited on for THIS pull
+    request — the last `decision=` is `wait` and the last `reason=` names
+    the run FOR #number — or None."""
+    decision = reason = None
+    for line in (log or "").splitlines():
+        if (m := _GATE_DECISION_LINE.search(line)):
+            decision = m.group(1)
+        elif (m := _GATE_REASON_LINE.search(line)):
+            reason = m.group(1).strip()
+    match = _GATE_FIX_WAIT.search(reason or "") if decision == "wait" else None
+    if match is None or int(match.group(2)) != int(number):
+        return None
+    return int(match.group(1))
+
+
+def _regate_again_reason(pr: dict, receipt: dict) -> str | None:
+    """Why a head already sent back once goes back the second time, or None
+    (DRE-9205).
+
+    On 2026-11-04 the regate's own comment on agent-bureau #4725 woke an
+    Agent Fix run, the gate run that regate dispatched answered `wait` on it
+    (DRE-4486), and the fix run finished `skipped` three minutes later.
+    Nothing woke the gate again, and #4725 waited 24 minutes for the
+    stuck-work sweep.
+
+    So: among the gate's dispatched runs within REGATE_RUN_WINDOW_MINUTES of
+    the first receipt, every one finished, and one printed `decision=wait` on
+    an Agent Fix run FOR this pull request; that fix run has finished. The
+    caller holds the head to the receipt's, so the fix run pushed nothing.
+    Any read that fails, or a fix run still queued or running, is None —
+    the next sweep looks again."""
+    number = pr["number"]
+    at = datetime.fromisoformat(receipt["createdAt"].replace("Z", "+00:00"))
+    window = timedelta(minutes=REGATE_RUN_WINDOW_MINUTES)
+    lo, hi = at - window, at + window
+    stamp = "%Y-%m-%dT%H:%M:%SZ"
+    out = gh_actions_read(
+        "api", f"repos/{REPO}/actions/workflows/{gate_workflow()}/runs"
+        f"?event=workflow_dispatch&created={lo.strftime(stamp)}..{hi.strftime(stamp)}"
+        "&per_page=100")
+    try:
+        runs = json.loads(out).get("workflow_runs") if out else None
+    except (ValueError, AttributeError):
+        runs = None
+    if not isinstance(runs, list):
+        print(f"regate: PR #{number} the gate's runs after its first send-back "
+              "could not be read — not sending it back on an unread run")
+        return None
+    near = sorted((r for r in runs if r.get("created_at") and lo <= datetime.fromisoformat(
+        r["created_at"].replace("Z", "+00:00")) <= hi), key=lambda r: r["created_at"])
+    if any(r.get("status") != "completed" for r in near):
+        return None  # the gate is still looking
+    for run in near:
+        log = gh_actions_read("run", "view", str(run.get("id")), "--repo", REPO, "--log")
+        if not log:
+            print(f"regate: PR #{number} gate run {run.get('id')}'s log could not "
+                  "be read — not sending it back on an unread run")
+            return None
+        fix_id = _gate_waited_on_fix(log, number)
+        if fix_id is not None:
+            gate_id = run.get("id")
+            break
+    else:
+        return None  # the gate's run waited on no fix run for this pull request
+    out = gh_actions_read("run", "view", str(fix_id), "--repo", REPO,
+                          "--json", "status,conclusion,updatedAt")
+    try:
+        fix = json.loads(out) if out else None
+    except ValueError:
+        fix = None
+    if not isinstance(fix, dict):
+        print(f"regate: PR #{number} Agent Fix run {fix_id} could not be read — "
+              "not sending it back on an unread run")
+        return None
+    if fix.get("status") != "completed" or not fix.get("updatedAt"):
+        print(f"regate: PR #{number} the gate's run {gate_id} waits on Agent Fix "
+              f"run {fix_id}, still {fix.get('status') or 'unknown'} — the sweep "
+              "looks again once it finishes")
+        return None
+    return (f"the gate's run {gate_id} waited on Agent Fix run {fix_id}, which "
+            f"finished `{fix.get('conclusion') or 'none'}` at "
+            f"{_pt(fix['updatedAt'])} with no new commit on this head, so the "
+            "gate evaluates it once more, the last time for this head (DRE-9205)")
 
 
 def refresh_pending(pr: dict) -> bool:
@@ -12331,19 +12754,19 @@ def _regate_reason(pr: dict) -> str | None:
     the gate's own condition 1 (`merge_gate.precheck`): every gating check
     finished green and no CI run still going. Then the time: a head the gate
     refreshed goes back as soon as that holds, any other once its last check
-    finished more than REGATE_MINUTES ago. Last, because it can cost two
+    finished more than REGATE_MINUTES ago. Then, because it can cost two
     reads, the APPROVE must bind this head — by sha, or carried by content
-    exactly as the gate carries it (`verdict_bound`)."""
+    exactly as the gate carries it (`verdict_bound`). A head sent back once
+    already goes back only by `_regate_again_reason`, last because it reads
+    run logs; a head sent back twice never again (DRE-9205)."""
     number, head = pr.get("number"), pr.get("headRefOid") or ""
     if (not card_branch(pr.get("headRefName")) or pr.get("isDraft")
             or pr.get(THREAD_UNREADABLE) or not head
             or pr.get("mergeStateStatus") != "CLEAN"):
         return None
-    opener = _regate_receipt_opener(head)
-    if any(is_worker_pool_comment(c)
-           and merge_gate.first_line(c.get("body") or "").startswith(opener)
-           for c in pr.get("comments") or []):
-        return None  # sent back once for this head already
+    receipt, again = _regate_receipts(pr, head)
+    if again:
+        return None  # sent back twice for this head — never a third time
     verdicts = critic_comments(pr)
     if not verdicts or merge_gate.verdict_token(
             merge_gate.first_line(verdicts[-1].get("body") or ""),
@@ -12374,6 +12797,8 @@ def _regate_reason(pr: dict) -> str | None:
         return None
     if not verdict_bound(pr):
         return None  # the APPROVE is for code this head no longer proposes
+    if receipt is not None:
+        return _regate_again_reason(pr, receipt)
     if refreshed:
         return (f"the gate refreshed this branch and stopped without merging, "
                 f"and every check on the new head finished green at {_pt(last)} "
@@ -12403,11 +12828,15 @@ def regate_green_unmerged() -> None:
     be evaluated again (`refresh_pending`) — and any other head once its last
     check finished more than REGATE_MINUTES ago. One dispatch per head: the
     dispatch posts one `🔁 regate @<head>:` line on the pull request naming
-    why, and a head carrying it is never dispatched again, while that gate
-    run is in flight or after it. A new head starts again. A dispatch that
-    does not go through posts nothing and is recorded, so the next sweep
-    tries again. One summary line per sweep, including one that finds
-    nothing."""
+    why, and a head carrying it is not dispatched again while that gate run
+    is in flight. After it, one exception (DRE-9205): when that gate run
+    answered `wait` on an Agent Fix run that has since finished with the
+    head unchanged — #4725's, which the regate's own comment woke — the
+    head goes back once more under one `🔁 regate @<head> again:` line
+    naming the fix run, and never a third time. A new head starts again. A
+    dispatch that does not go through posts nothing and is recorded, so the
+    next sweep tries again. One summary line per sweep, including one that
+    finds nothing."""
     prs = _open_pr_listing()
     if prs is None:
         print("regate: the open pull requests could not be read")
@@ -12418,10 +12847,12 @@ def regate_green_unmerged() -> None:
             continue
         candidates += 1
         number, head = pr["number"], pr["headRefOid"]
+        opener = (_regate_again_opener(head) if _regate_receipts(pr, head)[0]
+                  else _regate_receipt_opener(head))
         print(f"regate: PR #{number} @{head[:8]} sent back to the merge gate — {why}")
         if _nudge(gate_workflow(), number):
             dispatched += 1
-            _post_pr_note(number, f"{_regate_receipt_opener(head)} PR #{number} "
+            _post_pr_note(number, f"{opener} PR #{number} "
                                   f"sent back to the merge gate — {why}.")
     print(f"regate: {candidates} candidate(s), {dispatched} dispatched")
 
@@ -16931,7 +17362,13 @@ def main(
                     continue
                 spent = review_nudges_spent(card, tag, head)
                 if spent >= REVIEW_NUDGE_CAP:
-                    hand_review_nudge_to_person(card, pr, tag, critic, verifier)
+                    # DRE-9191: a head held only by what was stopped, not
+                    # failed, is re-run once before anybody is asked.
+                    rerun = review_cap_rerun(card, pr, tag)
+                    if not rerun.handled:
+                        hand_review_nudge_to_person(
+                            card, pr, tag, critic, verifier,
+                            rerun_jobs=rerun.rerun_jobs)
                 elif bound:
                     if _nudge(gate_workflow(), pr["number"]):
                         linear_ops.cmd_comment(
