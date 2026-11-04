@@ -602,10 +602,6 @@ oldest since 2026-10-08 (DRE-7772). This is the one full statement of the rule.
 The proof brief and the planner's brief point to it and never restate it.
 
 The sandbox presses, the one list (DRE-7772):
-- `createTask` — make a task
-- `snoozeTask` — snooze a task
-- `markTaskDone` — mark a task done
-- `makeTaskCard` — file a task's card into Intake
 - `sendProjectAgentMessage` — send a Desk message, or open a conversation
 - `answerDeskPermission` — answer a Desk Allow or Deny
 - `startInitiativeDraft` — start an initiative draft
@@ -668,7 +664,10 @@ Loops 3 epic (DRE-8700), and left the CEO's own answers off as well. DRE-9044
 (2026-11-03) added `saveThought`, the bullet after `askLoopAgain`, for the
 Loops 4 epic (DRE-8701), and left the CEO's own answers off again. DRE-9077
 (2026-11-03) added `askKpiWhy`, the last bullet, for the KPI page epic
-(DRE-8702), and left the CEO's own answers off as before.
+(DRE-8702), and left the CEO's own answers off as before. DRE-8704 removed
+the four task presses that opened the list — `createTask`, `snoozeTask`,
+`markTaskDone` and `makeTaskCard` — when Tasks retired under Loops, and
+DRE-9201 (2026-11-04) took them off this copy.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run

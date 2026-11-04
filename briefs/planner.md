@@ -618,16 +618,17 @@ the record lists, and the read that shows the result, as a step the run does:
 the run makes it as the console proof-reader on the sandbox project
 `agent-bureau-demo`.
 
-    - [ ] Sandbox press: on `agent-bureau-demo`, the run makes one task titled
-          `SANDBOX FIXTURE (proof DRE-<n>)` (`createTask`); the record quotes
-          the command's JSON object, its `outcome` `ok` and the task's id in
-          `ids`, reads the task back in the project's task list, and the run
-          marks it done (`markTaskDone`).
+    - [ ] Sandbox press: on `agent-bureau-demo`, the run records one loop titled
+          `SANDBOX FIXTURE (proof DRE-<n>)` (`recordLoop`); the record quotes
+          the command's JSON object, its `outcome` `ok` and the loop's id in
+          `ids`, reads the loop back on the project's Loops page, and the run
+          closes it with an ending (`closeLoop`).
 
 The record quotes the command's JSON object, never a tagged line, because the
 command's printer lives in agent-bureau and `config/proof-reach.json` keeps
 only lines printed in this repo. DRE-7711's six sandbox tasks, which waited on
-a person from 2026-10-19, are a press the run now makes. The plan critic
+a person from 2026-10-19, were a press the run made until Tasks retired under
+Loops (DRE-8704). The plan critic
 refuses a PROOF card labeled `repo:agent-bureau` that sends a press on the
 list, on the sandbox, to a person (DRE-7779).
 
