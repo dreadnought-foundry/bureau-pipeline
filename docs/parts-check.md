@@ -3,8 +3,9 @@
 A repo whose design system exists ships shared parts: the components in the
 folders its `.github/bureau/design-system.json` declares
 ([`design-system-declaration.md`](design-system-declaration.md)). A copy is one
-of those parts declared again somewhere else in the repo — the local `Notice`
-an initiatives page grew on 2026-10-30 beside the shared `Notice` molecule.
+of those parts declared again somewhere else in the repo, outside every part
+file of its name — the local `Notice` an initiatives page grew on 2026-10-30
+beside the shared `Notice` molecule.
 
 `scripts/parts_check.py` (DRE-8841) finds them. It has two commands: `count`
 counts every copy in a checkout, and `check` judges a pull request's diff. The
@@ -40,8 +41,9 @@ Every part in the catalog — its name is the part's file stem, as
 any other UI file of the repo is one copy.
 
 - **Any other UI file** is every file with a `design_parts.UI_EXTENSIONS`
-  extension (`.tsx`, `.jsx`, `.vue`, `.svelte`) other than the part's own
-  "ships at" file, inside the declared folders or outside them.
+  extension (`.tsx`, `.jsx`, `.vue`, `.svelte`) other than the "ships at"
+  file of a catalog part of that name, inside the declared folders or outside
+  them.
 - A file whose name contains `.test.`, `.spec.` or `.stories.` is never read,
   and neither is any path with a `node_modules`, `.git` or `.bureau-pipeline`
   segment.
@@ -53,8 +55,15 @@ any other UI file of the repo is one copy.
 - A copy's line is its first declaration of the part's name in the copy file.
   The part's line is the part's own declaration in its "ships at" file, or
   line 1 when no pattern recognizes it there (a `.vue` or `.svelte` part, say).
-- When two parts share a name, the first in catalog order is the part, and
-  the other's file is a copy of it.
+- When two parts share a name, each shipping from a declared folder, they are
+  counterparts — the same part built for two platforms, such as foundry's web
+  atoms and its phone atoms (DRE-8998) — and neither is a copy of the other. A
+  component declared under a part's name is a copy only when its file is not
+  the "ships at" file of any catalog part of that name. A page, a feature, or
+  another part's file that declares a local component with a part's name still
+  holds a copy, reported against the first part of that name in catalog order.
+  So a pull request that adds a counterpart, or edits one's declaration line,
+  adds no copy.
 
 ## A copy's identity
 
@@ -82,7 +91,11 @@ names every one.
    `import` statement imports a catalog part (the import rule, below). A
    component is declared on an added line when a `parts_review._declarations`
    match opens on a line `added_lines` numbers as added; a file the diff adds
-   has every line added, so a new file is judged whole. A diff that adds a
+   has every line added, so a new file is judged whole. A declaration the
+   diff also removes from the same file — a component renamed, or its
+   declaration line edited — is not new (DRE-9089): the file fails only when
+   the diff adds more declarations to it than it removes from it, so a rename
+   cannot carry a second, new component past the check. A diff that adds a
    route line to a router shell that declares a component and has no part to
    import does not fail. The file is read from the checkout; when the
    checkout does not hold it, from the diff's added and context lines.

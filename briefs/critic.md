@@ -112,7 +112,10 @@ the table escapes as `\|` may be quoted escaped or not: the gate reads it as
 the pipe it stands for on both sides, and still matches the whole quote to
 one row, never a part of it (DRE-8560). The seen
 quote is copied from the record word for word: a quote the record does not
-hold accepts nothing. The reason is one sentence of your own on why only the
+hold accepts nothing. Nothing may come between the seen quote's closing `”`
+and ` — differs:`: a location goes inside the differs or reason part. The
+gate reads no line of another form, and its decline names each one it could
+not read (DRE-9182). The reason is one sentence of your own on why only the
 words differ. An accepted row is no reason to send the record back.
 
 Judge each row by the rule the CEO decided on 2026-10-10, carried in the

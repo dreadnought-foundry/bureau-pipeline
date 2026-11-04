@@ -926,6 +926,21 @@ reads the newest back, so a step never runs twice and a close that can never
 land is not retried. Every reader of these comments sets the act's trailer
 line aside.
 
+**A Green Light row (DRE-9049).** The same act covers the three outcomes of
+a row in Green Light. `repair`, a stopped run, and `answer`, a question the
+facts answer, return a row that was never a decision to Planning: the
+receipt names the cause, quotes the facts and says
+`moved: Green Light → Planning`, a move the lane contract admits
+`operator_agent_apply.py` to make beside the hygiene agent's and the Triage
+Repair's, so the state stays `unchanged`. `keep` leaves a genuine decision
+where it is, under a receipt that says `stays: Green Light`, and moves
+nothing; the agent never approves. The sweep's `hand-work-overdue` alarm is
+also a trigger for the agent's next pass on the card. The receipt key has one
+exception here, the re-keep (DRE-9051): a `keep` that a comment came after
+(`operator_decide.keep_stands` is False) no longer spends the pass, so `claim`
+posts the next Green Light decision's receipt over the same fingerprint and
+the row is re-read once per comment it gets, never every pass.
+
 The console must learn this act before this row merges, as for every row.
 
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)

@@ -56,7 +56,9 @@ What is needed next is exactly one of `NEXT_STEPS`:
 
   * a re-run — the failing job was canceled, timed out, or lost its runner
     (it failed with no step failed), or the stuck job's run needs canceling
-    and re-running, on attempt 1;
+    and re-running, on attempt 1; or the decision is `harness-inconclusive`
+    and the failing job, if any, is the harness's own — GitHub refused it for
+    a rate limit, which no fix clears (DRE-9068);
   * a fix — a job failed at a step (a test or a harness scenario), or the
     decision is `mirror-tests-failed`;
   * a person — the run is already on attempt 2 or later, the decision is
@@ -95,7 +97,11 @@ read from the environment. Exit 0 on every pass, `unknown` included, and 1
 only when the notice client reports `lost`. The notice key is `NOTICE_KEY`
 (console kind `pipeline_notice:channel_hold:stable`), at WARN, with a fallback
 card titled `FALLBACK_TITLE` — one title, so the fallback finds its own open
-card and never files a second. One line per pass on stdout, under `TAG`:
+card and never files a second. The fallback card wears `agent:ops` and
+`no-code` beside `repo:bureau-pipeline`, and goes to the operator, not to a
+build: a held channel needs a re-run, a fix, a person or a wait, which is an
+operator's act, and those two labels route the card `OPERATOR` before any
+model or critic reads it (DRE-9162). One line per pass on stdout, under `TAG`:
 
     channel-hold: none — stable carries main <sha7>
     channel-hold: held since <h:mm AM/PM PT> age=<m>m next=<re-run|fix|person|wait> job="<name>" run=<url> — <raise|morning-raise|quiet>
@@ -150,15 +156,20 @@ MORNING_FLOOR_MINUTES = 45
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 #: The card the alert is filed as when the door cannot take it. One title, so
-#: `linear_ops.find_open` finds the card it filed and comments there.
+#: `linear_ops.find_open` finds the card it filed and comments there. Labeled
+#: for the operator (DRE-9162): `agent:ops` and `no-code` route it OPERATOR at
+#: precedence 1 (`config/routing-verdicts.json`), so it never reaches a build.
 FALLBACK_TITLE = "bureau-pipeline: the stable channel is held"
 FALLBACK = pipeline_notice.Fallback(
     title=FALLBACK_TITLE, lane=pipeline_notice.DEFAULT_LANE,
-    labels=("repo:bureau-pipeline",))
+    labels=("repo:bureau-pipeline", "agent:ops", "no-code"))
 
 #: The workflows it reads, by file, and the names they carry.
 UNIT_SUITE_FILE = "tests.yml"          # pc.UNIT_SUITE, "Pipeline Tests"
 HARNESS_FILE = "harness.yml"           # "Integration Harness"
+#: That workflow's one job, as GitHub names it: its id, since it has no
+#: `name:` of its own.
+HARNESS_JOB = "harness"
 PROMOTE_FILE = "promote-channel.yml"   # "Promote Channel"
 #: (file, the event its runs on main are read for — None for any).
 PROVING = ((UNIT_SUITE_FILE, "push"), (HARNESS_FILE, None))
@@ -186,6 +197,8 @@ OUTCOME_NEXT = {
     pc.OUTCOME_HELD: PERSON,
     pc.OUTCOME_BLOCKED: RERUN,
     pc.OUTCOME_QUEUE_STALL: RERUN,
+    # GitHub's meter refused the harness (DRE-9068): nothing to fix.
+    pc.OUTCOME_INCONCLUSIVE: RERUN,
     pc.OUTCOME_UNPROVEN: RERUN,
     pc.OUTCOME_FORCE_NEEDS_REASON: PERSON,
     pc.OUTCOME_FORCE_NOT_OPERATOR: PERSON,
@@ -698,6 +711,14 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
     if outcome == pc.OUTCOME_MIRROR_FAILED:
         return FIX, ("agent-bureau's mirror tests fail on this commit "
                      "(mirror-tests-failed), so agent-bureau's mirror needs a fix.")
+    if outcome == pc.OUTCOME_INCONCLUSIVE and (job is None or job.name == HARNESS_JOB):
+        # The harness job DID fail at a step — on GitHub's rate limit, which
+        # the decision read off its stamp (DRE-9068). Another job failing
+        # beside it is still that job's fix, below.
+        return RERUN, (f"GitHub refused the harness for a rate limit, so the "
+                       f"run is {pc.OUTCOME_INCONCLUSIVE} and nothing needs a "
+                       f"fix: re-run the harness once the limit resets. "
+                       f"{_one_line(decision.reason)}")
     if job:
         if job.state == FAILURE and job.failed_step:
             return FIX, (f"the job failed at step \"{job.failed_step}\" on attempt "

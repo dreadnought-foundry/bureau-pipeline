@@ -1069,6 +1069,16 @@ jobs:
       # Both land before the durable copy, so both critic attempts read them.
       # tests/test_parts_review_wiring.py executes the block against
       # DRE-8719's fixture trees.
+      #
+      # THE READ DOOR (DRE-8899). The CEO's answer is read off the card's
+      # thread, and this run's own card is the one read the door serves a
+      # pull_request run (agent-bureau DRE-8807). The four door variables are
+      # reconcile.yml's, and BUREAU_READ_CARD_MAX_AGE is the review card's
+      # bound (`bureau_read.REVIEW_CARD_MAX_AGE`, 120 seconds): the thread
+      # read asks the door first (`linear_ops.card_via_door`) and Linear when
+      # it cannot answer. The viewer the thread's authorship is judged against
+      # is still Linear's, this process's own key. The same five variables sit
+      # on Post verdict and Card → In Review below, for their card reads.
       - name: Assemble critic context
         id: ctx
         if: steps.decide.outputs.review == 'true'
@@ -1081,6 +1091,11 @@ jobs:
           SHADOW: ${{ inputs.shadow }}
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           python3 "$PIPELINE_DIR"/scripts/assemble_context.py assemble critic \
             --root "$PIPELINE_DIR" \
@@ -1858,8 +1873,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2262,8 +2278,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2862,6 +2879,14 @@ jobs:
           # reads is the owner's.
           NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
           OWNER: ${{ github.repository_owner }}
+          # The read door (DRE-8899), as Assemble critic context has it: the
+          # Linear copy's pre-read of the card asks the door first. The
+          # comment itself is Linear's write either way.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: bash "$PIPELINE_DIR/scripts/post_verdict.sh"
 
       # ── The card's lane, written from the PR side (DRE-4179) ──────────────
@@ -2913,6 +2938,16 @@ jobs:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # The read door (DRE-8899), as Assemble critic context has it. Every
+          # read the move makes stays on Linear: the In Review state's id
+          # (`/workflow-states` is refused on a pull_request run, and with the
+          # mode set it says `reason=pull-request`), and `get_issue` and the
+          # DRE-2316 re-read, which are the write path's own.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           # ANCHORED, and that is the point. The Resolve PR step's card grep is
           # `DRE-[0-9]+` anywhere in the ref — right for LOGGING which card a

@@ -78,7 +78,10 @@ Env (harness.yml sets all of these):
 
 Exit 0 iff every selected scenario passed; 1 if one failed; 2 on a bad
 invocation; `framework.BLOCKED_EXIT` (3) when the SANDBOX blocked the run —
-nothing proven about the commit either way, and the next run re-proves.
+nothing proven about the commit either way, and the next run re-proves;
+`framework.INCONCLUSIVE_EXIT` (4) when GitHub refused the run for a rate
+limit that outlasted the client's wait and no scenario failed for real
+(DRE-9068) — inconclusive, re-run the harness.
 """
 
 from __future__ import annotations
@@ -88,6 +91,7 @@ import os
 import re
 import sys
 
+import promote_channel
 from harness import app_token, builder_line, framework, sandbox_health
 from harness.github_api import GitHub
 from harness.scenarios import discover
@@ -311,6 +315,37 @@ def write_blocked_receipt(cause: str, log=print) -> str:
     return line
 
 
+def write_rate_limited_receipt(refusal: str, log=print) -> str:
+    """Publish an inconclusive, rate-limited run for the stamp step (DRE-9068).
+
+    The line opens with `promote_channel.RATE_LIMIT_MARKER` and goes out as
+    `blocked_reason`, the output harness.yml already makes the
+    `integration-harness` description: the marker is itself a blocked
+    marker, so the stamp step needs nothing new, and `evaluate` reads the
+    words after it as `harness-inconclusive` / rate-limited. `rate_limited`
+    says which kind of block it is. Sanitised and clamped like any block —
+    the refusal quotes GitHub's body, which is not ours to trust.
+    """
+    line = sandbox_health.receipt_line(
+        f"{promote_channel.RATE_LIMIT_MARKER} — {refusal}"
+    )
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a") as fh:
+            fh.write("rate_limited=true\n")
+            fh.write(f"blocked_reason={line}\n")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if summary:
+        with open(summary, "a") as fh:
+            fh.write(
+                "### Harness inconclusive: rate-limited by GitHub\n\n"
+                f"{refusal}\n\nNothing is proven either way — re-run the "
+                "harness.\n"
+            )
+    log(f"::error::{line}")
+    return line
+
+
 def select_names(available: dict, wanted: list) -> list:
     """Which scenarios this invocation runs.
 
@@ -521,7 +556,7 @@ def main(argv=None) -> int:
     )
 
     results = []
-    blocked = None
+    blocked = rate_limited = None
     for name in names:
         ctx = framework.HarnessContext(
             gh=gh,
@@ -576,14 +611,31 @@ def main(argv=None) -> int:
                     f"{remaining}; they would wait on the same failure"
                 )
             break
+        if result.rate_limited:
+            # Stop here too (DRE-9068). The meter that refused this scenario
+            # is the one every later scenario draws on, and asking an empty
+            # one again only deepens it (DRE-1921's lesson).
+            rate_limited = result.rate_limited
+            remaining = names[names.index(name) + 1:]
+            if remaining:
+                print(
+                    f"harness RATE-LIMITED by GitHub — not starting "
+                    f"{remaining}; they would be refused by the same meter"
+                )
+            break
 
     failed = [r for r in results if not r.ok]
+    # A failure that is a statement about the commit. A real one anywhere in
+    # the run outranks a rate limit elsewhere in it: the run is red.
+    real = [r for r in failed if not r.blocked and not r.rate_limited]
     print("\n== harness summary ==")
     for r in results:
         if r.ok:
             status = "PASS"
         elif r.blocked:
             status = f"BLOCKED at {r.failed_phase}"
+        elif r.rate_limited:
+            status = f"RATE-LIMITED at {r.failed_phase}"
         else:
             status = f"FAIL at {r.failed_phase}"
         print(f"  {r.scenario}: {status}")
@@ -610,6 +662,14 @@ def main(argv=None) -> int:
         )
         write_blocked_receipt(blocked)
         return framework.BLOCKED_EXIT
+    if rate_limited and not real:
+        print(
+            "\nharness INCONCLUSIVE / rate-limited — GitHub refused this run "
+            "for a rate limit that outlasted the wait. This commit is NOT "
+            "proven and NOT disproven; re-run the harness."
+        )
+        write_rate_limited_receipt(rate_limited)
+        return framework.INCONCLUSIVE_EXIT
     return 1 if failed else 0
 
 

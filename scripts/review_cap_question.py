@@ -35,6 +35,12 @@ request and canceling the card by hand, the one answer no mechanism makes,
 and the cancel is what lifts the hold (`card-closed`). The merge gate reads
 no Operator decision, so nothing here offers one as a way past a check.
 
+A head the cap already re-ran once (DRE-9191) — a canceled job, a summary
+job red only because of one, a Verify run that finished with no verdict — is
+asked about only once those runs finish and a check is still not green; the
+Finding then names each such job (`rerun_jobs`) and says it was re-run once
+at the cap.
+
 A proof record (`agent/DRE-<n>-proof-record`) is never parked: the sweep
 holds it In Review for the operator (DRE-6841), and asks through the variant
 — `compose_proof_record(...)` and `pr_blocker_proof_record(...)`, the same
@@ -141,8 +147,15 @@ def _count(n: int, noun: str) -> str:
     return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
 
 
+def _listed(names) -> str:
+    names = list(names)
+    if len(names) < 3:
+        return " and ".join(names)
+    return ", ".join(names[:-1]) + f" and {names[-1]}"
+
+
 def _finding(*, head, tag, critic, verifier, spent, hours, gate_note_line,
-             cap) -> str:
+             cap, rerun_jobs=()) -> str:
     budget = _BUDGET[tag]
     short = head[:7]
     if cap <= 0:
@@ -163,6 +176,12 @@ def _finding(*, head, tag, critic, verifier, spent, hours, gate_note_line,
     if tag == GATE_NUDGE_KEY and (gate_note_line or "").strip():
         parts.append("The gate's newest hold note on the pull request reads "
                      f"\"{gate_note_line.strip()}\".")
+    if rerun_jobs:
+        # DRE-9191: the cap re-ran these once, as stopped rather than failed,
+        # and they are still not green — so the question is a real one.
+        parts.append(f"Still not green: {_listed(rerun_jobs)}, each re-run "
+                     "once at the cap because it had been stopped rather than "
+                     "failed.")
     if cap > 0:
         parts.append("The sweep has stopped re-triggering, because "
                      f"{_count(cap, 'window')} on the same head is a stall, "
@@ -171,8 +190,11 @@ def _finding(*, head, tag, critic, verifier, spent, hours, gate_note_line,
 
 
 def escalation(*, card, pr_number, head, tag, critic, verifier, spent, hours,
-               gate_note_line, cap) -> console_escalation.Escalation:
-    """The one reading of the evidence both texts render."""
+               gate_note_line, cap,
+               rerun_jobs=()) -> console_escalation.Escalation:
+    """The one reading of the evidence both texts render. `rerun_jobs` names
+    the jobs the cap re-ran once on this head and found still not green
+    (DRE-9191); empty, the Finding reads as before."""
     if tag not in _BUDGET:
         raise ValueError(f"unknown re-trigger tag {tag!r}; expected "
                          f"{GATE_NUDGE_KEY!r} or {REVIEW_NUDGE_KEY!r}")
@@ -180,7 +202,8 @@ def escalation(*, card, pr_number, head, tag, critic, verifier, spent, hours,
     return console_escalation.Escalation(
         finding=_finding(head=head, tag=tag, critic=critic, verifier=verifier,
                          spent=spent, hours=hours,
-                         gate_note_line=gate_note_line, cap=cap),
+                         gate_note_line=gate_note_line, cap=cap,
+                         rerun_jobs=rerun_jobs),
         question=question,
         recommendation=pick,
         why=f"{reason} — the card comes back only on a new head, so "
@@ -204,12 +227,12 @@ def _key(head: str) -> str:
 
 
 def compose(*, card, pr_number, head, tag, critic, verifier, spent, hours,
-            gate_note_line, cap) -> str:
+            gate_note_line, cap, rerun_jobs=()) -> str:
     """The Linear comment the review-cap park posts on the card."""
     lines = console_escalation.render(escalation(
         card=card, pr_number=pr_number, head=head, tag=tag, critic=critic,
         verifier=verifier, spent=spent, hours=hours,
-        gate_note_line=gate_note_line, cap=cap))
+        gate_note_line=gate_note_line, cap=cap, rerun_jobs=rerun_jobs))
     notice = f"🚨 {REVIEW_NUDGE_CAP_KEY} PR #{pr_number} @{head}:"
     return "\n\n".join((notice, lines, _way_back(card), _key(head)))
 
@@ -223,12 +246,12 @@ def _blocker(lines, way_back, pr_number, head) -> str:
 
 
 def pr_blocker(*, card, pr_number, head, tag, critic, verifier, spent, hours,
-               gate_note_line, cap) -> str:
+               gate_note_line, cap, rerun_jobs=()) -> str:
     """The fix-loop blocker the same park posts on the pull request."""
     lines = console_escalation.render(escalation(
         card=card, pr_number=pr_number, head=head, tag=tag, critic=critic,
         verifier=verifier, spent=spent, hours=hours,
-        gate_note_line=gate_note_line, cap=cap))
+        gate_note_line=gate_note_line, cap=cap, rerun_jobs=rerun_jobs))
     return _blocker(lines, _way_back(card), pr_number, head)
 
 

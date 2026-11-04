@@ -145,6 +145,33 @@ scenario waiting on it had no way to tell that from slowness, so it waited
 out `timeout-minutes: 180` and `stable` sat 50 commits behind until a human
 cancelled the run.
 
+### A rate-limited run is inconclusive, not failed (DRE-9068)
+
+GitHub's own refusal is the same kind of fact. A `403` or `429` whose body
+names a rate limit is `github_api.RateLimited`, and the client recovers it
+where it can: a reader moves to the next pool slot, and the worker waits for
+the reset — `retry-after` first, then `x-ratelimit-reset` when the primary
+window is the empty one, else GitHub's one minute for a secondary limit
+(`RATE_LIMIT_BACKOFF_SECONDS`) — capped at `RATE_LIMIT_WAIT_CAP_SECONDS`, and
+sends the request once more. A refusal that outlasts that reaches
+`framework.run_scenario`, which records it as `rate_limited` rather than a
+failure, in any phase and in cleanup — unless something else in the scenario
+failed for real, which keeps it a failure.
+
+The run then stops (the remaining scenarios draw on the same meter), exits
+`framework.INCONCLUSIVE_EXIT` (4) when no scenario failed for real, and writes
+a `blocked_reason` opening with `promote_channel.RATE_LIMIT_MARKER`
+(`harness blocked: GitHub rate limit`), plus `rate_limited=true`. The stamp is
+red, as a block's is; the channel reads it as `harness-inconclusive` /
+rate-limited — re-run the harness — and red-main repair backs off, as it does
+for any block. A real failure — a 404, an assertion — is still a failure, and
+a real failure anywhere in the run makes the whole run one.
+
+Origin: 2026-11-02, run `41581663622` on `dd9a33d`. Every code scenario
+passed; `gate_paths`' cleanup and `proof_task_parses`' exercise were refused
+with `API rate limit exceeded for installation ID 123249480`, the run read as
+a red trunk, and `stable` held until a by-hand promote at 9:30 PM PT.
+
 ## What a wait costs GitHub (DRE-4132)
 
 Every wait above is the same URL asked again, and GitHub bills each ask against

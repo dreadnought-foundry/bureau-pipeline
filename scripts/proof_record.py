@@ -171,6 +171,13 @@ UNQUOTED = "the checker's acceptance quotes text the record does not hold"
 #: acceptance whose criterion is no row's (DRE-8560) — said, so it is not
 #: read as no acceptance at all; the quoted criteria follow it.
 UNMATCHED = "the checker's acceptance names no row's criterion as the record writes it"
+#: What the decline says of a bound verdict's line that opens `ACCEPTANCE_MARK`
+#: but that `_ACCEPTANCE` does not read (DRE-9182) — said, so an acceptance
+#: refused for its form is not read as no acceptance at all; each line follows
+#: it, cut to 70. Such a line still accepts nothing.
+UNREAD_FORM = ("acceptance line(s) in the checker's verdict were not read because of "
+               "their form (nothing may come between the seen quote's closing ” and "
+               "— differs)")
 
 _FENCE = re.compile(r"^\s*(```|~~~)")
 _SEPARATOR_CELL = re.compile(r":?-+:?")
@@ -214,6 +221,9 @@ _ACCEPTANCE = re.compile(
     rf"^[ \t]*{re.escape(ACCEPTANCE_MARK)}[ \t]*“(?P<criterion>.+?)”[ \t]+—[ \t]+seen:[ \t]*"
     r"“(?P<seen>.+?)”[ \t]+—[ \t]+differs:[ \t]*\S.*?[ \t]+—[ \t]+reason:[ \t]*\S.*$",
     re.MULTILINE)
+#: Any line `ACCEPTANCE_MARK` opens, as `_ACCEPTANCE` reads a line's start —
+#: the lines a decline checks for a form `_ACCEPTANCE` does not read.
+_ACCEPTANCE_OPENING = re.compile(rf"^[ \t]*{re.escape(ACCEPTANCE_MARK)}.*$", re.MULTILINE)
 #: The record's own merge: the criterion leads with it — "Merged to main…",
 #: "The record is on main", "docs/<record>.md merged to main".
 _OWN_MERGE = re.compile(r"(?:merged to main|(?:the |this )?record (?:is )?(?:merged to|on) main"
@@ -252,9 +262,11 @@ _CLOSING_STEP = re.compile(r"\bthe (?:ceo|operator)\b[^.;:]*?\b(?:clos(?:es|ed|e
 #: `caused` the (criterion, cause word) pairs of the unmet rows that carry one;
 #: `checked` the (criterion, verdict comment URL) pairs of the accepted rows
 #: the checker accepted (DRE-7949), and `refused` the ((criterion, result),
-#: why) pairs of the unmet rows an acceptance named but could not accept.
-Reading = namedtuple("Reading", "rows met unmet accepted caused checked refused",
-                     defaults=((), ()))
+#: why) pairs of the unmet rows an acceptance named but could not accept;
+#: `unread` the bound verdict's lines that open `ACCEPTANCE_MARK` in a form
+#: `_ACCEPTANCE` does not read (DRE-9182).
+Reading = namedtuple("Reading", "rows met unmet accepted caused checked refused unread",
+                     defaults=((), (), ()))
 
 
 def _cells(line: str) -> list:
@@ -453,6 +465,14 @@ def acceptances(body: str | None) -> list:
             for m in _ACCEPTANCE.finditer(body or "")]
 
 
+def unread_acceptances(body: str | None) -> list:
+    """Every line of `body` that opens `ACCEPTANCE_MARK` but that
+    `_ACCEPTANCE` does not read, stripped (DRE-9182). Each accepts nothing;
+    the caller names them so their form is said."""
+    return [m.group().strip() for m in _ACCEPTANCE_OPENING.finditer(body or "")
+            if not _ACCEPTANCE.match(m.group())]
+
+
 def _verdict_link(verdict) -> str | None:
     """The bound verdict's comment URL, or None when there is no verdict or
     its URL is not a GitHub pull request comment."""
@@ -517,11 +537,14 @@ def reading(text: str, verdict=None, others=()) -> Reading:
     other comment the caller read: an acceptance there, or written into the
     record, or a row opening `CHECKER_OPENING`, accepts nothing and is named
     the reading run's own (`refused`). A `Not observed.` row is never accepted.
+    The verdict's lines that open `ACCEPTANCE_MARK` in a form `_ACCEPTANCE`
+    does not read are kept as `unread` (DRE-9182).
     The legacy `ACCEPTED_OPENING` row reads as it always has."""
     rows = criterion_rows(text)
     judged = [r for r in rows or [] if not is_closing_row(r[0])]
     url = _verdict_link(verdict)
     checker = acceptances(verdict["body"]) if url else []
+    unread = unread_acceptances(verdict["body"]) if url else []
     stray = [named for named, _ in checker
              if not any(_names(named, criterion) for criterion, _ in rows or [])]
     own = acceptances(text) + [a for body in others or () for a in acceptances(body)]
@@ -543,7 +566,7 @@ def reading(text: str, verdict=None, others=()) -> Reading:
                 refused.append((row, why))
     caused = [(c, row_cause(r)) for c, r in unmet if row_cause(r)]
     return Reading(rows=rows, met=met, unmet=unmet, accepted=accepted, caused=caused,
-                   checked=checked, refused=refused)
+                   checked=checked, refused=refused, unread=unread)
 
 
 def all_unmet_caused(read: Reading) -> bool:
@@ -903,7 +926,11 @@ def shortfall(record: Record, verdict=None, others=()) -> str | None:
         refused = dict(read.refused)
         rows = "; ".join(f"{_row(c, r)} — {refused[(c, r)]}" if (c, r) in refused
                          else unmet_row(c, r) for c, r in read.unmet)
-        return f"{path} has {len(read.unmet)} row(s) not met: {rows}"
+        said = f"{path} has {len(read.unmet)} row(s) not met: {rows}"
+        if read.unread:
+            said += f"; {UNREAD_FORM}: " + "; ".join(f"“{_cut(line, 70)}”"
+                                                     for line in read.unread)
+        return said
     if not read.met and not read.accepted and not read.unmet:
         return f"{path} has a criterion table with no row but its closing step"
     return None

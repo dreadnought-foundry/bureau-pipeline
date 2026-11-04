@@ -16,8 +16,9 @@ a false arrival:
     it still escalates, with the question, unchanged.
 
 The rule: one automatic re-run per unbroken run of no-results, read off the
-card's own round records. A second no-result in a row escalates, says the
-review failed twice, and names both runs.
+card's own round records. A second no-result in a row parks for the operator
+(DRE-8772), says the review failed twice, and names both runs: "re-run the
+review, or settle the card yourself?" is a re-run, not the CEO's decision.
 
 The replay text below was copied off the two cards' threads on 2026-10-18, so
 nothing is fetched. Every row was written by the pipeline.
@@ -44,11 +45,9 @@ STANDARD = os.path.join(ROOT, "standards", "plan-critic.md")
 
 sys.path.insert(0, SCRIPTS)
 
-import console_escalation  # noqa: E402
 import linear_ops  # noqa: E402
 import plan_critic as pc  # noqa: E402
 import plan_run  # noqa: E402
-import planning_escalation  # noqa: E402
 import review_rerun as rr  # noqa: E402
 
 # --- DRE-2498 -----------------------------------------------------------------
@@ -171,9 +170,20 @@ class TheFirstNoResultIsReadAgain(unittest.TestCase):
             self.assertEqual(pc.RERUN, action, result)
             self.assertNotIn("goes to a person", note)
 
-    def test_a_no_result_with_the_rerun_spent_escalates(self):
-        self.assertEqual((pc.ESCALATE, pc.NO_CRITIC_NOTE),
-                         pc.one_off_decide(pc.NO_RESULT, rerun_spent=True))
+    def test_a_no_result_with_the_rerun_spent_parks(self):
+        """DRE-8772: the second in a row is the operator's, never the CEO's."""
+        for result in (pc.NO_RESULT, "", "MAYBE"):
+            action, note = pc.one_off_decide(result, "", 0, rerun_spent=True)
+            self.assertEqual(pc.PARK, action, result)
+            self.assertEqual(pc.one_off_twice_note(()), note)
+
+    def test_a_question_with_a_decision_finding_still_escalates(self):
+        for spent in (True, False):
+            action, note = pc.one_off_decide(
+                pc.QUESTION, DRE_7066_QUESTION, 0, rerun_spent=spent,
+                finding=DRE_7066_FINDING)
+            self.assertEqual(pc.ESCALATE, action, spent)
+            self.assertEqual(DRE_7066_QUESTION, note)
 
     def test_the_default_answers_what_it_answered_before(self):
         self.assertEqual(pc.one_off_decide(pc.NO_RESULT, rerun_spent=True),
@@ -187,8 +197,18 @@ class TheFirstNoResultIsReadAgain(unittest.TestCase):
                                          rerun_spent=False)
         self.assertEqual(pc.RERUN, action)
         self.assertEqual(pc.one_off_ran_out_note(row_), note)
-        self.assertEqual(pc.ESCALATE, pc.one_off_decide(
-            pc.NO_RESULT, "", 0, row_, rerun_spent=True)[0])
+
+    def test_a_read_that_ran_out_with_the_rerun_spent_parks(self):
+        row_ = {"stage": pc.STAGE_ONE_OFF, "run": "1", "attempt": 1,
+                "step": "oocritic", "subtype": pc.TURN_CAP_SUBTYPE,
+                "turns": 36, "ceiling": 36}
+        action, note = pc.one_off_decide(pc.NO_RESULT, "", 0, row_,
+                                         rerun_spent=True, runs=("1", "2"))
+        self.assertEqual(pc.PARK, action)
+        self.assertIn(pc.one_off_ran_out_note(row_), note)
+        self.assertIn("twice", note)
+        self.assertIn("run 1", note)
+        self.assertIn("run 2", note)
 
     def test_a_decided_round_does_not_change(self):
         for args, kwargs in (
@@ -236,65 +256,48 @@ class TheRoundRecordCarriesTheRun(unittest.TestCase):
         self.assertEqual("", rows[1]["reason"])
 
 
-class TheTwiceFailedEscalation(unittest.TestCase):
+#: The bound park's ask, which the second no-result's park must never make:
+#: no finding is open from a read that decided nothing.
+BOUND_REWRITE_ASK = "one rewrite answers every finding"
 
-    def _fits(self, text: str) -> None:
-        self.assertEqual([], console_escalation.problems(text), text)
-        self.assertIsNone(
-            planning_escalation.refusal(console_escalation.split(text)[0]), text)
+
+class TheTwiceFailedPark(unittest.TestCase):
+    """The note the second no-result in a row parks with (DRE-8772)."""
+
+    def _says_who_it_is_for(self, note: str) -> None:
+        self.assertIn("for the operator, not the CEO", note)
+        self.assertIn("Planning", note)
+        self.assertIn("read it again", note)
+        self.assertNotIn(BOUND_REWRITE_ASK, note)
 
     def test_it_says_twice_and_names_both_runs(self):
-        text = pc.one_off_escalation(
-            pc.NO_RESULT, runs=(DRE_2498_RUN, STAND_IN_SECOND_RUN))
-        self.assertIn("twice", text)
-        self.assertIn(DRE_2498_RUN, text)
-        self.assertIn(STAND_IN_SECOND_RUN, text)
-        self.assertIn("nothing has checked", text)
-        self._fits(text)
-
-    def test_it_keeps_the_three_lines_and_the_two_choices(self):
-        text = pc.one_off_escalation(
-            pc.NO_RESULT, runs=(DRE_2498_RUN, STAND_IN_SECOND_RUN))
-        esc = console_escalation.parse(text)
-        self.assertIsNotNone(esc, text)
-        self.assertIn("twice", esc.finding)
-        self.assertNotEqual(pc.NO_RESULT_FINDING, esc.finding)
-        self.assertEqual(pc.NO_RESULT_QUESTION, esc.question)
-        for line in (console_escalation.FINDING_PREFIX,
-                     console_escalation.QUESTION_PREFIX,
-                     console_escalation.RECOMMENDATION_PREFIX):
-            self.assertIn(line, text)
-        for choice in pc.NO_RESULT_CHOICES:
-            self.assertIn(choice.id, text)
+        note = pc.one_off_twice_note((DRE_2498_RUN, STAND_IN_SECOND_RUN))
+        self.assertIn("the review was started twice and the critic produced "
+                      "no result either time", note)
+        self.assertIn(f"run {DRE_2498_RUN}", note)
+        self.assertIn(f"run {STAND_IN_SECOND_RUN}", note)
+        self._says_who_it_is_for(note)
+        self.assertNotIn("\n", note, "a note is one line")
 
     def test_an_unrecorded_earlier_run_is_said_as_not_recorded(self):
-        text = pc.one_off_escalation(pc.NO_RESULT,
-                                     runs=(None, STAND_IN_SECOND_RUN))
-        self.assertIn("not recorded", text)
-        self.assertIn(STAND_IN_SECOND_RUN, text)
-        self.assertNotIn("None", text)
-        self._fits(text)
+        note = pc.one_off_twice_note((None, STAND_IN_SECOND_RUN))
+        self.assertIn("not recorded", note)
+        self.assertIn(STAND_IN_SECOND_RUN, note)
+        self.assertNotIn("None", note)
 
-    def test_it_replaces_the_ran_out_text(self):
-        row_ = {"stage": pc.STAGE_ONE_OFF, "run": "1", "attempt": 1,
-                "step": "oocritic", "subtype": pc.TURN_CAP_SUBTYPE,
-                "turns": 36, "ceiling": 36}
-        text = pc.one_off_escalation(pc.NO_RESULT, "", 0, (), row_,
-                                     runs=("1", "2"))
-        self.assertIn("twice", text)
-        self.assertNotEqual(pc.one_off_ran_out_request(row_), text)
-
-    def test_without_runs_nothing_changes(self):
-        self.assertEqual(pc.one_off_escalation(pc.NO_RESULT, runs=()),
-                         pc.one_off_escalation(pc.NO_RESULT))
-        self.assertNotIn("twice", pc.one_off_escalation(pc.NO_RESULT))
-
-    def test_a_question_is_untouched_by_runs(self):
+    def test_the_decision_carries_the_runs_into_its_note(self):
         self.assertEqual(
-            pc.one_off_escalation(pc.QUESTION, DRE_7066_QUESTION,
-                                  finding=DRE_7066_FINDING),
-            pc.one_off_escalation(pc.QUESTION, DRE_7066_QUESTION,
-                                  finding=DRE_7066_FINDING, runs=("1", "2")))
+            (pc.PARK, pc.one_off_twice_note(("1", "2"))),
+            pc.one_off_decide(pc.NO_RESULT, rerun_spent=True, runs=("1", "2")))
+
+    def test_the_two_run_escalation_is_gone(self):
+        """Nothing in `decide` reaches it any more, so it was removed rather
+        than left to be read as live (DRE-8772)."""
+        self.assertFalse(hasattr(pc, "NO_RESULT_TWICE_FINDING"))
+        self.assertFalse(hasattr(pc, "one_off_twice_what_happened"))
+        with self.assertRaises(TypeError):
+            pc.one_off_escalation(pc.NO_RESULT, runs=("1", "2"))
+        self.assertNotIn("twice", pc.one_off_escalation(pc.NO_RESULT))
 
 
 # --- DRE-2498, replayed through the CLI ----------------------------------------
@@ -322,30 +325,46 @@ class DRE2498IsReadAgainRatherThanAskedAbout(_Cli, unittest.TestCase):
         thread = dre_2498_thread() + [row(run["record"].strip())]
         self.assertEqual(1, pc.send_backs(thread, pc.STAGE_ONE_OFF))
 
-    def test_the_second_no_result_in_a_row_escalates_naming_both_runs(self):
+    def test_the_second_no_result_in_a_row_parks_naming_both_runs(self):
+        """DRE-8772: `park` and `bound=true`, the outputs `One-off critic —
+        park in Triage` acts on, and no reason file for the CEO."""
         thread = dre_2498_thread() + [row(DRE_2498_ROUND_2_AS_NOW_WRITTEN)]
         run = self.decide(thread, "", run_id=STAND_IN_SECOND_RUN)
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
-        text = run["escalation"]
-        self.assertIsNotNone(text)
-        self.assertIn("twice", text)
-        self.assertIn(DRE_2498_RUN, text)
-        self.assertIn(STAND_IN_SECOND_RUN, text)
-        self.assertIsNone(planning_escalation.refusal(
-            console_escalation.split(text)[0]), text)
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
+        self.assertEqual("true", run["outputs"]["bound"])
+        self.assertIsNone(run["escalation"],
+                          "the second no-result wrote a reason for the CEO")
+        note = run["note"]
+        self.assertIn("the review was started twice and the critic produced "
+                      "no result either time", note)
+        self.assertIn(f"run {DRE_2498_RUN}", note)
+        self.assertIn(f"run {STAND_IN_SECOND_RUN}", note)
+        self.assertIn("for the operator, not the CEO", note)
+        self.assertNotIn(BOUND_REWRITE_ASK, note)
+        self.assertNotIn("decision queue", note)
         self.assertIn(f"round=3 result={pc.NO_RESULT}", run["record"])
         self.assertIn(f"run={STAND_IN_SECOND_RUN}", run["record"])
+
+    def test_the_park_lists_no_finding(self):
+        """The card's earlier send-back is not open from these reads: the
+        bound exit reads it off the record, and the note does not restate it
+        as this park's finding."""
+        thread = dre_2498_thread() + [row(DRE_2498_ROUND_2_AS_NOW_WRITTEN)]
+        run = self.decide(thread, "", run_id=STAND_IN_SECOND_RUN)
+        self.assertEqual("0", run["outputs"]["findings_count"])
+        self.assertNotIn("The share panel", run["note"])
 
     def test_an_earlier_record_without_a_run_says_not_recorded(self):
         thread = dre_2498_thread() + [row(DRE_2498_ROUND_2_AS_WRITTEN)]
         run = self.decide(thread, "", run_id=STAND_IN_SECOND_RUN)
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
-        self.assertIn("not recorded", run["escalation"])
-        self.assertIn(STAND_IN_SECOND_RUN, run["escalation"])
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
+        self.assertIn("not recorded", run["note"])
+        self.assertIn(STAND_IN_SECOND_RUN, run["note"])
+        self.assertIsNone(run["escalation"])
 
-    def test_after_the_ceo_sends_it_back_the_newest_no_result_still_escalates(self):
-        """The loop limit: the escalation lands in Green Light, which only a
-        person leaves, and the newest round record is still the no-result."""
+    def test_after_a_person_sends_it_back_the_newest_no_result_still_parks(self):
+        """The loop limit: the park lands in Triage, which only a person
+        leaves, and the newest round record is still the no-result."""
         thread = dre_2498_thread() + [
             row(DRE_2498_ROUND_2_AS_NOW_WRITTEN),
             row(pc.death_marker(pc.STAGE_ONE_OFF, STAND_IN_SECOND_RUN, 1,
@@ -353,7 +372,7 @@ class DRE2498IsReadAgainRatherThanAskedAbout(_Cli, unittest.TestCase):
             row("Build it.", trusted=False),
         ]
         run = self.decide(thread, "", run_id="38435049584")
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
 
     def test_a_no_result_after_any_decided_round_reruns(self):
         for between in (pc.marker(pc.STAGE_ONE_OFF, 3, pc.SEND_BACK, "a defect"),
@@ -392,16 +411,19 @@ class AReadThatRanOutIsReadAgainOnce(_Cli, unittest.TestCase):
         self.assertIn("36", run["note"])
         self.assertIsNone(run["escalation"])
 
-    def test_the_second_in_a_row_escalates_naming_both_runs(self):
+    def test_the_second_in_a_row_parks_naming_both_runs(self):
         thread = dre_2498_thread() + [row(DRE_2498_ROUND_2_AS_NOW_WRITTEN)]
         run = self.decide(thread, "", run_id=STAND_IN_SECOND_RUN,
                           execution=ran_out_execution())
-        self.assertEqual(pc.ESCALATE, run["outputs"]["action"])
+        self.assertEqual(pc.PARK, run["outputs"]["action"])
+        self.assertEqual("true", run["outputs"]["bound"])
         self.assertEqual("true", run["outputs"]["ran_out"])
         self.assertIn("ran out of turns", run["note"].lower())
-        self.assertIn("twice", run["escalation"])
-        self.assertIn(DRE_2498_RUN, run["escalation"])
-        self.assertIn(STAND_IN_SECOND_RUN, run["escalation"])
+        self.assertIn("twice", run["note"])
+        self.assertIn(DRE_2498_RUN, run["note"])
+        self.assertIn(STAND_IN_SECOND_RUN, run["note"])
+        self.assertIn("for the operator, not the CEO", run["note"])
+        self.assertIsNone(run["escalation"])
 
 
 # --- DRE-7066, the regression guard --------------------------------------------
@@ -532,6 +554,54 @@ class TheStandardSaysSo(unittest.TestCase):
         self.assertIn("DRE-7491", section)
         self.assertIn("`rerun`", section)
         self.assertIn("second in a row", section)
+
+    def test_the_second_no_result_goes_to_triage_not_green_light(self):
+        """DRE-8772: the paragraph that said the second in a row takes the
+        escalation exit to `Green Light` says Triage."""
+        text = open(STANDARD, encoding="utf-8").read()
+        section = text.split("## The same first critic reads a one-off", 1)[1]
+        section = section.split("\n## ", 1)[0]
+        paragraph = section[section.index("**It fails CLOSED"):]
+        paragraph = paragraph.split("\n\n", 1)[0]
+        self.assertIn("DRE-8772", paragraph)
+        self.assertIn("`Triage`", paragraph)
+        self.assertNotIn("Green Light", paragraph)
+
+
+
+CONTRACT = os.path.join(ROOT, "config", "lane-contract.json")
+
+
+class TheWorkflowAndTheContractSaySo(unittest.TestCase):
+    """DRE-8772: nothing still says a one-off's second no-result goes to the
+    CEO — the plan.yml comments and the lane contract name Triage."""
+
+    def _lane(self, name: str) -> dict:
+        lanes = json.load(open(CONTRACT, encoding="utf-8"))["lanes"]
+        return next(lane for lane in lanes if lane["name"] == name)["clauses"]
+
+    def test_the_plan_yml_comments_say_triage(self):
+        text = open(WF, encoding="utf-8").read()
+        self.assertNotIn("second in a row is `escalate`", text)
+        self.assertNotIn("critic that decided nothing twice in a row, DRE-7491", text)
+        rerun_block = text[text.index("# --- A critic that decided nothing is read ONCE"):
+                           text.index(f"- name: {RERUN_STEP}")]
+        self.assertIn("DRE-8772", rerun_block)
+        self.assertIn("Triage", rerun_block)
+
+    def test_green_light_no_longer_admits_a_critic_that_decided_nothing(self):
+        entrance = self._lane("Green Light")["entrance"]["text"]
+        one_off = entrance[entrance.index("On the one-off route"):]
+        one_off = one_off.split(". ", 1)[0]
+        self.assertNotIn("and a critic that decided nothing", one_off)
+        self.assertIn("DRE-8772", entrance)
+
+    def test_the_planning_exit_and_triage_entrance_say_triage(self):
+        exit_ = self._lane("Planning")["exit"]["text"]
+        self.assertNotIn("and a critic that could not run take the escalation "
+                         "exit below", exit_)
+        self.assertIn("DRE-8772", exit_)
+        self.assertIn("DRE-8772", self._lane("Triage")["entrance"]["text"])
 
 
 if __name__ == "__main__":

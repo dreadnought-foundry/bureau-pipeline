@@ -372,6 +372,7 @@ on:
       artifact: { required: false, type: string, default: "" }
       card_url: { required: false, type: string, default: "" }
 permissions:
+  id-token: write
   contents: read
   actions: read
 jobs:
@@ -406,6 +407,10 @@ whatever the caller granted — so a `deliver-rescue.yml` stub pasted without
 That one is the sharper edge of the two: the `agent-task.yml` omission degrades
 to the 403 path described below, but a delivery job that cannot read its own
 artifact is a red run and still no pull request.
+
+`id-token: write` is the third line, and the soft one (DRE-8901): it lets the
+delivery's card reads ask the console's read door. A stub without it runs
+exactly as before, its reads going to Linear.
 
 Add it to that repo's **medic** `workflow_run` list too, by that exact name —
 this is the one workflow whose failure leaves somebody's only copy of finished
@@ -941,6 +946,18 @@ pull request as a fix-loop blocker, and parks the card `In Review` →
 their words and the fix it pushes is that head; the holds lane then lifts the
 hold and returns the card to `In Review`, and the new commit re-arms the
 budget. `REVIEW_NUDGE_CAP=0` parks the card on the first stale sweep.
+
+Before that question goes on an approved head (DRE-9191), the sweep looks at
+what is red. When every check that is not green was stopped rather than failed
+— a canceled CI job with no failed test in any log of its run, a summary job
+red only because of one, or a Verify run that finished without posting a
+verdict — it re-runs each of those runs once (`gh run rerun <id> --failed`),
+posts one `review-nudge-cap-rerun @<head>` note naming the jobs and run ids, and
+holds, asks and parks nothing. That count is once per head and its own, apart
+from the approved-but-red sweep's canceled-check re-run. While a run it re-ran
+is still going the sweep writes nothing; once they have all finished, a check
+still not green sends the question as above, and its Finding names each job
+re-run once at the cap. A proof record at the cap is unchanged.
 
 A draft pull request spends neither budget (DRE-6423): the critic skips drafts
 by design (DRE-5801) and the merge gate never merges one, so the sweep

@@ -206,9 +206,17 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: `serve_planner_line` since DRE-5178, is no longer asked, and no other phase
 #: reads that lane: 59 − 1 = 58.
 #:
+#: It is 59 since DRE-8849 (measured 2026-11-02: 58 before, 59 after) returned
+#: a card the medic held in Triage on an inherited red main. The return pass
+#: (`reconcile.return_inherited_red_main_holds`) reads this repo's Triage
+#: cards that wear `needs-human`, once, on a full pass, charged to
+#: `return_inherited_red_main_holds` — the one-filtered-read shape
+#: `lift_wip_cap_holds` took under DRE-7755. The board holds no such stamp, so
+#: no card is read further: 58 + 1 = 59.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 58
+REAL_BOARD_SWEEP_BUDGET = 59
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing

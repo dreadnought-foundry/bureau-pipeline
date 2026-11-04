@@ -58,6 +58,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import channel_hold  # noqa: E402
 import pipeline_notice  # noqa: E402
+import routing_verdict  # noqa: E402
 import promote_channel  # noqa: E402
 
 REPO = "dreadnought-foundry/bureau-pipeline"
@@ -924,6 +925,7 @@ class TestEveryOutcome:
             pc.OUTCOME_HELD: ch.PERSON,
             pc.OUTCOME_BLOCKED: ch.RERUN,
             pc.OUTCOME_QUEUE_STALL: ch.RERUN,
+            pc.OUTCOME_INCONCLUSIVE: ch.RERUN,
             pc.OUTCOME_UNPROVEN: ch.RERUN,
             pc.OUTCOME_FORCE_NEEDS_REASON: ch.PERSON,
             pc.OUTCOME_FORCE_NOT_OPERATOR: ch.PERSON,
@@ -1033,6 +1035,24 @@ class TestRaiseWindows:
         fallback = kwargs["fallback"]
         assert fallback.title == "bureau-pipeline: the stable channel is held"
         assert fallback.lane in pipeline_notice.FALLBACK_LANES
+        assert "agent:ops" in fallback.labels
+        assert "no-code" in fallback.labels
+
+    def test_the_fallback_card_routes_to_the_operator(self):
+        """A held channel needs a re-run, a fix, a person or a wait — an
+        operator's act, never a build (DRE-9162). The fallback card filed on
+        11-03 wore only `repo:bureau-pipeline` and was sent toward the build
+        queue; its labels must route it OPERATOR before any model reads it."""
+        _code, _out, _err, door = run_main(
+            live(NOON_PT, 120), "--interval-minutes", "10", "--apply", now=NOON_PT)
+        kwargs = door.raise_notice.call_args.kwargs
+        assert kwargs["fallback"] is channel_hold.FALLBACK
+        decision = routing_verdict.route(
+            channel_hold.FALLBACK_TITLE, kwargs["body"], channel_hold.FALLBACK.labels)
+        assert decision.verdict == "OPERATOR"
+        assert decision.source == "label"
+        assert set(channel_hold.FALLBACK.labels) == {
+            "repo:bureau-pipeline", "agent:ops", "no-code"}
 
     def test_a_pass_with_no_hold_sends_a_resolve(self):
         code, out, _err, door = run_main(

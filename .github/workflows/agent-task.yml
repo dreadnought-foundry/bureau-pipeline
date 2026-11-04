@@ -193,7 +193,29 @@ jobs:
       BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+      # The read door for every card read in the job (DRE-8900): reconcile.yml's
+      # four variables, and the max-age that opts `linear_ops`' card and thread
+      # reads in (DRE-8898) — 60 seconds, because a build is dispatched at the
+      # card. The floor is the job's start, which the first step writes to
+      # `$GITHUB_ENV` as `BUREAU_READ_CARD_SEEN_AFTER`; no `env:` block in this
+      # job names that variable, or the step carrying it would lose the floor.
+      # A door older than the floor, or than this job's own last write to the
+      # card, is read from Linear (`reason=older-than-needed`), so the report's
+      # cap counts and ⏳ receipts are never read short. The stub grants
+      # `id-token: write`; without it, or with `BUREAU_READ` off, every read
+      # goes to Linear as before. `tests/test_agent_runs_read_door.py`.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "60"
     steps:
+      # The floor every card read in this job is held to (DRE-8900): the job's
+      # start, to the second, in UTC. An earlier run's receipt was posted
+      # before it; a receipt this job posts is in the own-write record.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts
       # below (a handful of requests) and as slot 1's pool probe;
       # everything quota-heavy after pool selection uses the worker token.
@@ -450,6 +472,8 @@ jobs:
           CARD: ${{ github.event.client_payload.identifier }}
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Stage 2 #10 (DRE-8900): the thread off the card snapshot, not a re-read.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
           REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
         run: |

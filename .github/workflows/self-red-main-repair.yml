@@ -36,7 +36,7 @@ name: Red-Main Repair
 
 on:
   workflow_run:
-    workflows: [Pipeline Tests, Integration Harness, Parts Count, Parts Roster]
+    workflows: [Pipeline Tests, Integration Harness, Parts Count, Parts Roster, Parts Sweep]
     types: [completed]
 
 permissions:

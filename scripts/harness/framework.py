@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Callable, Optional
 
 import merge_gate
+from harness.github_api import RateLimited
 
 # The sweepable namespace. agent/ = reviewed by should_review_pr.py;
 # harness- = ours to delete. A run id follows, then the scenario name.
@@ -210,6 +211,14 @@ QUEUE_CHECK_SECONDS = 60.0
 #: (a scenario failed, which is a statement about the commit) and 2 (bad
 #: invocation). Nothing is proven either way; the next run re-proves.
 BLOCKED_EXIT = 3
+
+#: The driver's exit code for "GitHub refused the run for a RATE LIMIT that
+#: outlasted the client's wait" (DRE-9068) — distinct from 1 for the same
+#: reason 3 is: a busy quota says nothing about the commit. On 2026-11-02 run
+#: 41581663622 passed every code scenario, lost two to the worker
+#: installation's empty meter, and `stable` held on "a red trunk" until a
+#: person promoted by hand. Nothing is proven either way; re-run the harness.
+INCONCLUSIVE_EXIT = 4
 
 
 class HarnessTimeout(Exception):
@@ -431,6 +440,12 @@ class ScenarioResult:
     #: "not proven either way"; the driver stops the run and the promote
     #: receipt says blocked, not failed.
     blocked: Optional[str] = None
+    #: GitHub's quoted refusal when THIS scenario was turned away for a rate
+    #: limit the client's wait could not outlast, and nothing else went wrong
+    #: (DRE-9068). Set means "inconclusive": the driver stops the run and the
+    #: promote receipt says rate-limited, not failed. A real failure anywhere
+    #: in the scenario — a 404, an assertion — leaves it None.
+    rate_limited: Optional[str] = None
 
 
 class Scenario:
@@ -457,8 +472,16 @@ class Scenario:
 def run_scenario(scenario: Scenario, ctx: HarnessContext) -> ScenarioResult:
     """Run one scenario. setup → exercise → verify stop at the first
     failure; cleanup runs REGARDLESS and its failure is recorded without
-    masking the primary error."""
+    masking the primary error.
+
+    A `RateLimited` refusal that reached this far — the client already moved
+    identity or waited, and GitHub still said no — is recorded as
+    `rate_limited` rather than as a failure (DRE-9068), in any phase,
+    cleanup included: run 41581663622's two losses were an exercise and a
+    cleanup. Only when it is the ONLY thing that went wrong: a real failure
+    beside it, before or after, is a failure, and the scenario says so."""
     result = ScenarioResult(scenario=scenario.name, ok=True)
+    refused = real = False
     for phase in ("setup", "exercise", "verify"):
         ctx.log(f"[{scenario.name}] {phase}")
         try:
@@ -471,18 +494,38 @@ def run_scenario(scenario: Scenario, ctx: HarnessContext) -> ScenarioResult:
             result.blocked = e.cause
             result.errors.append(f"{phase}: blocked by the sandbox: {e}")
             break
+        except RateLimited as e:
+            # Apart from a failure for the same reason: GitHub's meter, not
+            # the commit, ended the phase.
+            result.ok = False
+            result.failed_phase = phase
+            result.rate_limited = f"{scenario.name} {phase}: {e}"
+            result.errors.append(f"{phase}: rate-limited by GitHub: {e}")
+            refused = True
+            break
         except Exception as e:  # any failure: record, stop progressing
             result.ok = False
             result.failed_phase = phase
             result.errors.append(f"{phase}: {type(e).__name__}: {e}")
+            real = True
             break
     ctx.log(f"[{scenario.name}] cleanup")
     try:
         scenario.cleanup(ctx)
+    except RateLimited as e:
+        result.ok = False
+        result.failed_phase = result.failed_phase or "cleanup"
+        result.errors.append(f"cleanup: rate-limited by GitHub: {e}")
+        if not refused:
+            result.rate_limited = f"{scenario.name} cleanup: {e}"
+            refused = True
     except Exception as e:
         result.ok = False
         result.failed_phase = result.failed_phase or "cleanup"
         result.errors.append(f"cleanup: {type(e).__name__}: {e}")
+        real = True
+    if real or result.blocked:
+        result.rate_limited = None
     return result
 
 

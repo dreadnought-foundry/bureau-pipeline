@@ -459,6 +459,12 @@ class TestTheHandOn:
     def test_the_limits_are_read_from_the_file_never_restated(self, tmp_path):
         trusted = tmp_path / "trusted"
         (trusted / "config").mkdir(parents=True)
+        # The rest of the checkout, as the trusted copy holds it: the block
+        # reads its outcomes off the copy's operator_decide (DRE-9052).
+        (trusted / "scripts").symlink_to(ROOT / "scripts")
+        for path in (ROOT / "config").iterdir():
+            if path.name != DO_CONFIG.name:
+                (trusted / "config" / path.name).symlink_to(path)
         doc = json.loads(DO_CONFIG.read_text())
         doc.update(max_do_per_pass=1, max_close_per_pass=2)
         (trusted / "config" / "operator-do.json").write_text(json.dumps(doc))
@@ -1111,7 +1117,7 @@ class TestTheRecord:
 
     def test_the_agent_leaves_its_switch_alone(self):
         rows = json.loads((ROOT / "config" / "operator-agent.json").read_text())["leave_alone"]
-        assert [r["card"] for r in rows] == ["DRE-8748", "DRE-8830", "DRE-8927"]
+        assert [r["card"] for r in rows] == ["DRE-8748", "DRE-8830", "DRE-8927", "DRE-9053"]
         assert "OPERATOR_AGENT_DO_LIVE" in rows[2]["why"]
 
     def test_the_proof_can_read_what_the_new_jobs_print(self):

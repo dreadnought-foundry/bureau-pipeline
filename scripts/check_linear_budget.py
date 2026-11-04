@@ -113,10 +113,27 @@ a log from before them reads exactly as it did. With no line in the window
 each table says so in words, and a repo the token cannot read prints UNKNOWN
 there too.
 
+Three optional flags make it read less (DRE-9163). Walking every repo and
+every run, it can outlast a proof run's tool ceiling and be killed having
+printed nothing, since the tables come only after the last log is read.
+`--repo <slug>`, repeatable, lists and reads only the named slugs of
+config/repo-map.json; a slug the map does not hold exits 2 before any `gh`
+call, and stderr names it and the valid ones. `--workflow <name>`,
+repeatable, fetches the log of only the runs whose `workflowName` is one of
+the names; the others are never fetched. `--deadline <seconds>` reads the
+time since the script started before each `gh run list` and each `gh run
+view`; once it reaches the deadline nothing more is read, and the four
+tables print from the runs that were. The spend table's footer then carries
+one more note, `stopped at the deadline (<seconds>s)`, naming per slug how
+many of its listed runs — of the named workflows, with `--workflow` — were
+not read, and the slugs never reached. A slug never reached prints the
+UNKNOWN rows an unreadable repo prints, never 0. With none of the three,
+the output is exactly what it was.
+
 Never writes anything: `gh run list` and `gh run view --log` are its only
 calls. Usage:
 
-    python3 scripts/check_linear_budget.py [--hours N] [--by-caller]
+    python3 scripts/check_linear_budget.py [--hours N] [--by-caller] [--repo SLUG ...] [--workflow NAME ...] [--deadline SECONDS]
 """
 
 from __future__ import annotations
@@ -190,6 +207,13 @@ UNKNOWN = "UNKNOWN"
 LOG_ATTEMPTS = 3
 LOG_BACKOFF_SECONDS = 5.0
 _sleep = time.sleep
+# The clock `--deadline` is read off (DRE-9163) — the one seam, as `_sleep`
+# is the back-off's, so a test moves it and never waits.
+_monotonic = time.monotonic
+
+
+class _DeadlineReached(Exception):
+    """`--deadline` passed before a `gh` call: read nothing more."""
 
 
 def load_repo_map() -> dict[str, str]:
@@ -332,11 +356,14 @@ def aggregate(observations) -> list[dict]:
 
 def render_table(rows: list[dict], unknown_repos: list[str], *,
                  hours: float = 1, skipped: list[tuple[str, int]] = (),
-                 empty: int = 0) -> str:
+                 empty: int = 0,
+                 stopped: tuple[float, dict[str, int], list[str]] | None = None) -> str:
     """The table, as text: one row per (repo, workflow), UNKNOWN rows for the
     repos the token could not read, a grand total last. `skipped` is each run
     whose log was still unreadable after every attempt, as `(slug, run id)`,
-    and is named in the footer; `empty` counts the runs whose log was empty."""
+    and is named in the footer; `empty` counts the runs whose log was empty.
+    `stopped`, when the deadline cut the reading short, is `(seconds, slug →
+    listed runs not read, slugs never reached)`, and is named in the footer."""
     header = f"{'repo':<20} {'workflow':<32} {'runs':>5} {'spent':>7} {'max/run':>8}"
     lines = [f"linear budget, last {hours:g}h", header, "-" * len(header)]
     for r in rows:
@@ -362,6 +389,13 @@ def render_table(rows: list[dict], unknown_repos: list[str], *,
                  f"{LOG_ATTEMPTS} attempts — {named})")
     if empty:
         tail += f"   ({empty} run(s) empty log: no job ran)"
+    if stopped is not None:
+        seconds, unread, unreached = stopped
+        parts = [f"{slug} {n} run(s) not read" for slug, n in sorted(unread.items())]
+        if unreached:
+            parts.append("not reached: " + ", ".join(unreached))
+        named = ": " + "; ".join(parts) if parts else ""
+        tail += f"   (stopped at the deadline ({seconds:g}s){named})"
     lines.append(tail)
     return "\n".join(lines)
 
@@ -630,7 +664,8 @@ def _runs_since(repo: str, since: datetime) -> list[dict] | None:
     return out
 
 
-def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
+def _run_log(repo: str, run_id: int,
+             expired=lambda: False) -> tuple[str | None, str]:
     """The run's full log and "", or None and why there is none to read.
 
     A nonzero rc — `run <id> is still in progress`, or `log not found` for an
@@ -638,11 +673,15 @@ def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
     between them; still nonzero after the last, the reason is the last thing
     `gh` said. An EMPTY log — rc 0 with no output, a completed run whose
     every job was skipped — is not asked again, since there was never
-    anything to read: it is None and "", and the caller counts it apart."""
+    anything to read: it is None and "", and the caller counts it apart.
+    `expired` is asked before every read, and raises _DeadlineReached when it
+    answers True."""
     p = None
     for attempt in range(LOG_ATTEMPTS):
         if attempt:
             _sleep(LOG_BACKOFF_SECONDS)
+        if expired():
+            raise _DeadlineReached
         p = _gh("run", "view", str(run_id), "-R", repo, "--log")
         if p.returncode == 0:
             return (p.stdout, "") if p.stdout.strip() else (None, "")
@@ -650,6 +689,7 @@ def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    started = _monotonic()
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         epilog="Prints four tables: the spend per (repo, workflow), the reads that "
@@ -661,20 +701,53 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--by-caller", action="store_true",
                     help="split the direct-read table by the function that sent "
                          "each read, one more key column (`caller`)")
+    ap.add_argument("--repo", action="append", metavar="SLUG",
+                    help="read only this slug of config/repo-map.json (repeatable)")
+    ap.add_argument("--workflow", action="append", metavar="NAME",
+                    help="fetch the log of only this workflow's runs (repeatable)")
+    ap.add_argument("--deadline", type=float, metavar="SECONDS",
+                    help="read nothing more once this many seconds have passed, "
+                         "and print the tables from what was read")
     args = ap.parse_args(argv)
     since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+
+    repo_map = load_repo_map()
+    wanted = set(args.repo or ())
+    missing = sorted(wanted - repo_map.keys())
+    if missing:
+        print(f"--repo: not a slug of config/repo-map.json: {', '.join(missing)} "
+              f"(valid: {', '.join(sorted(repo_map))})", file=sys.stderr)
+        return 2
+    slugs = sorted(slug for slug in repo_map if not wanted or slug in wanted)
+    workflows = set(args.workflow or ())
+
+    def expired() -> bool:
+        return (args.deadline is not None
+                and _monotonic() - started >= args.deadline)
 
     observations: list[tuple[str, str, str]] = []
     unknown_repos: list[str] = []
     skipped: list[tuple[str, int]] = []
     empty = 0
-    for slug, repo in sorted(load_repo_map().items()):
+    unread: dict[str, int] = {}
+    unreached: list[str] = []
+    for i, slug in enumerate(slugs):
+        repo = repo_map[slug]
+        if expired():
+            unreached = slugs[i:]
+            break
         runs = _runs_since(repo, since)
         if runs is None:
             unknown_repos.append(slug)
             continue
-        for run in runs:
-            log, why = _run_log(repo, run["databaseId"])
+        if workflows:
+            runs = [run for run in runs if run["workflowName"] in workflows]
+        for j, run in enumerate(runs):
+            try:
+                log, why = _run_log(repo, run["databaseId"], expired)
+            except _DeadlineReached:
+                unread[slug] = len(runs) - j
+                break
             if log is None and why:
                 print(f"{repo}: gh run view {run['databaseId']} failed after "
                       f"{LOG_ATTEMPTS} attempts: {why[:200]}", file=sys.stderr)
@@ -684,9 +757,16 @@ def main(argv: list[str] | None = None) -> int:
                 empty += 1
                 continue
             observations.append((slug, run["workflowName"], log))
+        if slug in unread:
+            unreached = slugs[i + 1:]
+            break
 
+    stopped = (args.deadline, unread, unreached) if unread or unreached else None
+    # A slug never reached was never looked at: UNKNOWN, as an unreadable one.
+    unknown_repos += unreached
     print(render_table(aggregate(observations), unknown_repos,
-                       hours=args.hours, skipped=skipped, empty=empty))
+                       hours=args.hours, skipped=skipped, empty=empty,
+                       stopped=stopped))
     print()
     print(render_fallbacks(aggregate_fallbacks(observations), unknown_repos,
                            hours=args.hours))

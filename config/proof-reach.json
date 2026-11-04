@@ -265,6 +265,24 @@
       "when": "every `read` run since DRE-8950, one line on stdout: the repo, then `yes` with the source and part count, `undeclared` with the layer folders, or `no` with the reason, each with whether its count and stub are on; or `UNKNOWN` with the problem"
     },
     {
+      "tag": "parts-sweep:",
+      "printed_by": "scripts/parts_sweep.py",
+      "constant": "TAG",
+      "when": "every `count` and `record` run since DRE-8944, and on a failed `roster`, one line on stderr per repo: the copies now and a week ago with the change, `skipped`, `unread`, `archived` or `failed` with the reason, or `UNKNOWN` with the problem; since DRE-8945 in the Parts Sweep run's log, one per leg"
+    },
+    {
+      "tag": "parts-provisional:",
+      "printed_by": "scripts/parts_provisional.py",
+      "constant": "TAG",
+      "when": "every `scan` run since DRE-8941, on stderr: one line per part — still provisional with its days, permanent with the pull request it was recorded on, rejected with its replacement card, already recorded, or a duplicate — the rejections read on the parts card, and the repo's summary line; or `UNKNOWN` with the problem. Since DRE-8945 in the Parts Sweep run's log, for each counted repo"
+    },
+    {
+      "tag": "parts-weekly:",
+      "printed_by": "scripts/parts_weekly.py",
+      "constant": "TAG",
+      "when": "every `post` run since DRE-9055, on stderr: `posted`, `already posted`, `would post` or `not posted` with the week, and for `not posted` the reason, `the roster named no repos` among them; the count of parts whose reasoning could not be read; or `UNKNOWN` with the problem. Since DRE-8945 in the Parts Sweep run's `weekly` job's log"
+    },
+    {
       "tag": "read-fallback:",
       "printed_by": "scripts/bureau_read.py",
       "constant": "FALLBACK_TAG",
@@ -275,6 +293,12 @@
       "printed_by": "scripts/read_fallback_alert.py",
       "constant": "TAG",
       "when": "every full reconcile pass since DRE-8798, one line on stdout in the sweep step's log: the notice door's outcome (raised, repeat, escalated, resolved, not-open, resolve-refused or lost, or `door <mode>` when the read door is not on), the repo, and each reader, read and reason that fell back with its count; an idle pass says it was not settled, and the card-scoped, promote-only and close-only passes print none"
+    },
+    {
+      "tag": "no-code-in-build-lane:",
+      "printed_by": "scripts/reconcile.py",
+      "constant": null,
+      "when": "every full reconcile pass since DRE-9154, one line on stdout in the sweep step's log per `no-code` card a path held back from a build: the card, its lane and the path (`reconcile` for the not-started re-dispatch, `limit-recovery` for a build-stage limit death's re-entry). The tag is spelled once, as `NO_CODE_TAG` in `scripts/limit_recovery.py`, which the sweep prints with"
     },
     {
       "tag": "read-door:",
@@ -304,7 +328,7 @@
       "tag": "operator-agent:",
       "printed_by": "scripts/operator_decide.py",
       "constant": "LOG_TAG",
-      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines)"
+      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines). Since DRE-9052 (part 3) the decide step's log also holds `operator-agent: <CARD> triggered — <hand-work entry|hand-work-overdue alarm> at <YYYY-MM-DD HH:MM> PT · <action>` after a triggered card's own line and `operator-agent: <CARD> left in Green Light — <why>` for a Green Light row the agent does not take, and the `apply` job prints `operator-agent: <CARD> moved — Green Light → Planning` or `operator-agent: <CARD> not moved — it is in <lane> now` for a `repair` or `answer`"
     }
   ],
   "causes": [

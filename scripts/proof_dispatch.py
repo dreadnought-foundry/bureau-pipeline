@@ -522,8 +522,10 @@ There are two events, and only these two:
      `🔬 proof-run` receipt of any count — after the run that spent the
      budget and after any earlier re-arm's run, so two notes with no run
      between them are one event. A note the pipeline writes never counts, by
-     its wording and not its author: the time lift (`LIFTED_BY`) and the
-     return step's record of the CEO's answer (`CEO_ANSWERED`). The re-arm
+     its wording and not its author: the time lift (`LIFTED_BY`), the
+     return step's record of the CEO's answer (`CEO_ANSWERED`) and the
+     record's note retiring the holds it supersedes
+     (`proof_record_pr.RETIRED_BY`, DRE-8680). The re-arm
      itself posts no note, so no run re-arms the next.
 
 The budget's own hold — the one whose observed half is
@@ -2044,10 +2046,13 @@ def _related_since(card: dict, at) -> bool:
 
 def _pipeline_note(body: str) -> bool:
     """Is this `🔬 proof-observed` one the pipeline writes itself — the time
-    lift (`LIFTED_BY`) or the return step's record of the CEO's answer
-    (`CEO_ANSWERED`)? Read off the wording, never the author (DRE-7740)."""
+    lift (`LIFTED_BY`), the return step's record of the CEO's answer
+    (`CEO_ANSWERED`) or the record's note retiring the holds it supersedes
+    (`proof_record_pr.RETIRED_BY`, DRE-8680)? Read off the wording, never the
+    author (DRE-7740)."""
     text = _first_line(body)[len(OBSERVED_MARK):].strip()
-    return LIFTED_BY in (body or "") or text.startswith(CEO_ANSWERED)
+    return (LIFTED_BY in (body or "") or text.startswith(CEO_ANSWERED)
+            or proof_record_pr.RETIRED_BY in (body or ""))
 
 
 #: `OPERATOR_PRESS`, a waiting row's event that names the operator's press

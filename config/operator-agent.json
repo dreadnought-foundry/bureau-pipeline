@@ -65,6 +65,10 @@
     {
       "card": "DRE-8927",
       "why": "the switch that turns the agent's `do` step on (OPERATOR_AGENT_DO_LIVE, DRE-8928) — the agent never decides it"
+    },
+    {
+      "card": "DRE-9053",
+      "why": "the proof's fixture step — a person files one sandbox question in Green Light and cancels it once its planning run has finished; the agent never decides the card that sets up its own proof"
     }
   ]
 }

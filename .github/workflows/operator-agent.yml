@@ -16,6 +16,15 @@
 # `select` from the file on every run — as one board read, so no product
 # repo carries a stub.
 #
+# THE TRIGGERS (DRE-9046, part 3 of the epic). The run has three triggers:
+# the hourly schedule, a card entering `Hand-work` and the
+# `🚨 hand-work-overdue:` alarm. The last two put a card first: both are read
+# by `select` off the thread it already reads, and both are served by the
+# next scheduled pass — neither starts a run of its own. Part 3 also reads the
+# `Green Light` group (DRE-9048, DRE-9050): a row in the CEO's queue that is
+# not a decision gets `repair` or `answer` and is sent back to `Planning`
+# (DRE-9051), and a genuine decision gets `keep` and stays with the CEO.
+#
 # IT DOES NOT RUN LIVE ON MERGE. A scheduled run is a dry run until the
 # repository variable OPERATOR_AGENT_LIVE is exactly `true`, and a hand
 # dispatch is a dry run unless its `dry_run` input is exactly `false`. The
@@ -116,8 +125,21 @@
 #      the three lanes a pass (plus a lane-history read for a card whose
 #      receipt is `ceo` or `done-already`), at most 20 cards to the model
 #      (`select`'s limit), and one claim and one apply per card handed on, one
-#      at a time. The model's ceiling is 80 turns; a run that reaches it
+#      at a time. The model's ceiling is 100 turns; a run that reaches it
 #      leaves every card it did not answer `unread`, read again next pass.
+#      Part 3 adds, per pass: the same one board read, now of four lanes;
+#      one more whole-thread read for each `Green Light` card, through the
+#      same `linear_ops.comment_records` call every card gets; and no
+#      lane-history read and no viewer read of its own (the viewer is the
+#      one `comment_records` already reads). `select` is a direct Linear
+#      reader today (DRE-8745), and its reads, part 3's included, move onto
+#      the console's read door with the rest of `select`'s when the
+#      read-door epic DRE-8783 places this workflow — its child DRE-8789
+#      names every pipeline workflow as moved or staying, and
+#      `comment_records` already reads a thread through the door in a step
+#      that names `BUREAU_READ_CARD_MAX_AGE` (DRE-8898), so the thread reads
+#      need no code of their own to move. Part 3 adds no new kind of read
+#      for DRE-8790's check to meet.
 #      Part 2 adds, per pass, the reads DRE-8924's and DRE-8925's docstrings
 #      name: at most 3 card-and-thread reads in the `do` job (one per leg,
 #      `max_do_per_pass`), two per project-status op, one in `credentials`
@@ -340,9 +362,12 @@ jobs:
       # the header and DRE-2696's waiver in tests/test_agent_linear_key.py.
       # The turn ceiling is a literal, sized here as medic.yml's 60 is there:
       # one read of the host's limits, up to 20 card-file reads, up to 20
-      # answer writes and at most one choices file per card — 61 tool calls
-      # made one at a time, with room left over. A model that dies or reaches
-      # the ceiling must still reach `Decide`.
+      # answer writes and at most one choices file per card — 61 tool calls —
+      # plus at most `operator_decide.MAX_PATH_EVIDENCE` (3) repository reads
+      # for each of at most `operator_agent.GREEN_LIGHT_SLOTS` (5) Green Light
+      # cards, 15 more: 76 tool calls made one at a time, with room left over.
+      # A model that dies or reaches the ceiling must still reach `Decide`,
+      # and every card it did not answer is `unread`.
       - name: Read the cards
         id: read
         if: steps.select.outputs.count != '0'
@@ -360,7 +385,7 @@ jobs:
           # as the qa-bot that merged the last change to this file.
           allowed_bots: agent-bureau-bot,agent-bureau-bot-2,agent-bureau-bot-3,agent-bureau-bot-4,agent-bureau-qa-bot,github-actions
           claude_args: |
-            --max-turns 80
+            --max-turns 100
             --model ${{ steps.model.outputs.model }}
             ${{ steps.model.outputs.fallback_arg }}
             ${{ steps.model.outputs.effort_arg }}
@@ -418,14 +443,44 @@ jobs:
             The `hand-step:machine` and `hand-step:person` labels, where a card
             carries one, are an input to weigh. They never decide alone.
 
+            A card whose file's `Lane:` line reads `Green Light` is in the
+            CEO's decision queue, and its outcome is exactly one of three:
+
+              `repair` — the work it waits on stopped: a run died, gave no
+              result, or was never started, and nothing about it is a
+              choice. `step` names what stopped, and `evidence` quotes the
+              card file, word for word, where it says so.
+
+              `answer` — it asks a question the facts answer. `step` is the
+              question, `answer` the answer in plain English, and `evidence`
+              the facts: quotes from the card file, word for word, or at
+              most three `{"path", "quote"}` objects, each quoting a file in
+              .bureau-pipeline word for word. `path` is the file's path
+              exactly as you read it, opening `.bureau-pipeline/` — for
+              example
+                {"path": ".bureau-pipeline/.github/workflows/operator-agent.yml", "quote": "…"}
+              — and never a `runner.temp` path, an absolute path or a path
+              with `..`.
+
+              `ceo` — a genuine business choice, written exactly as `ceo` is
+              above, with its choices file. It stays with the CEO: the agent
+              never moves it, and its one receipt says so (`keep`).
+
+            The `do`, `studio` and `done-already` outcomes are for the other
+            cards only, and a Green Light card never takes them. For each
+            Green Light card, read at most three repository files — `Read`,
+            `Glob` or `Grep` calls — and an answer quoting more than three
+            files is not used.
+
             Write one answer file for every card above, with the `Write` tool:
               ${{ runner.temp }}/operator-agent/answers/<CARD>.json
             One JSON object with these keys: `card` (the card's id),
             `outcome`, `step` (never empty — the step in your own words),
             `reason` (one sentence), `evidence` (a list of quotes), `access`,
             `deploy` (true or false), `host_cannot` (a list of quotes),
-            `finding`, `question` and `recommendation`. Leave out a key the
-            outcome does not use.
+            `finding`, `question`, `recommendation` and `answer` (a Green
+            Light card's `answer` only). Leave out a key the outcome does not
+            use.
 
             For a business choice only, also write its choices to
               ${{ runner.temp }}/operator-agent/answers/<CARD>.choices.json
@@ -450,9 +505,12 @@ jobs:
       # step that failed or reached its ceiling leaves every card it did not
       # answer `unread`. The answers are data the module checks; the code that
       # reads them is the trusted copy, and it holds no Linear key. A live run
-      # hands on the `studio`, `ceo` and `done-already` decisions that are not
-      # held and whose action is `decide`, and the `apply-only` cards; never a
-      # `do`, `spent`, `guard-returned` or unread card. A dry run hands on `[]`.
+      # hands on the `studio`, `ceo` and `done-already` decisions, and a Green
+      # Light row's `repair`, `answer` and `keep` (DRE-9052), that are not held
+      # and whose action is `decide`, and the `apply-only` cards; never a
+      # `do`, `spent`, `guard-returned` or unread card. The outcomes are read
+      # off the trusted copy's `operator_decide`, never retyped here. A dry
+      # run hands on `[]`.
       # In both modes it also writes `do_cards` and `close_cards` (DRE-8928,
       # see the header), each row a checked card id, with the limits read
       # from the trusted copy's config/operator-do.json.
@@ -471,8 +529,11 @@ jobs:
           # Write reaches this directory, and a module it left here must never
           # be imported by the code that writes the `cards` output.
           python3 -I - >> "$GITHUB_OUTPUT" <<'PY'
-          import json, os, re
-          written = ("studio", "ceo", "done-already")
+          import json, os, re, sys
+          sys.path.insert(0, os.path.join(os.environ["TRUSTED_PIPELINE"], "scripts"))
+          import operator_decide
+          written = ((operator_decide.STUDIO, operator_decide.CEO, operator_decide.DONE_ALREADY)
+                     + tuple(operator_decide.GREEN_LIGHT_OUTCOMES))
           with open("decisions.json", encoding="utf-8") as fh:
               decisions = json.load(fh)
           with open(os.path.join(os.environ["TRUSTED_PIPELINE"], "config", "operator-do.json"),

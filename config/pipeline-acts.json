@@ -322,6 +322,24 @@
       }
     },
     {
+      "name": "inherited-red-main-returned",
+      "tag": "inherited-red-main-return",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A card the medic held in Triage because every failing check on its pull request had failed on the merge base too — the fault was on `main` — was returned to In Review by the sweep, its `inherited-red-main` hold lifted: `main` is green again on those checks, or the pull request has a new head the medic's reading no longer describes.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: nothing is dispatched back whose run could be late — the card is In Review's again, and scripts/reconcile.py's stale-merge-ref refresh on the same pass, then the checks and the review on the refreshed head, are what move it next, each on its own act.",
+      "why": "DRE-8849, from 2026-11-01. Four foundry cards (DRE-8069, DRE-8064, DRE-8068, DRE-8074) sat in Triage for four to eight hours with nothing wrong with any of them: each had an approved pull request that went red because foundry's own `main` was broken, the medic asked a person, and its housekeeping question parked the card where the fix loop and the stale-merge-ref refresh do not reach. `main` was green by 9:22 PM PT and an operator moved the cards by hand at about 12:20 AM PT on 11-02. Now the medic holds such a card with an `inherited-red-main` stamp at the head it read, and `reconcile.return_inherited_red_main_holds` lifts it — the label and the lift line, then the move to In Review, then this one note — when `stale_merge_ref.decide` answers `refresh`, or when the head has moved. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the move is one the lane contract admits `reconcile.py` to make, and this receipt is the record of it. The lift line spends the stamp, so a second pass returns nothing twice. It discharges nothing.",
+      "emits": {
+        "file": "scripts/inherited_red_main.py",
+        "anchor": "waited on `main`, not on a person"
+      }
+    },
+    {
       "name": "reviewer-unavailable",
       "tag": "reviewer-down",
       "adopted": true,
@@ -1210,14 +1228,14 @@
       "tag": "operator-agent",
       "adopted": true,
       "kind": "recovery",
-      "means": "The operator agent decided a card waiting on a person and spent its pass: a `studio` card blocked by the studio host's go-live, a `ceo` card moved to Green Light as one question, or a `done-already` card closed. The receipt quotes the step, the fingerprint and the outcome's own lines. Since DRE-8925 the act also covers a `do` card's three comments and its close: the claim posted before its step runs, the receipt posted after it, the one close-failure line a close that can never land gets, and the close the receipt names.",
+      "means": "The operator agent decided a card waiting on a person and spent its pass: a `studio` card blocked by the studio host's go-live, a `ceo` card moved to Green Light as one question, or a `done-already` card closed. The receipt quotes the step, the fingerprint and the outcome's own lines. Since DRE-8925 the act also covers a `do` card's three comments and its close: the claim posted before its step runs, the receipt posted after it, the one close-failure line a close that can never land gets, and the close the receipt names. Since DRE-9049 it also covers a Green Light row's three outcomes: `repair`, a stopped run, and `answer`, a question the facts answer, each of which moves the card from Green Light to Planning under a receipt that names the cause, quotes the facts and says `moved: Green Light → Planning`; and `keep`, a genuine decision the CEO owes, which moves nothing and says `stays: Green Light`.",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
       "subscriber": "operator-agent.yml",
       "cadence_s": null,
       "cadence_why": "Null, by the registry's rule that only a `dispatched` act carries a run's timeout: the receipt is followed in the same Operator Agent run by its apply, and after it the card is a person's, and no workflow declares how long a person takes. A pass that died between the receipt and its apply is finished by the next hourly pass, which reads the card back as apply-only, so nothing waits on this receipt's silence. The claim and its apply are both scripts/operator_agent_apply.py's.",
-      "why": "DRE-8746 (epic DRE-8738, the Operator Agent). `scripts/operator_agent_apply.py claim` posts `🛠️ operator-agent: <outcome> — <reason> · <HH:MM> PT`, written by `operator_decide.receipt_text`, for a `studio`, `ceo` or `done-already` decision that is not held; `apply` acts only under it, re-reads the card live and makes the one write the outcome names — a `blockedBy` relation to the studio host's go-live, `planning_escalation.escalate` into Green Light, or the close to Done. The receipt is the card's spent pass, which is why the tag is adopted: a pipeline-authored receipt carrying the card's fingerprint makes `claim` exit 3, and `select` reads an `apply-only` card back off it after a pass that died before its write, so the write is tried again under the same receipt. The tag is the bare act name, unlike `triage-repair-receipt`: that suffix exists only because a lift line carries the act's name, and this act lifts no hold. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the moves it makes, into Green Light and Done, are ones the lane contract admits `operator_agent_apply.py` to make, and the receipt is the record of them. Nothing is discharged. DRE-8925 adds a `do` card's comments, written by DRE-8923's composers and posted through the same `_post`: `do-claim` posts `🛠️ operator-agent: do-claim — …` before the step's first command runs, and exits 3 when a claim or receipt with the card's fingerprint already stands; `do-post` posts the `🛠️ operator-agent: do — …` receipt after it, ending `close: <rule>`, `close: none named`, `failed:` or `continues:`; and `do-close` makes the close the receipt names — a `no-code` card through the console's outcome door (`scripts/console_outcome.py`), whose own `Outcome:` record is what the relay's lane guard reads, any other card by the same move to Done — or, when the close can never land, posts the one close-failure line `🛠️ operator-agent: do-close — …`. Each is the card's spent pass in the same way: `select` reads the newest one back and never runs the step twice.",
+      "why": "DRE-8746 (epic DRE-8738, the Operator Agent). `scripts/operator_agent_apply.py claim` posts `🛠️ operator-agent: <outcome> — <reason> · <HH:MM> PT`, written by `operator_decide.receipt_text`, for a `studio`, `ceo` or `done-already` decision that is not held; `apply` acts only under it, re-reads the card live and makes the one write the outcome names — a `blockedBy` relation to the studio host's go-live, `planning_escalation.escalate` into Green Light, or the close to Done. The receipt is the card's spent pass, which is why the tag is adopted: a pipeline-authored receipt carrying the card's fingerprint makes `claim` exit 3, and `select` reads an `apply-only` card back off it after a pass that died before its write, so the write is tried again under the same receipt. The tag is the bare act name, unlike `triage-repair-receipt`: that suffix exists only because a lift line carries the act's name, and this act lifts no hold. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the moves it makes, into Green Light and Done, are ones the lane contract admits `operator_agent_apply.py` to make, and the receipt is the record of them. Nothing is discharged. DRE-8925 adds a `do` card's comments, written by DRE-8923's composers and posted through the same `_post`: `do-claim` posts `🛠️ operator-agent: do-claim — …` before the step's first command runs, and exits 3 when a claim or receipt with the card's fingerprint already stands; `do-post` posts the `🛠️ operator-agent: do — …` receipt after it, ending `close: <rule>`, `close: none named`, `failed:` or `continues:`; and `do-close` makes the close the receipt names — a `no-code` card through the console's outcome door (`scripts/console_outcome.py`), whose own `Outcome:` record is what the relay's lane guard reads, any other card by the same move to Done — or, when the close can never land, posts the one close-failure line `🛠️ operator-agent: do-close — …`. Each is the card's spent pass in the same way: `select` reads the newest one back and never runs the step twice. DRE-9049 adds the three Green Light outcomes: `repair` and `answer` return a row that was never a decision — a stopped run, or a question the facts answer — from Green Light to Planning, a move the lane contract admits `operator_agent_apply.py` to make beside the hygiene agent's and the Triage Repair's, so the state stays `unchanged`; `keep` leaves a genuine decision in Green Light and moves nothing, and the agent never approves.",
       "emits": {
         "file": "scripts/operator_agent_apply.py",
         "anchor": "pipeline_act.receipt(\"operator-agent\""
@@ -1349,7 +1367,7 @@
       "subscriber": "reconcile.yml",
       "cadence_s": null,
       "cadence_why": "Null: scripts/reconcile.py raises this alarm as the chase of a person's card waiting in Hand-work, and the bound after which that card is late is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
-      "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes.",
+      "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes. Since DRE-9049, the alarm is also a trigger for the Operator Agent's next pass on the card.",
       "emits": {
         "file": "scripts/reconcile.py",
         "anchor": "🚨 hand-work-overdue: {ident} has waited in Hand-work"
@@ -1685,6 +1703,13 @@
       "kind": "not-an-act",
       "means": "The groomer's week counted, on the standing groom card in one comment: the cards the week's answered proposals put in front of a person, the ones that person removed by reason, and what became of every Cancel row, with a fenced JSON block a reader parses (DRE-7970).",
       "why": "A scorecard is a count of decisions people already made, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `📊 groom-scorecard: <start>..<end>`, which no decision reader matches. One call site, once per week."
+    },
+    {
+      "file": "scripts/parts_weekly.py",
+      "anchor": "linear_ops.cmd_comment(card, render_comment(doc, missing))",
+      "kind": "not-an-act",
+      "means": "The CEO's weekly parts list, on the standing parts card in one comment: the parts approved in the week with the critic's reasoning and how to reject each, the parts that became permanent or were rejected, the rejection messages that did not count, and each repo's copies, with a fenced JSON block the console's Sunday briefing parses (DRE-9055).",
+      "why": "A list is a report of what the weekly sweep already counted and recorded, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `🪴 parts-weekly: <start>..<end>`, and the console parses its block, whose shape is a contract a trailer line would sit outside. One call site, once per week."
     },
     {
       "file": "scripts/linear_ops.py",
@@ -2033,6 +2058,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "sent back to the merge gate — {why}.",
+      "kind": "undeclared-act",
+      "means": "An approved, verified, green, CLEAN pull request the gate has not merged is sent back to the merge gate once per head (DRE-9123): as soon as its checks finish green on a head the gate refreshed, otherwise once its last check finished REGATE_MINUTES ago. Its first line, `🔁 regate @<head>:`, is the once-per-head key `_regate_reason` reads.",
+      "why": "Act-shaped — the sweep dispatched the gate by itself — and the registry has no row for it, as for the review lane's gate nudge just above. A new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own, so the receipt ships as an undeclared act. Named here so the debt is countable rather than invisible."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "linear_ops.cmd_comment(ident, epic_growth.closing_comment(",
       "kind": "undeclared-act",
       "means": "The sweep closes a growth question the CEO answered (DRE-6414): on his signed `re-approve` or `split`, the question card about an epic grown past the size he approved is moved to Done under one comment, `✅ epic-growth-question: re-approved at <M> cards on <PT time>`, or `split asked at <M> cards on <PT time> — amendment filed on <epic>`. Read back off the card's own thread before it is posted, so a pass that stopped part-way posts no second one.",
@@ -2044,6 +2076,13 @@
       "kind": "not-an-act",
       "means": "A review-lane card whose open pull request is a draft is nudged by neither budget, because the critic skips drafts by design (DRE-5801) and the gate never merges one; the sweep says so once per head under `review-nudge-draft @<head>`, and the review budget for that head restarts from zero once the pull request is marked ready (DRE-6423).",
       "why": "Nothing was done, so nothing is announced as done: the comment records that the sweep deliberately did not act, and why. Its key carries no `(` after the head, so it is never read as a `review-nudge` or `gate-nudge` spend; the sweep posts it again only once a receipt for the head stands after it, which means the pull request was ready since."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "f\"🧹 Reconcile: {REVIEW_NUDGE_CAP_RERUN_KEY} @{head} — the merge-gate \"",
+      "kind": "undeclared-act",
+      "means": "At the merge-gate nudge cap, a head the critic approved whose only non-green checks were stopped rather than failed — a canceled CI job, a summary job red only because of one, a Verify run that finished without posting a verdict — has each of those runs re-run once, and the card says so under `review-nudge-cap-rerun @<head>`, naming the jobs and run ids, instead of being parked in Green Light with a question nobody can answer (DRE-9191).",
+      "why": "Act-shaped — it reports a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its `review-nudge-cap-rerun @<head>` key is the once-per-head count the next sweep reads back before it would re-run that head again, and the run ids it names are what that sweep waits on, so a trailer is a change to that key; the card that declares the act owns both. Spelled `_KEY`, not `_TAG`, so pipeline_act does not read it as a declared act."
     },
     {
       "file": "scripts/reconcile.py",

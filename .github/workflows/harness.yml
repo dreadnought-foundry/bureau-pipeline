@@ -730,6 +730,13 @@ jobs:
       # sandbox, not proven yet" instead of "harness failed", which would send
       # someone looking at a diff that was never judged. The stamp stays RED:
       # unproven is not proven, and the channel must not move on it.
+      #
+      # DRE-9068 rides the same output. When GitHub refused the run for a
+      # rate limit that outlasted the client's wait, the driver exits 4 and
+      # writes `blocked_reason` opening `harness blocked: GitHub rate limit`
+      # (promote_channel.RATE_LIMIT_MARKER), and the decision reads it as
+      # `harness-inconclusive` / rate-limited — re-run the harness — never
+      # `harness-failed`.
       - name: Stamp tested sha with the harness verdict
         if: success() || failure()
         env:

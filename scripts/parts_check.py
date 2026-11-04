@@ -9,6 +9,14 @@ files are read inside the declared folders and outside them; a `.test.`,
 `.bureau-pipeline` segment, is never read. A copy's identity is (repo, part
 name, copy file).
 
+When two parts share a name, each shipping from a declared folder, they are
+counterparts — the same part built for two platforms, such as a web atom and
+its phone atom — and neither is a copy of the other (DRE-8998). A component
+declared in a UI file under a part's name is a copy only when that file is not
+the "ships at" file of any catalog part of that name; a page, a feature, or
+another part's file declaring it is still a copy, reported against the first
+part of that name in catalog order.
+
 Nothing is kept. The copies are computed from the checkout's files on every
 run — `git ls-files` when the root is a git work tree, the directory tree
 otherwise — and no baseline is written or read. Components are recognized
@@ -20,8 +28,10 @@ with the patterns the critic's parts review already uses
 fails for a copy whose own declaration sits on a line the diff adds, or for
 which the diff adds the part's file, and for a UI file the diff adds, or in
 which it adds a line declaring a component, outside every declared folder and
-not a test, spec or story, that imports none of the shared parts. A file
-imports a shared part when an `import`
+not a test, spec or story, that imports none of the shared parts. A
+declaration the diff also removes from that file is a component renamed or
+edited, not a new one: only as many added declarations as the diff removes
+from the file are excused (DRE-9089). A file imports a shared part when an `import`
 statement binds a part's name (`import { Notice as N }` counts as `Notice`; a
 default import counts by its local name), or names a relative specifier that
 resolves, against the file's own folder, into a declared folder.
@@ -167,9 +177,11 @@ def count(repo_root) -> Counted:
     if not present:
         return Counted(None, f"the repo's design system does not exist ({why})", [])
     source = design_parts.load(root).source
-    parts = {}
+    parts, ships = {}, {}
     for part in design_parts.catalog(root):
         parts.setdefault(part.name, part)
+        # Every part file of a name is a counterpart, never a copy (DRE-8998).
+        ships.setdefault(part.name, set()).add(part.ships_at)
     if not parts:
         return Counted(source, f"no part ships in the folders read from {source}", [])
     part_lines = {}
@@ -185,7 +197,7 @@ def count(repo_root) -> Counted:
             continue
         for name, line in _declared(text).items():
             part = parts.get(name)
-            if part is not None and path != part.ships_at:
+            if part is not None and path not in ships[name]:
                 copies.append(Copy(name, part.layer, part.ships_at, part_lines[name],
                                    path, line))
     copies.sort(key=lambda c: (c.part, c.copy_path, c.copy_line))
@@ -291,9 +303,17 @@ def _new_side(diff) -> str:
     return "\n".join(text for kind, text in diff.lines if kind != "-") + "\n"
 
 
-def _declares_on(text: str, lines) -> bool:
-    """Whether a component is declared in `text` on one of `lines`."""
-    return any(_line_of(text, match) in lines for match in parts_review._declarations(text))
+def _declared_on(text: str, lines) -> int:
+    """How many components are declared in `text` on one of `lines`."""
+    return sum(1 for match in parts_review._declarations(text) if _line_of(text, match) in lines)
+
+
+def _removed_declarations(diff) -> int:
+    """How many components the lines a file's diff removes declare (DRE-9089)."""
+    old = [(kind, text) for kind, text in diff.lines if kind != "+"]
+    text = "\n".join(line for _, line in old) + "\n"
+    return sum(1 for match in parts_review._declarations(text)
+               if old[_line_of(text, match) - 1][0] == "-")
 
 
 # ---------------------------------------------------------------------------
@@ -350,7 +370,11 @@ def check(diff_path, repo_root) -> tuple:
             text = _new_side(diff)
             kinds = [kind for kind, _ in diff.lines if kind != "-"]
             on = {number for number, kind in enumerate(kinds, 1) if kind == "+"}
-        if _declares_on(text, on) and not imports_a_part(diff.path, text, names, folders):
+        # A declaration the diff also removes from the file is a component
+        # renamed, not a new one: only as many as it removes are excused.
+        removed = sum(_removed_declarations(d) for d in ui if d.path == diff.path)
+        if (_declared_on(text, on) > removed
+                and not imports_a_part(diff.path, text, names, folders)):
             lonely.append(diff.path)
     findings = ([f"{CHECK_TAG} COPY {c.part} — shared part declared at "
                  f"{c.part_path}:{c.part_line}; copy declared at {c.copy_path}:{c.copy_line}"
