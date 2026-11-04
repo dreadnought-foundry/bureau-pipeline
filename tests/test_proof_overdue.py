@@ -169,10 +169,10 @@ def test_a_time_only_hold_with_no_rows_behind_it_reads_date():
 
 
 def test_a_sandbox_press_on_an_agent_bureau_proof_reads_press():
-    criterion = "Sandbox press: make a task on agent-bureau-demo as the console proof-reader"
-    cell = "Not observed. waiting for the sandbox press: the task it makes"
+    criterion = "Sandbox press: record a loop on agent-bureau-demo as the console proof-reader"
+    cell = "Not observed. waiting for the sandbox press: the loop it records"
     got = _diagnose(rows=[(criterion, cell)])
-    assert (got.cls, got.action, got.waits_on) == ("press", "sandbox-press", "createTask")
+    assert (got.cls, got.action, got.waits_on) == ("press", "sandbox-press", "recordLoop")
     assert got.evidence == cell
 
 
@@ -258,8 +258,8 @@ def test_the_dispatchers_recheck_hold_is_read_through_to_the_row_it_rechecks():
 
 
 def test_the_same_press_on_another_repos_proof_reads_unrepeatable():
-    row = ("Sandbox press: make a task on agent-bureau-demo as the console proof-reader",
-           "Not observed. waiting for the sandbox press: the task it makes")
+    row = ("Sandbox press: record a loop on agent-bureau-demo as the console proof-reader",
+           "Not observed. waiting for the sandbox press: the loop it records")
     assert _diagnose(rows=[row]).cls == "press"
     got = _diagnose(rows=[row], repo="portico")
     assert (got.cls, got.by_elimination) == ("unrepeatable", False)

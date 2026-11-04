@@ -360,7 +360,7 @@ class OutOfReachTest(unittest.TestCase):
         self.assertEqual({"agent-bureau": "scripts/console_proof_reader.py"},
                          reading["queries_declared_by"])
         for criterion in (
-                "Sandbox press: on `agent-bureau-demo`, the run sends `createTask`; "
+                "Sandbox press: on `agent-bureau-demo`, the run sends `recordLoop`; "
                 "the record quotes the command's JSON object.",
                 "The run reads the live console refuse a press off the sandbox through "
                 "`scripts/console_proof_reader.py refusal-probe`, and the record quotes "

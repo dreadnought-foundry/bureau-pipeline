@@ -119,8 +119,12 @@ THOUGHTS = ("saveThought",)
 #: The one press DRE-9077 added for the KPI page epic (DRE-8702), after the
 #: saved thought.
 KPI_WHYS = ("askKpiWhy",)
-PRESSES = (tuple(p for p in ASKED if p not in DROPPED) + ADDED + LOOPS + KPIS + LOOP_ASKS
-           + THOUGHTS + KPI_WHYS)
+#: The four task presses DRE-9201 took off the list when the Tasks API retired
+#: under Loops (DRE-8704), the same four agent-bureau took off
+#: `SANDBOX_PRESS_MUTATIONS`.
+RETIRED = ("createTask", "snoozeTask", "markTaskDone", "makeTaskCard")
+PRESSES = (tuple(p for p in ASKED if p not in DROPPED + RETIRED) + ADDED + LOOPS + KPIS
+           + LOOP_ASKS + THOUGHTS + KPI_WHYS)
 #: The presses DRE-8305 left off agent-bureau's list: the CEO's own answers.
 LEFT_OFF = ("approveInitiativeDraft", "answerInitiativeDraftQuestion",
             "answerInitiativeDraftQuestions", "answerDecision")
@@ -415,6 +419,16 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
         for op in DROPPED:
             self.assertNotIn(f"`{op}`", "\n".join(bullets),
                              f"{self.NAME} lists `{op}`, which DRE-7776 dropped")
+        for op in RETIRED:
+            self.assertNotIn(f"`{op}`", "\n".join(bullets),
+                             f"{self.NAME} lists `{op}`, which DRE-9201 took off")
+            self.assertNotIn(op, [o for o, _ in plan_proof_reach.SANDBOX_PRESSES],
+                             f"`SANDBOX_PRESSES` carries `{op}`, which DRE-9201 took off")
+
+    def test_the_history_says_the_task_presses_left(self):
+        self.assertTrue(_says_together(self.raw, "DRE-8704", "Tasks", "Loops"),
+                        f"{self.NAME} does not say DRE-8704 took the task presses off "
+                        "when Tasks retired under Loops")
 
     def test_the_presses_left_off_stay_off(self):
         bullets = "\n".join(_list_bullets(self.raw) or [])
@@ -483,6 +497,19 @@ class TheBriefsPointToTheListTest(unittest.TestCase):
                 self.assertIsNone(_list_bullets(raw) or None,
                                   f"{name} restates the list under its line")
 
+    def test_no_document_offers_a_task_press(self):
+        """DRE-9201: no brief or standard offers a retired task press as a
+        live example. `createTask` is named only in DRE-7711's history, beside
+        DRE-8704, which retired it."""
+        for name, passage in PASSAGES.items():
+            raw = passage()
+            with self.subTest(name):
+                for op in RETIRED:
+                    for sentence in _sentences(raw):
+                        if f"`{op}`" in sentence and "DRE-8704" not in sentence:
+                            self.fail(f"{name} offers `{op}`, a retired task press: "
+                                      f"{_flat(sentence)!r}")
+
 
 class TheProofBriefTest(unittest.TestCase):
     NAME = "briefs/proof.md"
@@ -498,7 +525,7 @@ class TheProofBriefTest(unittest.TestCase):
 
     def test_the_third_exception(self):
         touch = _flat(_section(PROOF, TOUCH_HEADING))
-        for needle in ("**sandbox presses**", "`markTaskDone`", FIXTURE,
+        for needle in ("**sandbox presses**", "`closeLoop`", FIXTURE,
                        "left on the sandbox", SHADOW_ROW, "DRE-7776", "DRE-7783",
                        "`repo:agent-bureau-demo`"):
             self.assertIn(needle, touch, f"{self.NAME}'s third exception lost {needle!r}")
@@ -549,7 +576,7 @@ class ThePlannerBriefTest(unittest.TestCase):
         self.assertEqual(1, len(examples),
                          f"{self.NAME} has no one `- [ ] {SANDBOX_OPENER}` example criterion")
         example = _flat(examples[0])
-        for needle in ("JSON object", "`outcome`", "`ids`", "`createTask`"):
+        for needle in ("JSON object", "`outcome`", "`ids`", "`recordLoop`", "`closeLoop`"):
             self.assertIn(needle, example,
                           f"{self.NAME}'s `{SANDBOX_OPENER}` example does not quote {needle}")
 
