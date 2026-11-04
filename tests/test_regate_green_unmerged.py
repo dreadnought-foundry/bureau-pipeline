@@ -29,6 +29,16 @@ The first class runs the chain for real: the shipped gate step refreshes the
 branch, the sweep reads the note it posted and dispatches the gate, and the
 shipped gate step run for that dispatch merges.
 
+DRE-9205, 2026-11-04, agent-bureau #4725: the regate's own `🔁` comment woke
+an Agent Fix run, the gate the regate dispatched answered `wait` on it
+(DRE-4486), and the fix run finished `skipped` three minutes later with no
+commit. Nothing woke the gate again and the once-per-head rule left no second
+look: the stuck-work sweep merged it by hand 24 minutes after the regate. So
+a head whose first dispatch's gate run waited on a fix run that has since
+finished — the head unchanged, so it pushed nothing — goes back once more,
+with one `🔁 regate @<head> again:` line naming the fix run. Never a third
+time, and never while that fix run is still queued or running.
+
 Run: cd bureau-pipeline && python3 -m pytest tests/test_regate_green_unmerged.py -v
 """
 
@@ -56,6 +66,7 @@ os.environ.setdefault("GH_TOKEN", "test")
 import merge_gate  # noqa: E402
 import reconcile  # noqa: E402
 import step_shell  # noqa: E402
+import stranded_fix  # noqa: E402
 import verdict_content  # noqa: E402
 from test_merge_gate_new_test_recheck_wiring import (  # noqa: E402
     BRANCH,
@@ -158,11 +169,16 @@ class Sweep:
 
     `checks` / `runs` answer the head's check-run and workflow-run reads
     (`None` = the read failed); `compare` / `commits` answer the carry's two
-    reads; `gate_busy` is the gate workflow's run listing."""
+    reads; `gate_busy` is the gate workflow's run listing. `gate_runs` is the
+    gate's dispatched runs around a receipt (`None` = the read failed),
+    `logs` each gate run's log by id, and `fix_runs` each Agent Fix run's
+    `gh run view --json` answer by id (DRE-9205)."""
 
     def __init__(self, prs, *, checks=..., runs=GREEN_RUNS,
                  compare=None, commits=None, gate_busy=False,
-                 dispatch_fails=False):
+                 dispatch_fails=False, gate_runs=(), logs=None,
+                 fix_runs=None):
+        logs, fix_runs = logs or {}, fix_runs or {}
         if checks is ...:
             checks = green_checks()
         self.dispatches: list[tuple] = []
@@ -176,7 +192,16 @@ class Sweep:
             if args[:2] == ("run", "list"):
                 return json.dumps([{"status": "in_progress"}] if gate_busy
                                   else [])
+            if args[:2] == ("run", "view"):
+                if "--log" in args:
+                    return logs.get(int(args[2]), "")
+                found = fix_runs.get(int(args[2]))
+                return json.dumps(found) if found is not None else ""
             path = next((a for a in args if a.startswith("repos/")), "")
+            if f"/actions/workflows/{reconcile.gate_workflow()}/runs" in path:
+                return "" if gate_runs is None else json.dumps(
+                    {"total_count": len(gate_runs),
+                     "workflow_runs": list(gate_runs)})
             if "/check-runs" in path:
                 return "" if checks is None else json.dumps(
                     [{"total_count": len(checks), "check_runs": checks}])
@@ -508,6 +533,168 @@ class NoDispatchTest(unittest.TestCase):
             with self.subTest(branch=branch):
                 self.assert_left(Sweep([pr_payload(APPROVED_VERIFIED,
                                                    branch=branch)]))
+
+
+# --------------------------------------------------------------------------- #
+# DRE-9205 — a gate wait on a fix run that finished gets one more look         #
+# --------------------------------------------------------------------------- #
+
+#: agent-bureau #4725's two runs: the gate the regate dispatched, and the
+#: Agent Fix run the regate's own comment woke.
+GATE_RUN = 41868567766
+FIX_RUN = 41868640366
+SECOND_GATE_RUN = 41869900001
+SECOND_FIX_RUN = 41869900002
+
+
+def fix_wait(run: int = FIX_RUN, number: int = 4639) -> str:
+    """The gate's `reason=` for a fix run in flight, in its own words."""
+    return stranded_fix.lane_refusal(stranded_fix.Lane(by_pr={number: run}),
+                                     number)
+
+
+def gate_log(decision: str, reason: str) -> str:
+    """A gate run's log as `gh run view --log` prints it: job, step, stamp."""
+    stamp = "2026-11-04T16:37:01.1234567Z"
+    return "\n".join(f"evaluate\tDecide\t{stamp} {line}" for line in (
+        "note=condition F: an Agent Fix run is in flight",
+        f"decision={decision}", f"reason={reason}"))
+
+
+def gate_run(run_id: int, minutes_ago: float, status: str = "completed") -> dict:
+    """One dispatched gate run, REST shape."""
+    done = status == "completed"
+    return {"id": run_id, "event": "workflow_dispatch", "status": status,
+            "conclusion": "success" if done else None,
+            "created_at": _iso(minutes_ago)}
+
+
+def fix_run(status: str, conclusion: str | None, minutes_ago: float) -> dict:
+    return {"status": status, "conclusion": conclusion,
+            "updatedAt": _iso(minutes_ago)}
+
+
+def sent(sweep: "Sweep", minutes_ago: float) -> list[dict]:
+    """A sweep's receipts as a later listing shows them, posted then."""
+    return [comment(WORKER_BOT, body, minutes_ago) for _, body in sweep.notes]
+
+
+class FixRunWaitGetsOneMoreLookTest(unittest.TestCase):
+    """#4725's chain: the regate dispatches the gate for head H, the gate
+    answers `wait` on an Agent Fix run, that run finishes `skipped` with no
+    new commit on H, and the next sweep sends H back once more."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.first = Sweep([pr_payload(APPROVED_VERIFIED)])
+        cls.thread = APPROVED_VERIFIED + sent(cls.first, 24)
+        cls.waited = dict(gate_runs=[gate_run(GATE_RUN, 24.1)],
+                          logs={GATE_RUN: gate_log("wait", fix_wait())})
+        cls.again = Sweep([pr_payload(cls.thread)], **cls.waited,
+                          fix_runs={FIX_RUN: fix_run("completed", "skipped", 21)})
+
+    def test_the_first_dispatch_went_out(self):
+        self.assertEqual(len(self.first.gate_dispatches), 1, self.first.log)
+
+    def test_the_next_sweep_dispatches_the_gate_for_that_head_once_more(self):
+        self.assertEqual(len(self.again.gate_dispatches), 1, self.again.log)
+        self.assertIn("pr_number=4639", " ".join(self.again.gate_dispatches[0]))
+
+    def test_it_posts_one_line_naming_the_fix_run_and_why(self):
+        self.assertEqual(len(self.again.notes), 1, self.again.notes)
+        number, body = self.again.notes[0]
+        self.assertEqual(number, 4639)
+        self.assertEqual(len(body.splitlines()), 1, body)
+        self.assertTrue(body.startswith(
+            f"🔁 {reconcile.REGATE_KEY} @{OTHER_HEAD} again: PR #4639 "), body)
+        self.assertIn(f"Agent Fix run {FIX_RUN}", body)
+        self.assertIn("skipped", body)
+        self.assertIn(str(GATE_RUN), body)
+        self.assertIn("DRE-9205", body)
+        for forbidden in merge_gate.VERDICT_MARKERS:
+            self.assertNotIn(forbidden, body)
+        lines = [ln for ln in self.again.log.splitlines()
+                 if ln.startswith("regate: PR #4639")]
+        self.assertEqual(len(lines), 1, self.again.log)
+
+    def test_the_second_receipt_is_not_read_as_a_first(self):
+        _, body = self.again.notes[0]
+        self.assertFalse(body.startswith(f"🔁 {reconcile.REGATE_KEY} @{OTHER_HEAD}:"))
+
+    def test_a_head_whose_second_dispatch_also_waited_is_not_sent_a_third_time(self):
+        thread = self.thread + sent(self.again, 10)
+        third = Sweep(
+            [pr_payload(thread)],
+            gate_runs=[gate_run(SECOND_GATE_RUN, 10.1)],
+            logs={GATE_RUN: gate_log("wait", fix_wait()),
+                  SECOND_GATE_RUN: gate_log("wait", fix_wait(SECOND_FIX_RUN))},
+            fix_runs={FIX_RUN: fix_run("completed", "skipped", 21),
+                      SECOND_FIX_RUN: fix_run("completed", "skipped", 7)})
+        self.assertEqual(third.gate_dispatches, [], third.log)
+        self.assertEqual(third.notes, [])
+
+    def test_while_the_fix_run_is_queued_or_running_it_does_not_dispatch(self):
+        for status in ("queued", "in_progress", "waiting", "pending"):
+            with self.subTest(status=status):
+                sweep = Sweep([pr_payload(self.thread)], **self.waited,
+                              fix_runs={FIX_RUN: fix_run(status, None, 1)})
+                self.assertEqual(sweep.gate_dispatches, [], sweep.log)
+                self.assertEqual(sweep.notes, [])
+                self.assertIn(f"Agent Fix run {FIX_RUN}", sweep.log)
+
+    def test_once_the_fix_run_finishes_the_next_sweep_does(self):
+        running = Sweep([pr_payload(self.thread)], **self.waited,
+                        fix_runs={FIX_RUN: fix_run("in_progress", None, 1)})
+        self.assertEqual(running.gate_dispatches, [], running.log)
+        done = Sweep([pr_payload(self.thread)], **self.waited,
+                     fix_runs={FIX_RUN: fix_run("completed", "success", 0)})
+        self.assertEqual(len(done.gate_dispatches), 1, done.log)
+
+    def test_a_gate_run_that_did_not_wait_on_a_fix_run_is_not_sent_back(self):
+        for log in (gate_log("hold", "a required check is red"),
+                    gate_log("wait", "condition 1: a check is still running"),
+                    # A wait on a fix run for ANOTHER pull request.
+                    gate_log("wait", fix_wait(number=4641)),
+                    ""):
+            with self.subTest(log=log[-60:]):
+                sweep = Sweep([pr_payload(self.thread)],
+                              gate_runs=[gate_run(GATE_RUN, 24.1)],
+                              logs={GATE_RUN: log},
+                              fix_runs={FIX_RUN: fix_run("completed",
+                                                         "skipped", 21)})
+                self.assertEqual(sweep.gate_dispatches, [], sweep.log)
+
+    def test_the_first_gate_run_still_going_is_not_sent_back(self):
+        sweep = Sweep([pr_payload(self.thread)],
+                      gate_runs=[gate_run(GATE_RUN, 24.1, status="in_progress")],
+                      logs={GATE_RUN: gate_log("wait", fix_wait())},
+                      fix_runs={FIX_RUN: fix_run("completed", "skipped", 21)})
+        self.assertEqual(sweep.gate_dispatches, [], sweep.log)
+
+    def test_unreadable_gate_runs_or_fix_run_send_nothing(self):
+        for kwargs in (dict(gate_runs=None, logs=self.waited["logs"],
+                            fix_runs={FIX_RUN: fix_run("completed", "skipped", 21)}),
+                       dict(**self.waited, fix_runs={})):
+            with self.subTest(kwargs=sorted(kwargs)):
+                sweep = Sweep([pr_payload(self.thread)], **kwargs)
+                self.assertEqual(sweep.gate_dispatches, [], sweep.log)
+                self.assertEqual(sweep.notes, [])
+
+    def test_a_wait_by_a_gate_run_long_before_the_regate_does_not_count(self):
+        sweep = Sweep([pr_payload(self.thread)],
+                      gate_runs=[gate_run(GATE_RUN, 90)],
+                      logs={GATE_RUN: gate_log("wait", fix_wait())},
+                      fix_runs={FIX_RUN: fix_run("completed", "skipped", 80)})
+        self.assertEqual(sweep.gate_dispatches, [], sweep.log)
+
+    def test_the_gate_runs_are_read_around_the_first_receipt(self):
+        read = [a for a in self.again.reads
+                if any(f"/actions/workflows/{reconcile.gate_workflow()}/runs" in x
+                       for x in a)]
+        self.assertEqual(len(read), 1, self.again.reads)
+        path = next(x for x in read[0] if x.startswith("repos/"))
+        self.assertIn("event=workflow_dispatch", path)
+        self.assertIn("created=", path)
 
 
 class TheRouteRunsInTheFullSweepTest(unittest.TestCase):

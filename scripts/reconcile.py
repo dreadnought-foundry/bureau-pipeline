@@ -12591,8 +12591,129 @@ REGATE_KEY = "regate"
 REGATE_MINUTES = int(os.environ.get("REGATE_MINUTES", "15"))
 
 
+#: How far either side of the first receipt the gate run its dispatch started
+#: is looked for (DRE-9205). The dispatch goes out seconds before the receipt
+#: is posted; any regate passed REGATE_MINUTES of quiet before it, so nothing
+#: else this close is the same head's.
+REGATE_RUN_WINDOW_MINUTES = 5
+
+#: The gate's last `decision=` / `reason=` lines in a run log, and its wait on
+#: a fix run in `stranded_fix.lane_refusal`'s own words — the reading
+#: `hygiene_prs_held` makes of the same log (DRE-9205).
+_GATE_DECISION_LINE = re.compile(r"(?:^|\s)decision=([a-z_]+)\s*$")
+_GATE_REASON_LINE = re.compile(r"(?:^|\s)reason=(.*)$")
+_GATE_FIX_WAIT = re.compile(r"Agent Fix run (\d+) is queued or running FOR #(\d+)\b")
+
+
 def _regate_receipt_opener(head: str) -> str:
     return f"🔁 {REGATE_KEY} @{head}:"
+
+
+def _regate_again_opener(head: str) -> str:
+    """The second, and last, send-back's opener for a head (DRE-9205)."""
+    return f"🔁 {REGATE_KEY} @{head} again:"
+
+
+def _regate_receipts(pr: dict, head: str) -> tuple[dict | None, bool]:
+    """The head's first regate receipt, or None, and whether it has been
+    sent back the second time. Only the worker pool's receipts count."""
+    first, again = None, False
+    opener, again_opener = _regate_receipt_opener(head), _regate_again_opener(head)
+    for c in pr.get("comments") or []:
+        if not is_worker_pool_comment(c):
+            continue
+        line = merge_gate.first_line(c.get("body") or "")
+        if line.startswith(again_opener):
+            again = True
+        elif line.startswith(opener) and first is None:
+            first = c
+    return first, again
+
+
+def _gate_waited_on_fix(log: str, number: int) -> int | None:
+    """The Agent Fix run a gate run's log says it waited on for THIS pull
+    request — the last `decision=` is `wait` and the last `reason=` names
+    the run FOR #number — or None."""
+    decision = reason = None
+    for line in (log or "").splitlines():
+        if (m := _GATE_DECISION_LINE.search(line)):
+            decision = m.group(1)
+        elif (m := _GATE_REASON_LINE.search(line)):
+            reason = m.group(1).strip()
+    match = _GATE_FIX_WAIT.search(reason or "") if decision == "wait" else None
+    if match is None or int(match.group(2)) != int(number):
+        return None
+    return int(match.group(1))
+
+
+def _regate_again_reason(pr: dict, receipt: dict) -> str | None:
+    """Why a head already sent back once goes back the second time, or None
+    (DRE-9205).
+
+    On 2026-11-04 the regate's own comment on agent-bureau #4725 woke an
+    Agent Fix run, the gate run that regate dispatched answered `wait` on it
+    (DRE-4486), and the fix run finished `skipped` three minutes later.
+    Nothing woke the gate again, and #4725 waited 24 minutes for the
+    stuck-work sweep.
+
+    So: among the gate's dispatched runs within REGATE_RUN_WINDOW_MINUTES of
+    the first receipt, every one finished, and one printed `decision=wait` on
+    an Agent Fix run FOR this pull request; that fix run has finished. The
+    caller holds the head to the receipt's, so the fix run pushed nothing.
+    Any read that fails, or a fix run still queued or running, is None —
+    the next sweep looks again."""
+    number = pr["number"]
+    at = datetime.fromisoformat(receipt["createdAt"].replace("Z", "+00:00"))
+    window = timedelta(minutes=REGATE_RUN_WINDOW_MINUTES)
+    lo, hi = at - window, at + window
+    stamp = "%Y-%m-%dT%H:%M:%SZ"
+    out = gh_actions_read(
+        "api", f"repos/{REPO}/actions/workflows/{gate_workflow()}/runs"
+        f"?event=workflow_dispatch&created={lo.strftime(stamp)}..{hi.strftime(stamp)}"
+        "&per_page=100")
+    try:
+        runs = json.loads(out).get("workflow_runs") if out else None
+    except (ValueError, AttributeError):
+        runs = None
+    if not isinstance(runs, list):
+        print(f"regate: PR #{number} the gate's runs after its first send-back "
+              "could not be read — not sending it back on an unread run")
+        return None
+    near = sorted((r for r in runs if r.get("created_at") and lo <= datetime.fromisoformat(
+        r["created_at"].replace("Z", "+00:00")) <= hi), key=lambda r: r["created_at"])
+    if any(r.get("status") != "completed" for r in near):
+        return None  # the gate is still looking
+    for run in near:
+        log = gh_actions_read("run", "view", str(run.get("id")), "--repo", REPO, "--log")
+        if not log:
+            print(f"regate: PR #{number} gate run {run.get('id')}'s log could not "
+                  "be read — not sending it back on an unread run")
+            return None
+        fix_id = _gate_waited_on_fix(log, number)
+        if fix_id is not None:
+            gate_id = run.get("id")
+            break
+    else:
+        return None  # the gate's run waited on no fix run for this pull request
+    out = gh_actions_read("run", "view", str(fix_id), "--repo", REPO,
+                          "--json", "status,conclusion,updatedAt")
+    try:
+        fix = json.loads(out) if out else None
+    except ValueError:
+        fix = None
+    if not isinstance(fix, dict):
+        print(f"regate: PR #{number} Agent Fix run {fix_id} could not be read — "
+              "not sending it back on an unread run")
+        return None
+    if fix.get("status") != "completed" or not fix.get("updatedAt"):
+        print(f"regate: PR #{number} the gate's run {gate_id} waits on Agent Fix "
+              f"run {fix_id}, still {fix.get('status') or 'unknown'} — the sweep "
+              "looks again once it finishes")
+        return None
+    return (f"the gate's run {gate_id} waited on Agent Fix run {fix_id}, which "
+            f"finished `{fix.get('conclusion') or 'none'}` at "
+            f"{_pt(fix['updatedAt'])} with no new commit on this head, so the "
+            "gate evaluates it once more, the last time for this head (DRE-9205)")
 
 
 def refresh_pending(pr: dict) -> bool:
@@ -12633,19 +12754,19 @@ def _regate_reason(pr: dict) -> str | None:
     the gate's own condition 1 (`merge_gate.precheck`): every gating check
     finished green and no CI run still going. Then the time: a head the gate
     refreshed goes back as soon as that holds, any other once its last check
-    finished more than REGATE_MINUTES ago. Last, because it can cost two
+    finished more than REGATE_MINUTES ago. Then, because it can cost two
     reads, the APPROVE must bind this head — by sha, or carried by content
-    exactly as the gate carries it (`verdict_bound`)."""
+    exactly as the gate carries it (`verdict_bound`). A head sent back once
+    already goes back only by `_regate_again_reason`, last because it reads
+    run logs; a head sent back twice never again (DRE-9205)."""
     number, head = pr.get("number"), pr.get("headRefOid") or ""
     if (not card_branch(pr.get("headRefName")) or pr.get("isDraft")
             or pr.get(THREAD_UNREADABLE) or not head
             or pr.get("mergeStateStatus") != "CLEAN"):
         return None
-    opener = _regate_receipt_opener(head)
-    if any(is_worker_pool_comment(c)
-           and merge_gate.first_line(c.get("body") or "").startswith(opener)
-           for c in pr.get("comments") or []):
-        return None  # sent back once for this head already
+    receipt, again = _regate_receipts(pr, head)
+    if again:
+        return None  # sent back twice for this head — never a third time
     verdicts = critic_comments(pr)
     if not verdicts or merge_gate.verdict_token(
             merge_gate.first_line(verdicts[-1].get("body") or ""),
@@ -12676,6 +12797,8 @@ def _regate_reason(pr: dict) -> str | None:
         return None
     if not verdict_bound(pr):
         return None  # the APPROVE is for code this head no longer proposes
+    if receipt is not None:
+        return _regate_again_reason(pr, receipt)
     if refreshed:
         return (f"the gate refreshed this branch and stopped without merging, "
                 f"and every check on the new head finished green at {_pt(last)} "
@@ -12705,11 +12828,15 @@ def regate_green_unmerged() -> None:
     be evaluated again (`refresh_pending`) — and any other head once its last
     check finished more than REGATE_MINUTES ago. One dispatch per head: the
     dispatch posts one `🔁 regate @<head>:` line on the pull request naming
-    why, and a head carrying it is never dispatched again, while that gate
-    run is in flight or after it. A new head starts again. A dispatch that
-    does not go through posts nothing and is recorded, so the next sweep
-    tries again. One summary line per sweep, including one that finds
-    nothing."""
+    why, and a head carrying it is not dispatched again while that gate run
+    is in flight. After it, one exception (DRE-9205): when that gate run
+    answered `wait` on an Agent Fix run that has since finished with the
+    head unchanged — #4725's, which the regate's own comment woke — the
+    head goes back once more under one `🔁 regate @<head> again:` line
+    naming the fix run, and never a third time. A new head starts again. A
+    dispatch that does not go through posts nothing and is recorded, so the
+    next sweep tries again. One summary line per sweep, including one that
+    finds nothing."""
     prs = _open_pr_listing()
     if prs is None:
         print("regate: the open pull requests could not be read")
@@ -12720,10 +12847,12 @@ def regate_green_unmerged() -> None:
             continue
         candidates += 1
         number, head = pr["number"], pr["headRefOid"]
+        opener = (_regate_again_opener(head) if _regate_receipts(pr, head)[0]
+                  else _regate_receipt_opener(head))
         print(f"regate: PR #{number} @{head[:8]} sent back to the merge gate — {why}")
         if _nudge(gate_workflow(), number):
             dispatched += 1
-            _post_pr_note(number, f"{_regate_receipt_opener(head)} PR #{number} "
+            _post_pr_note(number, f"{opener} PR #{number} "
                                   f"sent back to the merge gate — {why}.")
     print(f"regate: {candidates} candidate(s), {dispatched} dispatched")
 
