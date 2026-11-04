@@ -253,6 +253,100 @@ class TestUnreadIsASkipNeverAPass(unittest.TestCase):
         )
 
 
+class _Body:
+    """What `urlopen` hands back: a context manager with a `read()`."""
+
+    def __init__(self, text: str):
+        self._text = text
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self._text.encode("utf-8")
+
+
+def _http_error(code: int):
+    import urllib.error
+
+    return urllib.error.HTTPError("https://api.github.com/x", code, "blip", {}, None)
+
+
+class TestATransientReadIsRetriedBeforeItIsUnread(unittest.TestCase):
+    """DRE-9193. The nightly at 8527c1db read the console at 10:44:48.57Z and
+    passed, then every request of the very next read failed 0.6s later with
+    the same token, and the `act registry consumers` job went red on a skip.
+    The re-run of the same commit was green. One blip must not be a red
+    `main` — and a console that stays unreadable must still be unread."""
+
+    def setUp(self):
+        from unittest import mock
+
+        self.sleeps = []
+        patcher = mock.patch.object(guard, "_sleep", self.sleeps.append, create=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _urlopen(self, *answers):
+        """Patch `urlopen` to answer in order: an exception raises, text reads."""
+        from unittest import mock
+
+        calls = []
+
+        def fake(req, timeout=None):
+            calls.append(req.full_url)
+            answer = answers[min(len(calls), len(answers)) - 1]
+            if isinstance(answer, BaseException):
+                raise answer
+            return _Body(answer)
+
+        patcher = mock.patch("urllib.request.urlopen", fake)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_a_server_error_then_an_answer_is_the_answer(self):
+        calls = self._urlopen(_http_error(502), CONSOLE_KNOWS_ONE)
+        self.assertEqual(CONSOLE_KNOWS_ONE, guard._get("https://api.github.com/x", "t", "a"))
+        self.assertEqual(2, len(calls))
+        self.assertEqual(1, len(self.sleeps), "a retry waits before it asks again")
+
+    def test_a_dropped_connection_then_an_answer_is_the_answer(self):
+        import urllib.error
+
+        calls = self._urlopen(urllib.error.URLError("reset"), CONSOLE_KNOWS_ONE)
+        self.assertEqual(CONSOLE_KNOWS_ONE, guard._get("https://api.github.com/x", "t", "a"))
+        self.assertEqual(2, len(calls))
+
+    def test_a_404_is_an_answer_and_is_not_retried(self):
+        """A 404 means the path moved — the tree lookup is what answers it,
+        and asking the same missing path again only slows that down."""
+        calls = self._urlopen(_http_error(404), CONSOLE_KNOWS_ONE)
+        self.assertIsNone(guard._get("https://api.github.com/x", "t", "a"))
+        self.assertEqual(1, len(calls))
+        self.assertEqual([], self.sleeps)
+
+    def test_a_console_that_stays_unreadable_is_still_unread(self):
+        calls = self._urlopen(_http_error(503))
+        self.assertIsNone(guard._get("https://api.github.com/x", "t", "a"))
+        self.assertGreater(len(calls), 1, "a failure is asked again before it is unread")
+        self.assertEqual(guard._TRIES, len(calls))
+
+    def test_the_live_failure_shape_reads_the_console_on_the_retry(self):
+        """The 10:44 shape end to end: the first read of the console's path
+        fails transiently, and the guard answers off the file rather than
+        skipping."""
+        calls = self._urlopen(_http_error(502), CONSOLE_KNOWS_ONE)
+        spec = guard.console_spec(_live())
+        source, reason = guard.read_console_source(spec, env={guard.TOKEN_ENV: "t"})
+        self.assertEqual(CONSOLE_KNOWS_ONE, source, reason)
+        self.assertEqual("", reason)
+        self.assertTrue(all(spec["path"] in url for url in calls), calls)
+
+
 # ── 3. the CI job asserts the guard did not skip ────────────────────────────
 def _junit(tests, skipped, body="") -> str:
     return (
