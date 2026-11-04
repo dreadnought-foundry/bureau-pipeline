@@ -426,9 +426,21 @@ def test_the_new_kind_is_distinct_from_every_other():
 #: unchecked one is never copied and writes nothing (DRE-6357).
 #: `reconcile.py` alarms a CEO's-press hold outside Green Light, and an
 #: unchecked answer after it spends nothing and the alarm says so (DRE-7741).
+#: `design_answer.py` reads the CEO's answer to the critic's design question,
+#: and an unchecked one reads `unknown` — never `asked` — and hands nothing
+#: back (DRE-8722). `parts_provisional.py` reads the CEO's rejections of a
+#: provisional part, and an unchecked one may be a rejection, so the scan is
+#: `UNKNOWN` and writes nothing (DRE-8941). `operator_green_light.py` reads
+#: the CEO's answer after a Green Light park, and an unchecked one may be that
+#: answer, so the operator agent never takes the row (DRE-9048).
+#: `parts_weekly.py` counts only the pipeline's own comment as the week's list
+#: already posted, and an unchecked one, its text withheld, never stands for
+#: it (DRE-9055).
 OTHER_READERS = {
     "answer_into_card.py": "tests/test_answer_into_card.py::"
     "test_an_unchecked_receipt_is_never_transcribed_and_says_could_not_check",
+    "design_answer.py": "tests/test_design_answer.py::"
+    "test_an_unchecked_answer_is_unknown_never_asked",
     "epic_growth.py": "tests/test_epic_growth.py::"
     "test_a_withheld_console_answer_is_left_for_a_person",
     "escalation_answers.py": "tests/test_escalation_answers.py::"
@@ -439,6 +451,12 @@ OTHER_READERS = {
     "test_an_unchecked_console_answer_reads_withheld_and_shows_none_of_its_text",
     "groom_priority.py": "tests/test_groom_priority.py::"
     "test_an_unchecked_console_confirmation_keeps_the_band_and_names_the_card",
+    "operator_green_light.py": "tests/test_operator_green_light.py::"
+    "test_an_unchecked_answer_after_the_park_takes_nothing",
+    "parts_provisional.py": "tests/test_parts_provisional.py::"
+    "test_an_unchecked_message_is_unknown_even_for_a_part_twenty_days_old",
+    "parts_weekly.py": "tests/test_parts_weekly.py::"
+    "test_an_unchecked_comment_never_counts_as_posted",
     "planning_escalation.py": "tests/test_planning_escalation_prior_answer.py::"
     "test_an_unchecked_answer_is_the_third_form_naming_the_key",
     "proof_dispatch.py": "tests/test_proof_dispatch.py::"

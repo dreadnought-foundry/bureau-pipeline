@@ -261,7 +261,7 @@ class TestTheOrder:
             r'epic_split\.py check --epic "\$EPIC" --comment-file "\$BOUNCE_FILE"',
             run)
         # The bounce is posted on the parent, then the run fails.
-        assert 'linear_ops.py comment "$EPIC" "$(cat "$BOUNCE_FILE")"' in run
+        assert 'linear_ops.py comment "$EPIC" --body-file="$BOUNCE_FILE"' in run
         assert "exit 1" in run
         # It moves nothing: the card stays where the hand-off left it.
         assert "linear_ops.py state" not in run

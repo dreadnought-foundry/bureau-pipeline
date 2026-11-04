@@ -39,6 +39,22 @@ mints (see `models.yaml` below).
 - **`repo-map.json`** — the relay's routing snapshot (see further below).
 - **`lane-contract.json`** — the board's lanes, their clauses and their
   permitted writers (DRE-2726). `docs/lane-contract.md` is rendered from it.
+- **`ledger-files.json`** — the declared ledgers, per repo (DRE-8688): a repo
+  slug maps to a list of path globs, each naming a file several cards share by
+  design, such as agent-bureau's count ledger
+  `console/web/src/theme/rawValues*.baseline.json`. Read only by
+  `scripts/plan_blocker_footprint.py`, which reads each ledger from the plan
+  run's checkout and lets two cards that share only a ledger be ordered only
+  where their lines touch. A ledger renamed or split out of its glob is a
+  one-line edit here.
+- **`parts-count.json`** — the repos whose one-time parts count is switched on
+  (DRE-8844): `repos`, one entry per repo with `repo` (a key of
+  `repo-map.json`), the `agent` and `initiative` labels its cleanup cards
+  carry, and an optional `owned_by`, the `DRE-<n>` epic already deleting the
+  copies, handed to `scripts/parts_cleanup.py file` as `--owned-by`. A push to
+  `main` that changes it runs `.github/workflows/parts-count.yml` over every
+  repo listed; the filer files nothing twice, so a repo already counted is
+  counted again and files nothing new.
 - **`tdd-exemptions.json`** — the exemptions to the TDD commit rule
   (DRE-3009): every code commit needs a test commit since the previous code
   commit, and any code commit after the first may instead carry one of these.
@@ -76,33 +92,27 @@ mints (see `models.yaml` below).
   question. The numbers are the card's own example, not a CEO decision
   (`decided_by` says so), so changing them is an ordinary edit. Read only
   through `scripts/epic_growth.py`.
-- **`planner-queue.json`** — the fleet-wide planner cap (DRE-5176, the CEO's
-  "file the planner cap at 4"; two from DRE-5326, three from DRE-5634): how many planner runs may hold a slot at once,
-  how long a claim lives, how long a dispatch reserves a slot, and how long a
-  card may wait before the watchdog treats it as stuck. Read only through
-  `scripts/planner_queue.py`, which finds it beside itself and raises on a bad
-  file rather than defaulting; `python3 scripts/planner_queue.py check`
-  validates it. `plan.yml` claims against it in its `Planner slot — claim or
-  wait` step, after the duplicate-dispatch guard and before any model step
-  (DRE-5179); a run it does not admit waits in line and ends green.
-  Two more keys bound the number (DRE-5792): `max_running_ceiling`, a positive
-  integer no smaller than `max_running`, and `ceiling_reason`, a non-empty
-  string saying why the ceiling stands where it does; `check` refuses a file
-  missing either, or with a ceiling below `max_running`. The console publishes
-  the number in force to each repo as the GitHub Actions repo variable
-  `PLANNER_MAX_RUNNING`, handed to the steps as an environment variable of the
-  same name, and `planner_queue.cap()` is the one place the rule is applied:
-  set to a positive integer, the variable is the cap, clamped to
-  `max_running_ceiling` with a warning; set to anything else, the file's
-  `max_running` is in force with a warning quoting the value; unset or empty,
-  the file's `max_running` is in force. **A repo holding the variable does not
-  read the file's `max_running` — on that repo it is a fallback only, and
-  editing it changes nothing there.** Deleting the variable is the way back
-  (`gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>`, one repo at a
-  time). The ceiling is never published: it is read from this file on every
-  repo, so a ceiling change is a file edit that takes effect everywhere. The
-  console reads both keys off this file and refuses a number above the
-  ceiling with `ceiling_reason` as the words.
+- **`planner-allowance.json`** — the one limit left on planners (DRE-8616,
+  the CEO's "No limit, slow down near empty" of 2026-10-31, epic DRE-8539;
+  `architecture/decisions/adr-planner-cap-removed.md`). Exactly five keys:
+  `threshold_remaining`, the allowance at or above which a planner starts at
+  once; `wait_minutes`, the boundary a held planner re-reads on;
+  `hold_max_minutes`, after which it starts whatever the reading;
+  `stagger_seconds`, the gap between held planners' starts, in the CEO's
+  Planning order and then oldest `held` first, capped at `wait_minutes`; and
+  `fixture_low_reading` (`repo`, `title_marker`, `remaining`), the live
+  proof's one declared seam — the first read of a sandbox card whose title
+  carries the marker reports that `remaining`. Read only through
+  `scripts/planner_allowance.py`, which finds it beside itself and raises on a
+  bad file rather than defaulting; `python3 scripts/planner_allowance.py check`
+  validates it, and refuses `hold_max_minutes` plus `wait_minutes` at or above
+  the Planning stall window in `lane-contract.json`, because a held card posts
+  nothing between its `🪫 planner-hold: held` and `started` receipts.
+  `plan.yml` reads it in its `Planner allowance — start or wait` step, after
+  the duplicate-dispatch guard and before any model step (DRE-8617), and the
+  plan job's `timeout-minutes` is the planner's own budget plus
+  `hold_max_minutes` plus `wait_minutes`, so raising either means raising
+  that clock too — `tests/test_planner_allowance_wiring.py` holds the sum.
 - **`whats-new-cutover.json`** — the switch for the What's New rule
   (DRE-5576): `enforced_from`, the UTC instant from which the merge gate holds
   a pull request opened without a `What's new:` line, and `why`. Absent, the
@@ -226,6 +236,46 @@ mints (see `models.yaml` below).
   non-default class with no phrase, a phrase under two classes, a `default`
   that is not a class, and an `action` missing or not a `[a-z_]+` module name.
   `docs/blocker-classes.md` is the page a person reads.
+- **`operator-step-kinds.json`** — which operator steps in Hand-work a machine
+  could do and which a person must (DRE-8650): a `_readme`, `person.phrases`
+  (the phrases that name a person acting — a bare `sign-in` is not one), then
+  `kinds`, an ordered list of the five machine kinds (`variable`,
+  `linear-admin`, `bot-pr`, `deploy`, `script`), each with `why` and
+  `phrases`. Read only through `scripts/operator_step_kind.py`, whose
+  `classify` matches each phrase case-insensitively and whole: a person phrase
+  wins, then the first kind matched, and no match is a person's. The hygiene
+  lane `scripts/hygiene_hand_step.py` labels each Hand-work operator step
+  `hand-step:machine` or `hand-step:person` by it, and nothing else reads it.
+- **`operator-agent.json`** — the operator agent's fixed routes (DRE-8743,
+  epic DRE-8738): exactly six keys, no `_readme`. `ceo_acts`, the six acts the
+  CEO kept on 2026-10-30 (`{"id", "label", "phrases"}` each);
+  `destructive_go`, two phrase lists that must both match; `studio_access`;
+  `deploy`; `studio`, the `blocker`, `deploy_epic` and `never_blocker` ids the
+  apply reads, and `host_limits`, this repo's one copy of what the studio host
+  cannot do as built, with its `source` and the day it was `read_on`; and
+  `leave_alone`, the cards the agent never takes (`{"card", "why"}`). Read only
+  through `scripts/operator_rules.py`, whose `load_rules` refuses a table that
+  breaks the shape. A kept act wins over `destructive-go`, which wins over
+  studio access; no match is the model's to read. A phrase's last word matches
+  in the singular or the plural, so each phrase is listed once, as its fixture
+  sentence writes it. Every phrase is quoted from
+  a sentence of `tests/fixtures/operator-agent-board-2026-11-01.json`, and
+  `tests/test_operator_rules.py` pins every fixture card the table sends to
+  the CEO or to the studio host.
+- **`operator-do.json`** — the steps the operator agent may carry out itself
+  (DRE-8922, epic DRE-8738): a `_readme`; `max_ops` (20, one plan's cap),
+  `max_do_per_pass` (3), `max_close_per_pass` (10) and `pr_wait_days` (14);
+  `org`, the one organization a plan's repository may open; `never`, the
+  agent's own switches and their `_OFF_UNTIL` companions; `never_branches`;
+  `scripts`, the one script a `script` op may run and its one argument form;
+  and `kinds` — exactly `variable`, `bot-pr`, `linear-admin` and `script`,
+  each with its `credential` (`GH_TOKEN` or `LINEAR_API_KEY`), its `mint` and
+  its `ops`, each op with `fields` (name to type), `writes` and the argv
+  `command` it becomes. Read only through `scripts/operator_do_ops.py`, whose
+  `load` refuses `deploy`, a kind outside `operator_step_kind.MACHINE_KINDS`,
+  any other credential and a command naming an undeclared field, and whose
+  `check` refuses a plan that names an op not in the file, a second
+  repository, or a target the card's own text does not quote.
 - **`notice-writers.json`** — every writer that files a Linear card
   automatically (DRE-7452): a `_readme`, `found`, then `writers`, one row per
   writer with `id`, `repo` (`bureau-pipeline` or `agent-bureau`), `file`,
@@ -375,7 +425,9 @@ mints (see `models.yaml` below).
   3,000,000. `plan.yml` — and since Stage 2 (fix #12) `agent-task.yml`,
   `agent-fix.yml`, `qa-review.yml`, `verify.yml` and `proof-task.yml` in a
   repo that sets the variable `LINEAR_AGENT_BUCKET=planner` (review item 29),
-  and no other workflow — reads it ahead of the fleet key, steps back onto the
+  and since DRE-8716 `reconcile.yml` in every repo whose variable
+  `LINEAR_SWEEP_BUCKET` is not `fleet` (an opt-out, where the agents' is an
+  opt-in), and no other workflow — reads it ahead of the fleet key, steps back onto the
   fleet key on a 401 — never on a rate limit — and its `linear-budget:` line names
   `budget: planner-oauth` while the token is what it spends, which is
   how `scripts/check_linear_budget.py` keeps that spend out of the fleet

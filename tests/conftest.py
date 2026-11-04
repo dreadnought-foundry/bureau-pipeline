@@ -58,18 +58,6 @@ def _reset_read_door() -> None:
         reset()
 
 
-def _lift_drain_slots(monkeypatch) -> None:
-    """The groom drain reads the planner slot ledger before it moves a card
-    (DRE-5326), and releases no more cards than there are free slots. Every
-    drain fixture written before that moves fifteen cards through a fake that
-    carries no ledger, and none of them is about slots — so for them the read
-    answers "no limit". `test_groomer_drain_slots.py` is where the slots are
-    tested, and each test there puts back the slots it means."""
-    groomer = sys.modules.get("groomer")
-    if getattr(groomer, "free_planner_slots", None) is not None:
-        monkeypatch.setattr(groomer, "free_planner_slots", lambda lops: None)
-
-
 def _empty_epic_queue(monkeypatch) -> None:
     """The sweep's two epic-queue phases read Linear directly, not through the
     pass's board snapshot (DRE-5152): `epic_cap.labeled_elsewhere` in every
@@ -87,12 +75,25 @@ def _empty_epic_queue(monkeypatch) -> None:
             monkeypatch.setattr(epic_cap, name, lambda: [])
 
 
+def _no_inherited_red_main_holds(monkeypatch) -> None:
+    """The sweep's return of cards the medic held on a red `main` (DRE-8849)
+    reads this repo's held Triage cards straight from Linear, as the epic
+    queue does above, in every full sweep. For the suites that run a whole
+    `reconcile.main()` and are not about it, no card is held, at no request.
+    `tests/test_inherited_red_main.py` puts back the real read."""
+    inherited_red_main = sys.modules.get("inherited_red_main")
+    if getattr(inherited_red_main, "held_cards", None) is not None:
+        monkeypatch.setattr(inherited_red_main, "held_cards", lambda *a, **k: [])
+
+
 def _no_ambient_event(monkeypatch) -> None:
     """The read door's client refuses to ask from a `pull_request` run (the
-    door refuses those tokens by design, S7) — and the CI that runs this suite
-    IS a `pull_request` run. A test that is about the event sets it itself; no
-    test inherits the runner's."""
+    door refuses those tokens by design, S7) except for the one card its head
+    branch names (DRE-8812) — and the CI that runs this suite IS a
+    `pull_request` run, on an `agent/DRE-<n>-…` branch. A test that is about
+    the event or the branch sets it itself; no test inherits the runner's."""
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
+    monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
 
 
 def _own_runner_temp(monkeypatch, tmp_path_factory) -> None:
@@ -173,8 +174,8 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_model_home(monkeypatch)
     _own_runner_temp(monkeypatch, tmp_path_factory)
     _own_agent_notes(monkeypatch, tmp_path_factory)
-    _lift_drain_slots(monkeypatch)
     _empty_epic_queue(monkeypatch)
+    _no_inherited_red_main_holds(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
     _reset_workflow_states()

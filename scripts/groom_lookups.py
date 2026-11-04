@@ -31,7 +31,14 @@ stops at five is not "nothing merged". A `Link` header with `rel="next"` puts
   * **A repo that refuses** (any `gh` failure but a rate limit, or a request
     that reaches `REQUEST_TIMEOUT`) — named in the card's `unread_repos`, and
     the next repo is asked.
-  * **A rate limit** — the leg stops; every card not finished is `read: false`.
+  * **A rate limit** — waited out and asked again (DRE-8859): the refused
+    answer's `retry-after`, else its `x-ratelimit-reset` when
+    `x-ratelimit-remaining` is 0, else `RATE_LIMIT_BACKOFF` doubled for the
+    second wait. At most `RATE_LIMIT_WAITS` waits in one leg, each counted on
+    the clock below, and each try is one request of the budget. When the
+    waits are spent, or the wait would reach `MAX_SECONDS`, the leg stops and
+    every card not finished is `read: false`, its `why` beginning
+    `rate limited: ` and saying which.
   * **The request budget** — `--budget` when given, otherwise
     `min(MAX_REQUESTS, floor(remaining × BUDGET_SHARE))` with `remaining` read
     off the first answered response's `x-ratelimit-remaining` header (the
@@ -137,10 +144,25 @@ REQUEST_TIMEOUT = 20
 #: The credential the leg spends: this owner's App installation token.
 TOKEN_ENV = "GH_TOKEN"
 
+# --- a rate limit, waited out (DRE-8859) ----------------------------------- #
+#: The most waits on a rate limit one leg makes, in all. On 2026-11-02 the
+#: fleet's shared installation refused the leg after 9 requests of 600 and
+#: 3.2 s of its clock: GitHub's secondary limit, which passes in a minute or
+#: two. Two backoff waits take 180 s and leave 120 s of `MAX_SECONDS` to
+#: read; a third, doubled to 240 s, could never fit.
+RATE_LIMIT_WAITS = 2
+#: The wait, in seconds, when the refused answer names none — doubled for
+#: the second, as GitHub asks of a secondary limit: a minute, longer each time.
+RATE_LIMIT_BACKOFF = 60
+
 # The `why` values, exact (the contract DRE-5458's `fold` reads).
 BUDGET_SPENT = "request budget of {n} spent"
 TIME_SPENT = "time budget of {n} s spent"
 RATE_LIMITED = "rate limited: {message}"
+# What follows `RATE_LIMITED` when the leg stops on a rate limit, exact.
+WAIT_TOO_LONG = ("; not asked again: GitHub asked for {asked} s and the leg "
+                 "had {left} s of its {n} s left")
+STILL_REFUSED = "; still refused after {n} waits of {waits} s"
 NO_TOKEN = "no token for {owner}: the App's installation could not be minted"
 TIMED_OUT = "timed out after {n} s"
 # Two that only a row or a map breaking its own contract can produce: a card
@@ -251,7 +273,12 @@ _WORD_EDGE = string.punctuation + "“”‘’—–…"
 
 
 class GhError(RuntimeError):
-    """`gh api` exited non-zero; the message is its stderr."""
+    """`gh api` exited non-zero; the message is its stderr, and `headers`
+    the refused answer's headers — `{}` when it printed none."""
+
+    def __init__(self, message: str, *, headers: dict | None = None):
+        super().__init__(message)
+        self.headers = dict(headers or {})
 
 
 class _Refused(Exception):
@@ -305,13 +332,16 @@ def _gh(args, *, timeout=REQUEST_TIMEOUT) -> tuple[str, str]:
     no shell, and a timeout on every call — `groom_context._gh_json` passes
     none, and the clock is read only BETWEEN requests, so one hung call would
     run the leg into the job kill. A timeout raises
-    `subprocess.TimeoutExpired`; a non-zero exit raises `GhError`."""
+    `subprocess.TimeoutExpired`; a non-zero exit raises `GhError`, carrying
+    the headers `-i` printed of the refused answer, which say how long a rate
+    limit wants (DRE-8859)."""
     done = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
         ["gh", "api", "-i", *args], capture_output=True, text=True,
         check=False, shell=False, timeout=timeout)
     if done.returncode != 0:
         raise GhError(_one_line(done.stderr)
-                      or f"gh api {' '.join(args)} exited {done.returncode}")
+                      or f"gh api {' '.join(args)} exited {done.returncode}",
+                      headers=_headers(_split(done.stdout)[0]))
     return _split(done.stdout)
 
 
@@ -328,8 +358,35 @@ def _headers(text: str) -> dict:
 # one leg                                                                      #
 # --------------------------------------------------------------------------- #
 
+def _epoch() -> float:
+    """Now, in Unix seconds — what `x-ratelimit-reset` is counted in; tests
+    replace it."""
+    return time.time()
+
+
+def _rate_limit_wait(error: Exception, waited: int) -> int:
+    """The seconds a rate-limited answer asks the leg to wait: its
+    `retry-after`; else, when `x-ratelimit-remaining` is 0, until its
+    `x-ratelimit-reset`; else `RATE_LIMIT_BACKOFF`, doubled for each wait
+    the leg has already made. An error with no headers backs off."""
+    headers = getattr(error, "headers", None)
+    headers = headers if isinstance(headers, dict) else {}
+    after = dispatch_pool._int_or_none(
+        dispatch_pool._header(headers, "retry-after"))
+    if after is not None and after >= 0:
+        return after
+    remaining = dispatch_pool._int_or_none(
+        dispatch_pool._header(headers, "x-ratelimit-remaining"))
+    reset = dispatch_pool._int_or_none(
+        dispatch_pool._header(headers, "x-ratelimit-reset"))
+    if remaining == 0 and reset is not None:
+        return max(0, math.ceil(reset - _epoch()))
+    return RATE_LIMIT_BACKOFF * 2 ** waited
+
+
 class _Leg:
-    """The two budgets, checked before every request."""
+    """The two budgets, checked before every request, and the waits on a
+    rate limit, counted on the same clock."""
 
     def __init__(self, gh_run, clock, budget: int | None, started: float):
         self.gh_run = gh_run
@@ -338,26 +395,49 @@ class _Leg:
         self.cap = budget
         self.sized = budget is not None
         self.requests = 0
+        self.waits: list[int] = []
 
     def elapsed(self) -> float:
         return self.clock() - self.started
 
+    def _wait_out(self, error: Exception, message: str) -> None:
+        """A rate limit (DRE-8859): wait what GitHub asks and return, so the
+        request is asked again — or stop the leg, as before, when the waits
+        are spent or the wait would reach `MAX_SECONDS`. Both stops begin
+        `RATE_LIMITED`, which `fold` reads."""
+        said = RATE_LIMITED.format(message=message)
+        if len(self.waits) >= RATE_LIMIT_WAITS:
+            raise _Stop(said + STILL_REFUSED.format(
+                n=len(self.waits),
+                waits=", ".join(str(w) for w in self.waits))) from error
+        seconds = _rate_limit_wait(error, len(self.waits))
+        elapsed = self.elapsed()
+        if elapsed + seconds >= MAX_SECONDS:
+            # After a wait that long, no request could be made at all.
+            raise _Stop(said + WAIT_TOO_LONG.format(
+                asked=seconds, left=max(0, math.floor(MAX_SECONDS - elapsed)),
+                n=MAX_SECONDS)) from error
+        self.waits.append(seconds)
+        _wait(seconds)
+
     def request(self, endpoint: str) -> tuple[dict, str]:
-        ceiling = self.cap if self.cap is not None else MAX_REQUESTS
-        if self.requests >= ceiling:
-            raise _Stop(BUDGET_SPENT.format(n=ceiling))
-        if self.elapsed() >= MAX_SECONDS:
-            raise _Stop(TIME_SPENT.format(n=MAX_SECONDS))
-        self.requests += 1
-        try:
-            head, body = self.gh_run([endpoint])
-        except subprocess.TimeoutExpired as e:
-            raise _Refused(TIMED_OUT.format(n=REQUEST_TIMEOUT)) from e
-        except Exception as e:  # noqa: BLE001 — every refusal is named
-            message = _one_line(e) or type(e).__name__
-            if "rate limit" in message.lower():
-                raise _Stop(RATE_LIMITED.format(message=message)) from e
-            raise _Refused(message) from e
+        while True:
+            ceiling = self.cap if self.cap is not None else MAX_REQUESTS
+            if self.requests >= ceiling:
+                raise _Stop(BUDGET_SPENT.format(n=ceiling))
+            if self.elapsed() >= MAX_SECONDS:
+                raise _Stop(TIME_SPENT.format(n=MAX_SECONDS))
+            self.requests += 1
+            try:
+                head, body = self.gh_run([endpoint])
+                break
+            except subprocess.TimeoutExpired as e:
+                raise _Refused(TIMED_OUT.format(n=REQUEST_TIMEOUT)) from e
+            except Exception as e:  # noqa: BLE001 — every refusal is named
+                message = _one_line(e) or type(e).__name__
+                if "rate limit" not in message.lower():
+                    raise _Refused(message) from e
+                self._wait_out(e, message)
         headers = _headers(head)
         if not self.sized:
             # The first answered response sizes the leg, and only the first:
@@ -789,6 +869,9 @@ def _door_search(terms: list[str]) -> dict | None:
     or could not answer them all — then Linear answers every term, so one
     card's answer is never half the door's."""
     if not bureau_read.enabled():
+        # A stopped door is never asked, so the client cannot name this
+        # Linear read: it is named here (DRE-8796). `off` prints nothing.
+        bureau_read.note_fallback("search", bureau_read.disabled_reason() or "unavailable")
         return None
     found = {}
     for term in terms:
@@ -804,7 +887,8 @@ def _door_search(terms: list[str]) -> dict | None:
 
 
 def _wait(seconds: float) -> None:
-    """The one wait on Linear's search-speed refusal; tests replace it."""
+    """The one wait — on Linear's search-speed refusal, and on GitHub's rate
+    limit in a lookup leg (DRE-8859); tests replace it."""
     time.sleep(seconds)
 
 

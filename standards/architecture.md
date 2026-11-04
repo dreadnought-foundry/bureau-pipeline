@@ -99,6 +99,37 @@ migrations / monitors and runs only credential-less checks (`cdk synth`/`diff`,
 tests); the **operator runs every `cdk deploy`, migration, and rollout**.
 Enforced by a hard classifier/permission block, not just a brief.
 
+**The studio-machine exception (DRE-8486).** Build runs are unchanged: every
+agent dispatched by the pipeline — build, fix, critic, verifier, proof and the
+DevOps agent — still holds no cloud credentials, and the hard
+classifier/permission block still applies to them. Nothing in this paragraph
+gives a build run a credential. The one exception: a console conversation may
+send a command to an operator-owned machine enrolled in the console's machine
+roster, where a host program runs it as that machine's own separate, non-admin
+OS user — never the operator's own account. That user holds its own cloud role
+and its own source-control machine identity, never a person's. Its cloud role
+is denied changing access (identity and permission writes, organization and
+single-sign-on changes, and assuming or passing any other role), billing and
+account settings, writing secrets and parameters and reading a secret's value
+or an encrypted parameter's value, and stopping or changing the audit trail.
+The deny on reading a secret's value covers a value kept in the cloud's secrets
+store or in an encrypted parameter, and nothing else: a secret value kept
+anywhere else — in a function's, a task's or a build project's settings, in a
+stack's template or outputs, in a plain parameter or in a stored file — stays
+readable, and the linked record names where. Until a signed Allow can hand a
+deploy its own credential, it is also denied driving a stack or starting code
+that runs under another role, and the linked record names which services and
+why. These denies bind the role's own calls; what they do not reach — code that
+already runs under another role — is stated in the linked record, with how it
+is held. Its source-control identity is an organization member, never an
+owner, with no administration, secrets, variables, members or environments
+permission. Those acts stay with the operator. A command in a risky class —
+read from the same classes file the console's Auto check reads — runs on the
+machine only with a signed, single-use, expiring Allow bound to that exact
+command; without one the machine itself refuses it, even when the console sends
+it. The decision is recorded in
+[`adr-studio-host.md`](https://github.com/dreadnought-foundry/agent-bureau/blob/main/architecture/decisions/adr-studio-host.md).
+
 ## Settled stack decisions
 - **Vite + React SPA + shadcn/ui — NOT Next.js — for a gated cockpit.** SSR/SEO
   are irrelevant behind a login wall. Only a public/marketing site may reach for

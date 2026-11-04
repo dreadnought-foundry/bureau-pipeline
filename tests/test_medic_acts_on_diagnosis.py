@@ -63,7 +63,7 @@ PR_URL = "https://github.com/dreadnought-foundry/atlas/pull/77"
 REPORT_TEXT = ("The card asks for two lanes that contradict each other. "
                "No build can satisfy both.\n\n"
                "Technical: criteria 2 and 4 name different destinations.\n")
-DIAGNOSIS_ANCHOR = ('linear_ops.py comment "$TARGET" "$(cat "$REPORT")" '
+DIAGNOSIS_ANCHOR = ('linear_ops.py comment "$TARGET" --body-file="$REPORT" '
                     '--act=run-failure-diagnosed')
 RECEIPT_ANCHOR = 'linear_ops.py comment "$TARGET" "$RECEIPT" --act=medic-next-step'
 THREE_STEPS = ("requeue-once", "send-to-planning", "fix-path")
@@ -127,8 +127,15 @@ def _runs(condition: str, ctx: dict) -> bool:
 # `medic_next_step.py` and `medic_resume.py` then run the real script.
 STUB_HEAD = """#!/usr/bin/env python3
 import json, os, subprocess, sys
+def _body(a):
+    # A body in a file arrives as `--body-file=PATH` (DRE-8758); the log
+    # carries the body, as the real client posts it.
+    if a.startswith("--body-file=") and os.path.isfile(a[len("--body-file="):]):
+        with open(a[len("--body-file="):], encoding="utf-8") as fh:
+            return fh.read().rstrip("\\n")
+    return a
 with open(os.environ["CALLS"], "a", encoding="utf-8") as f:
-    f.write(json.dumps([os.path.basename(__file__), *sys.argv[1:]]) + "\\n")
+    f.write(json.dumps([os.path.basename(__file__), *map(_body, sys.argv[1:])]) + "\\n")
 cmd = sys.argv[1] if len(sys.argv) > 1 else ""
 """
 
@@ -182,9 +189,21 @@ STUB_GH = STUB_HEAD.replace("os.path.basename(__file__)", '"gh"') + """
 sys.exit(int(os.environ.get("FAKE_GH_RC", "0")))
 """
 
+#: `planning_escalation` as a module, not a stub: the ask step reads its
+#: `HOUSEKEEPING_LANE` with `import planning_escalation` from the scripts
+#: directory (DRE-8592), so the real module's code runs under its own path and
+#: every import it makes is the real one.
+SHIM_PLANNING_ESCALATION = """
+import os
+__file__ = os.path.join(os.environ["REAL_SCRIPTS"], "planning_escalation.py")
+with open(__file__, encoding="utf-8") as _f:
+    exec(compile(_f.read(), __file__, "exec"))
+"""
+
 STUBS = {"linear_ops.py": STUB_LINEAR_OPS, "card_pr.py": STUB_CARD_PR,
          "medic_retry.py": STUB_MEDIC_RETRY, "pipeline_notice.py": STUB_QUIET,
-         "medic_next_step.py": STUB_REAL, "medic_resume.py": STUB_REAL}
+         "medic_next_step.py": STUB_REAL, "medic_resume.py": STUB_REAL,
+         "planning_escalation.py": SHIM_PLANNING_ESCALATION}
 
 
 class Run:
@@ -513,9 +532,10 @@ class TheSendToPlanningTest(unittest.TestCase):
                       run_)
         self.assertIn('linear_ops.py advance "$TARGET" "Planning" "$FROM_LANES"', run_)
         self.assertEqual(1, _text().count('advance "$TARGET" "Planning"'))
-        # The Green Light move (DRE-7794) calls the same command, and no other.
+        # The Green Light move (DRE-7794) calls the same command, and so does
+        # the hold on an inherited red main (DRE-8849), and no other.
         assigned = re.findall(r"FROM_LANES=(.*)", _text())
-        self.assertEqual(2, len(assigned))
+        self.assertEqual(3, len(assigned))
         for value in assigned:
             self.assertEqual("$(python3 .bureau-pipeline/scripts/medic_next_step.py "
                              "from-lanes) || true", value.strip())
@@ -632,14 +652,18 @@ class TheOtherTargetsTest(unittest.TestCase):
         self.assertFalse(r.ran["receipt"])
 
     def test_ask_person_is_delivered_then_asked_with_one_receipt(self):
-        # DRE-7794: the diagnosis as before, then the question in Green Light
-        # (tests/test_medic_asks_a_person.py), then the one receipt.
+        # DRE-7794: the diagnosis as before, then the question
+        # (tests/test_medic_asks_a_person.py), then the one receipt. With no
+        # choices file the question is housekeeping, so it is the operator's
+        # note and the card goes to Triage, never Green Light (DRE-8592).
         r = _run_job(step="ask-person")
         self.assertEqual((CARD, REPORT_TEXT.rstrip("\n"), "run-failure-diagnosed"),
                          r.comments[0])
         self.assertEqual([None, "medic-next-step"], [act for _, _, act in r.comments[1:]])
+        self.assertTrue(r.comments[1][1].startswith("🧹 planning-stall-park:"))
         self.assertTrue(r.ran["ask"])
         self.assertTrue(r.ran["receipt"])
+        self.assertEqual(["Triage"], [c[3] for c in r.called("linear_ops.py", "advance")])
 
 
 # ── 10. the receipt step, as written ────────────────────────────────────────

@@ -269,7 +269,7 @@ jobs:
       # part — runs on the selected worker token minted further down.
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -377,11 +377,14 @@ jobs:
       # says where it comes from: the console's read door when BUREAU_READ is
       # `on` and the door can give the whole answer, else ONE Linear read.
       #
-      # The door refuses every token minted for a pull_request or
-      # pull_request_target event, so a fork can never mint one (agent-bureau
-      # github_oidc.py check 7, review S7), and the client never asks from one.
-      # A pull_request verify is one Linear read where an in-scope one made two;
-      # only a workflow_dispatch re-verify can be served by the door.
+      # A pull_request verify on an `agent/` or `repair/DRE-<n>-…` branch asks
+      # the door for its own card, the one read the door serves such a run
+      # (agent-bureau DRE-8807, `bureau_read.own_card`, DRE-8812), as a
+      # workflow_dispatch re-verify does. Every other pull_request run, and
+      # every pull_request_target run, is one Linear read where an in-scope
+      # one made two: the door refuses those tokens, so a fork can never mint
+      # one (agent-bureau github_oidc.py check 7, review S7), and the client
+      # does not ask.
       #
       # A read that fails writes no file: the scope gate then has no card
       # signal and Select model fails CLOSED (`--built-on-unknown`), exactly as
@@ -504,7 +507,7 @@ jobs:
         id: probe_2
         if: steps.scope.outputs.in_scope == 'true' && env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -512,7 +515,7 @@ jobs:
         id: probe_3
         if: steps.scope.outputs.in_scope == 'true' && env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -520,7 +523,7 @@ jobs:
         id: probe_4
         if: steps.scope.outputs.in_scope == 'true' && env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -551,7 +554,7 @@ jobs:
       - name: Mint worker token (selected pool app)
         id: worker
         if: steps.scope.outputs.in_scope == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -639,7 +642,7 @@ jobs:
         id: model_home
         if: steps.scope.outputs.in_scope == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -778,9 +781,21 @@ jobs:
         # A shadow replay's agent (DRE-7194) holds no Linear key: it posts
         # nothing, and the card's thread holds the verdicts it is replaying.
         # A live run's key is the same expression, inside the gate.
+        #
+        # The read door (DRE-8899), closed the same way: a replay is handed no
+        # door either, since the door would serve it the thread its Linear key
+        # was taken away to keep from it. A live run reads the card from the
+        # job's snapshot (the prompt says how), and any `linear_ops` card read
+        # it makes asks the door first, at most the review card's 120 seconds
+        # old (`bureau_read.REVIEW_CARD_MAX_AGE`).
         env:
           LINEAR_API_KEY: ${{ !inputs.shadow && (vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY) || '' }}
           LINEAR_API_KEY_FALLBACK: ${{ !inputs.shadow && (secrets.LINEAR_API_KEY) || '' }}
+          BUREAU_READ: ${{ !inputs.shadow && (vars.BUREAU_READ || 'off') || 'off' }}
+          BUREAU_READ_URL: ${{ !inputs.shadow && vars.BUREAU_READ_URL || '' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -852,8 +867,14 @@ jobs:
             `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
-            1. Read the card's acceptance criteria (read the LIVE card as the
-               authoritative source, not just the PR body). If the card has a
+            1. Read the card's acceptance criteria from the card itself, not
+               just the PR body. This run already read the card once, at its
+               start, into a snapshot: its description is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py description "$RUNNER_TEMP/card-snapshot.json"`
+               and its comment thread, oldest first, is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py thread "$RUNNER_TEMP/card-snapshot.json"`.
+               Read the card from Linear only when the snapshot is absent
+               (both commands exit non-zero). If the card has a
                `**Design:**` ref, Read that screen PNG (normal-sized exports
                under console/design/images/screens/..., safe to Read) and
                verify the built screen against it.
@@ -969,9 +990,21 @@ jobs:
         # A shadow replay's agent (DRE-7194) holds no Linear key: it posts
         # nothing, and the card's thread holds the verdicts it is replaying.
         # A live run's key is the same expression, inside the gate.
+        #
+        # The read door (DRE-8899), closed the same way: a replay is handed no
+        # door either, since the door would serve it the thread its Linear key
+        # was taken away to keep from it. A live run reads the card from the
+        # job's snapshot (the prompt says how), and any `linear_ops` card read
+        # it makes asks the door first, at most the review card's 120 seconds
+        # old (`bureau_read.REVIEW_CARD_MAX_AGE`).
         env:
           LINEAR_API_KEY: ${{ !inputs.shadow && (vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY) || '' }}
           LINEAR_API_KEY_FALLBACK: ${{ !inputs.shadow && (secrets.LINEAR_API_KEY) || '' }}
+          BUREAU_READ: ${{ !inputs.shadow && (vars.BUREAU_READ || 'off') || 'off' }}
+          BUREAU_READ_URL: ${{ !inputs.shadow && vars.BUREAU_READ_URL || '' }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1021,8 +1054,14 @@ jobs:
             `gh pr diff ${{ steps.pr.outputs.number }}` (GH_TOKEN is in your env).${{ inputs.shadow && format(' SHADOW REPLAY — where this paragraph and the steps below differ, this paragraph wins. You are replaying this pull request at commit {0}, the head an earlier verification ran on, and the workspace is already checked out there: do not check out the pull request branch or any other commit. Do not run `gh pr diff` — it shows the branch as it is today; the diff you verify is the three-dot compare of {0} with the base it was built on, in {1}. Do not read the pull request''s comments, by any route — not `gh pr view --comments`, not `gh api` on its issue or review comments, and not the pull request''s page. You have no Linear access in this run: the card''s description is in {2} and stands in for the live card (when it is empty, judge from the pull request body).', steps.pr.outputs.sha, '/tmp/shadow-replay.diff', '/tmp/shadow-card.md') || '' }}
 
             You do NOT review the code — you RUN THE FEATURE and prove it works:
-            1. Read the card's acceptance criteria (read the LIVE card as the
-               authoritative source, not just the PR body). If the card has a
+            1. Read the card's acceptance criteria from the card itself, not
+               just the PR body. This run already read the card once, at its
+               start, into a snapshot: its description is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py description "$RUNNER_TEMP/card-snapshot.json"`
+               and its comment thread, oldest first, is
+               `python3 .bureau-pipeline/scripts/card_snapshot.py thread "$RUNNER_TEMP/card-snapshot.json"`.
+               Read the card from Linear only when the snapshot is absent
+               (both commands exit non-zero). If the card has a
                `**Design:**` ref, Read that screen PNG (normal-sized exports
                under console/design/images/screens/..., safe to Read) and
                verify the built screen against it.
@@ -1097,7 +1136,7 @@ jobs:
       - name: Mint qa-bot token (verdicts author as qa-bot)
         id: qa
         if: always() && !cancelled() && steps.scope.outputs.in_scope == 'true' && !inputs.shadow
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
@@ -1121,6 +1160,16 @@ jobs:
           # Empty = the verdict line is composed exactly as it is today.
           CONTENT_ID: ${{ steps.pr.outputs.content }}
           REAL: ${{ (steps.gate1.outputs.real == 'true' || steps.gate2.outputs.real == 'true') && 'true' || 'false' }}
+          # The read door (DRE-8899): the Linear copy's pre-read of the card
+          # asks the door first. This pull_request run's own card is the one
+          # read the door serves it (agent-bureau DRE-8807), at most the
+          # review card's 120 seconds old (`bureau_read.REVIEW_CARD_MAX_AGE`).
+          # The comment itself is Linear's write either way.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           if [ "$REAL" = "true" ]; then
             # A real verdict (PASS or FAIL with evidence) from a Verifier that
@@ -1153,7 +1202,7 @@ jobs:
             gh pr comment "$PR" --body-file /tmp/verify-comment.md && break
             echo "comment attempt $i failed; retrying in $((i*10))s"; sleep $((i*10))
           done
-          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/verify-comment.md)" || true
+          [ -n "$CARD" ] && python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" --body-file=/tmp/verify-comment.md || true
 
       # Fail the job loudly AFTER the neutral comment is posted, so the infra
       # failure is visibly red and the medic picks it up. A genuine verdict

@@ -626,12 +626,78 @@ def _drive_triage_repair(mp):
     import answer_into_card  # noqa: PLC0415 — only this driver needs it
     import triage_repair  # noqa: PLC0415
 
+    stamp = "🔒 hold: reason=plan-critic-bound at=none lifts=manual by=plan.yml"
     mp.setattr(triage_repair.linear_ops, "comment_records",
-               lambda *_a, **_k: [])
+               lambda *_a, **_k: [{"body": stamp, "authored_by_pipeline": True}])
     mp.setattr(answer_into_card, "_read_description",
                lambda _card: "The card as it stood.")
     _card_recorder(mp)
     triage_repair.claim("DRE-1")
+
+
+@site("alarm-repair", "alarm-repair")
+def _drive_alarm_repair(mp):
+    """The Alarm Repair's claim (DRE-8633): an alert's first attempt, on a
+    card with no receipt for that raise. Frozen from its first render: there
+    was no earlier wording to read it off."""
+    import alarm_repair  # noqa: PLC0415 — only this driver needs it
+
+    mp.setattr(alarm_repair.linear_ops, "comment_records", lambda *_a, **_k: [])
+    _card_recorder(mp)
+    alarm_repair.claim("DRE-1", "pipeline_stuck:DRE-1", "2026-11-01T10:00:00Z")
+
+
+@site("operator-agent", "operator-agent")
+def _drive_operator_agent(mp):
+    """The Operator Agent's claim (DRE-8746): a `studio` decision on a card
+    with no receipt on its thread, read from a one-entry decisions file.
+    Frozen from its first render: there was no earlier wording to read it
+    off."""
+    import tempfile  # noqa: PLC0415 — only this driver needs it
+
+    import operator_agent_apply  # noqa: PLC0415
+    import operator_decide  # noqa: PLC0415
+
+    decision = operator_decide.Decision(
+        card="DRE-1", repo="agent-bureau", lane="Hand-work", outcome="studio",
+        reason="the step needs production deploy, production access no test "
+               "environment gives",
+        step="run the production deploy", act="", deploy=True, evidence=[],
+        host_cannot=["In this child the studio user can do everything but deploy."],
+        finding="", question="", recommendation="", choices=None, held="",
+        fingerprint="0123456789ab")
+    folder = tempfile.mkdtemp()
+    path = os.path.join(folder, "decisions.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump([dict(decision.to_json(), action="decide")], fh)
+    mp.setattr(operator_agent_apply.linear_ops, "comment_records", lambda *_a, **_k: [])
+    mp.setattr(operator_agent_apply, "_now",
+               lambda: datetime(2026, 11, 2, 17, 5, tzinfo=UTC))
+    _card_recorder(mp)
+    operator_agent_apply.claim("DRE-1", path)
+
+
+@site("failure-tally", "failure-tally")
+def _drive_failure_tally(mp):
+    """The failure tally's count (DRE-8635): a stranded-fix card a person
+    canceled, found again with a new commit on the same branch. Frozen from
+    its first render: there was no earlier wording to read it off."""
+    import failure_tally  # noqa: PLC0415 — only this driver needs it
+
+    title = "bureau-pipeline: a fix commit is stranded on the merged branch agent/DRE-2-x"
+    mp.setattr(failure_tally.linear_ops, "repo_cards_by_title_prefix",
+               lambda *_a, **_k: [{
+                   "identifier": "DRE-1", "title": title,
+                   "description": "Occurrence: agent/DRE-2-x@aaaaaaaa",
+                   "state": "Canceled", "createdAt": "2026-11-01T10:00:00.000Z",
+                   "completedAt": ""}])
+    mp.setattr(failure_tally.linear_ops, "comment_records", lambda *_a, **_k: [])
+    _card_recorder(mp)
+    failure_tally.file_or_tally(
+        title, "the card's body", occurrence="agent/DRE-2-x@bbbbbbbb",
+        repo_slug="bureau-pipeline",
+        labels=["repo:bureau-pipeline", "agent:engineer"],
+        now=datetime(2026, 11, 2, 18, 0, tzinfo=UTC))
 
 
 @site("promotion-stalled", "promotion-stalled")
@@ -743,7 +809,7 @@ def _drive_proof_gap_filed(mp):
         repo_slug="bureau-pipeline", records=[])
 
 
-#: The hygiene agent's fourteen acts (DRE-5368, DRE-6180, DRE-6451). The core composes every one of
+#: The hygiene agent's sixteen acts (DRE-5368, DRE-6180, DRE-6451, DRE-8648, DRE-8650). The core composes every one of
 #: them through `hygiene.receipt` and posts it through its one comment seam,
 #: `hygiene.send`; WHICH act a pass takes is a lane module's decision, and the
 #: lanes are sibling cards. So each driver hands the real seam the receipt a
@@ -754,7 +820,8 @@ HYGIENE_ACTS = (
     "hygiene-decision-needed", "hygiene-pr-close", "hygiene-resend-to-planning",
     "hygiene-card-close", "hygiene-proof-close", "hygiene-triage-return",
     "hygiene-review-move", "hygiene-card-cancel", "hygiene-cause-name",
-    "hygiene-hold-clear", "hygiene-triage-alarm",
+    "hygiene-hold-clear", "hygiene-triage-alarm", "hygiene-blocker-owner-notice",
+    "hygiene-hand-step-class",
 )
 
 
@@ -911,6 +978,54 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
             "be posted as if it were composed"
         )
 
+    # --body-file (DRE-8779): a body over 128 KiB cannot be one argument, so
+    # the shell callers pipe it in. What reaches --out must not depend on
+    # which way the body came.
+    _BODY = "\U0001f6d1 a hold body\n\nwith a blank line, inner  gap, and a trailing newline\n"
+
+    def _receipt(self, tmp_path, *args, stdin=None):
+        out = tmp_path / "receipt.md"
+        r = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "pipeline_act.py"), "receipt",
+             "fix-attempt-disputed", *args, "--out", str(out)],
+            input=stdin, capture_output=True, text=True, cwd=str(ROOT), check=False,
+        )
+        return r, out
+
+    def test_the_receipt_cli_reads_the_body_from_a_file(self, tmp_path):
+        given, by_arg = self._receipt(tmp_path, "--body", self._BODY)
+        assert given.returncode == 0, given.stdout + given.stderr
+        expected = by_arg.read_bytes()
+        by_arg.unlink()
+        body = tmp_path / "body.md"
+        body.write_text(self._BODY, encoding="utf-8")
+        r, out = self._receipt(tmp_path, f"--body-file={body}")
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert out.read_bytes() == expected
+
+    def test_the_receipt_cli_reads_the_body_from_stdin(self, tmp_path):
+        given, by_arg = self._receipt(tmp_path, "--body", self._BODY)
+        assert given.returncode == 0, given.stdout + given.stderr
+        expected = by_arg.read_bytes()
+        by_arg.unlink()
+        r, out = self._receipt(tmp_path, "--body-file=-", stdin=self._BODY)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert out.read_bytes() == expected
+
+    @pytest.mark.parametrize("args", [
+        ("--body", "x", "--body-file=-"),
+        (),
+    ], ids=["both", "neither"])
+    def test_the_receipt_cli_takes_exactly_one_body(self, tmp_path, args):
+        r, out = self._receipt(tmp_path, *args, stdin="x")
+        assert r.returncode != 0
+        assert not out.exists(), "a refused receipt must write nothing"
+
+    def test_the_receipt_cli_writes_nothing_when_the_file_is_missing(self, tmp_path):
+        r, out = self._receipt(tmp_path, f"--body-file={tmp_path / 'absent.md'}")
+        assert r.returncode != 0
+        assert not out.exists(), "a refused receipt must write nothing"
+
     def test_linear_ops_comment_composes_when_an_act_is_named(self):
         """The card-side seam, used by the conflict sweep and the medic."""
         import linear_ops
@@ -926,7 +1041,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(linear_ops, "gql", fake_gql)
-            mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
+            mp.setattr(linear_ops, "_comment_target", lambda _i: "uuid")
             linear_ops.cmd_comment("DRE-1", "a body", "--act=fix-attempt-landed")
         assert sent["body"] == (
             "a body\n\n" + pipeline_act.trailer("fix-attempt-landed")
@@ -941,6 +1056,6 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(linear_ops, "gql", lambda q, v=None, **_kw: sent.update(
                 body=v["input"]["body"]) or {"commentCreate": {"success": True}})
-            mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
+            mp.setattr(linear_ops, "_comment_target", lambda _i: "uuid")
             linear_ops.cmd_comment("DRE-1", "a body")
         assert sent["body"] == "a body"

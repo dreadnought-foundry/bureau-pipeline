@@ -83,6 +83,21 @@ agent-bureau repo; the third clause added by DRE-2103).
     <why>`: GitHub will not say who set a variable or when, so the reason is
     the only record of who owns a hold.
 
+  - **A hung job is re-run, and a hold is diagnosed (DRE-8655).**
+    `channel-watch.yml` (`Channel Watch`) runs every 10 minutes. A hung
+    `Pipeline Tests` job on `main` is canceled and its run re-run once, by
+    the App, so the re-run's completion wakes Promote Channel
+    (`scripts/hung_job.py`) — unless the `ci` runner column still names the
+    service the job hung on, in which case the re-run is held and a later
+    pass makes it once the column has moved (DRE-8817,
+    `scripts/runner_service.py`). A hold of 2 hours raises
+    `pipeline_notice:channel_hold:stable` with its diagnosis — the failing
+    job, or one stuck 2 hours by its own clock, and what to do next — and a hold standing between 06:00 and 06:29 PT
+    is raised before the briefing, once it is 45 minutes old; a pass that finds no hold resolves it
+    (`scripts/channel_hold.py`). Set the repository variable
+    `HUNG_JOB_WATCH` to `off` to stop the cancels and re-runs; the watch
+    keeps reporting what it would have done. Unset means live.
+
   - **Every move is a Linear release (DRE-4872).** Once it has moved
     `stable` and read the ref back, `promote-channel.yml` writes release
     `stable-<short sha>` to the `bureau-pipeline-channel` pipeline that
@@ -157,6 +172,26 @@ could lose (2026-09-03, run `33832750432`, `main@46ca2476`, displaced by the
 DRE-3059 PR run). DRE-3075 gave `main` its own lane; DRE-4149 then removed the
 pull-request run altogether, so `integration-harness-main` is the only lane
 and the only runs in it are pushes to `main` and by-hand dispatches.
+
+**A promote run canceled while pending is covered by the look-back
+(DRE-9069).** `promote-channel.yml` has a one-pending-run group of its own,
+`promote-channel`, so the promote run that would have moved `stable` onto a
+proven commit can be dropped before it starts, and an older proven commit was
+never offered again. Now a promote run on `main` that refuses its own commit
+at the harness proof — `harness-cancelled-by-newer-push`, `harness-failed`,
+`harness-blocked-by-sandbox`, `harness-blocked-by-github-queue` or
+`no-harness-stamp` — walks main's first-parent chain from main's head, at
+most 20 commits, stopping at `stable`, and puts the newest commit with a green,
+unblocked `integration-harness` stamp through every gate: its status, its
+ancestry, its own unit suite, the hold and the mirror check. The outcome words
+are the ones in the table below, and the decision line names both commits, the
+refusal word of the run's own commit and how many commits were read. The
+release, the decision record and the run summary name the run behind the
+promoted commit's own stamp as its proof, never the starting run, which was
+about the refused commit; and a chain that could not be read says so, rather
+than that main's history ended. The
+hold, the unit-suite and mirror refusals and every by-hand dispatch never look
+back, so force stays a person's alone.
 
 ### The harness proves main, not every pull request (DRE-4149)
 
@@ -233,6 +268,7 @@ harness run, and its conclusion is the suite's: a red suite reads
 | `channel-held` | `CHANNEL_HOLD` is set | clear the variable when the hold is done |
 | `harness-blocked-by-sandbox` | the harness never judged this commit — its own sandbox (reconcile/merge-gate/linear-sync) failed first | nothing proven either way; the next run re-proves this trunk |
 | `harness-blocked-by-github-queue` | GitHub left a sandbox run queued with no jobs, and it stayed stuck through the harness's two re-runs (DRE-6147) | nothing proven either way; GitHub's queue, not the code — the next run re-proves this trunk |
+| `harness-inconclusive` | rate-limited: GitHub refused the harness for a rate limit that outlasted its wait, and no scenario failed for real (DRE-9068). The stamp leads `harness blocked: GitHub rate limit` | nothing proven either way and not a red trunk — re-run the harness once the limit resets, or let the next push re-prove the trunk |
 | `no-harness-stamp` | no green `integration-harness` status on this sha | fail-closed by design; check the harness run |
 | `not-ahead-of-channel` | already there, or behind | nothing — the channel never moves backwards |
 | `by-hand-promoting` | a person promoted a commit the harness had already proved | nothing — the run records who, when and why |

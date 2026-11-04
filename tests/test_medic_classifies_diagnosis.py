@@ -110,7 +110,13 @@ class ThePromptTest(unittest.TestCase):
         self.assertRegex(flat, r"platform-fault:[^.]*\(b\) and \(d\)")
 
     def test_the_prompt_names_neither_resume_nor_hold(self):
-        prompt = _prompt()
+        # The planner's business-choice test, carried word for word since
+        # DRE-8592, names "lift a hold" as a mechanical step for a person. That
+        # is not the retired verdict word, so it is read past, and only it.
+        lift = "lift a hold"
+        prompt = _flat(_prompt())
+        self.assertEqual(1, prompt.count(lift))
+        prompt = prompt.replace(lift, "")
         self.assertNotRegex(prompt, r"\bresume\b")
         self.assertNotRegex(prompt, r"\bhold\b")
 

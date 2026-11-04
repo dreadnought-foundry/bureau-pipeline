@@ -28,6 +28,28 @@ EITHER
     five hours after the run, when the run named none — so that wait is now
     only for markers written before it.
 
+## A review that succeeded is the wall coming down (DRE-8690)
+
+On 2026-11-01 the fleet's Claude account hit its monthly spend limit at 11:34
+AM PT, the credential was rotated at 1:08 PM, and a review on PR #4470
+succeeded at 1:25 PM. The two reviews the medic had marked waited for their
+markers' reset, 5:00 PM, because the account switch above is unwired on
+purpose (DRE-5456: no sweep holds the Claude credential). So the sweep hands
+`recover()` one more fact, `wall_down_at`: when the newest critic verdict in
+this repository landed. A verdict is a Claude run that succeeded, so a
+`kind=claude stage=review` marker whose own comment is older than it is
+re-entered now — the stage a re-run answers, and the one the verdict speaks
+for. Every other marker keeps the triggers above: a verdict says nothing of
+Linear's quota, and a build is not re-entered on a review's word. `None`, an
+unreadable listing or a repository with no verdict, leaves the clock alone,
+and so does a marker whose comment carries no readable time.
+
+It is bounded the way every review re-run is: a re-run keeps its run id, the
+medic marks a run id once, and this pass's `🔁` receipt closes the marker, so a
+review re-run here that dies on the wall again is not re-run again. The sweep's
+crashed-review pass finds it at its retry cap with no live marker and reports
+it to a person.
+
 ## Re-entry is the stage's own front door
 
   * `classify` / `plan` — the card re-enters Planning. The relay's planner
@@ -63,6 +85,9 @@ is not red on every pass for a card nobody was told about.
     shipped contract that is a card in the lane the start lane names (DRE-3062
     died at `Card → In Progress` and never left it); once the flip sets
     `build_start.lane` to In Progress, it is every card that died building.
+    A card carrying `no-code` is never re-entered (DRE-9154): a person builds
+    it, so it gets one hand-off receipt closing the marker and one
+    `no-code-in-build-lane:` line (`NO_CODE_TAG`), and keeps its lane.
   * `fix` / `review` / `sync` — the ORIGINAL GitHub run the marker names is
     re-run, failed jobs only. Never a workflow_dispatch: the rerun keeps the
     run's own event, PR and head, which is what the fix loop, the critic and
@@ -144,7 +169,9 @@ enumerated as data, a glyph people reach for (👍 🎉 👀 ✅ ❌ 🙏) is no
 a receipt the pipeline opens with a glyph not listed here simply does not close
 the marker — the safe direction, because the recovery's own receipt always does.
 
-Bounded by `wip_room` per pass; skips terminal cards (Done / Canceled /
+Bounded by `wip_room` per pass — except a `review` re-entry, which re-runs an
+existing review run, starts no build and takes no build's slot, so it neither
+waits on the room nor spends it (DRE-8690); skips terminal cards (Done / Canceled /
 Duplicate) and cards held for a human (`needs-human`), which the sweep leaves
 alone everywhere else too — EXCEPT a held card's `sync` stage (Stage 2 fix
 #23, `hold_blocks_stage`): re-running Linear Sync's card-done is bookkeeping
@@ -198,6 +225,14 @@ LIMIT_DEATH_CLOCK_MINUTES = dead_run.LIMIT_DEATH_CLOCK_MINUTES
 # The clock's hand-off reason and its red-run line both open on this phrase,
 # and the sweep routes the line to its standing-defect ledger by it.
 STOOD_PHRASE = "the limit-death marker has stood"
+# DRE-9154: a `no-code` card is a person's to build, and the relay refuses
+# to dispatch one. Both sweep paths that start a build — this pass's build
+# re-entry and reconcile's not-started re-dispatch — hold it back with one
+# line opening on this tag, spelled here once and declared in
+# config/proof-reach.json `log_lines` so the epic's proof run may read it.
+NO_CODE_TAG = "no-code-in-build-lane:"
+# Moving the card there is a person's act — the console's Answer or a board move.
+HAND_WORK_LANE = "Hand-work"
 _COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
                 "eight", "nine")
 
@@ -255,6 +290,27 @@ def trigger(marker: dict, now: datetime, active_account: str | None) -> str | No
         return ("Linear's quota answered this sweep's own board read, so it has "
                 "refilled")
     return None
+
+
+def wall_down(card: dict, marker: dict, wall_down_at: datetime | None) -> str | None:
+    """The wall-down trigger (DRE-8690) — one plain sentence — or None.
+
+    Only a `kind=claude stage=review` marker takes it, and only when its own
+    comment is older than `wall_down_at`, the newest critic verdict in this
+    repository: a review on the same account succeeded after this death."""
+    if (wall_down_at is None or marker.get("kind") != "claude"
+            or marker.get("stage") != "review"):
+        return None
+    node = marker_node(card)
+    created = _created(node) if node is not None else None
+    if created is None:
+        return None  # an unknown age is never "older than" anything
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=wall_down_at.tzinfo)
+    if created >= wall_down_at:
+        return None
+    return (f"the wall is down: a review on the same account succeeded after "
+            f"this death, at {dead_run.pacific(wall_down_at)}")
 
 
 def _until(marker: dict) -> str:
@@ -356,6 +412,22 @@ def _lane(card: dict) -> str:
     return (card.get("state") or {}).get("name") or ""
 
 
+def no_code(card: dict) -> bool:
+    """Does the card carry `no-code` (DRE-9154)? Compared lower-cased, the
+    way the sweep's `counts_against_wip` reads it."""
+    return any(
+        (lbl.get("name") or "").lower() == linear_ops.NO_CODE_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def no_code_line(ident: str, lane: str, path: str) -> str:
+    """The one line a path that held back a `no-code` card prints (DRE-9154).
+    `path` names it: `reconcile` or `limit-recovery`."""
+    return (f"{NO_CODE_TAG} {ident} in {lane} — carries {linear_ops.NO_CODE_LABEL}, "
+            f"so {path} dispatched nothing; a person moves it to {HAND_WORK_LANE}")
+
+
 def _needs_rerun(card: dict, marker: dict) -> bool:
     """Whether re-entry means re-running the original run: every PR stage,
     and a planning stage whose card is already past Planning exit."""
@@ -441,6 +513,12 @@ def handoff_receipt(marker: dict, reason: str) -> str:
     )
 
 
+def _hand_off(lops, ident: str, marker: dict, reason: str) -> None:
+    """Post the hand-off receipt — the one site for every reason, the clock's,
+    the no-trigger kind and a `no-code` card's (DRE-9154)."""
+    lops.cmd_comment(ident, handoff_receipt(marker, reason))
+
+
 def _reenter(card: dict, marker: dict, *, rerun, move, dispatch) -> str:
     """Re-enter the stage the marker names; return what was done, for the
     receipt. Raises RecoveryFailed when the write did not go through."""
@@ -491,13 +569,16 @@ def recovery_receipt(marker: dict, why: str, what: str) -> str:
 
 
 def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
-            rerun, move, dispatch, cards) -> list[str]:
+            rerun, move, dispatch, cards,
+            wall_down_at: datetime | None = None) -> list[str]:
     """One pass. Returns the lines the sweep prints; `ERROR:` lines are the
     writes that did not land, which the sweep adds to its ledger.
 
     `lops` posts the receipt (`cmd_comment`). `rerun(run_id) -> bool`,
     `move(identifier, lane)` and `dispatch(card) -> bool` are the sweep's own
-    writes, injected — see the module docstring for why.
+    writes, injected — see the module docstring for why. `wall_down_at` is
+    when the newest critic verdict in this repository landed, or None
+    (DRE-8690).
     """
     lines: list[str] = []
     room = wip_room
@@ -507,6 +588,17 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
             continue
         marker = waiting(_bodies(card))
         if marker is None:
+            continue
+        if marker.get("stage") == "build" and no_code(card):
+            # DRE-9154: a person builds a `no-code` card, so its build is
+            # never re-entered — no write, no WIP room. Told once, before any
+            # trigger or clock: the hand-off closes the marker, so it never
+            # stands to the six-hour clock. The card keeps its lane.
+            _hand_off(lops, ident, marker, (
+                f"the card carries `{linear_ops.NO_CODE_LABEL}`, so no agent "
+                f"builds it and a person builds it. Moving it to "
+                f"{HAND_WORK_LANE} is a person's act"))
+            lines.append(no_code_line(ident, _lane(card), RECOVERY_TAG))
             continue
         # DRE-4208: the clock, read off the marker's own comment node. An
         # unknown age is never stale.
@@ -533,10 +625,11 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         # and a hand-off now would close the marker before it does. Only a
         # held card, which nothing here re-enters, is handed off before it.
         ahead = marker.get("reset") is not None and now < marker["reset"]
+        why = (trigger(marker, now, active_account)
+               or wall_down(card, marker, wall_down_at))
         alarm = None
         if (reason is None and stood
-                and (held or (not ahead and (
-                    watchers or trigger(marker, now, active_account) is None)))):
+                and (held or (not ahead and (watchers or why is None)))):
             # Past the clock with no re-entry this pass can make: the hand-off
             # is the clock's, and the run goes red on a standing defect.
             reason = stood_reason(card, marker, age, held=held)
@@ -546,7 +639,7 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         if reason is not None:
             # Told once, and the receipt closes the marker — no WIP spent, and
             # the card is the sweep's again next pass.
-            lops.cmd_comment(ident, handoff_receipt(marker, reason))
+            _hand_off(lops, ident, marker, reason)
             lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('. ')[0].rstrip('.')}")
             if alarm:
                 lines.append(alarm)
@@ -558,12 +651,14 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
                          f"is the re-review watcher's — it waits out the marker's reset, "
                          f"then asks for the review again")
             continue
-        why = trigger(marker, now, active_account)
         if why is None:
             lines.append(f"{RECOVERY_TAG}: {ident} is waiting {_until(marker)} "
                          f"({marker['kind']} limit, {marker['stage']} stage)")
             continue
-        if room <= 0:
+        # DRE-8690: a review re-entry re-runs an existing review run and
+        # starts no build, so it neither waits on the WIP room nor spends it.
+        review = marker.get("stage") == "review"
+        if room <= 0 and not review:
             lines.append(f"{RECOVERY_TAG}: {ident} is ready ({why}) but the WIP room "
                          f"is spent this pass — next sweep")
             if stood:
@@ -578,7 +673,8 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
             lines.append(f"ERROR: {RECOVERY_TAG} {ident}: {marker['stage']} re-entry "
                          f"did not land: {exc}")
             continue
-        room -= 1
+        if not review:
+            room -= 1
         lops.cmd_comment(ident, recovery_receipt(marker, why, what))
         lines.append(f"{RECOVERY_TAG}: {ident} {marker['stage']} re-entered — {why}")
     return lines

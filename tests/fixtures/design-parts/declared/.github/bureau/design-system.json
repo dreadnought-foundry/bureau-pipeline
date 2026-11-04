@@ -1,0 +1,4 @@
+{"parts": {"atoms": ["web/src/components/atoms"],
+           "molecules": ["web/src/components/molecules"],
+           "organisms": ["web/src/components/organisms"],
+           "templates": ["web/src/components/templates"]}}

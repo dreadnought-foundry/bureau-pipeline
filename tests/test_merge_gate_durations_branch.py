@@ -12,7 +12,8 @@ The CEO's signed answer of 2026-09-15 allows literal bot branch names only,
 never a `bot/` prefix, so every test below pairs the admitted name with the
 near-misses that must stay out: `bot/test-durations-x`, `bot/test-duration`,
 `bot/other`. It joins the way `bot/onboard` did (DRE-7209,
-`tests/test_merge_gate_onboard_branch.py`), and the three places that answer
+`tests/test_merge_gate_onboard_branch.py`, which since DRE-8658 also admits the
+per-slug `bot/onboard-<slug>` family), and the three places that answer
 "does the gate take this branch?" are read LIVE the same way:
   1. merge-gate.yml's `workflow_run` leg, rendered the way GitHub renders it
      (scripts/fix_concurrency.py);
@@ -61,7 +62,8 @@ class WorkflowRunLegTest(unittest.TestCase):
                 self.assertFalse(gate_job_runs(branch))
 
     def test_the_other_bot_branches_still_reach_the_gate_job(self):
-        for branch in ("bot/standards-sync", "bot/onboard"):
+        for branch in ("bot/standards-sync", "bot/onboard",
+                       "bot/onboard-acme"):
             with self.subTest(branch=branch):
                 self.assertTrue(gate_job_runs(branch))
 
@@ -89,7 +91,7 @@ class EvaluateStepBranchGateTest(unittest.TestCase):
     def test_the_step_still_admits_every_other_pipeline_branch(self):
         for branch in ("agent/DRE-1-x", "repair/red-main-1",
                        "dependabot/pip/x-1.2", "bot/standards-sync",
-                       "bot/onboard"):
+                       "bot/onboard", "bot/onboard-acme"):
             with self.subTest(branch=branch):
                 self.assertTrue(shell_admits(branch))
 

@@ -43,6 +43,7 @@ import ast
 import copy
 import importlib
 import inspect
+import json
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -137,10 +138,13 @@ class Seams:
         self.dispatched.append(c["identifier"])
         return self._dispatch_ok
 
-    def recover(self, cards, *, now=AFTER, active_account=None, wip_room=8):
+    def recover(self, cards, *, now=AFTER, active_account=None, wip_room=8, **extra):
+        # `extra` carries `wall_down_at` (DRE-8690) only where a test names
+        # it, so every older test drives the call exactly as the sweep did.
         return limit_recovery.recover(
             self.lops, now, active_account, wip_room,
             rerun=self.rerun, move=self.move, dispatch=self.dispatch, cards=cards,
+            **extra,
         )
 
 
@@ -377,6 +381,85 @@ def test_a_rerun_with_no_run_id_is_handed_to_a_human_once_not_errored_every_pass
     again = Seams()
     again.recover([card(lane="In Review", bodies=[marker(stage="review", run="unknown"), s.comments[0][1]])])
     assert again.comments == [] and again.reruns == []
+
+
+# --------------------------------------------------------------------------
+# a `no-code` card's build is never re-entered (DRE-9154)
+# --------------------------------------------------------------------------
+NO_CODE = ("repo:agent-bureau", "no-code")
+
+
+@pytest.mark.parametrize("lane", [START_LANE, lane_contract.QUEUE_LANE])
+def test_a_no_code_build_death_is_never_reentered_and_closes_once(lane):
+    """DRE-7083, 2026-11-03: limit-recovery re-entered the build of a card a
+    person builds. It is held back with one tagged line, no write but the
+    hand-off receipt, and that receipt closes the marker."""
+    c = card(ident="DRE-7083", lane=lane, labels=NO_CODE, bodies=[marker()])
+    s = Seams()
+    lines = s.recover([c], wip_room=1)
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert lines == [
+        f"no-code-in-build-lane: DRE-7083 in {lane} — carries no-code, so "
+        "limit-recovery dispatched nothing; a person moves it to Hand-work"
+    ]
+    assert len(s.comments) == 1
+    ident, body = s.comments[0]
+    assert ident == "DRE-7083"
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert "no-code" in body and "a person builds it" in body
+    assert limit_recovery.is_receipt(body), "the hand-off must close the marker"
+    # Closed once: the next pass reads no marker, and writes nothing.
+    again = Seams()
+    c = card(ident="DRE-7083", lane=lane, labels=NO_CODE, bodies=[marker(), body])
+    assert again.recover([c], wip_room=1) == []
+    assert again.comments == [] and again.moves == [] and again.dispatched == []
+
+
+def test_a_no_code_card_leaves_the_wip_room_unspent():
+    held_back = card(ident="DRE-7083", lane=START_LANE, labels=NO_CODE, bodies=[marker()])
+    other = card(ident="DRE-7084", bodies=[marker()])
+    s = Seams()
+    s.recover([held_back, other], wip_room=1)
+    assert s.moves == [("DRE-7084", START_LANE)], "the one slot went to the other card"
+    assert s.dispatched == []
+
+
+def test_a_no_code_card_held_back_before_the_reset_too():
+    """A marker that never re-enters must never stand to the six-hour clock,
+    so it is closed on the first pass that reads it."""
+    s = Seams()
+    lines = s.recover([card(ident="DRE-7083", lane=START_LANE, labels=NO_CODE,
+                            bodies=[marker()])], now=BEFORE)
+    assert len(lines) == 1 and lines[0].startswith("no-code-in-build-lane: DRE-7083 ")
+    assert len(s.comments) == 1 and s.dispatched == [] and s.moves == []
+
+
+@pytest.mark.parametrize("stage", ["review", "sync"])
+def test_a_no_code_card_s_review_and_sync_reentries_are_unchanged(stage):
+    s = Seams()
+    s.recover([card(ident="DRE-7083", lane="In Review", labels=NO_CODE,
+                    bodies=[marker(stage=stage)])])
+    assert s.reruns == [RUN]
+    assert s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+
+
+def test_the_same_card_without_no_code_reenters_the_build_as_today():
+    s = Seams()
+    lines = s.recover([card(ident="DRE-7083", lane=START_LANE, bodies=[marker()])])
+    assert s.dispatched == ["DRE-7083"]
+    assert s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+    assert not any(line.startswith("no-code-in-build-lane:") for line in lines)
+
+
+def test_the_tag_is_spelled_once():
+    """One constant both paths print with: the sweep reads it off this module
+    and spells no copy of its own."""
+    assert limit_recovery.NO_CODE_TAG == "no-code-in-build-lane:"
+    tree = ast.parse((Path(reconcile.__file__)).read_text(encoding="utf-8"))
+    copies = [n.lineno for n in ast.walk(tree)
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)
+              and "no-code-in-build-lane" in n.value]
+    assert copies == []
 
 
 # --------------------------------------------------------------------------
@@ -619,7 +702,8 @@ def test_the_wrapper_hands_recovery_this_repos_cards_and_the_seams(monkeypatch):
     unlabelled = card(ident="DRE-3", lane="Planning", labels=())
     seen = {}
 
-    def fake_recover(lops, now, active_account, wip_room, *, rerun, move, dispatch, cards):
+    def fake_recover(lops, now, active_account, wip_room, *, rerun, move, dispatch, cards,
+                     wall_down_at=None):
         seen.update(lops=lops, now=now, active_account=active_account,
                     wip_room=wip_room, rerun=rerun, move=move, dispatch=dispatch,
                     cards=cards)
@@ -1572,3 +1656,181 @@ def test_the_marker_s_first_line_is_byte_identical(case):
     assert parsed == {"kind": kind, "stage": stage, "reset": reset, "run": run,
                       "account": args[4] if len(args) > 4 else None,
                       "assumed": bool(kwargs.get("reset_assumed"))}
+
+
+# --------------------------------------------------------------------------
+# DRE-8690: a later critic verdict is the "wall is down" trigger for a Claude
+# review death, and a review re-run never waits on, or spends, WIP room
+# --------------------------------------------------------------------------
+# 2026-11-01: the fleet's Claude account hit its monthly spend limit at 11:34
+# PT, the credential was rotated at 13:08, and a review on PR #4470 succeeded
+# at 13:25. The two reviews the medic had marked at 13:09 and 13:10 waited for
+# the marker's reset, 17:00 PT, because nothing else could bring them back.
+WALL_MARKER_AT = datetime(2026, 11, 1, 20, 10, tzinfo=UTC)    # 13:10 PT
+WALL_RESET = datetime(2026, 11, 2, 1, 0, tzinfo=UTC)          # 17:00 PT
+WALL_NOW = datetime(2026, 11, 1, 21, 31, tzinfo=UTC)          # 14:31 PT — before the reset
+VERDICT_AT = datetime(2026, 11, 1, 21, 25, 19, tzinfo=UTC)    # 13:25 PT, PR #4470
+WALL_RUN = "41349671195"
+
+
+def wall_card(ident="DRE-8553", *, stage="review", kind="claude", lane="In Review",
+              at=WALL_MARKER_AT):
+    """The card as the board read hands it over: the medic's marker, as it
+    wrote it on 11-01, on a node carrying its `createdAt`."""
+    body = (f"🪦 limit-death: kind={kind} stage={stage} "
+            f"reset={WALL_RESET.strftime('%Y-%m-%dT%H:%M:%SZ')} run={WALL_RUN}")
+    c = card(ident=ident, lane=lane)
+    c["comments"] = {"nodes": [{"body": body,
+                                "createdAt": at.strftime("%Y-%m-%dT%H:%M:%S.000Z")}]}
+    return c
+
+
+def test_a_verdict_after_a_claude_review_death_reruns_it_now():
+    """MUTATION CHECK: drop the wall-down trigger and the review waits for
+    17:00 PT, the marker's reset — which is what happened on 11-01."""
+    s = Seams()
+    lines = s.recover([wall_card()], now=WALL_NOW, wall_down_at=VERDICT_AT)
+    assert s.reruns == [WALL_RUN]
+    assert len(s.comments) == 1
+    ident, receipt = s.comments[0]
+    assert ident == "DRE-8553"
+    assert receipt.startswith(limit_recovery.RECOVERY_MARK)
+    assert "2026-11-01 13:25 PT" in receipt, "the receipt names the verdict's time in PT"
+    assert "wall is down" in receipt
+    assert "succeeded after this death" in receipt
+    assert any("re-entered" in line for line in lines)
+
+
+def test_a_verdict_older_than_the_death_is_no_trigger():
+    s = Seams()
+    lines = s.recover([wall_card()], now=WALL_NOW,
+                      wall_down_at=WALL_MARKER_AT - timedelta(minutes=30))
+    assert s.reruns == [] and s.comments == []
+    assert any("is waiting until" in line for line in lines)
+
+
+def test_no_verdict_leaves_the_clock_alone():
+    s = Seams()
+    s.recover([wall_card()], now=WALL_NOW, wall_down_at=None)
+    assert s.reruns == [] and s.comments == []
+
+
+@pytest.mark.parametrize("lane", [START_LANE, lane_contract.QUEUE_LANE])
+def test_a_build_stage_death_never_takes_the_wall_down_trigger(lane):
+    s = Seams()
+    s.recover([wall_card(stage="build", lane=lane)], now=WALL_NOW, wall_down_at=VERDICT_AT)
+    assert s.reruns == [] and s.moves == [] and s.dispatched == [] and s.comments == []
+
+
+def test_a_linear_review_death_never_takes_the_wall_down_trigger():
+    """A verdict says the Claude account can run; it says nothing of Linear's
+    quota, so a Linear marker keeps its own triggers."""
+    s = Seams()
+    c = wall_card(kind="linear")
+    s.recover([c], now=WALL_NOW, wall_down_at=VERDICT_AT)
+    assert s.reruns == [] and s.comments == []
+
+
+def test_a_marker_of_unknown_age_never_takes_the_wall_down_trigger():
+    c = wall_card()
+    del c["comments"]["nodes"][0]["createdAt"]
+    s = Seams()
+    s.recover([c], now=WALL_NOW, wall_down_at=VERDICT_AT)
+    assert s.reruns == []
+
+
+def test_a_planning_review_death_stays_the_watchers():
+    """The second critic's review is re-entered by the re-review watcher as a
+    fresh run, never re-run here (DRE-5640) — whatever the trigger."""
+    s = Seams()
+    s.recover([wall_card(lane="Planning")], now=WALL_NOW, wall_down_at=VERDICT_AT)
+    assert s.reruns == []
+
+
+def test_a_review_reentry_needs_no_wip_room():
+    """MUTATION CHECK: drop the review exemption and a full board holds the
+    re-run back with 'the WIP room is spent'."""
+    s = Seams()
+    lines = s.recover([wall_card()], now=WALL_NOW, wall_down_at=VERDICT_AT, wip_room=0)
+    assert s.reruns == [WALL_RUN]
+    assert not any("WIP room" in line for line in lines)
+
+
+def test_a_review_reentry_at_its_reset_needs_no_wip_room_either():
+    s = Seams()
+    s.recover([wall_card()], now=WALL_RESET + timedelta(minutes=1), wip_room=0)
+    assert s.reruns == [WALL_RUN]
+
+
+def test_a_review_reentry_spends_no_room_of_another_card():
+    """One slot left: the review re-run takes none of it, so the build that
+    follows it in the same pass still comes back."""
+    s = Seams()
+    build = card(ident="DRE-1", bodies=[marker(reset=datetime(2026, 1, 1, tzinfo=UTC))])
+    s.recover([wall_card(), build], now=WALL_NOW, wall_down_at=VERDICT_AT, wip_room=1)
+    assert s.reruns == [WALL_RUN]
+    assert s.moves == [("DRE-1", START_LANE)]
+
+
+class _Listing:
+    """`reconcile.gh`, answering the sweep's one open-PR listing and counting it."""
+
+    def __init__(self, prs, fail=False):
+        self.prs = prs
+        self.fail = fail
+        self.listings = 0
+
+    def __call__(self, *args):
+        if args[:2] == ("pr", "list"):
+            self.listings += 1
+            if self.fail:
+                raise RuntimeError("HTTP 502: Bad Gateway")
+            return json.dumps(self.prs)
+        return ""
+
+
+def _verdict_pr():
+    return {"number": 4470, "headRefName": "agent/DRE-8600-other",
+            "headRefOid": "c" * 40, "baseRefName": "main",
+            "mergeStateStatus": "CLEAN", "isDraft": False,
+            "comments": [{"author": {"login": "agent-bureau-qa-bot"},
+                          "createdAt": "2026-11-01T21:25:19Z",
+                          "body": f"🔎 QA Critic — VERDICT: APPROVE @{'c' * 40}"}]}
+
+
+def _wrapper_wall(listing):
+    seen = {}
+
+    def fake_recover(lops, now, active_account, wip_room, **kw):
+        seen.update(kw)
+        return []
+
+    with patch.object(reconcile, "active_cards", return_value=[]), \
+         patch.object(reconcile, "gh", side_effect=listing), \
+         patch.object(reconcile.limit_recovery, "recover", side_effect=fake_recover):
+        reconcile.recover_limit_deaths()
+    return seen
+
+
+def test_the_wrapper_passes_the_newest_verdict_in_the_listing():
+    listing = _Listing([_verdict_pr()])
+    seen = _wrapper_wall(listing)
+    assert seen["wall_down_at"] == VERDICT_AT
+    # The listing is the sweep's, read once: the crashed-review pass after
+    # this one reads the same memo and asks GitHub nothing.
+    with patch.object(reconcile, "gh", side_effect=listing):
+        assert reconcile._open_pr_listing() is not None
+    assert listing.listings == 1
+
+
+def test_the_wrapper_passes_none_when_the_listing_is_unreadable():
+    seen = _wrapper_wall(_Listing([], fail=True))
+    assert "wall_down_at" in seen and seen["wall_down_at"] is None
+    reconcile._write_failures.clear()
+
+
+def test_the_wrapper_passes_none_when_no_verdict_is_listed():
+    pr = _verdict_pr()
+    pr["comments"] = []
+    seen = _wrapper_wall(_Listing([pr]))
+    assert "wall_down_at" in seen and seen["wall_down_at"] is None

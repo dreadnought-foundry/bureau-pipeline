@@ -21,6 +21,14 @@ Subcommands:
                                        body is composed as that pipeline act's
                                        receipt — byte-identical, plus the
                                        machine-readable trailer (DRE-2826).
+  comment <DRE-N> --body-file=<path|-> [--act=<name>]
+                                       the same, the body read from a file (or
+                                       stdin). Any body held in a file goes in
+                                       this way, never as "$(cat FILE)": one
+                                       argument over 128 KiB is exit 126
+                                       (DRE-8758)
+  set-description <DRE-N> <body> | --body-file=<path|->
+                                       overwrite a card's description
   actor <DRE-N> <role>                 record WHICH agent acted on this card, in
                                        the one machine-readable form
                                        (scripts/agent_marker.py). The briefs tell
@@ -155,6 +163,7 @@ import re
 import signal
 import subprocess  # nosec B404 - one fixed argv (the key read), no shell
 import sys
+import sysconfig
 import time
 import urllib.error
 import urllib.request
@@ -220,6 +229,23 @@ class CommentCapReached(LinearError):
     It is a fact about ONE issue, which is why it does not arm the
     process-wide rate-limit stop: the next card's receipt is unaffected.
     """
+
+
+class BodyTooLong(LinearError):
+    """Linear refused a body as too long (DRE-8818).
+
+    `limit` is the maximum the refusal named, or None when it named none.
+    Its own type because `cmd_comment` answers it unlike any other failure:
+    a named maximum is posted as numbered parts of at most that size, and a
+    refusal naming no number is raised exactly as before, because a guessed
+    size is a note that may be refused again part by part. A LinearError
+    still, so every existing `except LinearError` keeps isolating it, and a
+    fact about one body, so it arms no stop.
+    """
+
+    def __init__(self, message: str, limit: int | None = None):
+        super().__init__(message)
+        self.limit = limit
 
 
 # How much of the response body a raised error carries. Truncated because a
@@ -337,6 +363,88 @@ def comment_cap_condition(body: str) -> str | None:
     """
     text = body or ""
     return COMMENT_CAP_CONDITION if all(m in text for m in _COMMENT_CAP_MARKERS) else None
+
+
+# ── The size refusal (DRE-8818) ─────────────────────────────────────────────
+# Since DRE-8758 a body reaches `comment` from a file, so the kernel's cap on
+# one argument no longer stops a long note; Linear's own limit is the next
+# wall. Nobody has seen Linear refuse a comment for size: DRE-8698's 57,370
+# characters went up in one, and whether 200 KB does is not known before
+# release. So the shape is not known either, and the two the card names are
+# read — an errors payload naming a maximum length, and an HTTP 413. The
+# number is the contract: a refusal that names none is not split.
+_SIZE_REFUSAL_RE = re.compile(
+    r"too long|too large|max(?:imum)?[ _-]?length|shorter than or equal to",
+    re.I,
+)
+# The maximum, read only where a phrase that states one is directly followed
+# by a number: "shorter than or equal to 65536 characters", "the maximum
+# length is 65,536", `"maxLength": 65536`. Any other number in the refusal —
+# a status, a code, a count of something else — is never read as the size.
+_SIZE_LIMIT_RE = re.compile(
+    r"(?:shorter than or equal to|at most|no more than|max(?:imum)?[ _-]?length"
+    r"(?:\s+(?:is|of))?|maximum(?:\s+(?:is|of))?)[\s:=\"']*(\d[\d,_]*)",
+    re.I,
+)
+# A refusal's own sentences are short; a string longer than this inside one is
+# not a sentence about the limit (an echoed body, a schema dump), and a number
+# in it is never read as the size.
+_REFUSAL_TEXT_CHARS = 2_000
+
+
+def _refusal_text(body: str) -> str:
+    """The text a size refusal is read from: each short scalar of a JSON body
+    as `key: value`, so `"maxLength": 65536` reads like a sentence, or the
+    head of a body that is not JSON."""
+    try:
+        data = json.loads(body)
+    except ValueError:
+        return body[:_REFUSAL_TEXT_CHARS]
+    out: list[str] = []
+
+    def walk(node, key: str = "") -> None:
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, str(k))
+        elif isinstance(node, list):
+            for v in node:
+                walk(v, key)
+        elif isinstance(node, (str, int, float)) and not isinstance(node, bool):
+            text = str(node)
+            if len(text) <= _REFUSAL_TEXT_CHARS:
+                out.append(f"{key}: {text}")
+
+    walk(data)
+    return "\n".join(out)
+
+
+def is_size_refusal(body: str, code: int | str | None = None) -> bool:
+    """True when Linear refused the request as too large: an HTTP 413, or a
+    refusal whose own sentences say the input is too long."""
+    if str(code) == "413":
+        return True
+    return bool(_SIZE_REFUSAL_RE.search(_refusal_text(body or "")))
+
+
+def size_refusal_limit(body: str) -> int | None:
+    """The maximum a size refusal names, or None when it names none."""
+    found = _SIZE_LIMIT_RE.search(_refusal_text(body or ""))
+    if not found:
+        return None
+    limit = int(found.group(1).replace(",", "").replace("_", ""))
+    return limit or None
+
+
+def _too_long(detail: str, body: str, shown: str) -> BodyTooLong:
+    """The ONE shape a size refusal is raised in: where it came from, the
+    maximum or that there is none, then the refusal as the log shows it."""
+    limit = size_refusal_limit(body)
+    if limit is None:
+        condition = ("body too long, and the refusal names no maximum, so it is "
+                     "not split and no size is guessed")
+    else:
+        condition = f"body too long: Linear takes at most {limit:,} in one"
+    return BodyTooLong(f"{detail}: {condition} — {shown}", limit)
 
 
 # HOW THE COUNT IS READ, and why it is not one field. DRE-3343 was written
@@ -600,6 +708,10 @@ def _fall_back(why: str, verb: str = "refused") -> None:
     # (its published expiry had passed) spent nothing, so it is charged
     # nothing and gets no `0 request(s)` line of its own.
     _budget["calls_by_bucket"] = {refused: _budget["calls"]} if _budget["calls"] else {}
+    # The reads so far went out on the same key, so they move with the calls
+    # (DRE-8897): the refused request, when it was a read, among them.
+    _budget["reads_by_bucket"] = {refused: _budget["reads"]} if _budget["reads"] else {}
+    _budget["reads"] = {}
     if refused == identity:
         refused = "the primary key"
     _budget["fell_back"] = True
@@ -671,6 +783,10 @@ def _api_error(code: int | str, body: str) -> LinearError:
     cap = comment_cap_condition(body)
     if cap:
         return CommentCapReached(f"{detail}: {cap} — body: {body[:BODY_CHARS]!r}")
+    # A body refused for size, as a 413 or a 400 naming a maximum length
+    # (DRE-8818). It arms no stop either: it is a fact about one body.
+    if is_size_refusal(body, code):
+        return _too_long(detail, body, f"body: {body[:BODY_CHARS]!r}")
     return LinearError(f"{detail}: {body[:BODY_CHARS]!r}")
 
 
@@ -706,7 +822,9 @@ def _reset_budget_state() -> None:
         last=None,  # last `remaining` seen
         reset_ms=None,  # last reset epoch seen, ms
         refilled=False,  # `remaining` rose at some point mid-run (DRE-3224)
-        refused_after=None,  # calls sent before the stop armed; None = not armed
+        refused_after=None,  # calls sent before the FIRST refusal; None = never refused
+        stopped_after=None,  # calls sent before the stop now armed; None = disarmed
+        lifted=0,  # times the stop was lifted (DRE-8616) — never resets the count
         condition=None,  # the named condition the stop was armed with
         reported=False,  # the exit line was printed
         limit=None,  # last bucket size seen (DRE-5589)
@@ -715,6 +833,21 @@ def _reset_budget_state() -> None:
         # the remainder of `calls` is the current bucket's (Stage 2 item 28)
         calls_by_bucket={},
         expiry_unreadable_said=False,  # an unreadable published expiry was named
+        # reads sent on the current bucket, by (site, caller) (DRE-8897), and
+        # those charged to a bucket this process has LEFT, as calls_by_bucket
+        reads={},
+        reads_by_bucket={},
+        # The rate-limit headers of the LAST response, whole (DRE-8616): a
+        # header that response did not carry is None here, never the one an
+        # earlier response sent. `call` is the request that answered.
+        reading={"remaining": None, "limit": None, "reset_ms": None, "call": 0},
+        # Who each bucket's key is, read once outside a pass (DRE-8898).
+        viewers={},
+        # The job's own-write record off a runner, where there is no
+        # RUNNER_TEMP to keep it in (DRE-8898).
+        own_writes=[],
+        # What `_say_once` has said.
+        said=set(),
     )
 
 
@@ -738,6 +871,8 @@ def _note_response_headers(headers) -> None:
     remaining = _int_header(headers, _REMAINING_HEADER)
     reset_ms = _int_header(headers, _RESET_HEADER)
     limit = _int_header(headers, _LIMIT_HEADER)
+    _budget["reading"] = {"remaining": remaining, "limit": limit, "reset_ms": reset_ms,
+                          "call": _budget["calls"]}
     if limit is not None:
         _budget["limit"] = limit
     if remaining is not None:
@@ -770,10 +905,53 @@ def _reset_clock() -> str:
 def _arm_rate_limit_stop(condition: str) -> None:
     """The first RATELIMITED arms the stop: every later `gql` in this process
     raises without sending. Idempotent — the count is the calls BEFORE the
-    first limit, and a second arming must not move it."""
+    first limit, and a second arming must not move it.
+
+    `refused_after` is the process's FIRST refusal and is never cleared: the
+    budget line, the sweep and the read door read it as "this process was
+    refused". The stop itself is `stopped_after`, which only
+    `lift_rate_limit_stop` clears (DRE-8616) — so a lifted stop that is armed
+    again says when it was armed again, and the first refusal still stands."""
+    if _budget["stopped_after"] is None:
+        _budget["stopped_after"] = _budget["calls"]
+        _budget["condition"] = condition
     if _budget["refused_after"] is None:
         _budget["refused_after"] = _budget["calls"]
-        _budget["condition"] = condition
+
+
+def rate_reading() -> dict:
+    """The rate-limit headers of the last response this process received, as
+    `_note_response_headers` recorded them (DRE-8616):
+
+        {"remaining": int|None, "limit": int|None, "reset_ms": int|None, "call": int}
+
+    A RATELIMITED answer is a response too, so its headers are here when
+    Linear sent them. `call` is `requests_made()` as it stood when that
+    response arrived: a caller comparing it with the count before its own
+    request knows whether these headers are its answer's. A copy — nothing
+    outside this module reads or writes `_budget`."""
+    return dict(_budget["reading"])
+
+
+def lift_rate_limit_stop(why: str) -> bool:
+    """Disarm the stop, so the next `gql` is sent (DRE-8616). False when no
+    stop was armed, and then nothing is said.
+
+    The stop is right for every caller that would ask again at once. ONE
+    caller has already backed off: `planner_allowance.wait` sleeps to the
+    next `wait_minutes` boundary before it reads again, and lifts the stop
+    then, and only then — a test fails on any other caller under `scripts/`.
+    `requests_made()` is untouched, and the budget line still says
+    `refused after <n> calls` for the FIRST refusal, with `stop lifted <k>×`
+    after it, so the fleet's budget log still shows the refusal."""
+    if _budget["stopped_after"] is None:
+        return False
+    _budget["stopped_after"] = None
+    _budget["lifted"] += 1
+    why = " ".join(str(why).split())
+    print(f"linear-stop: lifted after {_budget['calls']} calls ({why})",
+          file=sys.stderr, flush=True)
+    return True
 
 
 def _refusal() -> LinearRateLimited:
@@ -786,7 +964,7 @@ def _refusal() -> LinearRateLimited:
     them."""
     return LinearRateLimited(
         f"linear error from {API}: {_budget['condition']} — refused after "
-        f"{_budget['refused_after']} calls, no request sent; window resets "
+        f"{_budget['stopped_after']} calls, no request sent; window resets "
         f"{_reset_clock()} PT; {_budget_part()}"
     )
 
@@ -825,6 +1003,8 @@ def budget_line() -> str:
     parts = [spent, f"window resets {_reset_clock()} PT"]
     if _budget["refused_after"] is not None:
         parts.append(f"refused after {_budget['refused_after']} calls")
+        if _budget["lifted"]:
+            parts.append(f"stop lifted {_budget['lifted']}×")
     if _budget["limit"] is not None:
         parts.append(f"limit {_budget['limit']}")
     # LAST, always: every other part keeps the place it has always had, so the
@@ -886,7 +1066,12 @@ def calls_lines() -> list[str]:
     One line per bucket (Stage 2 item 28, K5): a planner whose token was
     refused mid-run sent everything up to and including the refused request
     on `planner-oauth`, and the rest on the fleet key — each is charged its
-    own. A process that never fell back prints one line."""
+    own. A process that never fell back prints one line.
+
+    The reads among those requests are counted again apart, by who asked for
+    them, on the `linear-read:` lines `read_lines` composes (DRE-8897) —
+    printed after these, charged to the same buckets, and changing nothing
+    here."""
     token = process_token()
     charged = dict(_budget["calls_by_bucket"])
     rest = _budget["calls"] - sum(charged.values())
@@ -899,12 +1084,197 @@ def calls_lines() -> list[str]:
     ]
 
 
+# ── Every read, named by who asked for it (DRE-8897) ────────────────────────
+# The calls lines mix reads and writes, and the read door's own exit line names
+# no bucket and no process, so nothing could tell a read moved onto the door
+# from one that stayed on Linear. `gql` counts each request that is not a
+# mutation by two names read off the stack: the SITE, the nearest frame
+# outside this file — the place in the calling code that asked — and the
+# CALLER, the frame just outside the outermost `gql`/`gql_paged` — the function
+# that sent the query. Both, because most of the reads worth moving live in
+# this file and run as `linear_ops.py <command>` from bash, where no frame
+# outside it exists, and because one script line can ask for two different
+# reads. `check_linear_budget.py` adds the lines up per reader.
+#
+# The tags are values in parentheses, deliberately: `pipeline_act.problems()`
+# reads every `*_TAG = "…"` in this file as an act the registry must declare,
+# and these are log lines a proof run reads (`config/proof-reach.json`), not
+# acts.
+READ_TAG = ("linear-read:")
+DOOR_TAG = ("linear-door:")
+
+_THIS_FILE = os.path.basename(__file__)
+_SENDERS = frozenset({"gql", "gql_paged"})
+# A name lands on a line parsed one field at a time: nothing in it may end
+# the field or open a quote.
+_UNSAFE_NAME_CHARS = re.compile(r"[^\w.<>-]")
+# The interpreter's own library, where a frame is never the calling code: a
+# `with` block's `contextlib`, the `runpy` that starts a script, a thread's
+# `threading`. Installed packages under it are not the library.
+_STDLIB_DIRS = tuple(
+    {os.path.join(os.path.realpath(p), "") for p in (
+        sysconfig.get_paths().get("stdlib"), sysconfig.get_paths().get("platstdlib"))
+     if p}
+)
+
+
+_LIBRARY_FILES: dict[str, bool] = {}
+
+
+def _library_frame(frame) -> bool:
+    """Whether `frame` runs in the interpreter's own library — decided once
+    per file, since every read walks the whole stack."""
+    path = frame.f_code.co_filename
+    if path not in _LIBRARY_FILES:
+        real = os.path.realpath(path)
+        _LIBRARY_FILES[path] = path.startswith("<frozen ") or (
+            real.startswith(_STDLIB_DIRS)
+            and not any(part in real for part in ("site-packages", "dist-packages")))
+    return _LIBRARY_FILES[path]
+
+
+def _frame_name(frame) -> str:
+    """`<module>.<function>`, the module being the file's basename."""
+    module = os.path.splitext(os.path.basename(frame.f_code.co_filename))[0]
+    return _UNSAFE_NAME_CHARS.sub("_", f"{module}.{frame.f_code.co_name}")
+
+
+def _command_site() -> str:
+    """`linear_ops.<command>`, the command exactly as typed on the command
+    line: the site of a read when this file is the process."""
+    command = sys.argv[1] if len(sys.argv) > 1 else "-"
+    return _UNSAFE_NAME_CHARS.sub("_", f"{os.path.splitext(_THIS_FILE)[0]}.{command}")
+
+
+def _read_names(frame) -> tuple[str, str]:
+    """`(site, caller)` for a read sent from inside `frame`, walking out.
+
+    The site is the nearest frame whose file is not this one. A frame of this
+    file running as `__main__` is the process itself — `linear_ops.py
+    <command>` — and nothing past it is calling code, so there, or at the end
+    of the stack, the site is the command. The caller is the frame just
+    outside the outermost `gql`/`gql_paged` frame of this file. Frames of the
+    interpreter's own library are passed over for both."""
+    frames = []
+    while frame is not None:
+        if not _library_frame(frame):
+            frames.append(frame)
+        frame = frame.f_back
+    site = None
+    for f in frames:
+        if os.path.basename(f.f_code.co_filename) != _THIS_FILE:
+            site = _frame_name(f)
+            break
+        if f.f_globals.get("__name__") == "__main__":
+            break
+    site = site or _command_site()
+    outermost = max((i for i, f in enumerate(frames)
+                     if f.f_code.co_name in _SENDERS
+                     and os.path.basename(f.f_code.co_filename) == _THIS_FILE),
+                    default=None)
+    if outermost is None or outermost + 1 >= len(frames):
+        return site, site
+    return site, _frame_name(frames[outermost + 1])
+
+
+def _names_of_this_read(frame) -> tuple[str, str]:
+    """`_read_names`, or `("-", "-")` when the stack cannot be read: a count
+    must never fail the read it counts."""
+    try:
+        return _read_names(frame)
+    except Exception:
+        return "-", "-"
+
+
+def _reader() -> str:
+    """`<workflow> / <job> / <script>` — the value `bureau_read._reader` puts
+    on `read-fallback:` lines, composed here rather than borrowed from the
+    door's private helper, so the two lines can be joined on it."""
+    workflow = os.environ.get("GITHUB_WORKFLOW") or "local"
+    job = os.environ.get("GITHUB_JOB") or "-"
+    script = os.path.basename(sys.argv[0]) if sys.argv and sys.argv[0] else "-"
+    return f"{workflow} / {job} / {script}"
+
+
+def read_lines() -> list[str]:
+    """One line per (site, caller, bucket) this process read on, largest
+    count first:
+
+        linear-read: reader="<workflow> / <job> / <script>" site=<module>.<function> count=<n> budget=<bucket> process=<token> caller=<module>.<function>
+
+    `count` is the reads sent, a retry included, each page of a `gql_paged`
+    one; the bucket is the one `calls_lines` charged that request. A process
+    that sent no read prints none."""
+    charged = {bucket: dict(reads) for bucket, reads in _budget["reads_by_bucket"].items()}
+    if _budget["reads"]:
+        current = charged.setdefault(spending_bucket(), {})
+        for key, n in _budget["reads"].items():
+            current[key] = current.get(key, 0) + n
+    rows = [(n, site, caller, bucket)
+            for bucket, reads in charged.items() for (site, caller), n in reads.items()]
+    rows.sort(key=lambda r: (-r[0], r[1], r[2], r[3]))
+    reader, token = _reader(), process_token()
+    return [
+        f'{READ_TAG} reader="{reader}" site={site} count={n} budget={bucket} '
+        f"process={token} caller={caller}"
+        for n, site, caller, bucket in rows
+    ]
+
+
+def _door_on():
+    """The read door's module when this process imported it and its mode was
+    read as `on`, else None. Its recorded mode is read, never `mode()`: that
+    reads the environment and prints a line the first time, and an exit hook
+    must not be the first to ask."""
+    door = sys.modules.get("bureau_read")
+    state = getattr(door, "_state", None)
+    if not isinstance(state, dict) or state.get("mode") != "on":
+        return None
+    return door
+
+
+def door_line() -> str | None:
+    """The door's answers on the key they were made under, or None when the
+    door was not on in this process:
+
+        linear-door: reader="<workflow> / <job> / <script>" served=<n> fallbacks=<read>/<reason>:<n>[,...] budget=<bucket> process=<token>
+
+    `served` is `bureau_read.served()`; `fallbacks` groups
+    `bureau_read.fallbacks()` by read and reason, sorted, or is `-`; the
+    bucket is the one this process is spending at exit."""
+    door = _door_on()
+    if door is None:
+        return None
+    grouped: dict[str, int] = {}
+    for _reader_name, read, reason in door.fallbacks():
+        key = f"{read}/{reason}"
+        grouped[key] = grouped.get(key, 0) + 1
+    fallbacks = ",".join(f"{key}:{n}" for key, n in sorted(
+        grouped.items(), key=lambda kv: tuple(kv[0].split("/", 1)))) or "-"
+    return (f'{DOOR_TAG} reader="{_reader()}" served={door.served()} '
+            f"fallbacks={fallbacks} budget={spending_bucket()} process={process_token()}")
+
+
 def _report_budget_at_exit() -> None:
-    """Print the budget line and the calls lines ONCE, on stderr, if any Linear
-    call was made. Registered with atexit, and run by the SIGTERM handler
-    below; a process that never touched Linear says nothing. Each is printed
-    on its own, so a failure composing one can never cost the other."""
-    if _budget["reported"] or not _budget["calls"]:
+    """Print the budget line, the calls lines, the `linear-read:` lines and the
+    `linear-door:` line ONCE, on stderr. Registered with atexit, and run by
+    the SIGTERM handler below. A process that never touched Linear prints
+    only the door line, and that only when its read door was on; one that did
+    neither says nothing. Each is composed on its own, so a failure composing
+    one can never cost the others."""
+    if _budget["reported"]:
+        return
+    try:
+        door = door_line()
+    except Exception:  # pragma: no cover — telemetry must never fail an exit
+        door = None
+    if not _budget["calls"]:
+        if door is not None:
+            _budget["reported"] = True
+            try:
+                print(door, file=sys.stderr, flush=True)
+            except Exception:  # pragma: no cover
+                pass
         return
     _budget["reported"] = True
     try:
@@ -915,6 +1285,12 @@ def _report_budget_at_exit() -> None:
         lines += calls_lines()
     except Exception:  # pragma: no cover
         pass
+    try:
+        lines += read_lines()
+    except Exception:  # pragma: no cover
+        pass
+    if door is not None:
+        lines.append(door)
     for line in lines:
         try:
             print(line, file=sys.stderr, flush=True)
@@ -1216,21 +1592,24 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
     # `LinearSearchTooFast`, a fact about searching that fast, not about the
     # hour, so the next request is still sent — every other RATELIMITED arms
     # it exactly as before.
-    if _budget["refused_after"] is not None:
+    if _budget["stopped_after"] is not None:
         raise _refusal()
     # A token the console has already said is dead is never sent (review item
     # 30): every agent call is its own process, so without this each one would
     # spend a 401 first for as long as the console stays down.
     _skip_a_known_dead_token()
     payload = json.dumps({"query": query, "variables": variables or {}}).encode()
+    # A request that is not a mutation is a read, counted by who asked for it
+    # (DRE-8897) — a write is read the way the read-only switch reads one.
+    read = None if _mutation_field(query) is not None else _names_of_this_read(sys._getframe())
     try:
-        out = _send(payload, landed)
+        out = _send(payload, landed, read)
     except _KeyRefused as refused:
         # A dead planner token (DRE-5589): `||` in plan.yml falls back only on
         # an EMPTY secret, and the console never un-publishes a token it could
         # not keep alive. This one request goes again on the fleet key, once.
         _fall_back(refused.why)
-        out = _send(payload, landed)
+        out = _send(payload, landed, read)
     if out.get("errors"):
         errors = json.dumps(out["errors"])
         # The search-speed refusal, same two shapes (DRE-7613): its own type,
@@ -1268,6 +1647,10 @@ def gql(query: str, variables: dict | None = None, *, landed=None) -> dict:
             raise CommentCapReached(
                 f"linear error from {API}: {cap} — {errors[:BODY_CHARS]}"
             )
+        # A body refused for size, same two shapes (DRE-8818): its own type,
+        # so `cmd_comment` can post it in parts, and the refusal still named.
+        if is_size_refusal(errors):
+            raise _too_long(f"linear error from {API}", errors, str(out["errors"]))
         raise LinearError(f"linear error from {API}: {out['errors']}")
     return out["data"]
 
@@ -1314,11 +1697,12 @@ def _landed_as(found: dict) -> str:
     return "?"
 
 
-def _send(payload: bytes, landed=None) -> dict:
+def _send(payload: bytes, landed=None, read: tuple[str, str] | None = None) -> dict:
     """One request through the one-shot transient retry (DRE-3087), answered
     as parsed JSON. Raises `_KeyRefused` when the key itself was refused and
     there is a different key to fall back to; every other failure raises
-    exactly as it always has.
+    exactly as it always has. `read` is the `(site, caller)` a read is
+    counted under each time it is sent (DRE-8897), None for a write.
 
     A CREATE IS NEVER SENT TWICE BLIND (DRE-6839). This seam is handed bytes
     and cannot tell a read from a create, and a read sent twice is harmless
@@ -1351,6 +1735,9 @@ def _send(payload: bytes, landed=None) -> dict:
         # B310: URL is the constant https://api.linear.app endpoint, no user
         # input.
         _budget["calls"] += 1
+        if read is not None:
+            # Counted where the call is (DRE-8897): a retry is a read again.
+            _budget["reads"][read] = _budget["reads"].get(read, 0) + 1
         try:
             with urllib.request.urlopen(req, timeout=15) as resp:  # nosec B310
                 _note_response_headers(getattr(resp, "headers", None))
@@ -1480,6 +1867,11 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
 
     `fresh=True` bypasses `_card_read_once`'s memo: the caller needs the card
     as it is NOW, not as it was when the command began.
+
+    It stays on Linear (DRE-8898): it is the write path's read, and
+    `team { id }`, `state { id type }` and `project { id }` are not on the
+    door's node; `fresh=True` is the DRE-2316 pre-write re-read, which must
+    be live.
     """
     if not fresh and identifier in _card_memo:
         return _card_memo[identifier]
@@ -1493,6 +1885,195 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
         {"id": identifier},
     )
     return data["issue"]
+
+
+# ── A card off the read door, first (DRE-8898) ───────────────────────────────
+# `linear_ops`' own card reads — a card's comment thread, its description, the
+# `id` a comment is posted to — ask the read door before Linear, in a step that
+# opts in by naming its max-age in `BUREAU_READ_CARD_MAX_AGE`. A step that names
+# none (the Reconcile sweep above all) never asks, and reads exactly as before.
+#
+# An age bound cannot vouch for a write made seconds before the read: the
+# door's `as_of` trails real time, so a receipt posted a moment ago can be
+# missing from a FRESH answer. So an answer is taken only when its `as_of` is
+# at or after the card's FLOOR, the latest of `seen_after` (or
+# `BUREAU_READ_CARD_SEEN_AFTER`) and the newest write this job made to the card
+# through this module, from the job's own-write record. Every step of a job
+# shares `$RUNNER_TEMP` and GitHub empties it per job, so a write in one step's
+# process sets the floor of a later step's read of the same card, and never of
+# another job's. `docs/stage2-read-door-linear-ops.md` is the whole account.
+CARD_MAX_AGE_ENV = "BUREAU_READ_CARD_MAX_AGE"
+CARD_SEEN_AFTER_ENV = "BUREAU_READ_CARD_SEEN_AFTER"
+#: The max-ages a step may name, whole seconds, both ends included.
+CARD_MAX_AGE_RANGE = (20, 3600)
+#: The job's own-write record, under `$RUNNER_TEMP`: one
+#: `{"card": "<IDENTIFIER>", "at": "<instant>"}` line per card write.
+OWN_WRITES_FILE = "linear-own-writes.jsonl"
+#: The fallback reason of a door answer older than the card's floor.
+OLDER_THAN_NEEDED = "older-than-needed"
+_WHOLE_SECONDS = re.compile(r"[0-9]+")
+
+
+def _say_once(key, line: str) -> None:
+    """`line` on stderr, the first time `key` is said in this process."""
+    if key in _budget["said"]:
+        return
+    _budget["said"].add(key)
+    print(line, file=sys.stderr, flush=True)
+
+
+def _card_max_age() -> int | None:
+    """The step's `BUREAU_READ_CARD_MAX_AGE`, or None: unset or empty, and a
+    value that is not whole seconds in `CARD_MAX_AGE_RANGE`, which is named
+    once on stderr."""
+    raw = os.environ.get(CARD_MAX_AGE_ENV) or ""
+    value = raw.strip()
+    if not value:
+        return None
+    low, high = CARD_MAX_AGE_RANGE
+    if _WHOLE_SECONDS.fullmatch(value) and low <= int(value) <= high:
+        return int(value)
+    _say_once(("max-age", raw),
+              f"read-door: {CARD_MAX_AGE_ENV}={raw!r} is not whole seconds from {low} "
+              f"to {high} — this step's card reads go to Linear")
+    return None
+
+
+def _own_writes_path() -> str | None:
+    temp = os.environ.get("RUNNER_TEMP") or ""
+    return os.path.join(temp, OWN_WRITES_FILE) if temp else None
+
+
+def _note_own_write(identifier: str, answer: dict | None, field: str) -> None:
+    """Record a card write Linear answered `field { success: true }` to:
+    under `$RUNNER_TEMP` on a runner, in this process's memory off one. A
+    record that cannot be written is said once, and leaves the floor to
+    `seen_after`."""
+    if not ((answer or {}).get(field) or {}).get("success"):
+        return
+    line = {"card": str(identifier or "").strip().upper(),
+            "at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+    path = _own_writes_path()
+    if path is None:
+        _budget["own_writes"].append(line)
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line) + "\n")
+    except OSError as exc:
+        _say_once("own-writes-write",
+                  f"own-writes: could not write {path} ({exc}) — this job's later "
+                  "door reads of the card are not held to this write")
+
+
+def _own_writes() -> list:
+    """The job's own-write record, as rows; a line that cannot be read is
+    passed over, and said once."""
+    path = _own_writes_path()
+    if path is None:
+        return list(_budget["own_writes"])
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        return []
+    except (OSError, UnicodeDecodeError) as exc:
+        _say_once("own-writes-read", f"own-writes: could not read {path} ({exc}) — "
+                  "no floor from this job's writes")
+        return []
+    rows = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            row = None
+        if not isinstance(row, dict) or _instant(row.get("at")) is None:
+            _say_once("own-writes-read", f"own-writes: a line of {path} cannot be read "
+                      f"({line[:80]!r}) — passed over")
+            continue
+        rows.append(row)
+    return rows
+
+
+def _own_write_floor(identifier: str) -> datetime | None:
+    """When this job last wrote `identifier` through this module, or None."""
+    ident = str(identifier or "").strip().upper()
+    times = [_instant(row.get("at")) for row in _own_writes()
+             if str(row.get("card") or "").strip().upper() == ident]
+    return max(times) if times else None
+
+
+def _card_floor(identifier: str, seen_after) -> tuple[datetime | None, bool]:
+    """`(floor, readable)`: the latest of `seen_after` (the variable when the
+    argument is not passed) and the job's newest write to the card, or None
+    with neither; `readable` is False when `seen_after` cannot be read."""
+    given = os.environ.get(CARD_SEEN_AFTER_ENV) if seen_after is None else seen_after
+    instants = []
+    if isinstance(given, datetime):
+        if given.tzinfo is None:
+            return None, False
+        instants.append(given)
+    elif str(given or "").strip():
+        at = _instant(str(given).strip())
+        if at is None:
+            return None, False
+        instants.append(at)
+    own = _own_write_floor(identifier)
+    if own is not None:
+        instants.append(own)
+    return (max(instants) if instants else None), True
+
+
+def card_via_door(identifier: str, *, comments: int | str = 50, relations: bool = False,
+                  seen_after=None, floor: bool = True
+                  ) -> tuple[dict, bureau_read.DoorRead] | None:
+    """`(node, read)`: the door's node for this one card and the `DoorRead`
+    it came in, or None — and the caller reads Linear exactly as it would
+    have.
+
+    None at once, asking nothing and printing nothing, when the step names
+    no `BUREAU_READ_CARD_MAX_AGE` or the door is not `on`. A stopped door is
+    named here through `note_fallback`; a refusal or an UNKNOWN is named by
+    `bureau_read.cards` itself; `linear-hold` is None too, since a reader here
+    has no phase to skip. With `floor` (the default) an answer whose `as_of`
+    is before the card's floor, or cannot be read, and a `seen_after` that
+    cannot be read, are None after an `older-than-needed` fallback.
+    `floor=False` is for a read of what never changes, the card's `id`.
+
+    The node's `viewer` is never used for authorship: the door's is the
+    console's key, and authorship is judged against this process's own."""
+    max_age = _card_max_age()
+    if max_age is None or _door_mode() != "on":
+        return None
+    if not bureau_read.enabled():
+        bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
+        return None
+    wanted = None
+    if floor:
+        wanted, readable = _card_floor(identifier, seen_after)
+        if not readable:
+            bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
+            return None
+    try:
+        read = bureau_read.cards(
+            [identifier], max_age=max_age, comments=comments, relations=relations,
+            relations_max_age=bureau_read.RELATIONS_MAX_AGE if relations else None)
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            print(f"read-door: {identifier} unknown ({bureau_read.LINEAR_HOLD}) — read "
+                  "from Linear: a card read has no phase to skip", file=sys.stderr)
+        return None
+    except Exception as e:  # noqa: BLE001 — Linear on ANY door error
+        print(f"read-door: {identifier} unreadable ({type(e).__name__}: {e}) — read "
+              "from Linear", file=sys.stderr)
+        bureau_read.note_fallback("cards", "unavailable")
+        return None
+    if wanted is not None:
+        as_of = _instant(read.as_of)
+        if as_of is None or as_of < wanted:
+            bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
+            return None
+    return read.nodes[0], read
 
 
 def state_id(team_id: str, name: str) -> str:
@@ -1600,6 +2181,11 @@ def _door_state_list() -> list[dict] | None:
             except Exception as e:  # noqa: BLE001 — Linear on ANY door error
                 print(f"read-door: workflow states unreadable ({type(e).__name__}: {e}) — "
                       "read from Linear")
+        else:
+            # A stopped door is never asked, so the client cannot name this
+            # Linear read: it is named here (DRE-8796). `off` prints nothing.
+            bureau_read.note_fallback("workflow-states",
+                                      bureau_read.disabled_reason() or "unavailable")
         _door_workflow_states["nodes"] = nodes
     return _door_workflow_states["nodes"]
 
@@ -1841,6 +2427,9 @@ def _clobbered_terminal_state(
 
     An entry older than `since` is never ours, whatever its `toState`: with none
     at or after it, this write left nothing to repair.
+
+    It stays on Linear (DRE-8898): the door serves no history, and the entry
+    it reads back is seconds old.
     """
     data = gql(
         """query($id: String!) { issue(id: $id) {
@@ -1909,11 +2498,12 @@ def _expectation_refusal(
 
 
 def _set_state(identifier: str, issue_id: str, state_id_value: str) -> None:
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue_id, "input": {"stateId": state_id_value}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
 
 
 def guarded_state_write(
@@ -2354,11 +2944,12 @@ def set_description(identifier: str, body: str) -> None:
     alone. This remains a general-purpose description setter.
     """
     issue = get_issue(identifier)
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"description": body}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} description updated")
 
 
@@ -2373,11 +2964,12 @@ def set_title(identifier: str, title: str) -> None:
     the next sweep recomputes the title from the ledger it can read.
     """
     issue = get_issue(identifier)
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"title": title}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} title updated")
 
 
@@ -2398,6 +2990,13 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
     all reached DRE-2668 through this function and all of them died in it.
     A caller that ignores the return value is unaffected, which is every
     caller that has nothing better to do than carry on.
+
+    A body Linear refuses for size is posted as numbered parts (DRE-8818),
+    sized from the maximum the refusal names (`comment_parts`), each its own
+    `commentCreate` with its own read-back look, and each printed as
+    `commented on <identifier> (part <i> of <n>)` — the line a PROOF reads
+    off the step's log. A refusal naming no maximum raises as before, and so
+    does a receipt: one split across parts loses its trailer to a later part.
     """
     act = None
     for flag in flags:
@@ -2410,25 +3009,179 @@ def cmd_comment(identifier: str, body: str, *flags: str) -> str | None:
         # receipt that quietly loses its trailer is the silence this whole
         # mechanism exists to end.
         body = pipeline_act.receipt(act, body)
-    issue = get_issue(identifier)
+    issue_id = _comment_target(identifier)
     try:
-        gql(
-            """mutation($input: CommentCreateInput!) {
-                 commentCreate(input: $input) { success } }""",
-            {"input": {"issueId": issue["id"], "body": body}},
-            landed=_comment_look(identifier, body, datetime.now(UTC)),
-        )
+        try:
+            _create_comment(identifier, issue_id, body)
+        except BodyTooLong as refused:
+            if act or refused.limit is None:
+                raise
+            parts = comment_parts(body, refused.limit)
+            for i, part in enumerate(parts, 1):
+                try:
+                    _create_comment(identifier, issue_id, part)
+                except LinearError:
+                    print(f"comment: {identifier} part {i} of {len(parts)} not posted "
+                          f"({i - 1} posted before it)", file=sys.stderr)
+                    raise
+                print(f"commented on {identifier} (part {i} of {len(parts)})")
+            return None
     except CommentCapReached:
         # Named on stderr, for the same reason the budget line is: some of this
         # script's stdout is read through `$(...)` by the workflows, and a
         # degrade must never corrupt an answer a caller is parsing.
         print(f"comment-cap: {identifier} — {COMMENT_CAP_CONDITION}", file=sys.stderr)
         return COMMENT_CAP_CONDITION
+    print(f"commented on {identifier}")
+    return None
+
+
+#: The comment's pre-read (DRE-8898): the card's `id`, and nothing else.
+_COMMENT_TARGET_QUERY = "query($id: String!) { issue(id: $id) { id } }"
+
+
+def _comment_target(identifier: str) -> str:
+    """The card's `id`, the one fact a comment needs of the card (DRE-8898).
+
+    From `_card_read_once`'s memo when the command holds one, else off the
+    door — an `id` never changes, so no floor — else its own Linear read of
+    the `id` alone, named `caller=linear_ops._comment_target` on the
+    `linear-read:` line, apart from the write path's `get_issue`."""
+    if identifier in _card_memo:
+        return _card_memo[identifier]["id"]
+    served = card_via_door(identifier, comments=1, floor=False)
+    if served is not None and served[0].get("id"):
+        return served[0]["id"]
+    issue = (gql(_COMMENT_TARGET_QUERY, {"id": identifier}) or {}).get("issue") or {}
+    if not issue.get("id"):
+        raise LinearError(f"comment: Linear has no card {identifier!r}")
+    return issue["id"]
+
+
+def _create_comment(identifier: str, issue_id: str, body: str) -> None:
+    """One `commentCreate`, with its own read-back look so a retried post is
+    not doubled (DRE-6839)."""
+    data = gql(
+        """mutation($input: CommentCreateInput!) {
+             commentCreate(input: $input) { success } }""",
+        {"input": {"issueId": issue_id, "body": body}},
+        landed=_comment_look(identifier, body, datetime.now(UTC)),
+    )
+    _note_own_write(identifier, data, "commentCreate")
     # The pass's cached thread is stale the moment this lands (DRE-3236): the
     # next reader in the pass must see the comment it just posted.
     _pass["threads"].pop(identifier, None)
-    print(f"commented on {identifier}")
-    return None
+
+
+#: The first line of every part of a comment posted in parts (DRE-8818). The
+#: PROOF reads it off the epic's thread, so it is reworded only with the card.
+PART_HEADER = ("Part {i} of {n} — this note is longer than Linear takes in one "
+               "comment, so it is posted in {n} parts.")
+
+
+def _utf8_size(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def comment_parts(body: str, limit: int) -> list[str]:
+    """`body` as numbered parts, each at most `limit` with its header line
+    (DRE-8818). Removing each part's `PART_HEADER` line and joining the rest
+    in order gives `body` back byte for byte.
+
+    A part is measured in UTF-8 bytes, which is never fewer than the
+    characters or the UTF-16 units Linear may count, so it fits whichever
+    the refusal meant. It is split on line boundaries where a line fits, and
+    a single line longer than a part's room is cut at the size, never inside
+    a character. Every header is given the room of the longest one, part
+    `n` of `n`, and `n` is recomputed until its digits stop growing.
+
+    Raises `LinearError` when the limit leaves no room past the header, or
+    when the body already fits in it: a refusal that names a size the body is
+    within is one this cannot answer by splitting, and nothing is guessed.
+    """
+    n = 1
+    while True:
+        room = limit - _utf8_size(PART_HEADER.format(i=n, n=n) + "\n")
+        if room < 4:
+            raise LinearError(
+                f"comment: Linear's maximum of {limit:,} leaves no room for a part "
+                "past its header, so the body is not split")
+        chunks = _chunks(body, room)
+        if len(str(len(chunks))) <= len(str(n)):
+            break
+        n = len(chunks)
+    if len(chunks) < 2:
+        raise LinearError(
+            f"comment: Linear refused the body for size naming a maximum of {limit:,}, "
+            f"which the body ({_utf8_size(body):,} bytes) is within — not split")
+    n = len(chunks)
+    return [PART_HEADER.format(i=i, n=n) + "\n" + chunk
+            for i, chunk in enumerate(chunks, 1)]
+
+
+def _chunks(body: str, room: int) -> list[str]:
+    """`body` in pieces of at most `room` UTF-8 bytes, cut after a `\\n`
+    wherever the line fits and at the size where one line does not."""
+    pieces = body.split("\n")
+    lines = [p + "\n" for p in pieces[:-1]] + ([pieces[-1]] if pieces[-1] else [])
+    chunks: list[str] = []
+    current: list[str] = []
+    size = 0
+    for line in lines:
+        line_size = _utf8_size(line)
+        if size + line_size > room and current:
+            chunks.append("".join(current))
+            current, size = [], 0
+        while line_size > room:
+            head = line.encode("utf-8")[:room].decode("utf-8", "ignore")
+            chunks.append(head)
+            line = line[len(head):]
+            line_size = _utf8_size(line)
+        if line:
+            current.append(line)
+            size += line_size
+    if current:
+        chunks.append("".join(current))
+    return chunks
+
+
+#: The CLI flag that reads a `comment` or `set-description` body from a file.
+BODY_FILE_FLAG = "--body-file="
+
+
+def body_from_file(args: list[str]) -> list[str]:
+    """`<id> --body-file=PATH [flags]` as `<id> <body> [flags]` (DRE-8758).
+
+    A body passed as `"$(cat FILE)"` is ONE argument, and Linux refuses any
+    single argument over 128 KiB with E2BIG, which bash reports as exit code
+    126. On 2026-11-01 a 138 KiB mechanical note killed an epic's plan run that
+    way before either critic ran. `--body-file=PATH` reads the file here
+    instead, and `--body-file=-` reads stdin. Trailing newlines are dropped,
+    exactly as the command substitution dropped them, so a body is posted
+    byte for byte as it was and a reader matching a comment by its body still
+    finds it. Without the flag the arguments come back unchanged, so the
+    positional body keeps working. The flag is read on the CLI only:
+    `cmd_comment` and `set_description` still take the body itself, so a
+    library caller's body is never read as a path."""
+    files = [a for a in args[1:] if a.startswith(BODY_FILE_FLAG)]
+    if not files:
+        return args
+    if len(files) > 1:
+        raise LinearError(f"give {BODY_FILE_FLAG}PATH once")
+    rest = [a for a in args[1:] if a is not files[0]]
+    if any(not a.startswith("--") for a in rest):
+        raise LinearError(f"give the body once: positionally or as {BODY_FILE_FLAG}PATH, "
+                          "not both")
+    path = files[0][len(BODY_FILE_FLAG):]
+    try:
+        if path == "-":
+            body = sys.stdin.read()
+        else:
+            with open(path, encoding="utf-8") as fh:
+                body = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise LinearError(f"could not read the body from {path!r}: {exc}") from exc
+    return [args[0], body.rstrip("\n"), *rest]
 
 
 def _comment_look(identifier: str, body: str, began: datetime):
@@ -2439,13 +3192,17 @@ def _comment_look(identifier: str, body: str, began: datetime):
     check runs before the first attempt and cannot see what that attempt
     made; this reads the thread after it, through the reader every other
     thread read uses, for a comment by this key with exactly this body made at
-    or after `began` less `_READ_BACK_SKEW`."""
+    or after `began` less `_READ_BACK_SKEW`.
+
+    It stays on Linear (DRE-8898): it asks whether a write landed seconds
+    ago, which a door answer trailing real time cannot say."""
     since = began - _READ_BACK_SKEW
 
     def landed() -> dict | None:
         # A pass's cached thread predates the first attempt.
         _pass["threads"].pop(identifier, None)
-        nodes, me = _thread_and_viewer(identifier, "body", "createdAt", "user")
+        nodes, me = _thread_and_viewer(identifier, "body", "createdAt", "user",
+                                       door=False)
         for node in reversed(nodes):
             at = _history_at(node)
             if (me and (node.get("user") or {}).get("id") == me
@@ -3618,7 +4375,10 @@ def _card_look(title: str, began: datetime, parent_id: str | None = None):
     under the same parent. One found is what the first attempt made, answered
     as `issueCreate` answers. More than one is refused naming them: which of
     them is ours is a guess, and adopting a guess hangs the blockers and the
-    hold on somebody else's card."""
+    hold on somebody else's card.
+
+    It stays on Linear (DRE-8898): it asks whether a create landed seconds
+    ago, which a door answer trailing real time cannot say."""
     since = began - _READ_BACK_SKEW
 
     def landed() -> dict | None:
@@ -4114,7 +4874,9 @@ def find_open(title: str) -> str | None:
 
     The value behind `cmd_find_open`, for a Python caller (`repair_card.py`)
     that must decide between reusing that card and creating one — one query,
-    one answer, not a printed line somebody parses back."""
+    one answer, not a printed line somebody parses back.
+
+    It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone."""
     data = gql(
         """query($t: String!) {
              issues(filter: {
@@ -4163,6 +4925,8 @@ def find_open_prefix(prefix: str) -> dict | None:
     can be read. `first: 20` is a fleet-wide alarm's whole plausible range —
     there is one outage at a time, and a listing that ever filled this would
     itself be the finding.
+
+    It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone.
     """
     data = gql(
         """query($prefix: String!) {
@@ -4188,10 +4952,15 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
     """Every DRE card carrying `repo:<repo_slug>` whose title STARTS WITH
     `prefix` and that was created at or after `since`, in ANY state.
 
-    `[{"identifier", "description", "state", "createdAt"}]`, `state` as its
-    name. The repair sweep's memory of earlier failures (DRE-6870): a repair
+    `[{"identifier", "title", "description", "state", "createdAt",
+    "completedAt"}]`, `state` as its name. The repair sweep's memory of
+    earlier failures (DRE-6870): a repair
     card lists the tests that failed, and a Canceled one is a failure main
     passed on its own — so every state on purpose, unlike `find_open_prefix`.
+
+    `title` and `completedAt` serve the failure tally (DRE-8635): it keeps
+    the cards whose title EQUALS its key, since a prefix also matches a longer
+    branch name, and names the day a Done card closed.
 
     Paged to exhaustion through `gql_paged`: measured 2026-10-06 to 10-10,
     the two busiest repos had 27 red mains between them in five days, so two
@@ -4208,7 +4977,8 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
                title: {startsWith: $prefix},
                labels: {name: {eqIgnoreCase: $label}},
                createdAt: {gte: $since}
-             }) { nodes { identifier description createdAt state { name } }
+             }) { nodes { identifier title description createdAt completedAt
+                          state { name } }
                   pageInfo { hasNextPage endCursor } } }""",
         {"prefix": prefix, "label": f"repo:{repo_slug}",
          "since": since.isoformat()},
@@ -4216,9 +4986,11 @@ def repo_cards_by_title_prefix(prefix: str, *, repo_slug: str,
     return [
         {
             "identifier": node.get("identifier") or "",
+            "title": node.get("title") or "",
             "description": node.get("description") or "",
             "state": (node.get("state") or {}).get("name") or "",
             "createdAt": node.get("createdAt") or "",
+            "completedAt": node.get("completedAt") or "",
         }
         for node in nodes
     ]
@@ -4265,6 +5037,9 @@ def cmd_state_of(identifier: str) -> None:
 
 
 def cmd_children(identifier: str) -> None:
+    """Print how many children the card has.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier."""
     data = gql(
         """query($id: String!) { issue(id: $id) { children { nodes { id } } } }""",
         {"id": identifier},
@@ -4413,10 +5188,29 @@ _OLDER_PAGE_QUERY = """query($id: String!, $after: String!) { issue(id: $id) {
        nodes { %s } } } }""" % COMMENT_FIELDS
 
 
-def _fetch_thread(identifier: str,
-                  *, whole: bool = False) -> tuple[list[dict], str | None]:
+def _door_thread(identifier: str, *, whole: bool) -> list[dict] | None:
+    """The card's comments off the read door, oldest→newest, or None
+    (DRE-8898). The whole thread for `whole` and inside a pass, which the
+    door answers FRESH only when it marks the thread whole; the
+    COMMENT_WINDOW window otherwise. The door's nodes arrive newest-first, as
+    Linear's do, so they go through `window_nodes` like every window here."""
+    served = card_via_door(identifier,
+                           comments="all" if whole or _pass["open"] else COMMENT_WINDOW)
+    if served is None:
+        return None
+    node, _read = served
+    return window_nodes(node.get("comments"))
+
+
+def _fetch_thread(identifier: str, *, whole: bool = False,
+                  door: bool = True) -> tuple[list[dict], str | None]:
     """`(nodes, viewer_id)`: the card's comments oldest→newest, and who this
     key is.
+
+    Off the read door first when the step opts in (`card_via_door`,
+    DRE-8898), and then the viewer is None: the door's is the console's key,
+    never this one, so a reader that needs it asks `viewer_id()`. `door=False`
+    reads Linear whatever the step says.
 
     The COMMENT_WINDOW window always — the fifty NEWEST, which is the read
     every caller outside a pass gets by default and all it gets. The pages
@@ -4436,6 +5230,10 @@ def _fetch_thread(identifier: str,
     it costs a request per hundred comments, and every other reader here wants
     the recent history the window is.
     """
+    if door:
+        nodes = _door_thread(identifier, whole=whole)
+        if nodes is not None:
+            return nodes, None
     data = gql(_THREAD_QUERY, {"id": identifier})
     me = (data.get("viewer") or {}).get("id")
     conn = ((data.get("issue") or {}).get("comments")) or {}
@@ -4459,22 +5257,25 @@ def _fetch_thread(identifier: str,
     return list(reversed(nodes)), me
 
 
-def _thread(identifier: str, *needs: str) -> list[dict]:
+def _thread(identifier: str, *needs: str, whole: bool = False) -> list[dict]:
     """The card's comment nodes for a reader that needs `needs`: from the
     pass's cache when it carries them, else ONE read — cached for the pass.
-    Never asks who the viewer is; only `comment_records` needs that."""
+    Never asks who the viewer is; only `comment_records` needs that.
+    `whole` pages past the window, as `_thread_and_viewer`'s does."""
     cached = _cached_thread(identifier, needs)
     if cached is not None:
         return cached
-    nodes, me = _fetch_thread(identifier)
+    nodes, me = _fetch_thread(identifier, whole=whole)
     _remember(identifier, nodes, me)
     return nodes
 
 
-def _thread_and_viewer(identifier: str, *needs: str,
-                       whole: bool = False) -> tuple[list[dict], str | None]:
-    """`_thread`, plus the viewer — off the same read on a miss, off the
-    pass's one viewer read on a hit.
+def _thread_and_viewer(identifier: str, *needs: str, whole: bool = False,
+                       door: bool = True) -> tuple[list[dict], str | None]:
+    """`_thread`, plus the viewer — off the same read on a Linear miss, off
+    `viewer_id()` on a hit or a thread the door served (DRE-8898): the
+    door's viewer is the console's key, never this one. `door=False` reads
+    Linear on a miss whatever the step says.
 
     `whole` pages past the window even outside a sweep's pass. A cache HIT is
     still served: nothing is ever cached partial (`remember_comments` drops a
@@ -4485,8 +5286,16 @@ def _thread_and_viewer(identifier: str, *needs: str,
     cached = _cached_thread(identifier, needs)
     if cached is not None:
         return cached, viewer_id()
-    nodes, me = _fetch_thread(identifier, whole=whole)
+    nodes = _door_thread(identifier, whole=whole) if door else None
+    if nodes is not None:
+        _remember(identifier, nodes, None)
+        return nodes, viewer_id()
+    nodes, me = _fetch_thread(identifier, whole=whole, door=False)
     _remember(identifier, nodes, me)
+    if me and not _pass["open"]:
+        # The thread query named the viewer, so `viewer_id()` outside a pass
+        # answers it without a read of its own (DRE-9050).
+        _budget["viewers"][spending_bucket()] = me
     return nodes, me
 
 
@@ -4502,13 +5311,25 @@ def _remember(identifier: str, nodes: list[dict], me: str | None) -> None:
 
 
 def viewer_id() -> str | None:
-    """Who `LINEAR_API_KEY` is — read at most once per pass. Outside a pass
-    every call asks, exactly as `comment_records` always did."""
+    """Who `LINEAR_API_KEY` is — read at most once per pass, and outside a
+    pass at most once per process and bucket (DRE-8898), keyed by
+    `spending_bucket()`, so a process that fell back to another key asks
+    again. A viewer Linear did not name is asked again next time. Outside a
+    pass, a thread `comment_records` read off Linear names the viewer too, and
+    that answer is the bucket's: no second read (DRE-9050).
+
+    It stays on Linear (DRE-8898): authorship is judged against this
+    process's own key, and the door's viewer is the console's."""
     if _pass["open"] and _pass["viewer_read"]:
         return _pass["viewer"]
+    bucket = spending_bucket()
+    if not _pass["open"] and bucket in _budget["viewers"]:
+        return _budget["viewers"][bucket]
     me = ((gql("query { viewer { id } }") or {}).get("viewer") or {}).get("id")
     if _pass["open"] and me:
         _pass.update(viewer=me, viewer_read=True)
+    elif me:
+        _budget["viewers"][bucket] = me
     return me
 
 
@@ -4519,10 +5340,7 @@ def comment_timeline(identifier: str, *, whole_thread: bool = False) -> list[dic
     `whole_thread` pages past the window, as `comment_bodies` does: the
     planning exit retires every verdict a re-planned card carried (DRE-4884),
     and a verdict past the window that it did not see would stay live."""
-    if whole_thread:
-        nodes, _ = _thread_and_viewer(identifier, "body", "createdAt", whole=True)
-    else:
-        nodes = _thread(identifier, "body", "createdAt")
+    nodes = _thread(identifier, "body", "createdAt", whole=whole_thread)
     return [
         {"body": c.get("body") or "", "createdAt": c.get("createdAt") or ""}
         for c in nodes
@@ -4625,10 +5443,7 @@ def comment_bodies(identifier: str, *, whole_thread: bool = False) -> list[str]:
     when the planning classifier read the thread at 12:32 PT, so the classifier
     read the epic as unclassified, and its failed self-check parked it in
     Green Light as a CEO decision."""
-    if whole_thread:
-        nodes, _ = _thread_and_viewer(identifier, "body", whole=True)
-        return [c.get("body") or "" for c in nodes]
-    return [c.get("body") or "" for c in _thread(identifier, "body")]
+    return [c.get("body") or "" for c in _thread(identifier, "body", whole=whole_thread)]
 
 
 def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict]:
@@ -4671,9 +5486,15 @@ def comment_records(identifier: str, *, whole_thread: bool = False) -> list[dict
     query carried, at the cost of one request per pass instead of one per epic.
     In `BUREAU_READ=on` a thread past the fifty-comment window is in the cache
     too, off the read door's whole-thread (`comments=all`) answer, when the
-    sweep asked for it (`reconcile._door_epic_threads`, DRE-5850); a thread
-    the door could not prove whole is read from Linear here, as in `off`. The
-    viewer is always Linear's: the door's is the console's key, not this one.
+    sweep asked for it (`reconcile._door_epic_threads`, DRE-5850).
+
+    The thread may come from the read door outside the cache too, in a step
+    that names `BUREAU_READ_CARD_MAX_AGE` (`card_via_door`, DRE-8898): a
+    whole thread only when the door marks it whole, and only an answer at or
+    after the card's floor. A thread the door could not serve is read from
+    Linear here, as in `off`. The VIEWER never comes from the door: the
+    door's is the console's key, and `authored_by_pipeline` is judged against
+    this process's own, Linear's `viewer { id }` (`viewer_id`).
 
     `whole_thread` pages past the fifty-comment window outside a pass too, for
     a reader whose answer a truncated thread makes WRONG rather than stale —
@@ -4872,11 +5693,12 @@ def add_label(identifier: str, label_name: str) -> None:
         )
         label_id = created["issueLabelCreate"]["issueLabel"]["id"]
     label_ids = [lbl["id"] for lbl in existing] + [label_id]
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"labelIds": label_ids}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} + label {label_name!r}")
 
 
@@ -4902,11 +5724,12 @@ def remove_label(identifier: str, label_name: str) -> None:
     label_ids = [
         lbl["id"] for lbl in existing if lbl["name"].lower() != label_name.lower()
     ]
-    gql(
+    data = gql(
         """mutation($id: String!, $input: IssueUpdateInput!) {
              issueUpdate(id: $id, input: $input) { success } }""",
         {"id": issue["id"], "input": {"labelIds": label_ids}},
     )
+    _note_own_write(identifier, data, "issueUpdate")
     print(f"{identifier} − label {label_name!r}")
 
 
@@ -4951,7 +5774,14 @@ def cmd_description(identifier: str) -> None:
     agent-authored and not guaranteed to quote it verbatim). Prints nothing
     (not an error) for a description-less card so callers can treat empty as
     "no design ref".
+
+    Off the read door first when the step opts in (`card_via_door`,
+    DRE-8898), else Linear, exactly as before.
     """
+    served = card_via_door(identifier, comments=1)
+    if served is not None:
+        sys.stdout.write(served[0].get("description") or "")
+        return
     data = gql(
         """query($id: String!) { issue(id: $id) { description } }""",
         {"id": identifier},
@@ -4968,6 +5798,8 @@ def cmd_child_descriptions(identifier: str) -> None:
     where the plan's own prose is only a claim. Same degrade-quietly contract
     as `description` — a childless epic or a body-less child prints nothing,
     so the caller reads "no design refs" rather than the step erroring out.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier.
     """
     data = gql(
         """query($id: String!) {
@@ -5035,6 +5867,8 @@ def cmd_children_json(identifier: str) -> None:
     before, and a Done card describing the work it delivered is the normal
     shape of every Done card. That send-back was the second of two, so the
     epic hit the bound and parked on a finding that was not a gap.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier.
     """
     data = gql(
         """query($id: String!) {
@@ -5100,6 +5934,8 @@ def cmd_children_detail(identifier: str) -> None:
     more questions of the same cards — what is this card called, what labels
     does it carry, and what formally blocks it — so it gets its own read rather
     than widening the critics' one with fields they never look at.
+
+    It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier.
     """
     data = gql(
         """query($id: String!) {
@@ -5168,6 +6004,8 @@ def cmd_epics_in_flight(*flags: str, states=None) -> None:
 if __name__ == "__main__":
     cmd, *args = sys.argv[1:]
     try:
+        if cmd in ("comment", "set-description"):
+            args = body_from_file(args)
         {
             "state": cmd_state,
             "advance": cmd_advance,

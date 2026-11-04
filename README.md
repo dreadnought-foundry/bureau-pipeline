@@ -218,6 +218,19 @@ passes `secrets: inherit`: it already holds the token, so without the variable
 it would change buckets the moment `stable` advanced, with nobody deciding.
 `==` in a GitHub expression ignores case, so `PLANNER` opts in too.
 
+**The Reconcile sweep is the exception: it spends the token by default
+(DRE-8716).** On 2026-11-01 the sweep sent about three of every four requests
+on the fleet key, which ran down to about 840 of 2,500 while the planner's
+bucket sat near full. So every key-holding step in `reconcile.yml`'s `sweep`
+job reads `LINEAR_PLANNER_KEY` ahead of the fleet key, with the fleet key as
+its 401 fallback, in every repo that holds the token, `secrets: inherit` stubs
+included. A repo puts its sweep back on the fleet key by setting the variable
+`LINEAR_SWEEP_BUCKET` to `fleet` (`!=` ignores case too, so `FLEET` works). It
+takes no code change and no wait for `stable`. Set it when the planner's bucket
+runs short: planners posting `🪫 planner-hold: held`, or `planner-oauth`
+budget lines reading under about 2,000. Set it on agent-bureau and
+bureau-pipeline first, since they send most of the sweep's requests.
+
 **Before setting it on any repo, measure what that repo's agents would spend.**
 The OAuth bucket allows 5,000 requests an hour against the API key's 2,500, but
 only 2,000,000 complexity points an hour against the API key's 3,000,000, and
@@ -229,7 +242,8 @@ both buckets.
 **A token already known to be dead is never sent (Stage 2 #30).** The repository
 variable `LINEAR_PLANNER_KEY_EXPIRES_AT` holds the published token's expiry in
 epoch seconds. Every job that can hold the token (the four above, plus
-plan.yml's `plan` and `publish`) passes it to `scripts/linear_ops.py`. When the
+plan.yml's `plan` and `publish` and reconcile.yml's `sweep`) passes it to
+`scripts/linear_ops.py`. When the
 expiry has passed, or is less than a minute away, each process goes straight to
 the fleet key and prints one `linear-key: planner-oauth not sent (...)` line,
 rather than spending a 401 first. When the variable is absent, nothing changes.
@@ -358,6 +372,7 @@ on:
       artifact: { required: false, type: string, default: "" }
       card_url: { required: false, type: string, default: "" }
 permissions:
+  id-token: write
   contents: read
   actions: read
 jobs:
@@ -392,6 +407,10 @@ whatever the caller granted — so a `deliver-rescue.yml` stub pasted without
 That one is the sharper edge of the two: the `agent-task.yml` omission degrades
 to the 403 path described below, but a delivery job that cannot read its own
 artifact is a red run and still no pull request.
+
+`id-token: write` is the third line, and the soft one (DRE-8901): it lets the
+delivery's card reads ask the console's read door. A stub without it runs
+exactly as before, its reads going to Linear.
 
 Add it to that repo's **medic** `workflow_run` list too, by that exact name —
 this is the one workflow whose failure leaves somebody's only copy of finished
@@ -689,6 +708,21 @@ variable: the console's runner-pool fail-back deletes exactly `BUREAU_RUNS_ON`,
 `BUREAU_BUILD_RUNS_ON` nobody sets would have kept builds pinned to a dead
 pool. Reading the chain the fleet's CI already reads, byte for byte, is what
 makes the fail-back cover this lane too. Widening it to a fourth job is a card.
+
+**And the build lane asks for a machine AWS cannot take back** (DRE-8890). These
+three are the longest jobs in the fleet, so a Spot reclaim costs the most on
+them, but the variable they read is the one the repo's own CI reads, and CI
+stays on Spot. So each of the three `runs-on` values wraps the chain: when the
+value's first label opens `runs-on`, it gains RunsOn's `spot=false` — one
+`/spot=false` segment on a single-string label, one `spot=false` element on the
+array form — the shape agent-bureau's `ci.yml` uses on `push` (DRE-6879). A
+value that already carries a `spot=`, as the console's order writes it during
+Spot pressure, is used as it stands, and any other value (`ubuntu-latest`, the
+Mac pool, nothing set) renders exactly what the plain chain renders. The chain
+inside it is still the exact string above, so the grep still finds the site;
+`tests/test_build_runs_on_lane.py` evaluates the whole expression. The product
+repos reach it only through `stable`, so it takes effect there once the
+channel's promotion (the `stable` section below) advances the tag past it.
 
 **Setting the variable is the consuming repo's operator step**, never this
 repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
@@ -1630,3 +1664,11 @@ card the watcher filed before — its title, lane `Planning`, label
    its code, because the check ran in one repo and the discipline was broken in
    four. The job name is load-bearing — `scripts/unfixable_checks.py` matches
    the published check-run name to escalate the fix loop on its first attempt.
+5. Keep `.github/bureau/design-system.json`, which the onboarding scaffold
+   ships with every list empty, and fill in the repo's parts folders: the
+   folders its atoms, molecules, organisms and templates ship from. That file
+   is how the pipeline knows the repo's design system exists, judges its UI
+   pull requests by the shared-parts rule (`standards/design-system.md`), and
+   hands every UI-building agent its parts catalog. A repo with no shared parts
+   yet leaves the lists empty until its first part ships. The contract is
+   [`docs/design-system-declaration.md`](docs/design-system-declaration.md).

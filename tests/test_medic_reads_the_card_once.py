@@ -98,6 +98,8 @@ class _Linear:
         if "viewer" in query:
             return _Resp({"data": {"viewer": {"id": "fleet"},
                                    "issue": {"comments": window}}})
+        if "issue(id: $id) { id }" in query:
+            return _Resp({"data": {"issue": {"id": "uuid-5620"}}})
         if "children(first: 1)" in query:
             return _Resp({"data": {"issue": {
                 "id": "uuid-5620", "identifier": CARD, "title": "t",

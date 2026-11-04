@@ -19,8 +19,9 @@ WHAT IS UNDER TEST:
   * The age gate runs BEFORE anything reads the card's comments, in both
     watchdogs.
   * `active_cards()` is read ONCE per sweep, shared across its call sites —
-    `SWEPT_LANES` already unions the lane sets those callers ask for. The one
-    sanctioned read outside it is the planner line's Green Light (DRE-5178).
+    `SWEPT_LANES` already unions the lane sets those callers ask for. The
+    planner line's Green Light read (DRE-5178), the one sanctioned board read
+    outside it, went with the line's drain (DRE-8622).
   * A whole sweep over a fixed fake board stays inside a stated request budget,
     and tripling the board does not move it. The next N+1 fails this suite
     rather than the quota.
@@ -430,11 +431,11 @@ def test_the_board_is_read_once_per_sweep():
     and SWEPT_LANES already unions the lanes they ask for, so one read serves
     all of them.
 
-    ONE sanctioned exception (DRE-5178): the planner line's backstop reads
-    Green Light, which is outside SWEPT_LANES on purpose — widening the union
-    would hand the CEO's queue to every reader of it, the hand-built move to
-    In Review first. That read is its own paged query, it is the only one, and
-    it is of Green Light and nothing else.
+    There was ONE sanctioned exception (DRE-5178): the planner line's backstop
+    read Green Light, which is outside SWEPT_LANES on purpose — widening the
+    union would hand the CEO's queue to every reader of it, the hand-built
+    move to In Review first. The backstop's drain was deleted with the cap
+    (DRE-8622), so no lane read is of Green Light now.
 
     The one read is of BOARD_READ_LANES since DRE-6576 — SWEPT_LANES plus the
     outage alarm's Triage lane, so the alarm finds its own open card in it.
@@ -464,10 +465,10 @@ def test_the_board_is_read_once_per_sweep():
         "must be read once and shared"
     )
     assert others == [tuple(reconcile.IDLE_LANES), tuple(reconcile.QUEUE_LANES),
-                      tuple(reconcile.INTAKE_BLOCKED_LANES), ("Green Light",)], (
+                      tuple(reconcile.INTAKE_BLOCKED_LANES)], (
         f"the only lane reads outside SWEPT_LANES are the idle check's, the "
-        f"lift pass's held Queued cards (DRE-7755), the Intake blocker "
-        f"notice's and the planner line's Green Light: {others}"
+        f"lift pass's held Queued cards (DRE-7755) and the Intake blocker "
+        f"notice's: {others}"
     )
     assert reconcile.IDLE_QUERY in fake.queries
 
@@ -532,7 +533,12 @@ def test_a_lane_outside_the_swept_union_still_gets_its_own_read():
 # repo waiting, so none held for the cap. The read is not served from the door,
 # which is off by default fleet-wide, and a whole-thread read is added only
 # for a held card whose comment window is partial — none on this board.
-SWEEP_REQUEST_BUDGET = 6
+#
+# 6 -> 5 (DRE-8622): the planner line's Green Light read is gone. The cap was
+# removed (epic DRE-8539), nothing joins the line since DRE-8617, and the
+# sweep's one-way drain of what it still held was deleted with the ledger it
+# read, so the read added in 2 -> 3 is no longer asked.
+SWEEP_REQUEST_BUDGET = 5
 
 
 def test_one_sweep_stays_within_the_request_budget():

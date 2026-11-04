@@ -1271,23 +1271,25 @@ def lifted_marks(retired, new: str | None, doc: dict | None = None) -> tuple:
     return tuple(m for m in retirement_lifts(doc) if m in applied and m not in kept)
 
 
-def _read_state_history(identifier: str) -> list:
+def _read_state_history(identifier: str, gql=None) -> list:
     """Every lane move on the card, paged — the one reader of that history
     this repo already has (`rereview_watch`), not a second one."""
     import rereview_watch
 
-    return rereview_watch._state_history(identifier)
+    return rereview_watch._state_history(identifier, gql=gql)
 
 
-def lane_moves(identifier: str) -> list | None:
+def lane_moves(identifier: str, *, gql=None) -> list | None:
     """The card's lane moves, or None when Linear cannot say.
 
     Never raises: the promotion gate asks this per card, and a history it
     could not read is UNKNOWN, which is neither stale nor fresh — the sweep
-    holds the card this pass and says nothing on it.
+    holds the card this pass and says nothing on it. `gql` is the read to
+    make it through, `linear_ops.gql` when None: the hygiene agent's Triage
+    lane reads the same history through its own `ctx.linear` (DRE-8862).
     """
     try:
-        return _read_state_history(identifier)
+        return _read_state_history(identifier, gql=gql)
     except Exception as exc:  # noqa: BLE001 — an unreadable history is unknown
         print(f"stale-verdict: could not read {identifier}'s lane history ({exc})",
               file=sys.stderr)

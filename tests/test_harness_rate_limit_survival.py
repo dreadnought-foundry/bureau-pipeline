@@ -213,13 +213,16 @@ class RateLimitedIsNamedTest(unittest.TestCase):
         self.assertEqual(len(naps), 1)
 
     def test_a_refusal_with_no_reset_header_carries_none(self):
+        # DRE-9068: no reset named is no longer "nothing to wait for" — GitHub
+        # asks a secondary limit that names neither header for at least a
+        # minute, so that minute is the one wait, and then the refusal stands.
         naps = []
-        api = ScriptedOpener([_refusal()])
+        api = ScriptedOpener([_refusal(), _refusal()])
         with self.assertRaises(github_api.RateLimited) as caught:
             GitHub("ghs_x", opener=api, sleeper=naps.append).list_open_prs(REPO)
         self.assertIsNone(caught.exception.reset)
-        self.assertEqual(naps, [], "nothing to wait for")
-        self.assertEqual(len(api.tokens), 1)
+        self.assertEqual(naps, [github_api.RATE_LIMIT_BACKOFF_SECONDS])
+        self.assertEqual(len(api.tokens), 2)
 
     def test_a_permission_403_is_still_a_plain_GitHubError(self):
         # `Resource not accessible by integration` on cancelling a sandbox
@@ -301,15 +304,19 @@ class ReaderFallsBackTest(unittest.TestCase):
         self.assertEqual(reader.request("GET", "/repos/x"), {"ok": 1})
         self.assertEqual(api.tokens, ["Bearer ghs_slot3", "Bearer ghs_slot4", "Bearer ghs_slot1"])
         self.assertEqual(reader.identity, "pool slot 1")
-        # Every slot refused: the refusal stands, and it is the named kind.
-        api2 = ScriptedOpener([_refusal(), _refusal()])
+        # Every slot refused, and the one wait refused too (DRE-9068: a
+        # refusal naming no reset waits GitHub's minute): the refusal stands,
+        # and it is the named kind.
+        naps = []
+        api2 = ScriptedOpener([_refusal(), _refusal(), _refusal()])
         alone = GitHub(
-            "ghs_slot3", opener=api2, log=lambda *_: None,
+            "ghs_slot3", opener=api2, log=lambda *_: None, sleeper=naps.append,
             fallback_suppliers=[("pool slot 4", lambda: "ghs_slot4")],
         )
         with self.assertRaises(github_api.RateLimited):
             alone.request("GET", "/repos/x")
-        self.assertEqual(len(api2.tokens), 2)
+        self.assertEqual(len(api2.tokens), 3)
+        self.assertEqual(len(naps), 1)
 
     def test_the_raw_log_archive_read_falls_back_the_same_way(self):
         api = ScriptedOpener([_refusal(), (200, b"PK\x03\x04", {})])
@@ -411,13 +418,15 @@ class ReaderFallsBackTest(unittest.TestCase):
         reader.list_open_prs(REPO)
         self.assertEqual(api.tokens[-1], "Bearer ghs_slot1_1")
 
-    def test_without_fallbacks_and_without_a_reset_the_client_is_exactly_the_old_one(self):
-        api = ScriptedOpener([_refusal()])
+    def test_without_fallbacks_and_without_a_reset_the_client_waits_githubs_minute(self):
+        # Before DRE-9068 this pinned "nothing to wait for", and a secondary
+        # limit naming neither header ended the run on the spot.
+        api = ScriptedOpener([_refusal(), (200, b"[]", {})])
         naps = []
-        with self.assertRaises(github_api.RateLimited):
-            GitHub("ghs_x", opener=api, sleeper=naps.append).list_open_prs(REPO)
-        self.assertEqual(naps, [])
-        self.assertEqual(len(api.tokens), 1)
+        self.assertEqual(
+            GitHub("ghs_x", opener=api, sleeper=naps.append).list_open_prs(REPO), [])
+        self.assertEqual(naps, [github_api.RATE_LIMIT_BACKOFF_SECONDS])
+        self.assertEqual(len(api.tokens), 2)
 
 
 # --------------------------------------------------------------------------- #

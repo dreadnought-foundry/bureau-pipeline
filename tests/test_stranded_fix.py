@@ -605,7 +605,7 @@ class TheSweepReportsItOnce(unittest.TestCase):
     BRANCH = "agent/DRE-4183-auth-gate-veil"
 
     def sweep(self, *, existing=None, parked=False, branch_exists=True,
-              commit_date=PUSHED_AT):
+              commit_date=PUSHED_AT, legacy=False):
         import reconcile
 
         pr = {"number": 611, "headRefName": self.BRANCH, "baseRefName": "main",
@@ -620,6 +620,25 @@ class TheSweepReportsItOnce(unittest.TestCase):
             ["🧭 routing-verdict: PARKED — deliberately not built"]
             if parked else []
         )
+        # The card already filed for this finding, as the tally's search
+        # reads it back (DRE-8635): same title, same occurrence. A `legacy`
+        # card was filed before the tally, from `card_body` alone, so it
+        # carries the commits but no `Occurrence:` line.
+        legacy_body = sf.card_body(
+            repo="dreadnought-foundry/portico",
+            stranded=sf.Stranded(611, self.BRANCH, "main", MERGED_AT,
+                                 (commit("9f1b7542" + "0" * 32, commit_date),),
+                                 pr["url"]),
+            card="DRE-4183", pushed=True)
+        self.posted = []
+        earlier = [{
+            "identifier": existing,
+            "title": sf.card_title("portico", self.BRANCH),
+            "description": (legacy_body if legacy
+                            else f"Occurrence: {self.BRANCH}@9f1b7542"),
+            "state": "Planning", "createdAt": "2026-08-11T09:00:00.000Z",
+            "completedAt": "",
+        }] if existing else []
         with mock.patch.multiple(
             reconcile,
             REPO="dreadnought-foundry/portico",
@@ -628,7 +647,13 @@ class TheSweepReportsItOnce(unittest.TestCase):
                 [{"name": self.BRANCH, "sha": "a" * 40}] if branch_exists else [])),
             gh=mock.MagicMock(return_value=compare),
         ), mock.patch.object(
-            reconcile.linear_ops, "find_open", return_value=existing,
+            reconcile.linear_ops, "repo_cards_by_title_prefix",
+            return_value=earlier,
+        ), mock.patch.object(
+            reconcile.linear_ops, "comment_records", return_value=[],
+        ), mock.patch.object(
+            reconcile.linear_ops, "cmd_comment",
+            side_effect=lambda card, body, *a: self.posted.append((card, body)),
         ), mock.patch.object(
             reconcile.linear_ops, "comment_bodies", return_value=parked_comment,
         ), mock.patch.object(
@@ -653,6 +678,14 @@ class TheSweepReportsItOnce(unittest.TestCase):
         which is keyed on the branch — so a SECOND branch that strands the
         same way still speaks."""
         self.assertEqual(self.sweep(existing="DRE-9999"), [])
+        self.assertEqual(self.posted, [], "a repeat finding posts no count")
+
+    def test_the_next_sweep_over_a_card_filed_before_the_tally_posts_nothing(self):
+        """DRE-8635: a card filed by `card_body` alone, open on the board when
+        the tally shipped, already lists these commits — the sweep files
+        nothing and adds no count to it."""
+        self.assertEqual(self.sweep(existing="DRE-9999", legacy=True), [])
+        self.assertEqual(self.posted, [], "a repeat finding posts no count")
 
     def test_a_deleted_branch_is_the_healthy_outcome(self):
         self.assertEqual(self.sweep(branch_exists=False), [])

@@ -49,7 +49,9 @@ The rule this file pins:
   fourth would keep builds pinned to a dead pool. Verify, plan, the sweeps, the
   merge gate and the medic's `diagnose` keep their chains unchanged, and a repo
   that sets neither variable renders exactly what it renders today —
-  `tests/test_build_runs_on_lane.py` is where that lane is pinned.
+  `tests/test_build_runs_on_lane.py` is where that lane is pinned. Since
+  DRE-8890 those three jobs also ask RunsOn for an on-demand machine when the
+  value is a RunsOn label (`BUILD_ON_DEMAND` below), pinned in the same file.
 * A workflow that runs only in THIS repo is not a reusable and is not pinned
   here. Until DRE-5948 its jobs stayed on the literal `ubuntu-latest`; since
   the CEO moved bureau-pipeline to RunsOn (2026-10-05) they read the same
@@ -110,12 +112,32 @@ BUILD_JOBS = {
 }
 BUILD_VAR_HINT = "vars.BUREAU_CI_RUNS_ON"
 HOSTED = "ubuntu-latest"
+# The build lane's three jobs ask RunsOn for a machine AWS cannot take back
+# (DRE-8890): `BUILD_SWITCHABLE`'s value, plus RunsOn's `spot=false` when its
+# first label opens `runs-on` and no label already carries a `spot=` — one
+# more `spot=false` element on the array form, one more `/spot=false` segment
+# on a single-string label — and the value untouched otherwise. The shape is
+# agent-bureau's `ci.yml` on `push` (DRE-6879), byte for byte as YAML's folded
+# scalar reads it, with the `spot=` guard added and no event condition.
+# `BUILD_SWITCHABLE` stays the variable's chain: this repo's own suites and
+# `runner_service.CHAINS` read it unchanged.
+_BUILD_VALUE = (
+    "vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '[\"ubuntu-latest\"]'"
+)
+BUILD_ON_DEMAND = (
+    f"${{{{ fromJSON(startsWith(fromJSON({_BUILD_VALUE})[0], 'runs-on') "
+    f"&& !contains(join(fromJSON({_BUILD_VALUE}), ','), 'spot=') "
+    f"&& (fromJSON({_BUILD_VALUE})[1] "
+    f"&& format('[\"{{0}}\",\"spot=false\"]', join(fromJSON({_BUILD_VALUE}), '\",\"')) "
+    f"|| format('[\"{{0}}/spot=false\"]', fromJSON({_BUILD_VALUE})[0])) "
+    f"|| {_BUILD_VALUE}) }}}}"
+)
 
 
 def expected_runs_on(name: str, job_id: str) -> str:
     """The one expression a reusable job's `runs-on` must be, by file and job."""
     if job_id in BUILD_JOBS.get(name, set()):
-        return BUILD_SWITCHABLE
+        return BUILD_ON_DEMAND
     if name in SHORT_LANE and job_id not in LONG_JOBS.get(name, set()):
         return SHORT_SWITCHABLE
     return SWITCHABLE

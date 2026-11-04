@@ -29,6 +29,8 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 # that is not here fails this test and has to be classified deliberately.
 EXPECTED_PROMPT_FILES = {
     "agent-fix.yml": 1,
+    # DRE-8634: the repair agent's one decision on an alert open 2 hours.
+    "alarm-repair.yml": 1,
     # Three since DRE-4108: the agent step plus two retries for a GitHub
     # rate-limit refusal that arrives before the model starts. The three
     # prompts are byte-identical — tests/test_presubmit_gate_prompt.py
@@ -38,6 +40,9 @@ EXPECTED_PROMPT_FILES = {
     # DRE-4972: the groom verify agent, one per proposed card.
     "groomer.yml": 1,
     "medic.yml": 1,
+    # DRE-8747: the Operator Agent's one read of the cards waiting on a person,
+    # and DRE-8928's planner for each `do` card.
+    "operator-agent.yml": 2,
     # DRE-3897: the model trial's prompt. It names no lane and no card — it is
     # a fixed, checkable task on a candidate model — but it is an inline agent
     # prompt like any other and belongs in the enumeration.

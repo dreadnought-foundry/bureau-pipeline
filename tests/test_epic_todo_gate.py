@@ -313,6 +313,8 @@ class _Board:
                 "labels": {"nodes": [{"name": n} for n in self.labels]},
                 "children": {"nodes": [{"id": "kid"}] if self.children else []},
             }}
+        if "issue(id: $id) { id }" in q:
+            return {"issue": {"id": "card-uuid"}}
         if "workflowStates" in q:
             return {"workflowStates": {"nodes": [
                 {"id": i, "name": n, "type": t} for n, (i, t) in self.STATES.items()]}}

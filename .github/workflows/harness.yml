@@ -370,7 +370,7 @@ jobs:
 
       - name: Mint worker-bot token (sandbox-scoped)
         id: worker
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -379,7 +379,7 @@ jobs:
 
       - name: Mint qa-bot token (identity probe — merger-login source)
         id: qa
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
@@ -408,7 +408,7 @@ jobs:
         id: probe_2
         if: env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -418,7 +418,7 @@ jobs:
         id: probe_3
         if: env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -428,7 +428,7 @@ jobs:
         id: probe_4
         if: env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -491,7 +491,7 @@ jobs:
       # reader's re-mint credentials.
       - name: Mint pool reader token (sandbox-scoped)
         id: reader
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -515,7 +515,7 @@ jobs:
       - name: Mint console token (lane-contract parity — best effort)
         id: console
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -534,7 +534,7 @@ jobs:
       - name: Mint the model-home read token
         id: model_home
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -730,6 +730,13 @@ jobs:
       # sandbox, not proven yet" instead of "harness failed", which would send
       # someone looking at a diff that was never judged. The stamp stays RED:
       # unproven is not proven, and the channel must not move on it.
+      #
+      # DRE-9068 rides the same output. When GitHub refused the run for a
+      # rate limit that outlasted the client's wait, the driver exits 4 and
+      # writes `blocked_reason` opening `harness blocked: GitHub rate limit`
+      # (promote_channel.RATE_LIMIT_MARKER), and the decision reads it as
+      # `harness-inconclusive` / rate-limited — re-run the harness — never
+      # `harness-failed`.
       - name: Stamp tested sha with the harness verdict
         if: success() || failure()
         env:

@@ -674,6 +674,7 @@ def test_the_full_sweep_runs_the_rule_right_after_the_conflict_sweep():
     mocks = {name: MagicMock(side_effect=lambda n=name: order.append(n))
              for name in (
                  "drain_retiring_lanes", "unstick_conflicts",
+                 "return_inherited_red_main_holds",
                  "refresh_stale_merge_refs", "retrigger_dead_heads",
                  "flag_no_checks_prs", "flag_unowned_prs", "flag_unlanded_work",
                  "fix_approved_but_red", "retry_dead_fix_runs",
@@ -689,9 +690,13 @@ def test_the_full_sweep_runs_the_rule_right_after_the_conflict_sweep():
     with patch.multiple(reconcile, **mocks):
         reconcile.main()
     assert "refresh_stale_merge_refs" in order
+    # DRE-8849: the return of cards the medic held on a red `main` sits
+    # between them, so a card it returns is refreshed on the same pass.
+    assert order.index("return_inherited_red_main_holds") == \
+        order.index("unstick_conflicts") + 1
     assert order.index("refresh_stale_merge_refs") == \
-        order.index("unstick_conflicts") + 1, (
-        "immediately after the conflict sweep"
+        order.index("return_inherited_red_main_holds") + 1, (
+        "right after the conflict sweep and the return of held cards"
     )
 
 

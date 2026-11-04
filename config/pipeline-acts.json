@@ -322,6 +322,24 @@
       }
     },
     {
+      "name": "inherited-red-main-returned",
+      "tag": "inherited-red-main-return",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A card the medic held in Triage because every failing check on its pull request had failed on the merge base too — the fault was on `main` — was returned to In Review by the sweep, its `inherited-red-main` hold lifted: `main` is green again on those checks, or the pull request has a new head the medic's reading no longer describes.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: nothing is dispatched back whose run could be late — the card is In Review's again, and scripts/reconcile.py's stale-merge-ref refresh on the same pass, then the checks and the review on the refreshed head, are what move it next, each on its own act.",
+      "why": "DRE-8849, from 2026-11-01. Four foundry cards (DRE-8069, DRE-8064, DRE-8068, DRE-8074) sat in Triage for four to eight hours with nothing wrong with any of them: each had an approved pull request that went red because foundry's own `main` was broken, the medic asked a person, and its housekeeping question parked the card where the fix loop and the stale-merge-ref refresh do not reach. `main` was green by 9:22 PM PT and an operator moved the cards by hand at about 12:20 AM PT on 11-02. Now the medic holds such a card with an `inherited-red-main` stamp at the head it read, and `reconcile.return_inherited_red_main_holds` lifts it — the label and the lift line, then the move to In Review, then this one note — when `stale_merge_ref.decide` answers `refresh`, or when the head has moved. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the move is one the lane contract admits `reconcile.py` to make, and this receipt is the record of it. The lift line spends the stamp, so a second pass returns nothing twice. It discharges nothing.",
+      "emits": {
+        "file": "scripts/inherited_red_main.py",
+        "anchor": "waited on `main`, not on a person"
+      }
+    },
+    {
       "name": "reviewer-unavailable",
       "tag": "reviewer-down",
       "adopted": true,
@@ -416,14 +434,14 @@
       "tag": "canceled-check-again",
       "adopted": true,
       "kind": "hold",
-      "means": "A workflow run on an approved pull request's head holds a canceled check again on a later attempt, so the sweep neither re-runs it nor sends a fix agent, and tells a person once, naming the job.",
+      "means": "A workflow run on an approved pull request's head holds a canceled check that the sweep will not re-run, so it sends no fix agent and tells a person once, naming the job: either the run was canceled again on a later attempt, or (DRE-8817) its re-run is held because the column its jobs read still names the runner service a job just hung, was killed out of memory or lost its runner on.",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
-      "cadence_why": "Null: nothing is re-run and nothing is dispatched past this point, so scripts/reconcile.py hands the canceled job to a person and declares no bound on how long a person takes.",
-      "why": "DRE-3072, rule 4. A check canceled on attempt 2 or later — after this sweep's own re-run, the hygiene agent's or a person's — is not re-run again, because a job that stops twice is usually stopping at its own time limit and looping on it only spends runners. It is never sent a fix agent either: a cancellation is not a failure. Said once per (pull request, head sha, run id) — scripts/canceled_check.py's marker `canceled-check-again @<sha> run <id>` — so a further pass over the same head posts nothing. A hold and not a refusal: nothing else is coming until a person acts. It discharges nothing: the re-run's act carries the same name as its tag, so naming it here would put that live key into this receipt's trailer.",
+      "cadence_why": "Null: on a later attempt nothing is re-run and nothing is dispatched past this point, so scripts/reconcile.py hands the canceled job to a person and declares no bound on how long a person takes. A held run (DRE-8817) is the one case the sweep still acts on, and its bound is in the receipt, not here: it re-runs the run on a later pass if the column names another runner service within six hours (canceled_check.HELD_HOURS), and after that nothing is re-run and the run is the operator's.",
+      "why": "DRE-3072, rule 4. A check canceled on attempt 2 or later — after this sweep's own re-run, the hygiene agent's or a person's — is not re-run again, because a job that stops twice is usually stopping at its own time limit and looping on it only spends runners. It is never sent a fix agent either: a cancellation is not a failure. Said once per (pull request, head sha, run id) — scripts/canceled_check.py's marker `canceled-check-again @<sha> run <id>` — so a further pass over the same head posts nothing. A hold and not a refusal: nothing else is coming until a person acts. It discharges nothing: the re-run's act carries the same name as its tag, so naming it here would put that live key into this receipt's trailer. DRE-8817, the CEO's rule of 2026-11-01: a re-run never goes back onto the runner service a job just failed on. On agent-bureau #4499 (CI run 41379620566) `Console backend shard 3` hung to its 40-minute cap on RunsOn and the canceled-check re-run hung again on studio-1, because GitHub evaluates runs-on at re-run time and the console had put the CI column back on mac-studio. So on attempt 1 a run whose column still names the service a job hung, was killed out of memory or lost its runner on is held, and said once with this act's tag as `canceled-check-again @<sha> run <id> held:`, naming the job, its runner, its service, the column and its value, the six-hour bound and the operator. The told-once read above ignores a held: receipt, so a job canceled again after a held run was re-run is still told once.",
       "emits": {
         "file": "scripts/canceled_check.py",
         "anchor": "def again_receipt("
@@ -534,7 +552,7 @@
       "why": "Not a transient flake by the time it gets here: the retry already happened, and on a critic infra-crash or an upstream 5xx the medic deliberately neither retries nor diagnoses, because re-running against an exhausted limit cannot succeed and only deepens it (DRE-1921). The body is written by the diagnosis agent, so the anchor pins the WRITE CALL rather than any wording.",
       "emits": {
         "file": ".github/workflows/medic.yml",
-        "anchor": "linear_ops.py comment \"$TARGET\" \"$(cat \"$REPORT\")\" --act=run-failure-diagnosed",
+        "anchor": "linear_ops.py comment \"$TARGET\" --body-file=\"$REPORT\" --act=run-failure-diagnosed",
         "note": "The medic's report is agent-authored prose, so there is no fixed wording to pin. The anchor is the write call in the diagnose job's delivery step — the point at which the receipt is emitted. It sat in the agent's prompt until Stage 2 fix #23 took the Linear key away from the agent."
       }
     },
@@ -562,14 +580,14 @@
       "tag": "medic-retry-declined",
       "adopted": true,
       "kind": "refusal",
-      "means": "The medic declined its one automatic retry of a failed run — the card is parked for a human, or the run died of turn exhaustion, which a rerun cannot fix.",
+      "means": "The medic declined its one automatic retry of a failed run — the card is parked for a human, the run died of turn exhaustion, which a rerun cannot fix, or (DRE-8817) the retry would land back on the runner service a job just hung, was killed out of memory or lost its runner on, because the column the run reads still names it.",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
       "cadence_why": "Null: the one automatic retry is declined and nothing is started, so scripts/medic_retry.py leaves the card exactly where whoever parked it put it.",
-      "why": "DRE-2954. On 2026-09-01 the turn cap parked DRE-2937 in the queue with needs-human at 16:36 and the medic re-ran its first dead run at 16:37 — a third ~$16 build on a card the pipeline itself had just called unbuildable, killed by hand twelve minutes later. Two mechanisms, each right alone, with nothing joining them. A refusal rather than a hold: the medic changes nothing about the card, it only declines to start a run at it, and whoever parked the card is still the next actor. The receipt exists so the next operator reading the run sees a DECISION rather than a miss — silence here reads identically to the gate never having been asked.",
+      "why": "DRE-2954. On 2026-09-01 the turn cap parked DRE-2937 in the queue with needs-human at 16:36 and the medic re-ran its first dead run at 16:37 — a third ~$16 build on a card the pipeline itself had just called unbuildable, killed by hand twelve minutes later. Two mechanisms, each right alone, with nothing joining them. A refusal rather than a hold: the medic changes nothing about the card, it only declines to start a run at it, and whoever parked the card is still the next actor. The receipt exists so the next operator reading the run sees a DECISION rather than a miss — silence here reads identically to the gate never having been asked. DRE-8817 adds one rule to the same receipt, `failed-service-still-named`: GitHub evaluates runs-on again at re-run time, so on agent-bureau #4499 a hung shard's re-run hung again on the service the console's order had moved back to. The medic asks once per failed attempt and never again, so this hold is final and the receipt says an operator re-runs the run once the column names another service.",
       "emits": {
         "file": "scripts/medic_retry.py",
         "anchor": "not retried — {decision.detail}"
@@ -922,14 +940,14 @@
       "tag": "hyg-triage-returned",
       "adopted": true,
       "kind": "recovery",
-      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned to Queued, never a start lane.",
+      "means": "A Triage card whose mechanical defect the agent fixed — a prose blocker made true by the relation it added, a dependency loop a Done card already broke, a retired-repo card marked operator-step and parked — is returned, never to a start lane: a prose blocker or a broken loop goes to Planning when it has been in Triage since its newest routing verdict, and to Queued only when that verdict is newer than its last trip through Triage; a retired-repo card is parked in Queued. The cause names the lane.",
       "state": "unchanged",
-      "next_actor": "reconcile.py",
+      "next_actor": "plan.yml",
       "discharges": null,
       "subscriber": "hygiene.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the card is the sweep's again, and scripts/reconcile.py re-reads it at its own gate on the next ~15-minute pass; nothing speaks on this receipt's behalf.",
-      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued and never a start lane, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that.",
+      "cadence_why": "Null: a card returned to Planning is the planner's, started by the relay when the card enters Planning and timed by .github/workflows/plan.yml's own acts, and its exit stamps the fresh verdict; a card returned to Queued is the sweep's again, and scripts/reconcile.py re-reads it at its own gate on the next ~15-minute pass. Nothing speaks on this receipt's behalf.",
+      "why": "DRE-5368, the hygiene agent's core; the lane that decides it is a sibling card under DRE-5365, and the core holds the one table of tags so every lane's receipt reads the same. Its idempotency key is (tag, cause): scripts/hygiene.py's write seam suppresses the act when the target already carries a receipt with this tag and the same cause line, so a repeat is never sent and a new cause always is. Its state is `unchanged` because the registry's states name an obligation an act leaves open — a run expected back, a person's hold, a human queue — and this act leaves none of its own: the move it makes is one the lane contract admits `hygiene.py` to make, and the receipt is the record of it. It discharges nothing. Queued or Planning and never a start lane, because the promotion gate is what decides a card is ready, and the agent fixed a defect rather than deciding that. Planning whenever the card has been in Triage since its newest routing verdict (DRE-8862): the sweep refuses such a card `stale-verdict` in Queued on every pass (DRE-4962), and only Planning's exit retires that verdict and stamps a fresh one (DRE-4884). The lane is chosen by the sweep's own `routing_verdict.stale_verdict_refusal`, so the two never disagree. That is nearly every prose-blocker or loop return, so the next actor is the planning run; the rare card whose verdict is newer than its Triage trip still goes to Queued, for scripts/reconcile.py. Before this, DRE-8709 sat in Queued refused `stale-verdict` from one afternoon to the next morning.",
       "emits": {
         "file": "scripts/hygiene.py",
         "anchor": "\"hyg-triage-returned\""
@@ -1026,6 +1044,42 @@
       }
     },
     {
+      "name": "hygiene-blocker-owner-notice",
+      "tag": "hyg-blocker-owner",
+      "adopted": true,
+      "kind": "hold",
+      "means": "A card that has sat more than 48 hours in Intake or Hand-work while a blocks relation names an open card is told so once, on the card itself: the receipt names the card's owner — its assignee, or its creator when nobody is assigned — lists every open card it holds up, directly and through chains of relations, each with its title, lane and wait, and says the two ways on: finish or cancel it, or remove the relation. An owner who is not a person reads no owner to tell, and the card is a left row in the hygiene summary too.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the blocker is a person's to finish, cancel or unlink, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and says nothing more while the card's stay in the lane is unchanged.",
+      "why": "DRE-8648, the hygiene agent's blocker-owner lane (scripts/hygiene_blockers.py) under epic DRE-8609; the core holds the one table of tags so every lane's receipt reads the same. A card parked in Intake or Hand-work can hold open work for weeks with nobody told — on 2026-11-01 DRE-8092 had sat in Intake for weeks blocking eight open cards, and reconcile.report_intake_blockers spoke only for a blocked card in flow, on its epic, never to the blocker's owner. A HOLD: the agent moves nothing, lifts nothing and removes no relation; the next step is a person's. Its idempotency key is (tag, cause), and the cause names the blocker, its lane and the date it entered that lane, so a card is told once per stay and again when it leaves the lane and comes back. The comment is a plain one by the fleet's user and is not an @mention: whether Linear also notifies the person it names is that person's own setting, and nothing here reads or changes it. It discharges nothing: a hold starts an obligation, it does not end one.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-blocker-owner\""
+      }
+    },
+    {
+      "name": "hygiene-hand-step-class",
+      "tag": "hyg-hand-step",
+      "adopted": true,
+      "kind": "hold",
+      "means": "An operator step in Hand-work is marked, once, as one a machine could do or one a person must: the card gains the label hand-step:machine or hand-step:person, and this receipt names the class, the kind — deploy, script, variable, linear-admin, bot-pr, or person — and the phrase of the card that decided it, or that no machine kind matched.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "hygiene.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: the card stays the operator's, who still does every step, and no workflow declares how long a person takes — scripts/hygiene.py reads it again on its next hourly pass and plans nothing for a card that wears a class label.",
+      "why": "DRE-8650, the hygiene agent's Hand-work class lane (scripts/hygiene_hand_step.py) under epic DRE-8609; the core holds the one table of tags so every lane's receipt reads the same. Of the 22 cards in Hand-work on 2026-11-01, 14 were a deploy, a script run, a variable set, a Linear admin action or a bot pull request, and nothing said so — the Hand-work age alarm fired on them and nothing acted on it. The class is scripts/operator_step_kind.py over the card's title and description, by the phrases in config/operator-step-kinds.json; a person phrase wins, and no match is a person's. A HOLD in the registry's sense: the work stays with the operator, nothing moves and nothing is dispatched because of a class — which machine kinds an agent may one day run is the CEO's decision, asked in the epic's plan, and its own card. Its idempotency key is (tag, cause), the cause naming the class and the kind, and the lane also skips any card that already wears a class label. It discharges nothing: the card's obligation is the operator's step, which the label does not end.",
+      "emits": {
+        "file": "scripts/hygiene.py",
+        "anchor": "\"hyg-hand-step\""
+      }
+    },
+    {
       "name": "epic-approval-queued",
       "tag": "epic-queued",
       "adopted": true,
@@ -1040,7 +1094,7 @@
       "why": "DRE-5136, the activation half of the epic cap (DRE-5129). `plan.yml`'s route step asks `epic_cap.py decide` (DRE-5134) where it would answer `activate`; on `queue`, or when Linear could not be read, it labels the epic, posts this receipt once per planning attempt — the body `decide` wrote, stating place k of n and how many epics are in motion — and returns the epic to Green Light. A HOLD: nothing is dispatched at the epic while it waits, and the sweep (`reconcile.py`, DRE-5152) discharges it by starting the epic when the count falls under the cap. Since DRE-6618 the full sweep's promotion pass writes the same three things in the same order, with the body `epic_cap.receipt_for`, for an approved epic a blocker epic released with no start or place in line on record, when the cap answers `queue`. The tag is epic_cap.QUEUED_TAG, the same string as the label, and the console learned it first (DRE-5135). It discharges nothing: a hold starts an obligation, it does not end one.",
       "emits": {
         "file": ".github/workflows/plan.yml",
-        "anchor": "\"$(cat \"$RUNNER_TEMP/epic-cap-receipt.md\")\" --act=epic-approval-queued"
+        "anchor": "--body-file=\"$RUNNER_TEMP/epic-cap-receipt.md\" --act=epic-approval-queued"
       }
     },
     {
@@ -1072,7 +1126,7 @@
       "discharges": "epic-approval-queued",
       "subscriber": "reconcile.py",
       "cadence_s": 6900,
-      "cadence_why": "The activate run the start hands work to: .github/workflows/plan.yml gives its plan job timeout-minutes: 115 (105 when DRE-5152 was written; DRE-5288 raised it), so 6900 seconds after the start the run that should have activated the epic is over, whatever it did.",
+      "cadence_why": "The activate run the start hands work to: the planner's own share of plan.yml's plan job is 115 minutes, declared as PLANNER_OWN_MINUTES in tests/test_plan_critic_wiring.py (105 when DRE-5152 was written; DRE-5288 raised it). Since DRE-8617 the job also carries the allowance hold in front of it, at most 65 minutes, and an activate run is gated behind that hold and removes the epic-queued label as soon as it passes, so 6900 seconds after the start the run that should have activated the epic has acted or is never going to.",
       "why": "DRE-5152, the other half of DRE-5136's queue. `start_queued_epics` in `scripts/reconcile.py` reads the line and the count of epics in motion through `scripts/epic_cap.py` (DRE-5134) and, while the cap has room, moves the head of the line to In Progress. The move is the dispatch: the relay fires `plan.yml`'s activate route on every In Progress entry of an epic, whoever made it, and that route removes the `epic-queued` label, so the sweep fires no dispatch of its own on a start (DRE-3659, DRE-3664) — the state is dispatched, as for fix-loop-restarted. The body is `epic_cap.started_receipt`, stating the place the epic had and how many epics are in motion now. It discharges the queued hold. The tag is epic_cap.STARTED_TAG, and the console learned it first (DRE-5135). Since DRE-6618 the full sweep's promotion pass posts it too, with the body `epic_cap.released_started_receipt`, for an approved epic already In Progress that a blocker epic released with no start or place in line on record: the epic does not move and nothing is dispatched at it, its children are promoted by the same pass, and the receipt is the start the cap's promotion hold reads.",
       "emits": {
         "file": "scripts/reconcile.py",
@@ -1090,7 +1144,7 @@
       "discharges": "epic-queue-started",
       "subscriber": "reconcile.py",
       "cadence_s": 6900,
-      "cadence_why": "The activate run the start hands work to: .github/workflows/plan.yml gives its plan job timeout-minutes: 115 (105 when DRE-5152 was written; DRE-5288 raised it), so 6900 seconds after the start the run that should have activated the epic is over, whatever it did.",
+      "cadence_why": "The activate run the start hands work to: the planner's own share of plan.yml's plan job is 115 minutes, declared as PLANNER_OWN_MINUTES in tests/test_plan_critic_wiring.py (105 when DRE-5152 was written; DRE-5288 raised it). Since DRE-8617 the job also carries the allowance hold in front of it, at most 65 minutes, and an activate run is gated behind that hold and removes the epic-queued label as soon as it passes, so 6900 seconds after the start the run that should have activated the epic has acted or is never going to.",
       "why": "DRE-5152. The relay lives in agent-bureau and cannot be read from here, so `tend_epic_queue` confirms a start rather than assuming it: the label left on an In Progress epic is the activation that has not run, and any pipeline-authored comment newer than the start receipt (the receipt of a run waiting for a planner, the activation, the activate route's hand-back note) reads as the start taken. Only the sweep of the epic's own repo asks, through `plan_run.fire` with the activate trigger and reason epic-start-relay-missed, because only that repo's token can dispatch to its stub, and the receipt is posted only on a confirmed dispatch. One per start (the DRE-2071 lesson): a start carrying this receipt is never asked for again, and stays an overdue act in the console. The name is the tag, as epic_cap.REDISPATCHED_ACT and REDISPATCHED_TAG fix it; the console learned it first (DRE-5135).",
       "emits": {
         "file": "scripts/reconcile.py",
@@ -1108,7 +1162,7 @@
       "discharges": null,
       "subscriber": "plan.yml",
       "cadence_s": 6900,
-      "cadence_why": "Copied from the epic-queue-started row, which is the measurement: the same plan.yml run follows both, and .github/workflows/plan.yml gives its plan job timeout-minutes: 115, so 6900 seconds after the receipt the planning run it dispatched is over, whatever it did.",
+      "cadence_why": "Copied from the epic-queue-started row, which is the measurement: the same plan.yml run follows both, and the planner's own share of its plan job is 115 minutes, declared as PLANNER_OWN_MINUTES in tests/test_plan_critic_wiring.py. The allowance hold in front of it (DRE-8617, at most 65 minutes) posts `held` at its first answered read, so 6900 seconds of silence after the receipt means the planning run it dispatched is over, whatever it did.",
       "why": "DRE-6452, the try-without-a-person step of DRE-6172 applied to the plan-critic bound. `scripts/plan_bound.py exit` reads the worst finding of every send-back round, classifies each with `send_back_class` (DRE-6356), and when none is a decision and the card has had no rewrite yet, dispatches a planning run through `review_rerun._cmd_dispatch` (`--route plan --trigger-state planning --reason bound-rewrite`) and posts this receipt only on the confirmed dispatch (DRE-2034): `🔁 bound-rewrite: …`, every finding numbered with its class word. The tag IS a live key, which is why it is adopted: a pipeline-authored comment opening `🔁 bound-rewrite:` anywhere on the card is the grant, so the next bound parks rather than rewriting again, `plan_bound.py context` reads the findings back off the newest one for the planner, and the one-off critic counts its send-backs from it (DRE-6454). Nothing is discharged: the planning run it starts reports through the critics' own records. The console learned the tag first (DRE-6481).",
       "emits": {
         "file": "scripts/plan_bound.py",
@@ -1126,11 +1180,65 @@
       "discharges": null,
       "subscriber": "plan.yml",
       "cadence_s": 6900,
-      "cadence_why": "Copied from the plan-bound-rewrite row, which is the measurement: a rewritten card enters Planning and .github/workflows/plan.yml, the run that entry fires, gives its plan job timeout-minutes: 115, so 6900 seconds after the receipt that run is over, whatever it did. It also bounds a `started` claim: the Triage Repair workflow's repair job runs inside timeout-minutes: 100.",
+      "cadence_why": "Copied from the plan-bound-rewrite row, which is the measurement: a rewritten card enters Planning and plan.yml, the run that entry fires, gives the planner its own 115 minutes, declared as PLANNER_OWN_MINUTES in tests/test_plan_critic_wiring.py, after an allowance hold (DRE-8617, at most 65 minutes) that posts `held` at its first answered read, so 6900 seconds of silence after the receipt means that run is over, whatever it did. It also bounds a `started` claim: the Triage Repair workflow's repair job runs inside timeout-minutes: 100.",
       "why": "DRE-7178 (epic DRE-7174). On 2026-10-12 DRE-7066 and DRE-7164 sat in Triage about three hours each, held plan-critic-bound, and every finding on both was a defect in the card: the hygiene agent's Triage rule 3 only reported them. `scripts/triage_repair.py select` reads every finding of the newest park note off the card's whole thread and answers repair (every finding a revision or uncertain), escalate (a finding `send_back_class` places as a decision) or, for a card with children that has had no bound rewrite and whose findings are there and name no decision, replan (DRE-7181: the bound-rewrite receipt, the lift, the move to Planning, then `replanned`); `claim` posts `🩹 triage-repair: started`; `apply` reads the planner's files and reaches exactly one outcome, writing in the contract's order — its own writes, the lift (`because=triage-repair`), the move out of Triage, then the receipt. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🩹 triage-repair:` anywhere on the card is the card's one repair, so `select` answers spent and `claim` exits 3. The tag is `triage-repair-receipt`, never the bare act name, because the contract's lift line reads `because=triage-repair` and docs/holds.md lets no hold line carry a registry tag: a `tag in body` count of this act never reads a lift line as one of its receipts. Nothing is discharged.",
       "emits": {
         "file": "scripts/triage_repair.py",
         "anchor": "pipeline_act.receipt(\"triage-repair\""
+      }
+    },
+    {
+      "name": "alarm-repair",
+      "tag": "alarm-repair-receipt",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "An open console alert that names a card, at WARN or CRITICAL and open for at least ALARM_REPAIR_AFTER_HOURS (2), got its one automatic repair attempt, once per raise of the alert — keyed on its kind and its raised_at. `started` is the claim, posted before the repair agent runs; `repaired` (a relation the card's own prose declares was added, or a hold lift its own rule says is due was performed — always move=pipeline), `diagnosed` (nothing written but the receipt, with the agent's move=operator or move=ceo) and `unfinished` (a refused or malformed decision, or a failed write, named with every write already made — always move=operator) are finished outcomes, each posted last.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: the receipt leaves the card's state unchanged with scripts/reconcile.py next, and the full sweep reads the card again on its own schedule at its own gates — a repaired card stays in its lane with a relation added or its hold lifted, a diagnosed or unfinished one waits on the person its move names — so nothing is expected to speak on this receipt and the console reads it as parked, not overdue.",
+      "why": "DRE-8633 (epic DRE-8606). Alarms fired and nothing acted on them. `scripts/alarm_repair.py select` reads `bureau_read.open_alerts()` and answers repair, spent (a contract receipt for the alert's kind and raised_at stands) or skip (no card, too young, card closed, card unreadable) per alert, oldest first, with classes — prose-blocker, queued-terminal-blockers, standing-defect, other — as the agent's hint; `claim` posts `🔩 alarm-repair: started · alert=<kind> · raised=<raised_at>`; `apply` reads the agent's decision.json and applies add-relation (each id in the card's live prose_blockers.undeclared_claims, through linear_ops._add_blocked_by — the description, title, labels and lane are never written, DRE-2676), lift-hold (hold.lift_due answers a lift kind, or blockers-terminal for an operator-step stamp whose blockers are all terminal) or none, then posts the receipt last. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🔩 alarm-repair:` and names an alert's kind and raised_at is that raise's one attempt, so `select` answers spent and `claim` exits 3. The tag is `alarm-repair-receipt`, never the bare act name, so a `tag in body` count of this act never reads the lift line `by=scripts/alarm_repair.py` as one of its receipts. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/alarm_repair.py",
+        "anchor": "pipeline_act.receipt(\"alarm-repair\""
+      }
+    },
+    {
+      "name": "failure-tally",
+      "tag": "failure-tally-receipt",
+      "adopted": true,
+      "kind": "refusal",
+      "means": "A failure the pipeline had already filed as a card, within FAILURE_TALLY_WINDOW_DAYS (30) and in any state, was found again with a new occurrence, so the pipeline declined to file another card and counted it on the one it is already on: `🔢 failure-tally: <n> · <occurrence>`, where <n> counts every occurrence, the first filing included. An open, Canceled or Duplicate card keeps its lane and the decision a person made, and gains the count.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, and declared rather than omitted: scripts/failure_tally.py posts the receipt and leaves the card exactly where it was — an open card with whoever already holds it, a Canceled or Duplicate one with the person who closed it — and nothing in this tree is expected to speak after a count, so the console reads it as parked, not overdue.",
+      "why": "DRE-8635 (epic DRE-8606). The stranded-fix title was filed eight times from 09-20, and DRE-4828, DRE-4831 and DRE-4861 were one branch, portico's agent/DRE-4518-mcp-form-read-tools, filed three times: both writers looked only for an OPEN card with the exact title (linear_ops.find_open), so a card a person canceled was filed again by the next sweep. `scripts/failure_tally.py` file_or_tally reads the repo's cards with that exact title over 30 days in any state (linear_ops.repo_cards_by_title_prefix kept to equality) and answers filed (none found, or the newest is Done — a new card naming it), tallied (this receipt, on the newest open, Canceled or Duplicate card) or already-tallied (the occurrence is on the card's description or a receipt). A search that never answered files nothing and answers unread. The receipt key IS live, which is why the tag is adopted: a pipeline-authored comment whose first line opens `🔢 failure-tally:` and names an occurrence is that occurrence's one count, so a later sweep over the same occurrence writes nothing, and the receipts on a card are what <n> counts. The tag is `failure-tally-receipt`, never the bare act name, so a `tag in body` count of this act never reads the `failure-tally:` log line as one of its receipts. Nothing is discharged.",
+      "emits": {
+        "file": "scripts/failure_tally.py",
+        "anchor": "pipeline_act.receipt(\"failure-tally\""
+      }
+    },
+    {
+      "name": "operator-agent",
+      "tag": "operator-agent",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "The operator agent decided a card waiting on a person and spent its pass: a `studio` card blocked by the studio host's go-live, a `ceo` card moved to Green Light as one question, or a `done-already` card closed. The receipt quotes the step, the fingerprint and the outcome's own lines. Since DRE-8925 the act also covers a `do` card's three comments and its close: the claim posted before its step runs, the receipt posted after it, the one close-failure line a close that can never land gets, and the close the receipt names. Since DRE-9049 it also covers a Green Light row's three outcomes: `repair`, a stopped run, and `answer`, a question the facts answer, each of which moves the card from Green Light to Planning under a receipt that names the cause, quotes the facts and says `moved: Green Light → Planning`; and `keep`, a genuine decision the CEO owes, which moves nothing and says `stays: Green Light`.",
+      "state": "unchanged",
+      "next_actor": "operator",
+      "discharges": null,
+      "subscriber": "operator-agent.yml",
+      "cadence_s": null,
+      "cadence_why": "Null, by the registry's rule that only a `dispatched` act carries a run's timeout: the receipt is followed in the same Operator Agent run by its apply, and after it the card is a person's, and no workflow declares how long a person takes. A pass that died between the receipt and its apply is finished by the next hourly pass, which reads the card back as apply-only, so nothing waits on this receipt's silence. The claim and its apply are both scripts/operator_agent_apply.py's.",
+      "why": "DRE-8746 (epic DRE-8738, the Operator Agent). `scripts/operator_agent_apply.py claim` posts `🛠️ operator-agent: <outcome> — <reason> · <HH:MM> PT`, written by `operator_decide.receipt_text`, for a `studio`, `ceo` or `done-already` decision that is not held; `apply` acts only under it, re-reads the card live and makes the one write the outcome names — a `blockedBy` relation to the studio host's go-live, `planning_escalation.escalate` into Green Light, or the close to Done. The receipt is the card's spent pass, which is why the tag is adopted: a pipeline-authored receipt carrying the card's fingerprint makes `claim` exit 3, and `select` reads an `apply-only` card back off it after a pass that died before its write, so the write is tried again under the same receipt. The tag is the bare act name, unlike `triage-repair-receipt`: that suffix exists only because a lift line carries the act's name, and this act lifts no hold. Its state is `unchanged` for the reason `hygiene-triage-return` gives: the moves it makes, into Green Light and Done, are ones the lane contract admits `operator_agent_apply.py` to make, and the receipt is the record of them. Nothing is discharged. DRE-8925 adds a `do` card's comments, written by DRE-8923's composers and posted through the same `_post`: `do-claim` posts `🛠️ operator-agent: do-claim — …` before the step's first command runs, and exits 3 when a claim or receipt with the card's fingerprint already stands; `do-post` posts the `🛠️ operator-agent: do — …` receipt after it, ending `close: <rule>`, `close: none named`, `failed:` or `continues:`; and `do-close` makes the close the receipt names — a `no-code` card through the console's outcome door (`scripts/console_outcome.py`), whose own `Outcome:` record is what the relay's lane guard reads, any other card by the same move to Done — or, when the close can never land, posts the one close-failure line `🛠️ operator-agent: do-close — …`. Each is the card's spent pass in the same way: `select` reads the newest one back and never runs the step twice. DRE-9049 adds the three Green Light outcomes: `repair` and `answer` return a row that was never a decision — a stopped run, or a question the facts answer — from Green Light to Planning, a move the lane contract admits `operator_agent_apply.py` to make beside the hygiene agent's and the Triage Repair's, so the state stays `unchanged`; `keep` leaves a genuine decision in Green Light and moves nothing, and the agent never approves.",
+      "emits": {
+        "file": "scripts/operator_agent_apply.py",
+        "anchor": "pipeline_act.receipt(\"operator-agent\""
       }
     },
     {
@@ -1259,7 +1367,7 @@
       "subscriber": "reconcile.yml",
       "cadence_s": null,
       "cadence_why": "Null: scripts/reconcile.py raises this alarm as the chase of a person's card waiting in Hand-work, and the bound after which that card is late is declared in config/hold-deadlines.json (DRE-7964), never in cadence_s, because a number there renders as overdue in the console and, under docs/pipeline-acts.md's console-first rule, must be declared in agent-bureau first, and tests/test_act_cadence.py requires null for a hold.",
-      "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes.",
+      "why": "DRE-6409. The stall watchdog skips every card waiting on a person, rightly — no run is expected — and nothing kept time in its place: on 2026-10-09 one sweep printed 'not a strand' for 18 cards and raised nothing. The clock is the card's entry to Hand-work, never updatedAt. Posted once per entry, by the card's own repo's sweep only; it adds no label, moves no lane and writes nothing to Green Light. A standing card and the CEO's own hand-built card never alarm — an age is not a decision he owes. Since DRE-9049, the alarm is also a trigger for the Operator Agent's next pass on the card.",
       "emits": {
         "file": "scripts/reconcile.py",
         "anchor": "🚨 hand-work-overdue: {ident} has waited in Hand-work"
@@ -1270,14 +1378,14 @@
       "tag": "promotion-stalled",
       "adopted": true,
       "kind": "hold",
-      "means": "A Queued card the sweep has refused promotion for the same reason on sweep after sweep for two hours or more — a refusal nothing can clear on its own, which until now was indistinguishable from a card waiting its turn.",
+      "means": "A Queued card the sweep has refused promotion for the same reason on sweep after sweep for two hours or more — a refusal nothing can clear on its own, which until now was indistinguishable from a card waiting its turn. Or an epic in Planning whose plan run is dead or was never found while its children wait on it in Queued: one record for the epic, its receipt posted on the epic (DRE-8815).",
       "state": "unchanged",
       "next_actor": "operator",
       "discharges": null,
       "subscriber": "reconcile.yml",
       "cadence_s": null,
       "cadence_why": "Null: the hold names a card a person must act on, and scripts/reconcile.py declares no bound on how long an operator takes — the same null the holds that end with a human carry.",
-      "why": "DRE-4198 found five queued cards refused promotion for the same reason across thirty hours, and found them only by reading a sweep log: the refusal was posted once and never read again, so from outside each looked exactly like a card waiting its turn. The clock is the refusal receipt's own age — the oldest comment carrying its tag, never a count of sweeps kept somewhere — the rule DRE-2676 already runs on an epic's prose defect, generalized (scripts/promotion_stall.py, DRE-4207). Only the refusals no sweep can clear are clocked: a PARKED card is never clocked, and neither is a wave epic waiting its turn or any other declared wait, because each already says what it waits for and that thing is scheduled. The receipt is posted once; the run stays red on every sweep the card still stands, so it is a hold that ends with a person.",
+      "why": "DRE-4198 found five queued cards refused promotion for the same reason across thirty hours, and found them only by reading a sweep log: the refusal was posted once and never read again, so from outside each looked exactly like a card waiting its turn. The clock is the refusal receipt's own age — the oldest comment carrying its tag, never a count of sweeps kept somewhere — the rule DRE-2676 already runs on an epic's prose defect, generalized (scripts/promotion_stall.py, DRE-4207). Only the refusals no sweep can clear are clocked: a PARKED card is never clocked, and neither is a wave epic waiting its turn or any other declared wait, because each already says what it waits for and that thing is scheduled. The one declared wait that is clocked is `epic-not-active` when the epic stands in Planning and its newest plan run is dead or was never found (DRE-8815): epic DRE-8698's plan run died after posting the plan and its nine children waited five hours looking scheduled, when nothing was. That record is one per epic, never one per child, and its receipt is posted on the epic from clock_planning_epics in scripts/reconcile.py, at the promotion_stall.epic_notice( call — a second emitter beside the one pinned below. The receipt is posted once; the run stays red on every sweep the card still stands, so it is a hold that ends with a person.",
       "emits": {
         "file": "scripts/reconcile.py",
         "anchor": "promotion_stall.notice("
@@ -1464,6 +1572,13 @@
       "why": "Act-shaped — it reports a hold no writer will clear — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. The `🧱 proof-record-stuck #<n>:` mark it opens with is the once-a-day key the next sweep reads back before it names the record again, so a trailer is a change to that key; the card that declares the act owns both."
     },
     {
+      "file": "scripts/proof_overdue_sweep.py",
+      "anchor": "linear_ops.cmd_comment(d.card, comment(d, day))",
+      "kind": "not-an-act",
+      "means": "A PROOF card open more than seven days is told, at most once per PT day, what it waits on — the `⏳ proof-overdue: <YYYY-MM-DD> · class=… · action=… · waits-on=… · age=…d` first line, then plain English — read by `proof_overdue.reading`; a card in Green Light is never told (DRE-8626).",
+      "why": "A REPORT, not an act: it moves no lane, writes no label, posts no hold and touches no pull request, and hands the work to nobody new — the action step (`scripts/proof_overdue_act.py`) reads its first line and takes the one action. Giving it a row would be a REGISTRY change that ships console-first (docs/pipeline-acts.md). Its `⏳ proof-overdue: <PT day>` first line is the once-a-day key the next pass reads back, by a pipeline-authored comment, before it says it again, so a trailer would be a change to that key."
+    },
+    {
       "file": "scripts/reconcile.py",
       "anchor": "head_desync.unresolved_notice(number, head, tip, \"after\")",
       "kind": "undeclared-act",
@@ -1559,14 +1674,7 @@
       "anchor": "moved_note(record[\"id\"], position=row[\"position\"]",
       "kind": "not-an-act",
       "means": "Which batch moved a card into Planning, on the card itself, in one line: the proposal id, the card's position on the approved Planning list (or that the CEO added it), the lanes, the drain as the writer, and the card the proposal record stands on (DRE-3326).",
-      "why": "The CEO decided this, not the pipeline. The drain moves a card only because the CEO approved the batch it is in, or reached in for it, so the note is bookkeeping of that decision rather than something the pipeline chose — the same reason the cancel note beside it is not an act. A trailer would name a next actor nobody chose: the card's next actor is its own planner run, started by its entry to Planning. One renderer (`groomer.moved_note`), shared with the sweep's release, so a moved card carries one shape of note."
-    },
-    {
-      "file": "scripts/groomer.py",
-      "anchor": "queued_record(record[\"id\"], plan[\"queued\"])",
-      "kind": "not-an-act",
-      "means": "The cards of an approved batch the free planner slots could not take, on the proposal card in one record written just before the drained record: the queue, in place order, that the reconcile sweep releases into Planning as slots free (DRE-5435).",
-      "why": "The CEO decided this, not the pipeline. The cards are queued only because the CEO approved the batch they are in, so the record is bookkeeping of that approval rather than something the pipeline chose — the same reason the drained record beside it is not an act. A trailer would name a next actor nobody chose: the next actor is the sweep, and it reads this record by its own grammar (`parse_queued_record`). One record per drain, never one per card."
+      "why": "The CEO decided this, not the pipeline. The drain moves a card only because the CEO approved the batch it is in, or reached in for it, so the note is bookkeeping of that decision rather than something the pipeline chose — the same reason the cancel note beside it is not an act. A trailer would name a next actor nobody chose: the card's next actor is its own planner run, started by its entry to Planning. One renderer (`groomer.moved_note`) at one call site, so a moved card carries one shape of note — the sweep's queue release was its second caller until DRE-8619 removed the queue."
     },
     {
       "file": "scripts/groomer.py",
@@ -1583,27 +1691,6 @@
       "why": "The CEO decided this, not the pipeline: the CEO accepted the draft by name, so the note is bookkeeping of that acceptance — the same reading the moved_note(record[\"id\"], position=row[\"position\"] row gives the moved card's note. Nothing was refused, recovered or held, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. One renderer at one call site in _drain, so the record carries one shape."
     },
     {
-      "file": "scripts/reconcile.py",
-      "anchor": "groomer.released_record(list(changes.values()))",
-      "kind": "not-an-act",
-      "means": "What one sweep pass did to the groom queue, on the groomer's standing card in one comment: per batch it touched, the queued cards it released into Planning and the ones that had left the lane (DRE-5435).",
-      "why": "Bookkeeping of a queue the CEO's approval filled, not a decision the pipeline made: each release only carries out that approval at the rate the planner line can take. The queue's standing is read off the thread from these rows (`groomer.queue_standing`), so its grammar is the groomer's, and a trailer would announce a recovery that has not happened. One comment per pass that changed the queue, never one per card."
-    },
-    {
-      "file": "scripts/reconcile.py",
-      "anchor": "groomer.requeued_record(",
-      "kind": "not-an-act",
-      "means": "The cards of an approved batch that a groom-released row recorded as taken out by hand while nobody had removed their groom-queued label, put back in the queue on the groomer's standing card: one groom-queued record per batch, the batch's own id, the cards in their original place order, and prose naming the row it corrects and its date (DRE-6640).",
-      "why": "It corrects the queue's own bookkeeping back to what the CEO's approval already decided — the cards were never taken out by a person — so it is the same record the drain writes, not a new decision. The sweep reads it by the queue's one grammar (`groomer.queue_standing`), and the thread is the test it is written once: a pipeline groom-queued record newer than the row already names the card. A trailer would name a next actor nobody chose; the next actor is the sweep's release, as for any queued card. One record per batch, never one per card."
-    },
-    {
-      "file": "scripts/reconcile.py",
-      "anchor": "groomer.moved_note(",
-      "kind": "not-an-act",
-      "means": "Which batch moved a card the sweep released from the groom queue into Planning, on the card itself, in one line: the proposal id, its position read off the proposal record on the standing card's thread, the lanes, the sweep's queue release and the card's queue place as the writer, and the card the proposal record stands on (DRE-3326).",
-      "why": "Bookkeeping of a queue the CEO's approval filled, not a decision the pipeline made: the release only carries out that approval at the rate the planner line can take, exactly as the groom-released row beside it does. A trailer would name a next actor nobody chose: the card's next actor is its own planner run. The note is the groomer's (`groomer.moved_note`), the same renderer the drain calls, so a released card and a drained card carry one shape of note."
-    },
-    {
       "file": "scripts/groomer.py",
       "anchor": "drain_refused_record(refusal.batch, str(refusal))",
       "kind": "not-an-act",
@@ -1616,6 +1703,13 @@
       "kind": "not-an-act",
       "means": "The groomer's week counted, on the standing groom card in one comment: the cards the week's answered proposals put in front of a person, the ones that person removed by reason, and what became of every Cancel row, with a fenced JSON block a reader parses (DRE-7970).",
       "why": "A scorecard is a count of decisions people already made, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `📊 groom-scorecard: <start>..<end>`, which no decision reader matches. One call site, once per week."
+    },
+    {
+      "file": "scripts/parts_weekly.py",
+      "anchor": "linear_ops.cmd_comment(card, render_comment(doc, missing))",
+      "kind": "not-an-act",
+      "means": "The CEO's weekly parts list, on the standing parts card in one comment: the parts approved in the week with the critic's reasoning and how to reject each, the parts that became permanent or were rejected, the rejection messages that did not count, and each repo's copies, with a fenced JSON block the console's Sunday briefing parses (DRE-9055).",
+      "why": "A list is a report of what the weekly sweep already counted and recorded, not something the pipeline did on its own. Nothing was refused, recovered or held and no card moved, so a trailer would announce a recovery that has not happened and name a next actor nobody chose. Its readers find it by its own first line, `🪴 parts-weekly: <start>..<end>`, and the console parses its block, whose shape is a contract a trailer line would sit outside. One call site, once per week."
     },
     {
       "file": "scripts/linear_ops.py",
@@ -1815,6 +1909,15 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "cmd_comment(identifier, notice)",
+      "kind": "not-an-act",
+      "opener": "🧾 promotion-wait:",
+      "reasons": ["wip-cap", "held", "epic-not-active", "epic-gate", "epic-cap-queued"],
+      "means": "Why a Queued card whose blockers are all finished has not moved: the WIP budget is spent, a person put `needs-human` on it by hand, its epic is not active, the epic gate holds the epic, or the epic cap has queued the epic. Said once per card per reason, its first line `🧾 promotion-wait: <reason> — <card id> <plain sentence>` (DRE-8646).",
+      "why": "A REPORT about a gate that was already holding the card, not something the pipeline did on its own. It moves no lane, adds or removes no label, dispatches nobody and creates no obligation. Each of the five exits held the card before this comment existed and holds it the same way now. The three questions a trailer answers all read 'not applicable'. It is posted through `_surface_once`, the seam declared just above, and this row names that same one site: the seam row says the site decides only whether to post, and this row declares the report that rides it, its opener and its five reasons, which `scripts/promotion_wait.py` holds as `OPENER` and `REASONS`. The once-only key is the first line's own head, `🧾 promotion-wait: <reason> —`, read back off the card's thread, and no act's tag is inside it."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-promoted {QUEUE_LANE} → {destination}",
       "kind": "undeclared-act",
       "means": "A Queued card whose blockers are all Done is promoted on its own, to the lane its routing verdict names: In Progress for FLEET, where the move is the dispatch (DRE-7120), Hand-work for WORKBENCH and OPERATOR (DRE-5322).",
@@ -1824,7 +1927,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "stall_park_note(ident, reason)",
       "kind": "undeclared-act",
-      "means": "The Planning stall exit parks a card nothing has happened to — or one the planner line never served, or one the old rule froze — in Triage, the note landing first and saying what was seen and the way back (DRE-5286).",
+      "means": "The Planning stall exit parks a card nothing has happened to — or one the old rule froze — in Triage, the note landing first and saying what was seen and the way back (DRE-5286).",
       "why": "Act-shaped, and the registry has no row for it. The note was `planning_escalation`'s question until DRE-5286 moved this exit to Triage, and that module's notes were already declared here rather than in the registry; giving the park a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber and a cadence — and the console is the registry's consumer, so it is its own card. It carries its own idempotency key, `dedupe_dispatch.STALL_PARK_TAG`, which the plan-gate reads on the card's newest comment to refuse the plan run the relay fires on Triage entry; a trailer appended after the tag would leave that reading intact, but converting it moves a key two modules read."
     },
     {
@@ -1952,6 +2055,13 @@
       "kind": "not-an-act",
       "means": "The same question on the pull request, posted once per head as a fix-loop blocker (`review_cap_question.pr_blocker`): its first line opens the 🛑 blocker prefix, so a person's Operator decision after it is read by the sweep's answered-blocker restart and by agent-fix.yml's comment-started run (DRE-6181). On a proof-record pull request the blocker is the proof-record variant and the card is held `In Review`, not parked — not live until DRE-6841.",
       "why": "A question is not an act, for the reason the card-side question above gives: the hold is said by the stamp, and this comment only makes the decision that answers it reachable — without a blocker on the thread `fix_context.operator_decision` reads nothing. Its last line, `review-nudge-cap @<head>`, on a worker-bot comment, is the once-per-head key the sweep reads off the pull request before posting it again."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "sent back to the merge gate — {why}.",
+      "kind": "undeclared-act",
+      "means": "An approved, verified, green, CLEAN pull request the gate has not merged is sent back to the merge gate once per head (DRE-9123): as soon as its checks finish green on a head the gate refreshed, otherwise once its last check finished REGATE_MINUTES ago. Its first line, `🔁 regate @<head>:`, is the once-per-head key `_regate_reason` reads.",
+      "why": "Act-shaped — the sweep dispatched the gate by itself — and the registry has no row for it, as for the review lane's gate nudge just above. A new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own, so the receipt ships as an undeclared act. Named here so the debt is countable rather than invisible."
     },
     {
       "file": "scripts/reconcile.py",
@@ -2115,6 +2225,30 @@
     },
     {
       "file": ".github/workflows/agent-fix.yml",
+      "anchor": "which is the CEO's to answer. It is asked on the card, in Green Light.",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "A fix run stopped on the critic's design question, which the CEO answers, and the card is parked in Green Light with the question on it (DRE-8735).",
+      "why": "A report of where the round went, not something the pipeline did on the pull request. The act is on the card — the question, and the move to Green Light the lane contract declares — and the CEO's answer comes back through the card, never through this thread. It creates no obligation on the pull request, hands the work to nobody the card does not already name, and nothing reads it back."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "and the CEO has answered it on the card, so his answer goes back to the reviewer",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "A fix run stopped on the critic's design question the CEO has already answered, so his answer goes back to the critic as one re-review (DRE-8735).",
+      "why": "A report of where the round went, not the act. The hand-back is design_answer.py handback's, which dispatches the re-review and posts its own design-question-answered record on the card (DRE-8722); this line only says so on the pull request, and nothing reads it back."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
+      "anchor": "--body-file=\"$DQ_FILE\"",
+      "step": "Report",
+      "kind": "not-an-act",
+      "means": "The critic's design question for the CEO, posted on the card: the block's first line, then the three lines console_escalation.render writes (DRE-8735).",
+      "why": "A question, not an act — the build escalation's reason: the pipeline did nothing precisely because the choice is the CEO's. Its first line is the record design_answer.py reads (QUESTION_MARK), and a trailer on it would give that reader a second grammar to disagree with."
+    },
+    {
+      "file": ".github/workflows/agent-fix.yml",
       "anchor": "🙋 Two fix runs finished this fix and GitHub refused both pushes",
       "step": "Report",
       "kind": "undeclared-act",
@@ -2261,7 +2395,7 @@
       "anchor": "medic-ask-comment.md",
       "step": "Ask a person about the diagnosis",
       "kind": "not-an-act",
-      "means": "The medic's question to a person about a diagnosis only a person can settle (DRE-7794): its 🙋 first line and the three lines console_escalation renders (through medic_next_step.py question), posted before the card moves to Green Light.",
+      "means": "The medic's question to a person about a diagnosis only a person can settle (DRE-7794): its 🙋 first line and the three lines console_escalation renders (through medic_next_step.py question), posted before the card moves to Green Light, its escalation-choices block last. A question that fails planning_escalation.screen is the operator's instead (DRE-8592): the same file holds one planning-stall-park note carrying the same three lines, posted before the card moves to Triage.",
       "why": "A QUESTION, not an act — it asks rather than announces, the same reason as the proof run's question and the proof cause park. The act for this run is the medic-next-step receipt the receipt step posts straight after it, which carries the trailer and names step=ask-person; a second trailer on the question would give the weekly report two keys for one move. green_light_rows.py finds the question by its 🙋 first line."
     },
     {
@@ -2290,7 +2424,7 @@
     },
     {
       "file": ".github/workflows/groomer.yml",
-      "anchor": "\"$CARD\" \"$(cat receipt.txt)\"",
+      "anchor": "\"$CARD\" --body-file=receipt.txt",
       "step": "Judgement receipt — the model that answered",
       "kind": "not-an-act",
       "means": "Which model answered the groomer's one ranked read, and what the call cost — the same 🧠 model-attempt receipt plan.yml posts for the planning classifier.",
@@ -2448,7 +2582,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Proof card — the epic's last child",
       "kind": "not-an-act",
       "means": "The proof-card check sends an epic back: its last child is missing or wrong.",
@@ -2456,7 +2590,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Re-check the revised plan",
       "kind": "not-an-act",
       "means": "The same proof-and-demo send-back, re-run against a revised plan (DRE-2746).",
@@ -2464,7 +2598,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Roll-up route — check the split",
       "kind": "not-an-act",
       "means": "The split check sends a roll-up back: its children are not yet a split into child epics, and the card still owes one (DRE-4718).",
@@ -2472,7 +2606,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Routing verdicts — the epic's children",
       "kind": "not-an-act",
       "means": "The epic is told which of its children no writer will stamp, so the cards that will freeze in Queued are named on the card a person is about to read (DRE-4593).",
@@ -2480,7 +2614,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Activate the approved epic",
       "kind": "not-an-act",
       "means": "The same note, from the activation backstop — the one site that sees a card an old-rule epic's send-back re-plan added, stamped only on a plan the second critic passed (DRE-4593, DRE-5281).",
@@ -2488,7 +2622,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-note.md\"",
       "step": "First critic — round 1 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 1 note — the judgement the CEO reads.",
@@ -2496,7 +2630,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-record.txt\"",
       "step": "First critic — round 1 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 1 record, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2504,7 +2638,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-note.md\"",
       "step": "First critic — round 2 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 2 note — the judgement the CEO reads.",
@@ -2512,7 +2646,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-record.txt\"",
       "step": "First critic — round 2 decision",
       "kind": "not-an-act",
       "means": "The plan critic's round 2 record, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2544,7 +2678,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-note.md\"",
       "step": "Second critic — decision",
       "kind": "not-an-act",
       "means": "The second critic's round note, before Green Light — the judgement the CEO reads.",
@@ -2552,7 +2686,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-record.txt\"",
       "step": "Second critic — decision",
       "kind": "not-an-act",
       "means": "The second critic's round record, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2560,7 +2694,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$RECEIPT\")\"",
+      "anchor": "--body-file=\"$RECEIPT\"",
       "step": "Second critic — turns receipt",
       "kind": "not-an-act",
       "means": "What one review by the second critic SPENT against what it was given — turns, ceiling, child count and model — posted alone because it is only a record while nothing else shares its comment (DRE-3498).",
@@ -2568,7 +2702,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/one-off-note.md\"",
       "step": "One-off critic — decision",
       "kind": "not-an-act",
       "means": "The pre-approval critic's note on a one-off — the judgement the person who filed the card reads.",
@@ -2576,7 +2710,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/one-off-record.txt\"",
       "step": "One-off critic — decision",
       "kind": "not-an-act",
       "means": "The pre-approval critic's round record on a one-off, posted alone because it is only a credential while nothing else shares its comment.",
@@ -2584,7 +2718,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/one-off-ran-out-record.txt\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/one-off-ran-out-record.txt\"",
       "step": "One-off critic — the read that ran out of turns",
       "kind": "not-an-act",
       "means": "The tombstone for a one-off read cut off at its turn ceiling (DRE-4381), posted alone because it is only a credential while nothing else shares its comment. It is what gives the next read of this card a higher ceiling, once.",
@@ -2624,7 +2758,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "anchor": "--body-file=\"$PARK_NOTE\"",
       "step": "One-off critic — park in Triage",
       "kind": "undeclared-act",
       "means": "The planner's revision of a one-off card did not finish, so the card parks in Triage for the operator with the critic's findings named (DRE-5376).",
@@ -2672,7 +2806,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Mechanical findings — posted before the critic reads them",
       "kind": "not-an-act",
       "means": "The structural checks the first critic is handed — the declared footprint of every card, and every finding read off it.",
@@ -2680,7 +2814,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Mechanical findings — the revised plan",
       "kind": "not-an-act",
       "means": "The same structural checks, re-run against the revised plan the second round reads.",
@@ -2696,7 +2830,7 @@
     },
     {
       "file": ".github/workflows/verify.yml",
-      "anchor": "comment \"$CARD\" \"$(cat /tmp/verify-comment.md)\"",
+      "anchor": "comment \"$CARD\" --body-file=/tmp/verify-comment.md",
       "step": "Post verdict or neutral status",
       "kind": "not-an-act",
       "means": "The card-side half of the verifier's verdict.",
@@ -2718,7 +2852,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Mechanical findings — the revised plan (review)",
       "kind": "not-an-act",
       "means": "The same structural checks, re-run against the plan the second critic's re-plan just revised (DRE-3088; named for the review route since DRE-5284), so the next round's critic and the CEO read checks against the plan as it now stands.",
@@ -2726,7 +2860,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"${{ runner.temp }}/plan-critic-death-note.md\")\"",
+      "anchor": "--body-file=\"${{ runner.temp }}/plan-critic-death-note.md\"",
       "step": "Review — the review died",
       "kind": "undeclared-act",
       "means": "The second critic's review died before it decided, on the review route (DRE-5280) — a turn-ceiling death or a crash — so the epic stays in Planning; the review is re-run by the pipeline itself, once, at a higher ceiling, and only a second death parks it in Triage.",
@@ -2734,7 +2868,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$RECORD\")\"",
+      "anchor": "--body-file=\"$RECORD\"",
       "step": "Review — the review died",
       "kind": "not-an-act",
       "means": "The tombstone for a review-route review that died (DRE-5280), posted alone because it is only a credential while nothing else shares its comment.",
@@ -2758,7 +2892,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$PARK_NOTE\")\"",
+      "anchor": "--body-file=\"$PARK_NOTE\"",
       "step": "Review — the review died",
       "kind": "undeclared-act",
       "means": "The review-route review died a SECOND time, so the epic parks in Triage with needs-human and a note naming both dead runs, for an operator to read why it cannot finish at either ceiling (DRE-5280).",
@@ -2766,7 +2900,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Epic → Green Light — both critics passed",
       "kind": "not-an-act",
       "means": "The routing-verdict note from the Green Light backstop — the one site on the review route that sees a card the second critic's send-back added (DRE-4593, DRE-5280).",
@@ -2782,7 +2916,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$NOTE\")\"",
+      "anchor": "--body-file=\"$NOTE\"",
       "step": "Review — the second critic passed a plan the first critic held",
       "kind": "undeclared-act",
       "means": "The second critic passed a plan the first critic has not passed (its last record is a send-back, or there is none), so it has not been through both critics: it parks in Triage with needs-human for an operator instead of reaching Green Light (DRE-5280). Since DRE-5639 the note is `plan_critic.py held-park`, which names the first critic's actual record.",
@@ -2838,7 +2972,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$HELD\")\"",
+      "anchor": "--body-file=\"$HELD\"",
       "step": "Re-check the revised plan — review mode",
       "kind": "not-an-act",
       "means": "The routing-verdict note from the review route's re-check: the children of a revision the second critic asked for that no writer will stamp (DRE-4593, DRE-5299).",
@@ -2846,7 +2980,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Re-check the revised plan — review mode",
       "kind": "not-an-act",
       "means": "The proof-and-demo send-back, re-run against a plan revised on the review route after the second critic sent it back (DRE-2746, DRE-5299).",
@@ -2854,7 +2988,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Epic → Green Light — both critics passed",
       "kind": "not-an-act",
       "means": "The proof-and-demo send-back from the Green Light backstop: the check that writes a re-filed proof card's verdict refused the epic's cards, so the epic does not reach Green Light (DRE-6604).",
@@ -2862,7 +2996,7 @@
     },
     {
       "file": ".github/workflows/plan.yml",
-      "anchor": "\"$(cat \"$BOUNCE_FILE\")\"",
+      "anchor": "--body-file=\"$BOUNCE_FILE\"",
       "step": "Activate the approved epic",
       "kind": "not-an-act",
       "means": "The proof-and-demo send-back from the activation backstop: the check refused the epic's cards, so the epic is not activated and nothing is promoted (DRE-6604).",
@@ -3011,11 +3145,11 @@
       "why": "Act-shaped — a refusal: the pipeline declined to close the card and says why, and the work stays exactly where it was — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. So the gate ships first as an undeclared act and the row follows with its console half, exactly as DRE-4492's watchdog did. Named here so the debt is countable rather than invisible. Its opener `🪜 Merged into ` is a CONTRACT with the sibling card that closes these cards when the base finally lands — that card finds the receipt by it — so the opener is fixed by something other than this file, and a trailer sits after the body without touching it."
     },
     {
-      "file": "scripts/planner_queue.py",
-      "anchor": "linear_ops.cmd_comment(identifier, body)",
+      "file": "scripts/planner_allowance.py",
+      "anchor": "linear_ops.cmd_comment(card, body)",
       "kind": "not-an-act",
-      "means": "The planner slot ledger (DRE-5176): a planner run's claimed, waiting, dispatched or released receipt for the fleet-wide planner cap — every Linear write of epic DRE-5167 goes through this one site.",
-      "why": "It is already machine-readable, in its own single-definition grammar — `🎟️ planner-slot:`, owned by scripts/planner_queue.py and read back by that module alone — the same reason the model-attempt heartbeat gives. Two grammars on one line would give its readers two keys to disagree over. A new act ships console-first in agent-bureau, and this epic does not reach into that repo."
+      "means": "A planner run's planner-hold receipt (DRE-8616): `held` while the planners' Linear allowance is below the threshold and the run waits to read it again, `started` when it starts after that wait — the record the sweep and the console read a held planner by.",
+      "why": "It is already machine-readable, in its own single-definition grammar — `🪫 planner-hold:`, owned by scripts/planner_allowance.py and read back through its one reader, `planner_allowance.held` — the same reason the model-attempt heartbeat gives. It hands the work to nobody: the run that posts it is the run that starts the planner. Two grammars on one line would give its readers two keys to disagree over, and a new act ships console-first in agent-bureau, which this card does not reach into."
     },
     {
       "file": "scripts/reconcile.py",
@@ -3114,6 +3248,13 @@
       "kind": "not-an-act",
       "means": "A notice the console's notice door could not take, added to the writer's own card already open under the same title — the comment the writer posted there before the console carried notices, with one line saying the door was not reached and why (DRE-7451).",
       "why": "The notice itself, not a receipt of something the pipeline did: the writer's diagnosis, escalation or run list, filed where it was filed before. Nothing is refused, recovered or held by posting it, so a trailer would name a state and a next actor it does not have. It lands only while the door is down or not yet live; the alert it stands in for is the console's, and the client's one `pipeline-notice:` line is what a reader of the run keys on."
+    },
+    {
+      "file": "scripts/design_answer.py",
+      "anchor": "linear_ops.cmd_comment(card, body)",
+      "kind": "undeclared-act",
+      "means": "The CEO's verified answer to the critic's design question was handed back as one re-review: `🎨 design-question-answered: `<Name>` at `<path>` — re-review of PR #<n> asked at <sha8>`, posted after the review dispatch and before the card's move from In Progress to In Review (DRE-8722).",
+      "why": "Act-shaped — the pipeline started a review by itself and the critic is who has the work next — and the registry has no row for it. Giving it a row is a REGISTRY change (a tag, a kind, a state, a next actor, a subscriber), and since DRE-3081/DRE-3090 a new act must reach the console's receipts.py:ACTS BEFORE the pipeline declares it (DRE-3091), which is a change in another repository this card does not own. Meanwhile it carries its own single-definition grammar — `design_answer.HANDBACK_MARK`, read back by its one reader, `design_answer.state_of` — and that line is the hand-back's idempotency key: one hand-back per answer."
     }
   ]
 }

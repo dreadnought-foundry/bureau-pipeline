@@ -212,8 +212,20 @@ jobs:
     # boundedness that killed the four build and fix runs on 2026-09-24.
     # `BUREAU_CI_RUNS_ON` is the variable the repo's own `ci.yml` already reads,
     # so the console's pool fail-back covers this lane and a repo that sets
-    # neither variable renders what it rendered before.
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # neither variable renders what it rendered before. It asks RunsOn for a
+    # machine AWS cannot take back (DRE-8890): this is among the longest jobs
+    # in the fleet, so a Spot reclaim costs the most here, and the variable
+    # stays on Spot for the repo's CI — a RunsOn label gains `spot=false` as
+    # agent-bureau's `ci.yml` adds it on `push` (DRE-6879), one that already
+    # says `spot=` is used as it stands, and any other value renders as
+    # before. `tests/test_build_runs_on_lane.py` pins it.
+    runs-on: >-
+      ${{ fromJSON(startsWith(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0], 'runs-on')
+      && !contains(join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), ','), 'spot=')
+      && (fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[1]
+      && format('["{0}","spot=false"]', join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), '","'))
+      || format('["{0}/spot=false"]', fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0]))
+      || vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 65, raised from 25 with the file-list strategy (DRE-2466). A large
     # review deliberately takes more, smaller steps, and the budget has to
     # hold the WHOLE cycle this job can run — not just the first attempt:
@@ -374,7 +386,7 @@ jobs:
       # heavy reads after the decision run on the selected pool app below.
       - name: Mint qa-bot token (separate quota from relay dispatch)
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
@@ -665,7 +677,7 @@ jobs:
         id: probe_2
         if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -673,7 +685,7 @@ jobs:
         id: probe_3
         if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -681,7 +693,7 @@ jobs:
         id: probe_4
         if: steps.decide.outputs.review == 'true' && env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -720,7 +732,7 @@ jobs:
       - name: Mint read token (selected pool app)
         id: reader
         if: steps.decide.outputs.review == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -915,14 +927,15 @@ jobs:
       # give the whole answer, else ONE Linear read of the description and the
       # same comment window the old thread read took.
       #
-      # THE DOOR NEVER SERVES A pull_request RUN, and that is the door's rule,
-      # not ours to loosen: it refuses every token minted for a pull_request or
-      # pull_request_target event, so a fork's pull request can never mint
-      # one (agent-bureau github_oidc.py check 7, review S7). The client does
-      # not even ask from one. Nearly every review is a pull_request run, so for
-      # them this is one Linear read where there were two; only a
-      # workflow_dispatch re-review (the sweep's, the refutation's, an
-      # operator's) can be served by the door.
+      # A pull_request RUN GETS ONE READ FROM THE DOOR: its own card, the one
+      # its `agent/` or `repair/DRE-<n>-…` head branch names (agent-bureau
+      # DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review is
+      # such a run, so this read is served by the door like a workflow_dispatch
+      # re-review's (the sweep's, the refutation's, an operator's). Every
+      # other pull_request run, and every pull_request_target run, still reads
+      # Linear once where there were two reads: the door refuses those tokens,
+      # so a fork's pull request can never mint one (agent-bureau
+      # github_oidc.py check 7, review S7), and the client does not ask.
       #
       # A read that fails writes no file, and each reader then degrades exactly
       # as its own failed read did: no Design line (visual QA skips) and
@@ -1034,14 +1047,78 @@ jobs:
       # OUTPUT belongs in the tree: the move step's `mkdir -p` guarantees the
       # directory, and the agent is told to read the file there.
       # tests/test_critic_context_root.py executes this block as written.
+      #
+      # THE PARTS REVIEW AND THE CEO'S ANSWER (DRE-8721). After the standards
+      # and the brief, the step appends two blocks the brief's "UI code in a
+      # repo whose design system exists" section reads:
+      #   • the parts review (scripts/parts_review.py, DRE-8719) of the pull
+      #     request's diff against the catalog in `.`. `.` is whatever the
+      #     checkout above holds — the pull request merged into its base on a
+      #     pull_request run, the default branch on a workflow_dispatch
+      #     re-review, the replayed head on a shadow replay — and the review
+      #     is built for all three: the pull request's components come from
+      #     the diff, only the catalog from `.`. A diff that cannot be read
+      #     (`gh pr diff` refuses a very large pull request) leaves the file
+      #     empty, and the script itself writes `PARTS REVIEW: UNKNOWN`;
+      #   • the CEO's answer to the critic's design question
+      #     (scripts/design_answer.py context, DRE-8722). This step holds the
+      #     Linear key for that one read; the critic agent steps still hold
+      #     none (DRE-2696) and get his verified words as text. An empty CARD
+      #     reads nothing. A shadow replay judges the change, not the answers
+      #     it got, the way the card review context keeps earlier verdicts out.
+      # Both land before the durable copy, so both critic attempts read them.
+      # tests/test_parts_review_wiring.py executes the block against
+      # DRE-8719's fixture trees.
+      #
+      # THE READ DOOR (DRE-8899). The CEO's answer is read off the card's
+      # thread, and this run's own card is the one read the door serves a
+      # pull_request run (agent-bureau DRE-8807). The four door variables are
+      # reconcile.yml's, and BUREAU_READ_CARD_MAX_AGE is the review card's
+      # bound (`bureau_read.REVIEW_CARD_MAX_AGE`, 120 seconds): the thread
+      # read asks the door first (`linear_ops.card_via_door`) and Linear when
+      # it cannot answer. The viewer the thread's authorship is judged against
+      # is still Linear's, this process's own key. The same five variables sit
+      # on Post verdict and Card → In Review below, for their card reads.
       - name: Assemble critic context
         id: ctx
         if: steps.decide.outputs.review == 'true'
+        env:
+          # Reads — the pool-selected token (DRE-4282).
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          CARD: ${{ steps.pr.outputs.card }}
+          DIFF_FILE: ${{ steps.pr.outputs.diff_file }}
+          SHADOW: ${{ inputs.shadow }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           python3 "$PIPELINE_DIR"/scripts/assemble_context.py assemble critic \
             --root "$PIPELINE_DIR" \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of critic context"
+          PARTS_DIFF="${RUNNER_TEMP:-/tmp}/parts-review.diff"
+          if [ "$SHADOW" = "true" ]; then
+            # `gh pr diff` shows today's head; the replay's diff is on disk.
+            cp "$DIFF_FILE" "$PARTS_DIFF" 2>/dev/null || : > "$PARTS_DIFF"
+          else
+            gh pr diff "$PR" > "$PARTS_DIFF" 2>/dev/null || : > "$PARTS_DIFF"
+          fi
+          PARTS_OUT="${RUNNER_TEMP:-/tmp}/parts-review.out"
+          python3 "$PIPELINE_DIR"/scripts/parts_review.py review --diff "$PARTS_DIFF" --repo-root . > "$PARTS_OUT"
+          ANSWER_OUT="${RUNNER_TEMP:-/tmp}/design-answer.out"
+          if [ "$SHADOW" = "true" ]; then
+            echo "DESIGN ANSWER: none — a shadow replay judges the change, not the answers it got" > "$ANSWER_OUT"
+          else
+            python3 "$PIPELINE_DIR"/scripts/design_answer.py context "$CARD" > "$ANSWER_OUT"
+          fi
+          { echo; cat "$PARTS_OUT"; echo; cat "$ANSWER_OUT"; } >> .bureau-pipeline/agent-context.md
+          grep -E '^PARTS REVIEW:' "$PARTS_OUT" || true
+          grep -E '^DESIGN ANSWER:' "$ANSWER_OUT" || true
           # DRE-3226: keep the durable copy outside the working tree. The
           # agent is pointed at the in-tree path — one path across every
           # workflow — and attempt 1 is the one thing that can remove it, so
@@ -1383,7 +1460,7 @@ jobs:
         id: console
         if: steps.actsreg.outputs.touched == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1520,7 +1597,7 @@ jobs:
         id: model_home
         if: steps.decide.outputs.review == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1796,8 +1873,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2200,8 +2278,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2800,6 +2879,14 @@ jobs:
           # reads is the owner's.
           NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
           OWNER: ${{ github.repository_owner }}
+          # The read door (DRE-8899), as Assemble critic context has it: the
+          # Linear copy's pre-read of the card asks the door first. The
+          # comment itself is Linear's write either way.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: bash "$PIPELINE_DIR/scripts/post_verdict.sh"
 
       # ── The card's lane, written from the PR side (DRE-4179) ──────────────
@@ -2851,6 +2938,16 @@ jobs:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # The read door (DRE-8899), as Assemble critic context has it. Every
+          # read the move makes stays on Linear: the In Review state's id
+          # (`/workflow-states` is refused on a pull_request run, and with the
+          # mode set it says `reason=pull-request`), and `get_issue` and the
+          # DRE-2316 re-read, which are the write path's own.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           # ANCHORED, and that is the point. The Resolve PR step's card grep is
           # `DRE-[0-9]+` anywhere in the ref — right for LOGGING which card a
@@ -2949,7 +3046,7 @@ jobs:
         # A shadow replay (DRE-7193) publishes no check, so it mints no
         # token that could.
         if: always() && !cancelled() && (steps.decide.outputs.review == 'true' || steps.decide.outputs.carried_sha != '') && !inputs.shadow
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}

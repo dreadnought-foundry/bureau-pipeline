@@ -135,12 +135,6 @@ on:
       BUREAU_QA_APP_PRIVATE_KEY:
         required: false
 
-env:
-  # How many planners may run at once, as the console published it to this
-  # repo (epic DRE-5783). Empty when never published: planner_queue.cap()
-  # then reads config/planner-queue.json exactly as before.
-  PLANNER_MAX_RUNNING: ${{ vars.PLANNER_MAX_RUNNING }}
-
 jobs:
   card-done:
     if: github.event.pull_request.merged == true
@@ -186,7 +180,7 @@ jobs:
       - name: Mint qa-bot token (for the stacked-landing read)
         id: qa
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
@@ -218,16 +212,30 @@ jobs:
           # passes below read the merged card's dependents from it in `on` —
           # the same four variables, the same `off` default, as reconcile.yml's
           # Sweep. The Done stays on GitHub's merge event: what moves the card is
-          # the merge, and the write is Linear's either way. The only door read
-          # `card-done` can make is the lane's id (`linear_ops`' workflow-state
-          # lookup, Stage 2 #9), which falls back to Linear on any miss. NO
+          # the merge, and the write is Linear's either way. NO
           # `permissions:` block anywhere in this file: the stub
           # grants `id-token: write`, and a reusable can only take permissions
           # away.
+          #
+          # This is a `pull_request` run, and the door serves it ONE read:
+          # `/cards` for the card its head branch names (agent-bureau
+          # DRE-8807). `card-done`'s own reads of the merged card — a PROOF
+          # card's whole thread, the pre-read before each comment — ask the
+          # door for it first (`linear_ops.card_via_door`, DRE-8899), at most
+          # BUREAU_READ_CARD_MAX_AGE old: 60 seconds, because the card has just
+          # merged. Everything else stays on Linear, each read named by its
+          # `read-fallback:` line or its `linear-reads:` caller: the
+          # workflow-state list for the Done (`/workflow-states` is refused on
+          # this event), the write path's own reads, the gate's and the
+          # passes' board, dependents and other cards, `stacked_landing.py`'s
+          # other cards, and `proof_gap.epic_of`'s parent read for a fix card
+          # a PROOF record with gaps files. A dependabot head names no card,
+          # so its run reads Linear as it always did.
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 60
           # The stacked-landing closer's GitHub read (DRE-4650), and the PROOF
           # close's read of the merged record's verdict (DRE-5919). Empty when
           # the mint above could not run; both fail closed on it.
@@ -390,7 +398,7 @@ jobs:
     steps:
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -413,6 +421,17 @@ jobs:
           # Named in the notice below, so the person recovering by hand starts
           # at the run that failed instead of hunting for it.
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # The read door, as `Card → Done` above has it (DRE-8899). The sweep
+          # reads each conflicted pull request's card for its park state, and
+          # the door serves this `pull_request` run no card but the merged one,
+          # so those reads stay on Linear. With the mode set they say so —
+          # `read-fallback: … reason=pull-request` — where they used to read
+          # Linear in silence, and the proof can count them.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 60
         run: |
           # >>> DRE-3042 conflict sweep — executed verbatim by tests/test_linear_sync_workflow.py
           # REPO_SLUG, derived exactly as reconcile.yml's Sweep step derives it,
@@ -477,8 +496,8 @@ jobs:
               # wherever the notice IS the escalation — a lost trailer is a
               # missing machine-readable line, a lost comment is an invisible
               # conflicted pull request, which is the incident itself.
-              python3 .bureau-pipeline/scripts/pipeline_act.py receipt conflict-sweep-unavailable \
-                --body "$BODY" --out "$NOTE" \
+              printf '%s' "$BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt conflict-sweep-unavailable \
+                --body-file=- --out "$NOTE" \
                 || printf '%s' "$BODY" > "$NOTE"
               gh pr comment "$PR" --repo "$REPO" --body-file "$NOTE"
             done < "$CONFLICTED"

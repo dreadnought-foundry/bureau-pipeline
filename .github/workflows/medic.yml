@@ -120,6 +120,20 @@
 # the gate step), and every `pull_request`, `schedule` or `workflow_dispatch`
 # run keep the retry.
 #
+# NINTH EXCEPTION (DRE-8817): THE RETRY WOULD GO BACK ONTO THE SERVICE THAT
+# FAILED IT. On 2026-11-01 agent-bureau #4499's `Console backend shard 3` hung
+# to its 40-minute cap on RunsOn, and its re-run hung for another 40 minutes on
+# studio-1: GitHub evaluates `runs-on` again at re-run time, and the console's
+# order had put the CI column back on mac-studio. A failed or canceled job that
+# hung at its time limit, was killed out of memory or lost its runner is not
+# retried while the column its run's workflow file reads still names the
+# service it ran on (`rule == failed-service-still-named`, medic_retry.py and
+# scripts/runner_service.py). It is asked after every refusal above; the gate
+# step reads the workflow file, the Jobs API and each failed job's
+# annotations, and a read that fails keeps the retry with a ::warning::. The
+# medic asks once, so its hold is final: `retry_declined` says on the card
+# that an operator re-runs it, and the resume below is skipped too.
+#
 # ONE RESUME AFTER A DIAGNOSIS (DRE-7526, DRE-7793). The diagnosis agent also
 # writes the failure's class, one of the five in `medic_next_step.py`, and
 # the `diagnose` job decides the one step the class owes. `requeue-once` —
@@ -189,6 +203,26 @@ jobs:
     # 2026-10-02 that was the fleet's hour, the one that ran out.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door for every card read in the job (DRE-8900): reconcile.yml's
+      # four variables, and the max-age that opts `linear_ops`' card and thread
+      # reads in (DRE-8898) — 300 seconds, the bound the epic's survey set for
+      # the medic. An age bound is the wrong guard here on its own: the retry
+      # gate must see the park, the turn-cap receipt or the hold receipt the
+      # failed run posted seconds before it ended, or it retries a card the
+      # pipeline has just parked. So the floor is the failed run's end,
+      # `workflow_run.updated_at`: every card and thread read in the job —
+      # `medic_retry.card_facts`, `dump-comments`, `count-comments`,
+      # `spoken_thread`, the comment's pre-read — takes the door's answer only
+      # when its `as_of` is at or after that end, and otherwise reads Linear
+      # with `reason=older-than-needed`. The calling stub grants
+      # `id-token: write`; with `BUREAU_READ` off every read goes to Linear as
+      # before. `tests/test_agent_runs_read_door.py`.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     outputs:
       infra_crash: ${{ steps.c.outputs.infra_crash }}
       # DRE-2488/DRE-2923: the failure's class — environment_crash |
@@ -293,6 +327,15 @@ jobs:
           EVENT: ${{ github.event.workflow_run.event }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          # DRE-8817: what the runner-service rule reads — the failed run's
+          # own workflow file, read at its head on github.token (the stub
+          # grants `contents: read`), and the three runner columns' effective
+          # values, the very expressions GitHub evaluates for the retry (a
+          # reusable's `vars` are its caller's). env, not inline (DRE-1996).
+          WORKFLOW_PATH: ${{ github.event.workflow_run.path }}
+          CI_RUNS_ON: ${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
+          SHORT_RUNS_ON: ${{ vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
+          LONG_RUNS_ON: ${{ vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
         run: |
           # DRE-6851: the failed step's name off the Jobs API — the same read
           # the limit step below makes — so a change set refused by its
@@ -318,27 +361,50 @@ jobs:
           # a new single point of failure in front of four working ones. With
           # no answer the retry job's `!= 'false'` reads "never asked" and the
           # medic behaves exactly as it did before this card, out loud.
-          # DRE-8239: two reads, made only when this log carries an
-          # out-of-memory kill. The Jobs API's answer for this attempt names
-          # the machine — the log's own `Runner name:` line is missing on some
-          # runners — and on attempt 2 attempt 1's failed log says whether
-          # this is the run's first kill or its second. A read that fails
+          # DRE-8239: the Jobs API's answer for this attempt names the
+          # machine of an out-of-memory kill — the log's own `Runner name:`
+          # line is missing on some runners — and on attempt 2, for a kill,
+          # attempt 1's failed log says whether this is the run's first kill
+          # or its second. DRE-8817 reads the Jobs API for EVERY failed run:
+          # it names each failed job's runner service. A read that fails
           # leaves no file, never a failed step: the gate then names the
           # machine off the log and keeps the retry, and says so.
           JOBS_FILE="$RUNNER_TEMP/medic-jobs.json"
           PRIOR_LOG="$RUNNER_TEMP/medic-log-attempt1.txt"
-          rm -f "$JOBS_FILE" "$PRIOR_LOG"
+          WORKFLOW_FILE="$RUNNER_TEMP/medic-workflow.yml"
+          NOTES_FILE="$RUNNER_TEMP/medic-annotations.json"
+          rm -f "$JOBS_FILE" "$PRIOR_LOG" "$WORKFLOW_FILE" "$NOTES_FILE"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
+            > "$JOBS_FILE" 2>/dev/null || rm -f "$JOBS_FILE"
           KILL=$(python3 .bureau-pipeline/scripts/out_of_memory.py /tmp/medic-log.txt 2>/dev/null) || KILL=""
           case "$KILL" in
             *kills=*)
-              gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
-                > "$JOBS_FILE" 2>/dev/null || rm -f "$JOBS_FILE"
               if [ "$RUN_ATTEMPT" = "2" ]; then
                 gh run view "$RUN_ID" --attempt 1 --log-failed --repo "$GITHUB_REPOSITORY" \
                   > "$PRIOR_LOG" 2>/dev/null || rm -f "$PRIOR_LOG"
               fi
               ;;
           esac
+          # DRE-8817: never retry back onto the runner service the run just
+          # failed on. Two more reads: the run's workflow file at its head
+          # (which runner column its jobs read), and each failed or canceled
+          # job's annotations (a time limit, or a runner that lost contact),
+          # one `{"id": …, "annotations": …}` object per job. A read that
+          # fails leaves the file or the job out, never a failed step, and
+          # the gate then keeps the retry with a ::warning:: naming it.
+          gh api -H "Accept: application/vnd.github.raw" \
+            "repos/$GITHUB_REPOSITORY/contents/${WORKFLOW_PATH%%@*}?ref=$HEAD_SHA" \
+            > "$WORKFLOW_FILE" 2>/dev/null || rm -f "$WORKFLOW_FILE"
+          [ -s "$WORKFLOW_FILE" ] || rm -f "$WORKFLOW_FILE"
+          if [ -s "$JOBS_FILE" ]; then
+            : > "$NOTES_FILE"
+            for JOB_ID in $(python3 .bureau-pipeline/scripts/medic_retry.py failed-jobs --jobs "$JOBS_FILE" 2>/dev/null); do
+              if NOTES=$(gh api "repos/$GITHUB_REPOSITORY/check-runs/$JOB_ID/annotations?per_page=100" 2>/dev/null) \
+                  && [ -n "$NOTES" ]; then
+                printf '{"id": %s, "annotations": %s}\n' "$JOB_ID" "$NOTES" >> "$NOTES_FILE"
+              fi
+            done
+          fi
           OUT=$(python3 .bureau-pipeline/scripts/medic_retry.py decide \
             --branch "$HEAD_BRANCH" --log /tmp/medic-log.txt \
             --run-started-at "$RUN_STARTED_AT" \
@@ -347,6 +413,9 @@ jobs:
             --event "$EVENT" --head-sha "$HEAD_SHA" \
             --default-branch "$DEFAULT_BRANCH" --tip-sha "$TIP_SHA" \
             --jobs "$JOBS_FILE" --prior-log "$PRIOR_LOG" \
+            --workflow-file "$WORKFLOW_FILE" --annotations "$NOTES_FILE" \
+            --ci-runs-on "$CI_RUNS_ON" --short-runs-on "$SHORT_RUNS_ON" \
+            --long-runs-on "$LONG_RUNS_ON" \
             --snapshot "$RUNNER_TEMP/medic-card.json") || OUT=""
           if [ -z "$OUT" ]; then
             echo "::warning::The medic's retry gate gave no answer, so this run is handled the way it was before DRE-2954. If the card is parked, the retry it is about to take is the one that card exists to prevent."
@@ -595,6 +664,11 @@ jobs:
   # recorded. The rule fires only when the card already carries an earlier
   # stall record, so it still says it once.
   #
+  # …and EXCEPT for a retry held off the runner service it just failed on
+  # (DRE-8817, `rule == failed-service-still-named`): a first kill's retry on
+  # attempt 2 is held too, and the medic never asks again, so the hold is said
+  # on attempt 2 as well — the gate asks it only on attempts 1 and 2.
+  #
   # …and NOT while the card waits out a limit (DRE-7805, `limit == 'true'`).
   # The refusal carries the act trailer, and `limit_recovery.is_receipt`
   # reads any comment that does as the pipeline superseding the
@@ -610,7 +684,8 @@ jobs:
       (github.event.workflow_run.conclusion == 'failure' || github.event.workflow_run.conclusion == 'timed_out') &&
       (github.event.workflow_run.run_attempt == 1 ||
        needs.classify.outputs.rule == 'stalled-no-stream-repeat' ||
-       needs.classify.outputs.rule == 'out-of-memory') &&
+       needs.classify.outputs.rule == 'out-of-memory' ||
+       needs.classify.outputs.rule == 'failed-service-still-named') &&
       needs.classify.outputs.retry == 'false' &&
       needs.classify.outputs.rule != 'refused-by-design' &&
       needs.classify.outputs.rule != 'superseded-on-default' &&
@@ -622,6 +697,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -680,6 +762,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -774,6 +863,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -999,6 +1095,13 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -1061,10 +1164,17 @@ jobs:
     # Whose Linear hour this job spends: see `classify`.
     env:
       LINEAR_IDENTITY: fleet
+      # The read door, held to the failed run's end: see `classify` (DRE-8900).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
+      BUREAU_READ_CARD_SEEN_AFTER: ${{ github.event.workflow_run.updated_at }}
     steps:
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1220,7 +1330,7 @@ jobs:
       - name: Mint the model-home read token
         id: model_home
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1383,7 +1493,38 @@ jobs:
                whoever decides the card's next step. `recommendation` is your
                answer to it, and `why` the reason. It is read only when the
                diagnosis needs a person, and a line that is not plain is
-               replaced with fixed wording before anyone sees it.
+               replaced with fixed wording before anyone sees it. That
+               question goes to the operator, not the CEO, unless step 8
+               finds it a real business choice.
+            8. Decide whether that question is a real business choice. Only
+               a real business choice goes to the CEO: two or three defensible
+               options whose difference is a business outcome — a price, a
+               policy, what to make public, what a customer sees, scope or
+               priority, or a risky or destructive change. Anything else is
+               housekeeping: a fact an agent can look up, a mechanical step
+               for a person (lift a hold, set or clear a label, re-run or
+               retry, move a card, merge, set a secret or variable, fix a repo
+               label), or a question with only one sensible answer. For
+               housekeeping, write the reason and no choices file. Your
+               reason is the question file from step 7. A platform fault is
+               the operator's to mend, so its question is housekeeping unless
+               mending it needs such a choice. Only for a real business
+               choice, also write the choices as JSON to
+               .bureau-pipeline/medic-question-choices.json, beside the
+               question file. One object, with exactly these keys and no
+               others: `question` — one sentence. `context` — one short
+               paragraph. `choices` — 2 or 3 of them, each carrying `id` (a
+               lowercase slug, unique), `label` (a few words), `effect` (one
+               line on what happens), an optional `preview` (a few lines of
+               plain text showing the result) and `outcome` (`proceed`,
+               `replan` or `close`: build it, plan it again, or cancel the
+               card). `recommended` — the `id` of the choice you recommend.
+               `why` — one sentence saying why. No card numbers in a label or
+               an effect, and no code, file paths or commands anywhere. A
+               question with no choices file, a choices file that breaks these
+               rules, a count of choices other than 2 or 3, or words saying it
+               is not a real question is parked in Triage for the operator, not
+               put to the CEO.
             Do NOT attempt to fix anything — diagnose and report only.
 
       # THE CLASS, THE STEP, AND ONE RESUME (DRE-7526, DRE-7793; weekly report
@@ -1704,7 +1845,7 @@ jobs:
                 --fallback-label "repo:${SLUG}" \
               || { echo "::warning title=Diagnosis not raised::The diagnosis could not be raised on the console or filed as '${TITLE}'. The report is in this run's log below. Failed run: ${RUN_URL}"; cat "$REPORT"; }
           else
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$REPORT")" --act=run-failure-diagnosed \
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" --body-file="$REPORT" --act=run-failure-diagnosed \
               || echo "::warning title=Diagnosis not posted::The diagnosis could not be posted on ${TARGET}. Failed run: ${RUN_URL}"
           fi
 
@@ -1748,37 +1889,43 @@ jobs:
           fi
           echo "moved=$MOVED" >> "$GITHUB_OUTPUT"
 
-      # ASK-PERSON (DRE-7794): a diagnosis only a person can settle — a
-      # `platform-fault`, an `unreadable` one (a diagnosis agent that died or
-      # wrote no report reads `unreadable`), or a step whose fallback applies —
-      # parks the card in Green Light with a stated question, never a bare
-      # comment. The question is the `🙋` receipt line, then the three lines
-      # `medic_next_step.py question` prints (DRE-7792), then the failed run.
-      # The step composes no line of its own: `question` reads the agent's
-      # `.bureau-pipeline/medic-question.json` through
-      # `planning_escalation.refusal`, line by line, and puts the fixed wording
-      # in place of a line it refuses, of a blank one, or of a file that is
-      # missing or unparseable — the agent read untrusted logs and card text,
-      # so its words are never posted unguarded. With no report the Finding
-      # says no diagnosis was written, and the question, which then carries
-      # the failed run, is the card's whole record of the failure.
+      # HOLD ON AN INHERITED RED MAIN (DRE-8849). On 2026-11-01 four foundry
+      # cards sat in Triage for four to eight hours with nothing wrong with any
+      # of them: each had an approved pull request that went red because
+      # foundry's own main was broken, the medic's question on it was
+      # housekeeping, and the `ask` step below parked it under a
+      # `planning-stall-park` note nothing lifts. A card parked because main
+      # was red is waiting on main, not on a person.
       #
-      # The question is posted before the move, and through no act: it asks
-      # rather than announces (`config/pipeline-acts.json`'s `unconverted`
-      # block). The move is `advance` from `medic_next_step.py from-lanes`,
-      # the command the Planning move above calls. A question that could not
-      # be rendered posts nothing, and one that could not be posted moves
-      # nothing — a Green Light row with no question is the failure, and a
-      # `🙋` line with no three lines under it is no question. `moved` is
-      # `true` only when `advance` printed `<card> → Green Light`; the
-      # `receipt` step below reads it and writes ` moved=no` otherwise. `green_light_rows.py check` reads this shell,
-      # where it runs, for the receipt line and the post before the write.
+      # So before the medic asks, it makes one read, on an `ask-person` card
+      # with an OPEN pull request (`card_pr.py find`): the one
+      # `agent-fix.yml#Label failures inherited from the merge base` makes, in
+      # the same order — the pull request's base branch, the merge base off
+      # `compare/<base>...<head sha>`, then the check runs of the head and of
+      # the merge base, paged. The head is the failed run's own head sha, the
+      # commit whose checks were read. An unreadable merge-base read stays
+      # EMPTY, never `[]`: "we could not look" is never a green base.
+      # `inherited_red_main.py medic-read` answers `hold` only when every
+      # failing check on the head failed on the merge base too — the fix
+      # loop's own rule, `inherited_failures.inherited` with its strict
+      # merge-base read (DRE-8838) — and `ask` for anything else, on which
+      # this step writes nothing and the `ask` step runs as it always has.
       #
-      # `always()`: a diagnosis agent that died is the card most in need of
-      # asking about, and a step with no status function is skipped once an
-      # earlier step failed. Never on a waiting card (step `waiting`).
-      - name: Ask a person about the diagnosis
-        id: ask
+      # On `hold`: the hold first, through the registry's writer, stamped at
+      # the head (`config/holds.json`, `inherited-red-main`, lifted by the
+      # sweep on `inherited-checks-green`); then the move to Triage from the
+      # `ask` step's own from-lanes; then `held=true`, `moved` and `lane`,
+      # which keep the `ask` step off this card and which the `receipt` step
+      # reads with `reason`, the sentence `medic-read` wrote. A hold that would
+      # not write leaves `held` unset, so the `ask` step asks as before. The
+      # sweep's `return_inherited_red_main_holds` lifts the hold and returns
+      # the card to In Review once main is green on those checks.
+      #
+      # `always()`, for the reason the `ask` step gives. Never on a waiting
+      # card (step `waiting`). Every read is fail-soft: this step never turns
+      # the medic red.
+      - name: Hold the card on an inherited red main
+        id: redmain
         if: >
           always() &&
           steps.target.outputs.kind == 'card' &&
@@ -1786,26 +1933,185 @@ jobs:
           steps.waiting.outputs.waiting != 'true'
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # The bot, for the pull-request and check-run reads (DRE-8004).
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          REPO: ${{ github.repository }}
+          TARGET: ${{ steps.target.outputs.target }}
+          # The commit whose checks failed: the failed run's own head.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          S=.bureau-pipeline/scripts
+          FOUND=$(python3 "$S/card_pr.py" find "$TARGET" --repo "$REPO") || FOUND=""
+          FIRST=${FOUND%%$'\n'*}
+          if [ "${FIRST%%$'\t'*}" != OPEN ]; then
+            echo "no open pull request read back for ${TARGET} — the medic asks a person as before"
+            exit 0
+          fi
+          PR_URL=${FIRST#*$'\t'}
+          PR=${PR_URL##*/}
+          BASE_REF=$(gh api "repos/$REPO/pulls/$PR" --jq .base.ref 2>/dev/null || true)
+          if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "null" ]; then
+            echo "could not read the base branch of pull request #${PR} — the medic asks a person as before"
+            exit 0
+          fi
+          MERGE_BASE=$(gh api "repos/$REPO/compare/$BASE_REF...$HEAD_SHA" \
+            --jq .merge_base_commit.sha 2>/dev/null || true)
+          if [ -z "$MERGE_BASE" ] || [ "$MERGE_BASE" = "null" ]; then
+            echo "could not resolve the merge base of ${HEAD_SHA:0:8} — the medic asks a person as before"
+            exit 0
+          fi
+          HEAD_CHECKS="${RUNNER_TEMP:-/tmp}/redmain-head-checks.json"
+          BASE_CHECKS="${RUNNER_TEMP:-/tmp}/redmain-base-checks.json"
+          REASON_FILE="${RUNNER_TEMP:-/tmp}/redmain-reason.txt"
+          gh api --paginate --slurp "repos/$REPO/commits/$HEAD_SHA/check-runs?per_page=100" \
+            > "$HEAD_CHECKS" 2>/dev/null || : > "$HEAD_CHECKS"
+          gh api --paginate --slurp "repos/$REPO/commits/$MERGE_BASE/check-runs?per_page=100" \
+            > "$BASE_CHECKS" 2>/dev/null || : > "$BASE_CHECKS"
+          DECISION=$(python3 "$S/inherited_red_main.py" medic-read \
+            --checks-file "$HEAD_CHECKS" --base-checks-file "$BASE_CHECKS" \
+            --base-sha "$MERGE_BASE" --repo "$REPO" --reason-out "$REASON_FILE") || DECISION=ask
+          DECISION=${DECISION%%$'\n'*}
+          if [ "$DECISION" != hold ]; then
+            echo "inherited-red-main: ${DECISION:-ask} — the medic asks a person as before"
+            exit 0
+          fi
+          FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
+          if [ -z "$FROM_LANES" ]; then
+            echo "::warning title=Card not held::The lanes the medic moves a card out of could not be read, so ${TARGET} was not held on the red main and a person is asked instead. Failed run: ${RUN_URL}"
+            exit 0
+          fi
+          if ! python3 .bureau-pipeline/scripts/hold.py apply "$TARGET" --reason inherited-red-main --at "$HEAD_SHA" --by medic.yml; then
+            echo "::warning title=Card not held::The inherited-red-main hold could not be written on ${TARGET}, so a person is asked instead. Failed run: ${RUN_URL}"
+            exit 0
+          fi
+          MOVED=false
+          if OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Triage" "$FROM_LANES"); then
+            printf '%s\n' "$OUT"
+            if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Triage"; then MOVED=true; fi
+          else
+            echo "::warning title=Card not moved to Triage::${TARGET} is held on the red main, but its move to Triage failed. Failed run: ${RUN_URL}"
+          fi
+          REASON=$(tr '\n' ' ' < "$REASON_FILE" 2>/dev/null || true)
+          {
+            echo "held=true"
+            echo "moved=$MOVED"
+            echo "lane=Triage"
+            echo "reason=${REASON% }"
+          } >> "$GITHUB_OUTPUT"
+
+      # ASK-PERSON (DRE-7794): a diagnosis only a person can settle — a
+      # `platform-fault`, an `unreadable` one (a diagnosis agent that died or
+      # wrote no report reads `unreadable`), or a step whose fallback applies —
+      # is asked once on the card with a stated question, never a bare
+      # comment, and the card moves to the lane of whoever settles it.
+      #
+      # THE SCREEN (DRE-8592). Every such question used to park in Green
+      # Light, the CEO's queue, a `platform-fault` included, though its own
+      # record says only the operator can mend it. `medic_next_step.py screen`
+      # now applies `planning_escalation.screen`, the planner's (DRE-7961,
+      # docs/escalation-choices.md), to the agent's question and to
+      # `.bureau-pipeline/medic-question-choices.json`, which the agent writes
+      # only for a real business choice. It passes only when that file is
+      # there, `choices_problem` accepts it, it offers two or three choices
+      # and nothing says it is not a decision; it prints the rule broken and
+      # exits non-zero otherwise, and a screen that crashed is the same
+      # answer, so a diagnosis agent that died or wrote no choices goes to
+      # the operator.
+      #
+      # Passed: the question for Green Light, as before — the `🙋` receipt
+      # line, then the three lines `medic_next_step.py question` prints
+      # (DRE-7792), then the failed run — with the choices block
+      # (`medic_next_step.py choices-block`, `planning_escalation.choices_block`)
+      # last; with a block riding, the Recommendation's answer is the
+      # recommended choice's label, as on every Green Light row with one. Failed: housekeeping, one `medic_next_step.py housekeeping-note`
+      # for the operator, opening with `dedupe_dispatch.STALL_PARK_TAG` as
+      # `planning_escalation.housekeeping_note` does, naming the rule broken
+      # and carrying the same three lines and the failed run; no `🙋` line is
+      # written, and the move is to `planning_escalation.HOUSEKEEPING_LANE`,
+      # read into `HOUSEKEEPING_LANE` through the one seam a step shell reads
+      # a constant by, never written here.
+      #
+      # Either way the step composes no line of its own: `question` reads the
+      # agent's `.bureau-pipeline/medic-question.json` through
+      # `planning_escalation.refusal`, line by line, and puts the fixed wording
+      # in place of a line it refuses, of a blank one, or of a file that is
+      # missing or unparseable — the agent read untrusted logs and card text,
+      # so its words are never posted unguarded. With no report the Finding
+      # says no diagnosis was written, and the comment, which then carries
+      # the failed run, is the card's whole record of the failure.
+      #
+      # The comment is posted before the move, and through no act: it asks
+      # rather than announces (`config/pipeline-acts.json`'s `unconverted`
+      # block). The move is `advance` from `medic_next_step.py from-lanes`,
+      # the command the Planning move above calls. A comment that could not be
+      # rendered posts nothing, and one that could not be posted moves
+      # nothing — a Green Light row with no question is the failure, and a
+      # `🙋` line with no three lines under it is no question. `lane` is the
+      # lane the step was for, and `moved` is `true` only when `advance`
+      # printed `<card> → <lane>`; the `receipt` step below reads both and
+      # writes ` moved=no` otherwise. `green_light_rows.py check` reads this
+      # shell, where it runs, for the receipt line and the post before the
+      # Green Light write.
+      #
+      # `always()`: a diagnosis agent that died is the card most in need of
+      # asking about, and a step with no status function is skipped once an
+      # earlier step failed. Never on a waiting card (step `waiting`), and
+      # never on a card the step above held on an inherited red main
+      # (`redmain`, DRE-8849): the two never both run.
+      - name: Ask a person about the diagnosis
+        id: ask
+        if: >
+          always() &&
+          steps.target.outputs.kind == 'card' &&
+          steps.verdict.outputs.step == 'ask-person' &&
+          steps.waiting.outputs.waiting != 'true' &&
+          steps.redmain.outputs.held != 'true'
+        env:
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           TARGET: ${{ steps.target.outputs.target }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           MOVED=false
           RENDERED=true
-          {
-            echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
-            echo ""
-            python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
-              || RENDERED=false
-            echo ""
-            echo "The failed run: $RUN_URL"
-          } > "$RUNNER_TEMP/medic-ask-comment.md"
+          HOUSEKEEPING=false
+          HOUSEKEEPING_LANE=$(python3 -c 'import sys; sys.path.insert(0, ".bureau-pipeline/scripts"); import planning_escalation; print(planning_escalation.HOUSEKEEPING_LANE)')
+          LANE="Green Light"
+          if BROKEN=$(python3 .bureau-pipeline/scripts/medic_next_step.py screen --file .bureau-pipeline/medic-question.json --choices-file .bureau-pipeline/medic-question-choices.json); then
+            {
+              echo "🙋 The medic diagnosed a failure only a person can settle, and asks:"
+              echo ""
+              python3 .bureau-pipeline/scripts/medic_next_step.py question --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md \
+                --choices-file .bureau-pipeline/medic-question-choices.json || RENDERED=false
+              echo ""
+              echo "The failed run: $RUN_URL"
+              echo ""
+              python3 .bureau-pipeline/scripts/medic_next_step.py choices-block --file .bureau-pipeline/medic-question-choices.json \
+                || RENDERED=false
+            } > "$RUNNER_TEMP/medic-ask-comment.md"
+          else
+            HOUSEKEEPING=true
+            LANE=$HOUSEKEEPING_LANE
+            echo "the medic's question is housekeeping, not a decision for the CEO: ${BROKEN:-the screen gave no answer}"
+            python3 .bureau-pipeline/scripts/medic_next_step.py housekeeping-note --card "$TARGET" --broken "$BROKEN" \
+              --file .bureau-pipeline/medic-question.json --report .bureau-pipeline/medic-report.md --run-url "$RUN_URL" \
+              > "$RUNNER_TEMP/medic-ask-comment.md" || RENDERED=false
+          fi
+          echo "lane=$LANE" >> "$GITHUB_OUTPUT"
           FROM_LANES=$(python3 .bureau-pipeline/scripts/medic_next_step.py from-lanes) || true
           if [ "$RENDERED" != true ]; then
-            echo "::warning title=Medic question not rendered::The three lines for ${TARGET} could not be rendered, so no question was posted and the card was not moved to Green Light. Failed run: ${RUN_URL}"
-          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" "$(cat "$RUNNER_TEMP/medic-ask-comment.md")"; then
-            echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to Green Light. Failed run: ${RUN_URL}"
+            echo "::warning title=Medic question not rendered::The comment for ${TARGET} could not be rendered, so no question was posted and the card was not moved to ${LANE}. Failed run: ${RUN_URL}"
+          elif ! python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" --body-file="$RUNNER_TEMP/medic-ask-comment.md"; then
+            echo "::warning title=Medic question not posted::The medic's question could not be posted on ${TARGET}, so the card was not moved to ${LANE}. Failed run: ${RUN_URL}"
           elif [ -z "$FROM_LANES" ]; then
-            echo "::warning title=Card not moved to Green Light::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+            echo "::warning title=Card not moved to ${LANE}::The lanes the medic moves a card out of could not be read, so ${TARGET} was not moved. Failed run: ${RUN_URL}"
+          elif [ "$HOUSEKEEPING" = true ]; then
+            if OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "$HOUSEKEEPING_LANE" "$FROM_LANES"); then
+              printf '%s\n' "$OUT"
+              if printf '%s\n' "$OUT" | grep -qxF "$TARGET → $HOUSEKEEPING_LANE"; then MOVED=true; fi
+            else
+              echo "::warning title=Card not moved to ${LANE}::The move of ${TARGET} to ${LANE} failed. Failed run: ${RUN_URL}"
+            fi
           elif OUT=$(python3 .bureau-pipeline/scripts/linear_ops.py advance "$TARGET" "Green Light" "$FROM_LANES"); then
             printf '%s\n' "$OUT"
             if printf '%s\n' "$OUT" | grep -qxF "$TARGET → Green Light"; then MOVED=true; fi
@@ -1833,9 +2139,17 @@ jobs:
       # by which the fix loop already reaches a red agent pull request.
       #
       # Only for a `card` target that is not waiting, and for every step: the
-      # three whose move DRE-7799 made, and `ask-person`, whose park in Green
-      # Light is the `ask` step above (DRE-7794) — a move to Green Light that
-      # did not land (`moved` is not `true`) is ` moved=no`. This is the one
+      # three whose move DRE-7799 made, and `ask-person`, whose park is the
+      # `ask` step above (DRE-7794) — in Green Light, or in the housekeeping
+      # lane when its question failed the screen (DRE-8592). The paragraph
+      # names that lane, the `ask` step's `lane`, through `--moved-to`; the
+      # first line is unchanged, because agent-bureau's weekly report parses
+      # it. A move that did not land (`moved` is not `true`) is ` moved=no`,
+      # and names the lane the card was left in, as for every step. A card the
+      # `redmain` step held on an inherited red main (DRE-8849) takes `moved`
+      # and `lane` from that step instead, and its reason sentence names the
+      # repo, the failed checks and the merge base, and says the sweep returns
+      # the card once main is green on them. This is the one
       # receipt for the park too, never a second write: `pipeline_act.py
       # check` fails the act's anchor found any other number of times.
       # `always()`, for the reason the move above gives. A write that fails
@@ -1861,12 +2175,20 @@ jobs:
           RESUMED: ${{ steps.resume.outputs.resumed }}
           PLANNING_MOVED: ${{ steps.planning.outputs.moved }}
           ASK_MOVED: ${{ steps.ask.outputs.moved }}
+          ASK_LANE: ${{ steps.ask.outputs.lane }}
+          # A card held on an inherited red main (DRE-8849): the `redmain`
+          # step's move, its lane and its reason sentence.
+          HELD: ${{ steps.redmain.outputs.held }}
+          HELD_MOVED: ${{ steps.redmain.outputs.moved }}
+          HELD_LANE: ${{ steps.redmain.outputs.lane }}
+          HELD_REASON: ${{ steps.redmain.outputs.reason }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           S=.bureau-pipeline/scripts
           REPORT=.bureau-pipeline/medic-report.md
           MOVED=yes
           REASON=""
+          MOVED_TO=()
           case "$STEP" in
             requeue-once)
               if [ "$RESUMED" != true ]; then MOVED=no; fi ;;
@@ -1881,8 +2203,15 @@ jobs:
               fi
               REASON="the card has an open pull request, ${PR_URL:-which the medic could not read back}, and the fix loop already reaches a red agent pull request two ways: the fix agent (agent-fix.yml) is dispatched when the critic asks for changes or the verifier fails the pull request, and the sweep dispatches a fix for a pull request the critic approved whose checks are red (reconcile.fix_approved_but_red)." ;;
             ask-person)
-              if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
-              REASON="the question posted just before this receipt asks a person to settle it." ;;
+              if [ "$HELD" = true ]; then
+                if [ "$HELD_MOVED" != true ]; then MOVED=no; fi
+                MOVED_TO=(--moved-to "${HELD_LANE:-Triage}" --held-on-main)
+                REASON="$HELD_REASON"
+              else
+                if [ "$ASK_MOVED" != true ]; then MOVED=no; fi
+                if [ -n "$ASK_LANE" ]; then MOVED_TO=(--moved-to "$ASK_LANE"); fi
+                REASON="the comment posted just before this receipt asks a person to settle it."
+              fi ;;
           esac
           NOT_MOVED=()
           if [ "$MOVED" = no ]; then
@@ -1894,7 +2223,7 @@ jobs:
           FINDING=$(python3 "$S/medic_next_step.py" finding --report "$REPORT") || FINDING=""
           if ! RECEIPT=$(python3 "$S/medic_next_step.py" receipt --class "$CLASS" --step "$STEP" \
               --run-url "$RUN_URL" --report "$REPORT" --finding "$FINDING" --reason "$REASON" \
-              "${NOT_MOVED[@]}"); then
+              "${NOT_MOVED[@]}" "${MOVED_TO[@]}"); then
             echo "::warning title=Medic receipt not written::The medic's receipt for ${STEP} could not be rendered, so none was posted on ${TARGET}. Failed run: ${RUN_URL}"
             exit 0
           fi

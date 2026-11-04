@@ -34,8 +34,8 @@ and prints one line, `proof-record-pr: <word> <card> — <why>`:
   * `kept-open` — the record can merge and its pull request is open.
   * `closed-and-held` — the record cannot merge and its pull request was open:
     the hold, then `gh pr close <n> --comment CLOSE_COMMENT`, never
-    `--delete-branch`. A hold refused leaves the pull request open, so the
-    close comment never points at a card that says nothing.
+    `--delete-branch`. A hold or note refused leaves the pull request open,
+    so the close comment never points at a card that says nothing.
   * `held` — the record cannot merge and no pull request is open: the hold.
   * `no-record` — no branch, or no record that can be read or judged. Nothing
     is written.
@@ -54,12 +54,30 @@ time-only, lifted by the dispatcher itself. Otherwise its observed half opens
 `RECORD_HOLD_OPENING` and its needs half names what each row waits on — the
 event, a fix card shipped, or a re-run. `is_record_hold` reads that second
 kind; it tells the card's reader what each row waits on, and never decides a
-re-run: the record at the branch head does (DRE-8451). A hold whose first line
-is already the card's newest open hold is not posted again — nor one that
-differs only by the later recheck time an unstamped row is read as, while the
-standing hold has not lapsed. A thread that cannot be read posts no hold and
-is a refused read: a card whose thread is unknown is never read as one with no
-hold. `--no-hold`
+re-run: the record at the branch head does (DRE-8451).
+
+The card is left with one open hold (DRE-8680). Every open hold is read, and
+each is one the record at the head supersedes (`superseded`) — a time-only
+hold, the record's own, or the cause park's (`proof_cause_park.is_cause_hold`),
+the last two the ones the proof dispatcher reads past once it has read the
+record — or one that stands: an operator's, one naming
+`proof_record.CEO_PRESS`, or any line not recognized. Then:
+
+  1. A hold that stands is the card's one wait, and only an operator or the
+     CEO lifts it: no note and no hold are posted over it, and `decide` names
+     it on its line. `sweep` still closes the pull request.
+  2. When the only open hold is already this one — the same first line, or
+     one that differs only by the later recheck time an unstamped row is read
+     as, while it has not lapsed — nothing is posted.
+  3. When holds the record supersedes are open, one `🔬 proof-observed`
+     (`RETIRED_NOTE`, naming the record's head commit) retires them, and the
+     hold follows it. The note goes first: it discharges every earlier hold
+     but a CEO-press one, so it would discharge a hold posted before it too.
+     A note refused posts no hold.
+  4. With no open hold, the hold is posted.
+
+A thread that cannot be read posts no hold and is a refused read: a card
+whose thread is unknown is never read as one with no hold. `--no-hold`
 posts none — the proof run passes it when it escalated a CEO press, whose park
 posts the card's one hold.
 
@@ -69,7 +87,7 @@ Lists the repository's open pull requests on record branches
 (`proof_record.proof_record_branch`), reads each record at its head with
 `proof_record.fetch`, and closes each that `can_merge` refuses, with
 `CLOSE_COMMENT` and the hold on its card, keeping the branch — the hold first,
-so a refused hold leaves its pull request open for the next sweep. One line:
+so a refused hold or note leaves its pull request open for the next sweep. One line:
 `proof-record-sweep: read <N> open record pull request(s); closed <K>: #a;
 kept <M>; unread <U>`. A record not read is counted unread and never closed.
 Not live — `PROOF_DISPATCH_LIVE` is not exactly `true` — it prints
@@ -122,6 +140,13 @@ OPERATOR_PRESS = "the operator's press"
 #: Opens the observed half of a hold over a record whose blocking rows do not
 #: all wait on an event.
 RECORD_HOLD_OPENING = "not ready to merge:"
+#: The `🔬 proof-observed` note that retires the holds the record supersedes,
+#: posted just before the hold that replaces them (DRE-8680). `RETIRED_BY` is
+#: the wording the proof dispatcher reads it off as the pipeline's own note, so
+#: it re-arms no spent re-run budget (`proof_dispatch._pipeline_note`).
+RETIRED_BY = "the hold that follows replaces"
+RETIRED_NOTE = ("the proof record at {sha7} was read again — " + RETIRED_BY
+                + " the {n} earlier hold(s) on this card")
 
 #: What closes an open record pull request whose record cannot merge.
 CLOSE_COMMENT = ("Closed while the proof waits — the record on {branch} cannot merge "
@@ -275,21 +300,38 @@ def _already_held(newest: str, blocking: list, line: str, now: datetime) -> bool
     return all(until >= stamp for _, _, stamp in waiting if stamp)
 
 
-def _post_hold(card: str, blocking: list, now: datetime, comment: Callable,
-               voices: Callable) -> bool:
-    """Post the hold unless the card's newest open hold is already it.
-    True when it was posted. RuntimeError when the card's thread could not
-    be read: an unknown thread is never read as one with no hold."""
+def superseded(line: str) -> bool:
+    """Is `line`, an open hold's first line, one the record at the head
+    supersedes — a time-only hold, the record's own or the cause park's
+    (DRE-8680)? Any other — an operator's, one naming
+    `proof_record.CEO_PRESS`, a line nothing here recognizes — stands."""
+    if proof_record.CEO_PRESS in (line or ""):
+        return False
+    return (proof_record.time_only(line) is not None or is_record_hold(line)
+            or proof_cause_park.is_cause_hold(line or ""))
+
+
+def _post_hold(card: str, blocking: list, now: datetime, head: str, comment: Callable,
+               observe: Callable, voices: Callable) -> str:
+    """Leave the card one open hold — see the module docstring's `## The
+    hold`. Returns what was done, as `decide` says it. RuntimeError when the
+    card's thread could not be read: an unknown thread is never read as one
+    with no hold."""
     observed, needs = hold_line(blocking, now)
     line = linear_ops.proof_waiting_line(observed, needs)
     thread = voices(card)
     if thread is None:
         raise RuntimeError(f"the thread of {card} could not be read, so no hold was posted")
     held = proof_record.open_holds(thread)
-    if held and _already_held(held[-1], blocking, line, now):
-        return False
+    standing = [h for h in held if not superseded(h)]
+    if standing:
+        return f"already held by “{proof_record._cut(standing[-1], 160)}”"
+    if len(held) == 1 and _already_held(held[0], blocking, line, now):
+        return "already held"
+    if held:
+        observe(card, RETIRED_NOTE.format(sha7=head[:7], n=len(held)))
     comment(card, observed, needs)
-    return True
+    return f"held, {len(held)} earlier hold(s) retired" if held else "held"
 
 
 # --------------------------------------------------------------------------- #
@@ -329,12 +371,14 @@ def _say(word: str, card: str, why: str) -> str:
 
 def decide(repo: str, card: str, card_url: str, title: str, *, gh: Callable | None = None,
            comment: Callable | None = None, now: datetime | None = None, hold: bool = True,
-           voices: Callable | None = None, description: str = "") -> str:
+           voices: Callable | None = None, description: str = "",
+           observe: Callable | None = None) -> str:
     """Open, reopen or keep the record's pull request, or close it and hold
     the card — see the module docstring. Returns the decision word. A read or
     write GitHub refused raises RuntimeError."""
     gh = gh or proof_record._gh
     comment = comment or linear_ops.cmd_proof_waiting
+    observe = observe or linear_ops.cmd_proof_observed
     voices = voices or linear_ops.read_card_voices
     now = now or datetime.now(timezone.utc)
     branch = f"agent/{card}-proof-record"
@@ -366,10 +410,10 @@ def decide(repo: str, card: str, card_url: str, title: str, *, gh: Callable | No
         word = _open(repo, card, card_url, title, branch, gh)
         return _say(word, card, f"{at} can merge — {verdict.why}")
     n = len(verdict.blocking)
-    posted = hold and _post_hold(card, verdict.blocking, now, comment, voices)
+    said = (_post_hold(card, verdict.blocking, now, blob.commit, comment, observe, voices)
+            if hold else "no hold posted")
     if opened is not None:
         _close(repo, opened["number"], branch, n, card_url, gh)
-    said = "held" if posted else "already held" if hold else "no hold posted"
     if opened is not None:
         return _say(CLOSED_AND_HELD, card, f"{at}: {n} row(s) wait — "
                                            f"#{opened['number']} closed, {said}")
@@ -385,12 +429,14 @@ def is_live(env=None) -> bool:
 
 
 def sweep(repo: str, *, gh: Callable | None = None, comment: Callable | None = None,
-          live: bool, voices: Callable | None = None, now: datetime | None = None) -> int:
+          live: bool, voices: Callable | None = None, now: datetime | None = None,
+          observe: Callable | None = None) -> int:
     """Close every open record pull request whose record cannot merge, with
     the hold on its card — see the module docstring. Returns the exit code:
     1 when the list or a write was refused."""
     gh = gh or proof_record._gh
     comment = comment or linear_ops.cmd_proof_waiting
+    observe = observe or linear_ops.cmd_proof_observed
     voices = voices or linear_ops.read_card_voices
     now = now or datetime.now(timezone.utc)
     try:
@@ -434,7 +480,8 @@ def sweep(repo: str, *, gh: Callable | None = None, comment: Callable | None = N
             continue
         url = CARD_URL.format(identifier=card)
         try:
-            _post_hold(card, verdict.blocking, now, comment, voices)
+            _post_hold(card, verdict.blocking, now, pr.get("headRefOid") or "", comment,
+                       observe, voices)
             _close(repo, number, branch, len(verdict.blocking), url, gh)
             closed.append(number)
         except Exception as exc:  # noqa: BLE001 — one refused write stops no other

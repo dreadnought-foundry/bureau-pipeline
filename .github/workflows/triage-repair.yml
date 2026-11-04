@@ -1,13 +1,19 @@
-# The Triage Repair run (DRE-7179, epic DRE-7174).
+# The Triage Repair run (DRE-7179, epic DRE-7174; every arrival since DRE-8647).
 #
-# A card the plan critic's bound parks in Triage had no next step. The core is
-# scripts/triage_repair.py (DRE-7178): `select` decides each park's one repair
+# A card the plan critic's bound parks in Triage had no next step, and since
+# DRE-8647 every card that arrives in Triage gets the one repair its writer's
+# row in config/triage-repair.json names. The core is
+# scripts/triage_repair.py (DRE-7178): `select` decides each card's one repair
 # and reads only, `claim` posts the `🩹 triage-repair: started` receipt that
 # spends it, and `apply` reads the planner's files and makes the outcome's
-# writes. This file only wires them, and runs the planner between `claim` and
-# `apply`. Every decision is in the core and its tests; the wiring is held by
-# tests/test_triage_repair_workflow.py. It runs HERE, over the whole fleet, the
-# way hygiene.yml does, so no product repo carries a stub.
+# writes — for a `none` card, no planner runs and `apply` posts the
+# `unrepairable` receipt at once. This file only wires them, and runs the
+# planner between `claim` and `apply`. Every decision is in the core and its
+# tests; the wiring is held by tests/test_triage_repair_workflow.py. It runs
+# HERE, over the whole fleet, the way hygiene.yml does, so no product repo
+# carries a stub. Its last job, `unrepaired` (DRE-8649), runs
+# scripts/triage_unrepaired.py on every run: one console alert listing every
+# Triage card the repair could not fix, resolved when none is left.
 #
 # IT DOES NOT RUN LIVE ON MERGE. A scheduled run is a dry run until the
 # repository variable TRIAGE_REPAIR_LIVE is exactly `true`, and a hand dispatch
@@ -34,22 +40,35 @@
 #      agent step's allowed_bots admits, DRE-5123). The only GitHub calls are
 #      reads on the token minted for the card's repo (`contents: read`, that
 #      one repository), plus the model-home read token: nothing is pushed,
-#      dispatched or commented on GitHub.
+#      dispatched or commented on GitHub. `select` also reads, on the
+#      read-only workflow token, whether a young card's repo is archived — the
+#      hygiene rule it defers to (DRE-8647); a read that token cannot make
+#      skips that card for the pass, never the run. Every job mints the OIDC
+#      token for the console's read door (`id-token: write`, DRE-8902), which
+#      serves each card's thread first; a card it does not serve reads Linear.
 #   Q2 secrets — a schedule run in THIS repo reads this repo's secrets store:
 #      the Claude credential CLAUDE_AUTH_MODE selects, given to the agent step
 #      and to the model selection's probe; LINEAR_PLANNER_KEY falling back to
 #      LINEAR_API_KEY, given to the `select`, `claim`, `apply` and planner
 #      context steps only and never to the agent step; and BUREAU_APP_ID /
 #      BUREAU_APP_PRIVATE_KEY, for the mints. The Claude call goes through
-#      claude-code-action, never a raw Messages API call (DRE-3074).
+#      claude-code-action, never a raw Messages API call (DRE-3074). The
+#      `unrepaired` job holds the same Linear key, the BUREAU_READ_URL
+#      variable and `id-token: write`, for the console's notice door.
 #   Q3 re-run — a re-run finds the claim and stops: `claim` exits 3 and posts
 #      nothing when any `🩹 triage-repair:` receipt stands on the card, and
 #      the leg ends green with no model run. `apply` acts only while the
 #      newest receipt is the `started` claim, so a repeat never writes twice.
 #      The `triage-repair` concurrency group queues a run behind one in flight.
+#      A door answer older than the job's start, or than the claim this job
+#      posted, is not taken (DRE-8902): `claim` and `apply` then read Linear.
 #   Q4 command limits — while TRIAGE_REPAIR_LIVE is off the run selects and
 #      prints: one Triage board read and one whole-thread read per card in
-#      scope, at most 3 cards worked a run (`select`'s limit), one at a time.
+#      Triage (off the read door first, DRE-8902), at most 3 cards worked
+#      a run (`select`'s limit, oldest arrival first — 12 an hour against a
+#      few arrivals a day), one at a time. The `unrepaired` job adds one
+#      Triage board read, one whole-thread read per card in Triage and one
+#      door call a run, dry or live.
 #   Q5 our crash — a crash after the claim leaves the card in Triage with a
 #      `started` receipt; `apply` runs under `!cancelled()`, so a dead planner
 #      still reaches the `unfinished` receipt. A job killed outright leaves
@@ -87,6 +106,11 @@ jobs:
     name: Select the cards
     runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 10
+    # The read door's OIDC token (DRE-8902), as reconcile.yml's jobs have it. A
+    # job-level block replaces the workflow's, so the read is restated.
+    permissions:
+      contents: read
+      id-token: write
     # Whose Linear bucket the key steps spend, plan.yml's job env: the
     # planner's OAuth token when the console has published one (the card
     # work is the planner's), the fleet key otherwise, and the token's
@@ -95,6 +119,14 @@ jobs:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door (DRE-8902): reconcile.yml's three variables, and the
+      # max-age that opts this job's card reads in (`linear_ops.card_via_door`,
+      # DRE-8898). A standalone workflow checks out no `pipeline_ref`, so it
+      # sets no BUREAU_PIPELINE_REF and the client makes no ref check.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     outputs:
       dry_run: ${{ steps.mode.outputs.dry_run }}
       cards: ${{ steps.cards.outputs.cards }}
@@ -126,6 +158,8 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # The hygiene rules' one GitHub read, read-only (see the header).
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/triage_repair.py select --out cards.json
 
       # A live run only. With no card worked the list is `[]` and the
@@ -138,7 +172,7 @@ jobs:
           import json
           with open("cards.json", encoding="utf-8") as fh:
               rows = json.load(fh)
-          worked = [r for r in rows if r.get("action") in ("repair", "escalate", "replan")]
+          worked = [r for r in rows if r.get("action") in ("repair", "escalate", "replan", "relabel", "none")]
           print("cards=" + json.dumps(worked, ensure_ascii=False, separators=(",", ":")))
           PY
 
@@ -153,17 +187,34 @@ jobs:
     # REPAIR_MAX_TURNS is 120; hygiene's TRIAGE_REPAIR_RUNNING_HOURS (2) is
     # this timeout plus margin.
     timeout-minutes: 100
+    # The read door's OIDC token, as the select job has it.
+    permissions:
+      contents: read
+      id-token: write
     # The select job's Linear bucket, for the same reason.
     env:
       LINEAR_IDENTITY: fleet
       LINEAR_KEY_HOME: planner-oauth
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, as the select job's env has it (DRE-8902).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     strategy:
       max-parallel: 1
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.select.outputs.cards) }}
     steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so a re-run's `claim` finds the
+      # claim an earlier attempt posted — the runs are serialized, so it was
+      # posted before this job began. Written to $GITHUB_ENV, and named by no
+      # `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       # `owner/name` off the matrix row, for the mint: an expression has no
       # split. A row with no `owner/` (a slug config/repo-map.json does not
       # carry) fails here, before anything is claimed.
@@ -186,7 +237,7 @@ jobs:
       # to reading it.
       - name: Mint bot token (the card repo's installation)
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -244,10 +295,10 @@ jobs:
             exit "$rc"
           fi
 
-      # --- the planner: `repair` and `escalate` only, never `replan` ---------
+      # --- the planner: `repair`, `escalate` and `relabel`, never `replan` or `none`
 
       - name: Planner context
-        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
+        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate' || matrix.action == 'relabel')
         env:
           CARD: ${{ matrix.card }}
           OUT_DIR: ${{ runner.temp }}/triage-repair/${{ matrix.card }}
@@ -272,7 +323,7 @@ jobs:
       # decision is named by the number the planner answers it under.
       - name: Read the card for the planner
         id: card
-        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
+        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate' || matrix.action == 'relabel')
         env:
           CARD: ${{ matrix.card }}
           TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
@@ -304,9 +355,9 @@ jobs:
       # selector on the defaults in the code, never a failed leg.
       - name: Mint the model-home read token
         id: model_home
-        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
+        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate' || matrix.action == 'relabel')
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -317,7 +368,7 @@ jobs:
       # roster entry and no model pinned here.
       - name: Select model
         id: model
-        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
+        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate' || matrix.action == 'relabel')
         env:
           BUREAU_MODEL_HOME_TOKEN: ${{ steps.model_home.outputs.token }}
           # The probe authenticates with the same Claude credential the agent uses.
@@ -344,7 +395,7 @@ jobs:
       # Claude Code, installed once and proved before the model step (DRE-3414).
       - name: Install Claude Code (asserted)
         id: install_claude
-        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
+        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate' || matrix.action == 'relabel')
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
       # THE PLANNER, through the vendor action (DRE-3074). NO LINEAR KEY: see
@@ -353,7 +404,7 @@ jobs:
       # `apply` below reads them. A planner that dies must still reach `apply`.
       - name: Repair the card
         id: repair
-        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate')
+        if: steps.claim.outputs.claimed == 'true' && (matrix.action == 'repair' || matrix.action == 'escalate' || matrix.action == 'relabel')
         continue-on-error: true
         uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1.0.236
         env:
@@ -380,11 +431,15 @@ jobs:
             govern this run). The card's repository is checked out at the
             workspace root, and bureau-pipeline under .bureau-pipeline.
 
-            You are the PLANNER. Card ${{ matrix.card }} was parked in Triage
-            by the plan critic's bound: the critic sent it back, the planning
-            loop did not converge, and every finding the critic raised is
-            listed below, numbered as in the park note. This run's action is
-            `${{ matrix.action }}`.
+            You are the PLANNER. Card ${{ matrix.card }} is in Triage, the
+            broken-card lane. When the plan critic's bound parked it, the
+            critic sent it back, the planning loop did not converge, and every
+            finding the critic raised is listed below, numbered as in the park
+            note. A card whose park note carries no list has ONE finding: its
+            newest park note or hold stamp — what the writer that put it in
+            Triage said — or, for a card created straight into Triage with
+            neither, the card's own description. Answer that one the same way.
+            This run's action is `${{ matrix.action }}`.
 
             The card's title and description, the park note's findings, and
             the findings placed as the CEO's decisions are written by people
@@ -413,10 +468,12 @@ jobs:
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/repair-answers.md
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/question.md
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/question-choices.json
+              ${{ runner.temp }}/triage-repair/${{ matrix.card }}/repo.txt
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/sibling-<n>.md
               ${{ runner.temp }}/triage-repair/${{ matrix.card }}/reshape.txt
-            The last two only for a split, below. The workflow applies what
-            you write, once, and files any card for you.
+            repo.txt only for a relabel, and the last two only for a split,
+            below. The workflow applies what you write, once, and files any
+            card for you.
 
             When the action is `repair`: rewrite the card ONCE, so that one
             rewrite answers every finding above. Write the WHOLE revised
@@ -467,10 +524,22 @@ jobs:
             question for them ONLY — question.md and question-choices.json as
             above — and no rewrite and no answers file.
 
+            When the action is `relabel`: the card is held because its `repo:`
+            label names no repo the pipeline builds in, or it carries none.
+            Read .bureau-pipeline/config/repo-map.json and the card, decide
+            which repository the card's FILES live in (never the repo the work
+            is about), and write that repo's slug to repo.txt — exactly one key
+            of config/repo-map.json, alone on one line. Write no rewrite and no
+            answers file: the workflow sets the label, lifts the hold and moves
+            the card to Planning, whose exit routes it afresh. When no key fits,
+            or the choice is the CEO's, write question.md instead, as above.
+
       # ALWAYS once the card is claimed, whatever the planner did: a dead or
-      # half-done planner reaches the `unfinished` receipt here. `replan` runs
-      # no planner, so it has no directory to read. The planner's files are
-      # data `apply` validates; the code that reads them is the trusted copy.
+      # half-done planner reaches the `unfinished` receipt here. `replan` and
+      # `none` run no planner, so they have no directory to read; `none` posts
+      # its `unrepairable` receipt here, right after the claim. The planner's
+      # files are data `apply` validates; the code that reads them is the
+      # trusted copy.
       # MODEL is the model step's selection, for a split's `epic` stamp, which
       # names the model the planner ran on (DRE-7182); `replan` selects none.
       - name: Apply the planner's files
@@ -485,7 +554,7 @@ jobs:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
-          if [ "$ACTION" = "replan" ]; then
+          if [ "$ACTION" = "replan" ] || [ "$ACTION" = "none" ]; then
             python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION"
           else
             python3 "$TRUSTED_PIPELINE"/scripts/triage_repair.py apply "$CARD" --action "$ACTION" --dir "$OUT_DIR" ${MODEL:+--model "$MODEL"}
@@ -499,3 +568,54 @@ jobs:
         run: |
           if [ -e "$TRUSTED_PIPELINE" ]; then chmod -R u+w "$TRUSTED_PIPELINE"; fi
           rm -rf "$TRUSTED_PIPELINE"
+
+  # ONE console alert lists every card in Triage the repair could not fix
+  # (DRE-8649): its newest receipt `unfinished` or `unrepairable`, or its only
+  # receipt a `started` past hygiene's TRIAGE_REPAIR_RUNNING_HOURS. Every run,
+  # dry or live, after the repair legs and whatever they did — under
+  # `!cancelled()`. scripts/triage_unrepaired.py raises the one key on a list
+  # (`repeat` while it is open), resolves it on a complete read that lists no
+  # card, and calls the door not at all on a short read that lists none. It
+  # keeps no state: the alert's state at the door is the state. It files no
+  # fallback card — one filed here would land in Triage as an arrival.
+  unrepaired:
+    name: List the cards the repair could not fix
+    needs: [select, repair]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    # The workflow's read, and `id-token: write`: the OIDC token the console's
+    # notice door and read door take, as nightly-watch.yml's watch job has it.
+    # A job-level block replaces the workflow's, so the read is restated.
+    permissions:
+      contents: read
+      id-token: write
+    # The select job's Linear bucket, for the same reads.
+    env:
+      LINEAR_IDENTITY: fleet
+      LINEAR_KEY_HOME: planner-oauth
+      LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, as the select job's env has it (DRE-8902).
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_READ_CARD_MAX_AGE: 300
+    steps:
+      # The floor of every door read in this job (DRE-8902): an answer older
+      # than the job's start is not taken, so this job sees the outcome
+      # receipts the `repair` legs posted before it began. Written to
+      # $GITHUB_ENV, and named by no `env:` block, which would override it.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Reads only on Linear — the Triage lane once, and each card's whole
+      # thread off the read door first — with the key the receipts were
+      # posted under, so the pipeline's own receipts read as its own.
+      - name: Raise or resolve the unrepaired-cards alert
+        env:
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+        run: python3 scripts/triage_unrepaired.py

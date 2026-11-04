@@ -1,0 +1,308 @@
+[
+  {
+    "source": "https://linear.app/dreadnoughtfoundry/issue/DRE-8835",
+    "copied": "2026-11-03",
+    "cut_after": {
+      "created_at": "2026-11-03T10:50:10.567Z",
+      "opens": "🧹 Auto-promoted Queued → Hand-work:"
+    },
+    "withheld": [
+      "the description: cut after its opening sentences",
+      "the comments: only the ones the test reads are kept, the newest the one named in cut_after",
+      "the comment authors' Linear user ids: written user-pipeline for the pipeline's own user",
+      "the card's Linear id: written id-<card>",
+      "the lane history: only the move into Hand-work is kept",
+      "updatedAt: set to the time of the comment named in cut_after"
+    ],
+    "card": {
+      "id": "id-DRE-8835",
+      "identifier": "DRE-8835",
+      "title": "agent-bureau: the operator's sitting — deploys the census walls and the deploy credential, holds main with a ruleset, then runs the end-to-end test from Desk and an Initiatives conversation",
+      "description": "The operator's one sitting that turns the studio on for conversations, in the order below: first the walls and the deploy credential in AWS, then the hold on `main` in GitHub, then the end-to-end test the CEO asked for, from Desk and from an Initiatives conversation.",
+      "createdAt": "2026-11-02T06:15:08.555Z",
+      "updatedAt": "2026-11-03T10:50:10.567Z",
+      "state": {
+        "name": "Hand-work"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:agent-bureau"
+          },
+          {
+            "name": "initiative:bureau"
+          },
+          {
+            "name": "no-code"
+          },
+          {
+            "name": "agent:devops"
+          },
+          {
+            "name": "operator-step"
+          },
+          {
+            "name": "hand-step:person"
+          }
+        ]
+      },
+      "parent": {
+        "identifier": "DRE-8487",
+        "state": {
+          "name": "Done"
+        }
+      },
+      "children": {
+        "nodes": []
+      },
+      "comments": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        },
+        "nodes": [
+          {
+            "body": "🧹 Auto-promoted Queued → Hand-work: routed **OPERATOR** — Not code — a deploy, a migration run, a secret. operator, your turn in Hand-work — a person builds this; nothing was dispatched. Marked `operator-step`, `no-code`. Its `needs-human` hold (reason=operator-step) was lifted: every blocker is terminal.",
+            "createdAt": "2026-11-03T10:50:10.567Z",
+            "user": {
+              "id": "user-pipeline"
+            }
+          }
+        ]
+      },
+      "relations": {
+        "pageInfo": {
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8835"
+            },
+            "relatedIssue": {
+              "identifier": "DRE-8836"
+            }
+          }
+        ]
+      },
+      "inverseRelations": {
+        "pageInfo": {
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8834",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8833",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8832",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8828",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8827",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8826",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8825",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8824",
+              "state": {
+                "name": "Done"
+              }
+            }
+          }
+        ]
+      },
+      "history": {
+        "nodes": [
+          {
+            "createdAt": "2026-11-03T10:50:09.542Z",
+            "toState": {
+              "name": "Hand-work"
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "source": "https://linear.app/dreadnoughtfoundry/issue/DRE-8637",
+    "copied": "2026-11-03",
+    "cut_after": {
+      "created_at": "2026-11-03T09:04:56.951Z",
+      "opens": "🚨 hand-work-overdue:"
+    },
+    "withheld": [
+      "the description: cut after its opening sentences",
+      "the comments: only the ones the test reads are kept, the newest the one named in cut_after",
+      "the comment authors' Linear user ids: written user-pipeline for the pipeline's own user",
+      "the card's Linear id: written id-<card>",
+      "the lane history: only the move into Hand-work is kept",
+      "updatedAt: set to the time of the comment named in cut_after"
+    ],
+    "card": {
+      "id": "id-DRE-8637",
+      "identifier": "DRE-8637",
+      "title": "bureau-pipeline: turn on the Alarm Repair — set the repository variable ALARM_REPAIR_LIVE to true",
+      "description": "Turn on the Alarm Repair. The workflow merges switched off (`ALARM_REPAIR_LIVE`, the same pattern as `TRIAGE_REPAIR_LIVE`): until a person sets the switch, a scheduled run only prints what it would repair. This card is that one step.",
+      "createdAt": "2026-11-01T16:36:30.400Z",
+      "updatedAt": "2026-11-03T09:04:56.951Z",
+      "state": {
+        "name": "Hand-work"
+      },
+      "labels": {
+        "nodes": [
+          {
+            "name": "repo:bureau-pipeline"
+          },
+          {
+            "name": "agent:devops"
+          },
+          {
+            "name": "no-code"
+          },
+          {
+            "name": "operator-step"
+          },
+          {
+            "name": "hand-step:machine"
+          }
+        ]
+      },
+      "parent": {
+        "identifier": "DRE-8606",
+        "state": {
+          "name": "Done"
+        }
+      },
+      "children": {
+        "nodes": []
+      },
+      "comments": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": null
+        },
+        "nodes": [
+          {
+            "body": "🚨 hand-work-overdue: DRE-8637 has waited in Hand-work 24 hours, past its 24 — the operator's to look at.\nKind: the operator's card, labeled 'operator-step' — it entered Hand-work 2026-11-02 01:01 PT, and no run is dispatched for it.\n\n📎 pipeline-act: hand-work-overdue · kind: hold · state: unchanged · next: operator · discharges: nothing · subscriber: reconcile.yml · tag: hand-work-overdue",
+            "createdAt": "2026-11-03T09:04:56.951Z",
+            "user": {
+              "id": "user-pipeline"
+            }
+          },
+          {
+            "body": "🧹 Auto-promoted Queued → Hand-work: routed **OPERATOR** — Not code — a deploy, a migration run, a secret. operator, your turn in Hand-work — a person builds this; nothing was dispatched. Marked `operator-step`, `no-code`. Its `needs-human` hold (reason=operator-step) was lifted: every blocker is terminal.",
+            "createdAt": "2026-11-02T09:01:59.692Z",
+            "user": {
+              "id": "user-pipeline"
+            }
+          }
+        ]
+      },
+      "relations": {
+        "pageInfo": {
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8637"
+            },
+            "relatedIssue": {
+              "identifier": "DRE-8638"
+            }
+          }
+        ]
+      },
+      "inverseRelations": {
+        "pageInfo": {
+          "hasNextPage": false
+        },
+        "nodes": [
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8634",
+              "state": {
+                "name": "Done"
+              }
+            }
+          },
+          {
+            "type": "blocks",
+            "issue": {
+              "identifier": "DRE-8630",
+              "state": {
+                "name": "Done"
+              }
+            }
+          }
+        ]
+      },
+      "history": {
+        "nodes": [
+          {
+            "createdAt": "2026-11-02T09:01:59.180Z",
+            "toState": {
+              "name": "Hand-work"
+            }
+          }
+        ]
+      }
+    }
+  }
+]

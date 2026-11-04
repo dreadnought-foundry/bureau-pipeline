@@ -20,11 +20,12 @@ step reads that file.
   labels and the same fifty-newest comment window `dump-comments` read
   (`linear_ops.COMMENT_WINDOW_GQL`, the one literal). That is the two reads
   this replaces, in one request.
-* A `pull_request` or `pull_request_target` run never asks the door: the door
-  refuses those tokens by design (S7), and `bureau_read` will not mint one.
-  Nearly every review and verify is one, so for them this is the one Linear
-  read and nothing else. Only a `workflow_dispatch` re-review or re-verify can
-  be served by the door.
+* A `pull_request` run asks the door for its own card — the one its head
+  branch names, the one read the door serves such a run (agent-bureau
+  DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review and verify
+  is one. A `pull_request_target` run, and a `pull_request` run whose branch
+  names no card or another card, never asks: the door refuses those tokens
+  (S7), and `bureau_read` will not mint one.
 * `UNKNOWN reason=linear-hold` in `on`: no Linear call at all (Stage 2 item
   34) and no snapshot — the steps degrade exactly as on an unreadable card.
 * `shadow`: the door first, then the one Linear read; the difference is logged

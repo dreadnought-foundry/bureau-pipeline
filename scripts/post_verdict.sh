@@ -469,7 +469,7 @@ if [ -n "$CARD" ]; then
   { cat /tmp/qa-comment.md
     printf '\n\n🧠 model: %s — %s\n' "$MODEL_ID" "$MODEL_WHY"
   } > /tmp/qa-linear.md
-  python3 "$PIPELINE_DIR"/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-linear.md)" || true
+  python3 "$PIPELINE_DIR"/scripts/linear_ops.py comment "$CARD" --body-file=/tmp/qa-linear.md || true
 fi
 
 # On a real APPROVE, bring the formal review into line (DRE-1874).

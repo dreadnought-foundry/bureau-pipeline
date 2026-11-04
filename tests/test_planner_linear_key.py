@@ -1,6 +1,6 @@
 """The planner spends its own Linear bucket when it has one (DRE-5589).
 
-THE NUMBERS. The planner cap was 2 (`config/planner-queue.json`, DRE-5326)
+THE NUMBERS. The planner cap was 2 (DRE-5326; the cap is gone since DRE-8622)
 because planners and sweeps shared one Linear key's 2,500 requests an hour;
 DRE-5634 raised it to 3 once this change put the planners on their own bucket. On
 2026-10-01 at 21:41 PT a Linear OAuth app authorized as the Agent-Bureau user
@@ -200,7 +200,6 @@ CHANGED = (
     "tests/test_linear_identities.py",
     "tests/test_agent_linear_key.py",
     "tests/test_epic_split_wiring.py",
-    "tests/test_planner_queue_wiring.py",
     "tests/test_planner_stamps_children.py",
     "tests/test_spoken_thread_wiring.py",
 )

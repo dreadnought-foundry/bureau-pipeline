@@ -149,13 +149,17 @@ def pull(number: int, state: str, *, branch: str = BRANCH, head: str = HEAD,
 
 
 class Thread:
-    """The card threads: `comment` posts a hold on one, `voices` reads it."""
+    """The card threads: `comment` posts a hold on one, `observe` a
+    `🔬 proof-observed` note, `voices` reads it."""
 
-    def __init__(self):
-        self.posted: dict = {}
+    def __init__(self, **seeded):
+        self.posted: dict = {card: list(lines) for card, lines in seeded.items()}
 
     def comment(self, card: str, observed: str, needs: str) -> None:
         self.posted.setdefault(card, []).append(linear_ops.proof_waiting_line(observed, needs))
+
+    def observe(self, card: str, text: str) -> None:
+        self.posted.setdefault(card, []).append(linear_ops.proof_observed_line(text))
 
     def voices(self, card: str) -> list:
         return [spoken_thread.Voice(spoken_thread.PIPELINE, "the pipeline",
@@ -163,13 +167,57 @@ class Thread:
                 for line in self.posted.get(card, [])]
 
     def holds(self, card: str = CARD) -> list:
-        return self.posted.get(card, [])
+        return [line for line in self.posted.get(card, [])
+                if line.startswith(proof_record.HOLD_MARK)]
+
+    def notes(self, card: str = CARD) -> list:
+        return [line for line in self.posted.get(card, [])
+                if line.startswith(proof_record.OBSERVED_MARK)]
+
+    def open(self, card: str = CARD) -> list:
+        return proof_record.open_holds(self.voices(card))
 
 
 def decide(gh: FakeGH, thread: Thread, **kw) -> str:
-    kw = {"comment": thread.comment, "voices": thread.voices, **kw}
+    kw = {"comment": thread.comment, "observe": thread.observe, "voices": thread.voices, **kw}
     return prp.decide(REPO, CARD, CARD_URL, TITLE, gh=gh, now=NOW, description=DESCRIPTION,
                       **kw)
+
+
+def sweep(gh: FakeGH, thread: Thread, **kw) -> int:
+    kw = {"comment": thread.comment, "observe": thread.observe, "voices": thread.voices,
+          "live": True, "now": NOW, **kw}
+    return prp.sweep(REPO, gh=gh, **kw)
+
+
+#: The holds the record at the head supersedes, as DRE-6673 carried them on
+#: 2026-11-01: two cause holds and a time-only hold that has lapsed.
+CAUSE_HOLDS = [linear_ops.proof_waiting_line(*proof_cause_park.hold(
+    [proof_cause_park.CauseRow(criterion, "closed-window", "the window had closed")
+     for criterion in rows]))
+    for rows in (["The Sunday report lists every card"],
+                 ["The Sunday report lists every card", "The sweep posts one receipt"])]
+LAPSED = linear_ops.proof_waiting_line("The Sunday report lists every card",
+                                       f"{linear_ops.NOT_BEFORE}2026-10-14T12:02-07:00")
+#: The time-only hold the record sweep posted on DRE-7200, not yet lapsed.
+PENDING = linear_ops.proof_waiting_line("The Sunday report lists every card",
+                                        f"{linear_ops.NOT_BEFORE}2026-10-16T12:47-07:00")
+#: The proof dispatcher's operator hold DRE-7200 carried beneath it.
+RECHECKS = linear_ops.proof_waiting_line(proof_dispatch.RECHECK_EXHAUSTED_OBSERVED,
+                                         proof_dispatch.RECHECK_EXHAUSTED_NEEDS)
+#: Holds the record does not supersede: an operator's, the CEO's, and a
+#: line nothing here recognizes.
+STANDING = {
+    "three re-checks": RECHECKS,
+    "two timed re-runs": linear_ops.proof_waiting_line(
+        proof_dispatch.TIMED_EXHAUSTED_OBSERVED, proof_dispatch.TIMED_EXHAUSTED_NEEDS),
+    "re-run budget": linear_ops.proof_waiting_line(
+        proof_dispatch.RERUN_EXHAUSTED_OBSERVED, proof_dispatch.RERUN_EXHAUSTED_NEEDS),
+    "the CEO's press": linear_ops.proof_waiting_line(
+        "the plan is approved", f"{proof_record.CEO_PRESS} on the console"),
+    "unrecognized": linear_ops.proof_waiting_line("the deploy finished",
+                                                  "someone checking the dashboard"),
+}
 
 
 def _needs(line: str) -> str:
@@ -212,13 +260,17 @@ def test_an_unstamped_waiting_record_is_held_once_until_its_hold_lapses():
 
     def at(now):
         return prp.decide(REPO, CARD, CARD_URL, TITLE, gh=gh, comment=thread.comment,
-                          voices=thread.voices, now=now, description=DESCRIPTION)
+                          observe=thread.observe, voices=thread.voices, now=now,
+                          description=DESCRIPTION)
 
     assert at(NOW) == "held"
     assert at(NOW + timedelta(minutes=30)) == "held"
     assert len(thread.holds()) == 1, "a later recheck time is the same hold"
+    assert thread.notes() == []
     assert at(NOW + timedelta(hours=prp.WAITING_RECHECK_HOURS, minutes=1)) == "held"
-    assert len(thread.holds()) == 2, "a hold that lapsed is posted again"
+    first, note, second = thread.posted[CARD]
+    assert note.startswith(proof_record.OBSERVED_MARK), "the lapsed hold is retired first"
+    assert thread.open() == [second] and second != first, "a hold that lapsed is replaced"
 
 
 def test_a_restamped_waiting_record_is_held_again():
@@ -227,8 +279,136 @@ def test_a_restamped_waiting_record_is_held_again():
     assert decide(gh, thread) == "held"
     gh.records[HEAD] = record(WAITING_ROW.replace(STAMPED, later), MET_ROW)
     assert decide(gh, thread) == "held"
-    assert [_needs(h) for h in thread.holds()] == [f"not-before={STAMPED}",
-                                                   f"not-before={later}"]
+    first, note, second = thread.posted[CARD]
+    assert _needs(first) == f"not-before={STAMPED}"
+    assert note.startswith(proof_record.OBSERVED_MARK), "the earlier hold is retired first"
+    assert thread.open() == [second] and _needs(second) == f"not-before={later}"
+
+
+# --------------------------------------------------------------------------- #
+# one open hold (DRE-8680)                                                     #
+# --------------------------------------------------------------------------- #
+
+def _held_once(thread: Thread, card: str, head: str) -> None:
+    """The card ends with exactly one open hold — the new one — and the one
+    note that retired the rest, posted before it and naming the head."""
+    *earlier, note, hold = thread.posted[card]
+    assert earlier and all(line.startswith(proof_record.HOLD_MARK) for line in earlier)
+    assert note.startswith(proof_record.OBSERVED_MARK)
+    assert head[:7] in note
+    assert hold.startswith(proof_record.HOLD_MARK)
+    assert thread.open(card) == [hold]
+    assert len(thread.notes(card)) == 1
+
+
+def test_decide_retires_the_holds_the_record_supersedes():
+    thread = Thread(**{CARD: [*CAUSE_HOLDS, LAPSED]})
+    assert len(thread.open()) == 3
+    gh = FakeGH({HEAD: WAITING})
+    assert decide(gh, thread) == "held"
+    _held_once(thread, CARD, HEAD)
+    assert _needs(thread.open()[0]) == f"not-before={STAMPED}"
+
+
+def test_sweep_retires_the_holds_the_record_supersedes():
+    gh, _ = _three()
+    thread = Thread(**{"DRE-7012": [*CAUSE_HOLDS, LAPSED]})
+    assert sweep(gh, thread) == 0
+    assert [c[:3] for c in gh.writes()] == [["pr", "close", "12"]]
+    _held_once(thread, "DRE-7012", "b" * 40)
+
+
+def test_a_record_hold_is_superseded_too():
+    mixed = linear_ops.proof_waiting_line(*prp.hold_line(prp.can_merge(MIXED).blocking, NOW))
+    assert prp.is_record_hold(mixed)
+    thread = Thread(**{CARD: [mixed]})
+    assert decide(FakeGH({HEAD: WAITING}), thread) == "held"
+    _held_once(thread, CARD, HEAD)
+
+
+@pytest.mark.parametrize("pulls", [[], [pull(41, "OPEN")]], ids=["no pull", "open pull"])
+def test_decide_posts_nothing_over_an_operators_hold(pulls, capsys):
+    thread = Thread(**{CARD: [RECHECKS, PENDING]})
+    gh = FakeGH({HEAD: WAITING}, pulls)
+    before = list(thread.posted[CARD])
+    word = decide(gh, thread)
+    assert thread.posted[CARD] == before, "no note and no new hold"
+    assert thread.open() == [RECHECKS, PENDING]
+    out = capsys.readouterr().out
+    line = next(ln for ln in out.splitlines() if ln.startswith(f"{prp.TAG} {word} {CARD} — "))
+    assert proof_dispatch.RECHECK_EXHAUSTED_OBSERVED in line
+    if pulls:
+        assert word == "closed-and-held"
+        (close,) = gh.writes()
+        assert close[close.index("--comment") + 1] == prp.CLOSE_COMMENT.format(
+            branch=BRANCH, n=1, card_url=CARD_URL)
+    else:
+        assert word == "held" and gh.writes() == []
+
+
+def test_sweep_closes_but_posts_nothing_over_an_operators_hold():
+    gh, _ = _three()
+    thread = Thread(**{"DRE-7012": [RECHECKS, PENDING]})
+    assert sweep(gh, thread) == 0
+    (close,) = gh.writes()
+    assert close[:3] == ["pr", "close", "12"]
+    assert close[close.index("--comment") + 1] == prp.CLOSE_COMMENT.format(
+        branch="agent/DRE-7012-proof-record", n=1,
+        card_url="https://linear.app/dreadnoughtfoundry/issue/DRE-7012")
+    assert thread.posted["DRE-7012"] == [RECHECKS, PENDING]
+
+
+@pytest.mark.parametrize("standing", list(STANDING.values()), ids=list(STANDING))
+def test_no_note_and_no_hold_over_a_hold_the_record_does_not_supersede(standing):
+    assert proof_record.time_only(standing) is None
+    assert not prp.is_record_hold(standing) and not proof_cause_park.is_cause_hold(standing)
+    for run in ("decide", "sweep"):
+        thread = Thread(**{CARD: [standing, LAPSED], "DRE-7012": [standing, LAPSED]})
+        if run == "decide":
+            decide(FakeGH({HEAD: WAITING}), thread)
+            card = CARD
+        else:
+            gh, _ = _three()
+            assert sweep(gh, thread) == 0
+            card = "DRE-7012"
+        assert thread.posted[card] == [standing, LAPSED], run
+
+
+def test_a_refused_note_posts_no_hold_and_leaves_the_pull_request_open():
+    def refused(card, text):
+        raise linear_ops.LinearError("linear down")
+
+    thread = Thread(**{CARD: [*CAUSE_HOLDS, LAPSED]})
+    gh = FakeGH({HEAD: WAITING}, [pull(41, "OPEN")])
+    with pytest.raises(linear_ops.LinearError):
+        decide(gh, thread, observe=refused)
+    assert thread.posted[CARD] == [*CAUSE_HOLDS, LAPSED]
+    assert gh.writes() == []
+
+
+def test_sweep_leaves_open_a_pull_request_whose_note_was_refused(capsys):
+    def refused(card, text):
+        raise linear_ops.LinearError("linear down")
+
+    gh, _ = _three()
+    thread = Thread(**{"DRE-7012": [*CAUSE_HOLDS, LAPSED]})
+    assert sweep(gh, thread, observe=refused) == 1
+    assert gh.writes() == []
+    assert thread.posted["DRE-7012"] == [*CAUSE_HOLDS, LAPSED]
+    assert f"{prp.SWEEP_TAG} ERROR: #12 (DRE-7012): linear down" in capsys.readouterr().out
+
+
+def test_the_note_is_not_the_dispatchers_own_lift():
+    thread = Thread(**{CARD: [*CAUSE_HOLDS, LAPSED]})
+    assert decide(FakeGH({HEAD: WAITING}), thread) == "held"
+    (note,) = thread.notes()
+    voices = thread.voices(CARD)
+    upto = voices[:[v.body for v in voices].index(note) + 1]
+    assert upto[-1].body == note and upto[-1].kind == spoken_thread.PIPELINE
+    assert proof_dispatch._lifted_at(upto) is None
+    assert proof_dispatch.LIFTED_BY not in note
+    # It is still the pipeline's own: the re-run budget reads no re-arm off it.
+    assert proof_dispatch._pipeline_note(note)
 
 
 def test_an_unread_thread_posts_no_hold_and_closes_nothing():

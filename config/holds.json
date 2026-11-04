@@ -11,7 +11,8 @@
     "no-route": {
       "lifts": "repo-on-rail",
       "why": "Read off the card's CURRENT repo: label, never the stamp: the usual fix is a person correcting the label, which a lift reading the stamped slug would never see.",
-      "lift_sends": "Triage to Planning"
+      "lift_sends": "Triage to Planning",
+      "triage_repair_lift": "relabel (scripts/triage_repair.py, DRE-8647): the planner names one key of config/repo-map.json in repo.txt, and the repair sets that repo: label, lifts the hold with because=triage-repair and moves the card to Planning, once per card."
     },
     "review-cap-spent": {
       "lifts": "new-head",
@@ -30,13 +31,15 @@
     },
     "epic-rereview-twice": {
       "lifts": "manual",
-      "why": "The park ends in Triage for an operator and the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
-      "lift_sends": "nothing moves"
+      "why": "The park ends in Triage for an operator, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-8647): the epic is re-planned, and the repair lifts the hold with because=triage-repair as it moves the epic out. After that repair, the way back is plan_critic.REAPPROVE_HOW, a person's act that leaves no fact a sweep can read.",
+      "lift_sends": "nothing moves, unless the Triage repair lifts it: then Triage to Planning, the epic re-planned",
+      "triage_repair_lift": "replan (scripts/triage_repair.py, DRE-8647): the repair posts the epic's bound-rewrite receipt with every finding, lifts the hold with because=triage-repair and moves the epic to Planning for a fresh planning attempt, once per card."
     },
     "plan-critic-bound": {
       "lifts": "manual",
       "why": "Every bound park ends in Triage, and no sweep reads a fact that lifts it. It gets one automatic repair first, once per card (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out. After that repair, or one that did not finish, the way back is plan_critic.REAPPROVE_HOW, a person's act.",
-      "lift_sends": "Triage to Planning (rewritten, or an epic re-planned) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise"
+      "lift_sends": "Triage to Planning (rewritten, or an epic re-planned) or Green Light (a question), when the Triage repair lifts it; nothing moves otherwise",
+      "triage_repair_lift": "rewrite (scripts/triage_repair.py, DRE-7178): the planner answers every finding of the park note, and the repair lifts the hold with because=triage-repair as it moves the card out, once per card."
     },
     "fix-dispute": {
       "lifts": "new-head",
@@ -58,6 +61,11 @@
       "why": "A Queued child of an approved epic whose repo's WIP cap is 0 waits on the cap: nothing in that repo is built or promoted, so the child is held and the epic is told once with a `repo-held` receipt (DRE-7754). The sweep's lift pass lifts it when the cap is above 0 again, and the child waits on the dependency gate as before.",
       "lift_sends": "nothing moves"
     },
+    "inherited-red-main": {
+      "lifts": "inherited-checks-green",
+      "why": "The medic read a failed run whose pull request is red only on checks that failed on its merge base too — the fault is on the repo's `main`, not in the card or its pull request — so the card waits in Triage on `main`, not on a person (DRE-8849). Stamped at the head the medic read. The sweep lifts it once every one of those checks is green on `main` again, or with `because=new-head` once the pull request has a new head.",
+      "lift_sends": "Triage to In Review"
+    },
     "manual": {
       "lifts": "manual",
       "why": "A person chose it, or a writer created the card already held; nothing a sweep can read says it is over.",
@@ -71,6 +79,7 @@
     "unpark-marker": "A dead-run-budget-reset marker newer than the stamp.",
     "blockers-terminal": "Every blockedBy relation of the card is Done, Canceled or Duplicate, read off the card's relations by the sweep's promotion gate.",
     "cap-restored": "The repo's WIP cap is above 0 again, read by the sweep, whose lift pass (`repo_held_epics.lift_pass`) lifts every live wip-cap-held stamp on the repo's Queued cards.",
+    "inherited-checks-green": "Every check the stamped head failed on was red on `main` and is green on a newer `main` commit — `stale_merge_ref.decide` answers `refresh` — read by the sweep, whose return pass (`reconcile.return_inherited_red_main_holds`) lifts the live inherited-red-main stamp on the repo's Triage cards. Its only lifter: the hygiene holds lane never lifts it, except by card-closed.",
     "manual": "Nothing a sweep can read: only card-closed or a person lifts it."
   },
   "universal_lift": {
@@ -516,6 +525,28 @@
       ],
       "readers": [
         "sweep"
+      ]
+    },
+    {
+      "file": ".github/workflows/medic.yml",
+      "scope": "Hold the card on an inherited red main",
+      "anchor": "inherited_red_main.py\" medic-read",
+      "note": "The medic's `ask-person` step on a card with an open pull request whose every failing check failed on the merge base too: the card is held `inherited-red-main` at the failed run's head and moved to Triage, and the sweep returns it to In Review once `main` is green on those checks (DRE-8849).",
+      "reasons": [
+        {
+          "reason": "inherited-red-main",
+          "lifts": "inherited-checks-green",
+          "tried_first": {
+            "step": "The medic's diagnosis of the failed run, and its read of the head's and the merge base's check runs: every failing check on the head failed on the merge base too.",
+            "receipt": "medic-next-step: class="
+          }
+        }
+      ],
+      "readers": [
+        "sweep",
+        "fix-dispatch",
+        "medic",
+        "limit-recovery"
       ]
     }
   ]

@@ -97,6 +97,12 @@
       "when": "full passes only"
     },
     {
+      "tag": "proof-overdue:",
+      "printed_by": "scripts/proof_overdue_sweep.py",
+      "constant": "TAG",
+      "when": "every full reconcile pass since DRE-8626, in the `Proof overdue` step's log, where the repo carries a proof-run stub: one line per overdue card, then the note line"
+    },
+    {
       "tag": "proof identity:",
       "printed_by": ".github/workflows/proof-task.yml",
       "constant": null,
@@ -197,6 +203,132 @@
       "printed_by": "scripts/proof_record_pr.py",
       "constant": "SWEEP_TAG",
       "when": "every `sweep` run since DRE-8437, one line on stdout: the open record pull requests read, those closed (or that would be, not live), kept and unread"
+    },
+    {
+      "tag": "hung-job:",
+      "printed_by": "scripts/hung_job.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hung-jobs job's log and step summary"
+    },
+    {
+      "tag": "channel-hold:",
+      "printed_by": "scripts/channel_hold.py",
+      "constant": "TAG",
+      "when": "every Channel Watch pass, in the hold job's log"
+    },
+    {
+      "tag": "planner-allowance:",
+      "printed_by": "scripts/planner_allowance.py",
+      "constant": "TAG",
+      "when": "every read of the planners' Linear allowance since DRE-8616, one line on stdout: start or hold, the card, the remaining and the limit, the threshold, whether the read was answered or refused, the receipt and the run's request count"
+    },
+    {
+      "tag": "triage-unrepaired:",
+      "printed_by": "scripts/triage_unrepaired.py",
+      "constant": "TAG",
+      "when": "every Triage Repair run since DRE-8649, on stdout: one line per Triage card the repair could not fix (its card, its receipt word and when it arrived in Triage), then one closing line — the cards listed, whether every thread was read, and the console door's outcome, or unread when the door was not called"
+    },
+    {
+      "tag": "design-parts:",
+      "printed_by": "scripts/design_parts.py",
+      "constant": "TAG",
+      "when": "every `catalog` run since DRE-8717, one line on stderr after the catalog block (the catalog's first line with `PARTS CATALOG: ` taken off), and every `check` run, one line on stdout: ok, none or invalid"
+    },
+    {
+      "tag": "parts-review:",
+      "printed_by": "scripts/parts_review.py",
+      "constant": "TAG",
+      "when": "every `review` run since DRE-8719, one line on stderr: the review's first line with `PARTS REVIEW: ` taken off, and `, <m> finding(s)` where it applies; since DRE-8721 in qa-review.yml's `Assemble critic context` step's log on every review"
+    },
+    {
+      "tag": "parts-check:",
+      "printed_by": "scripts/parts_check.py",
+      "constant": "CHECK_TAG",
+      "when": "every `check` run since DRE-8841, one line on stderr: pass, does not apply, fail or UNKNOWN; on fail, also one stdout line per finding, `COPY` or `NO-SHARED-PART`"
+    },
+    {
+      "tag": "parts-count:",
+      "printed_by": "scripts/parts_check.py",
+      "constant": "COUNT_TAG",
+      "when": "every `count` run since DRE-8841, one line on stderr: the repo, then the number of copies of shared parts and the declaration source, `none` with the reason, or `UNKNOWN` with the problem"
+    },
+    {
+      "tag": "parts-cleanup:",
+      "printed_by": "scripts/parts_cleanup.py",
+      "constant": "TAG",
+      "when": "every `file` run since DRE-8843, one line on stderr: the repo, then the copies counted, the cards filed and the cards already filed, or `UNKNOWN` with the problem; before it, one stdout line per copy naming the card filed, already filed or (with `--dry-run`) that would be filed"
+    },
+    {
+      "tag": "parts-roster:",
+      "printed_by": "scripts/parts_roster.py",
+      "constant": "TAG",
+      "when": "every `read` run since DRE-8950, one line on stdout: the repo, then `yes` with the source and part count, `undeclared` with the layer folders, or `no` with the reason, each with whether its count and stub are on; or `UNKNOWN` with the problem"
+    },
+    {
+      "tag": "parts-sweep:",
+      "printed_by": "scripts/parts_sweep.py",
+      "constant": "TAG",
+      "when": "every `count` and `record` run since DRE-8944, and on a failed `roster`, one line on stderr per repo: the copies now and a week ago with the change, `skipped`, `unread`, `archived` or `failed` with the reason, or `UNKNOWN` with the problem; since DRE-8945 in the Parts Sweep run's log, one per leg"
+    },
+    {
+      "tag": "parts-provisional:",
+      "printed_by": "scripts/parts_provisional.py",
+      "constant": "TAG",
+      "when": "every `scan` run since DRE-8941, on stderr: one line per part — still provisional with its days, permanent with the pull request it was recorded on, rejected with its replacement card, already recorded, or a duplicate — the rejections read on the parts card, and the repo's summary line; or `UNKNOWN` with the problem. Since DRE-8945 in the Parts Sweep run's log, for each counted repo"
+    },
+    {
+      "tag": "parts-weekly:",
+      "printed_by": "scripts/parts_weekly.py",
+      "constant": "TAG",
+      "when": "every `post` run since DRE-9055, on stderr: `posted`, `already posted`, `would post` or `not posted` with the week, and for `not posted` the reason, `the roster named no repos` among them; the count of parts whose reasoning could not be read; or `UNKNOWN` with the problem. Since DRE-8945 in the Parts Sweep run's `weekly` job's log"
+    },
+    {
+      "tag": "read-fallback:",
+      "printed_by": "scripts/bureau_read.py",
+      "constant": "FALLBACK_TAG",
+      "when": "every read of the board, cards, dependents, workflow states or search that falls back to Linear in `BUREAU_READ=on`, since DRE-8794: one line on stderr per fallback, naming the reader (workflow, job and script), the read and the reason; never in `off` or `shadow`, and never for a `linear-hold` skip"
+    },
+    {
+      "tag": "read-fallback-alert:",
+      "printed_by": "scripts/read_fallback_alert.py",
+      "constant": "TAG",
+      "when": "every full reconcile pass since DRE-8798, one line on stdout in the sweep step's log: the notice door's outcome (raised, repeat, escalated, resolved, not-open, resolve-refused or lost, or `door <mode>` when the read door is not on), the repo, and each reader, read and reason that fell back with its count; an idle pass says it was not settled, and the card-scoped, promote-only and close-only passes print none"
+    },
+    {
+      "tag": "no-code-in-build-lane:",
+      "printed_by": "scripts/reconcile.py",
+      "constant": null,
+      "when": "every full reconcile pass since DRE-9154, one line on stdout in the sweep step's log per `no-code` card a path held back from a build: the card, its lane and the path (`reconcile` for the not-started re-dispatch, `limit-recovery` for a build-stage limit death's re-entry). The tag is spelled once, as `NO_CODE_TAG` in `scripts/limit_recovery.py`, which the sweep prints with"
+    },
+    {
+      "tag": "read-door:",
+      "printed_by": "scripts/bureau_read.py",
+      "constant": null,
+      "when": "every process that reads the door's mode, on stderr: the `read-door: mode <off|shadow|on>` line once when the mode is first read, and in `shadow` or `on` the `read-door: served …` line at exit"
+    },
+    {
+      "tag": "linear-calls:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": null,
+      "when": "every process that sent Linear a request through `linear_ops.py`, at exit on stderr: one line per budget bucket it spent, with the request count this run, the process token and the bucket; a process that never called Linear prints none"
+    },
+    {
+      "tag": "linear-read:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": "READ_TAG",
+      "when": "every process that sent Linear a read through `linear_ops.py`, since DRE-8897, at exit on stderr after its `linear-calls:` lines: one line per (site, caller, bucket), naming the reader (workflow, job and script), the site that asked, the count, the bucket, the process token and the function that sent the query; a process that sent only mutations, or nothing, prints none"
+    },
+    {
+      "tag": "linear-door:",
+      "printed_by": "scripts/linear_ops.py",
+      "constant": "DOOR_TAG",
+      "when": "every process whose read-door mode was `on`, since DRE-8897, at exit on stderr after its `linear-read:` lines, whether or not it sent Linear a request: one line naming the reader, the reads the door served, each read and reason that fell back with its count (`-` for none), the bucket and the process token; never in `off` or `shadow`"
+    },
+    {
+      "tag": "operator-agent:",
+      "printed_by": "scripts/operator_decide.py",
+      "constant": "LOG_TAG",
+      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines). Since DRE-9052 (part 3) the decide step's log also holds `operator-agent: <CARD> triggered — <hand-work entry|hand-work-overdue alarm> at <YYYY-MM-DD HH:MM> PT · <action>` after a triggered card's own line and `operator-agent: <CARD> left in Green Light — <why>` for a Green Light row the agent does not take, and the `apply` job prints `operator-agent: <CARD> moved — Green Light → Planning` or `operator-agent: <CARD> not moved — it is in <lane> now` for a `repair` or `answer`"
     }
   ],
   "causes": [

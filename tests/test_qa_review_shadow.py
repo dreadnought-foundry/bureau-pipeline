@@ -27,7 +27,7 @@ grepped:
     repository with two commits — and that no step acts on it otherwise.
 
 Every `${{ }}` is evaluated by a small three-valued reading of Actions'
-expression language (`_Eval`), the one `test_planner_queue_wiring.py` walks
+expression language (`_Eval`), the one `workflow_walk.py` walks
 plan.yml with, reduced to what this job's expressions use: a value it cannot
 know is a `Sym` carrying the name it was read from, so `--model` can be shown
 to resolve to `steps.model.outputs.model` rather than merely "something".

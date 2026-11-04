@@ -96,6 +96,80 @@ class InheritedSelectionTest(unittest.TestCase):
             inh.inherited("not a payload", runs(("harness", "failure")))
 
 
+def suite_runs(*triples):
+    """A check-runs payload whose runs carry their workflow run's
+    `check_suite.id`, the way `gh api` returns an Actions check run."""
+    return {
+        "check_runs": [
+            {"name": name, "status": "completed", "conclusion": conclusion,
+             "check_suite": {"id": suite}}
+            for name, conclusion, suite in triples
+        ]
+    }
+
+
+BACKEND = "Console backend (pytest)"
+SHARD = "Console backend shard ${{ matrix.shard }}"
+
+
+class MergeBaseReadTest(unittest.TestCase):
+    """DRE-8838: only a merge-base `failure` in a workflow run that was not
+    cancelled can make a check inherited. agent-bureau #4504 was told its own
+    red `Console backend (pytest)` was inherited, because main's run on the
+    merge base was cancelled and its `if: always()` summary job then
+    concluded `failure` having run no test."""
+
+    def test_a_cancelled_job_on_main_leaves_the_prs_failure_its_own(self):
+        head = runs((BACKEND, "failure"))
+        base = runs((BACKEND, "cancelled"))
+        self.assertEqual([], inh.inherited(head, base))
+        self.assertEqual([(BACKEND, "cancelled")], inh.unread(head, base))
+
+    def test_a_failure_in_a_cancelled_run_is_not_read_4504(self):
+        head = suite_runs((BACKEND, "failure", 41), (SHARD, "failure", 41))
+        base = suite_runs((SHARD, "cancelled", 7), (BACKEND, "failure", 7))
+        self.assertEqual([], inh.inherited(head, base))
+        self.assertEqual(
+            [(BACKEND, "failure (its run was cancelled)"),
+             (SHARD, "cancelled")],
+            inh.unread(head, base),
+        )
+
+    def test_every_other_unread_base_conclusion_is_never_inherited(self):
+        for conclusion in ("timed_out", "action_required", "startup_failure",
+                           "stale", "skipped", None):
+            with self.subTest(conclusion=conclusion):
+                head = runs(("harness", "failure"))
+                base = runs(("harness", conclusion))
+                self.assertEqual([], inh.inherited(head, base))
+                self.assertEqual(1, len(inh.unread(head, base)))
+
+    def test_a_base_failure_in_a_run_with_no_cancelled_job_is_inherited(self):
+        head = suite_runs((BACKEND, "failure", 41))
+        base = suite_runs((BACKEND, "failure", 7), (SHARD, "failure", 7),
+                          ("lint", "cancelled", 8))
+        self.assertEqual([BACKEND], inh.inherited(head, base),
+                         "a cancelled job in ANOTHER workflow run is not "
+                         "this run's")
+        self.assertEqual([], inh.unread(head, base))
+
+    def test_a_run_with_no_check_suite_is_never_read_as_cancelled(self):
+        head = runs(("harness", "failure"))
+        base = runs(("harness", "failure"), ("lint", "cancelled"))
+        self.assertEqual(["harness"], inh.inherited(head, base))
+
+    def test_passed_base_runs_are_not_listed_as_unread(self):
+        head = runs(("harness", "failure"), ("lint", "failure"))
+        base = runs(("harness", "success"), ("lint", "neutral"))
+        self.assertEqual([], inh.inherited(head, base))
+        self.assertEqual([], inh.unread(head, base))
+
+    def test_a_check_green_on_the_head_is_never_listed_as_unread(self):
+        head = runs(("harness", "success"))
+        base = runs(("harness", "cancelled"))
+        self.assertEqual([], inh.unread(head, base))
+
+
 class NoticeWordingTest(unittest.TestCase):
     def setUp(self):
         self.names = ["harness"]
@@ -204,6 +278,95 @@ class CliTest(unittest.TestCase):
             ])
         self.assertEqual(0, code, "the fix loop still runs — today's behavior")
         self.assertEqual(inh.UNEVALUATED, out.getvalue().strip().splitlines()[0])
+
+    def _run_both(self, head, base, extra=()):
+        import contextlib
+        import io
+
+        out, err = io.StringIO(), io.StringIO()
+        argv = [
+            "decide",
+            "--checks-file", self._file("head.json", head),
+            "--base-checks-file", self._file("base.json", base),
+            "--base-sha", BASE_SHA,
+            *extra,
+        ]
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = inh.main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_cancelled_base_run_decides_own_4504(self):
+        code, out, _ = self._run_both(
+            suite_runs((BACKEND, "failure", 41)),
+            suite_runs((SHARD, "cancelled", 7), (BACKEND, "failure", 7)),
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(inh.OWN + "\n", out)
+
+    def test_the_run_log_names_every_unread_base_check_on_own(self):
+        comment = str(self.tmp / "comment.md")
+        code, out, err = self._run_both(
+            suite_runs((BACKEND, "failure", 41), ("harness", "failure", 42),
+                       ("lint", "timed_out", 43)),
+            suite_runs((SHARD, "cancelled", 7), (BACKEND, "failure", 7),
+                       ("harness", "timed_out", 8), ("lint", None, 9)),
+            extra=["--comment-out", comment],
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(inh.OWN + "\n", out,
+                         "stdout is exactly the decision word — agent-fix.yml "
+                         "compares all of it to `inherited`")
+        log = err.strip()
+        self.assertEqual(1, len(log.splitlines()))
+        self.assertIn(f"{BACKEND} — failure (its run was cancelled)", log)
+        self.assertIn("harness — timed_out", log)
+        self.assertIn("lint — no conclusion", log)
+        self.assertFalse(Path(comment).exists())
+
+    def test_the_notice_names_unread_base_checks_on_inherited(self):
+        comment = str(self.tmp / "comment.md")
+        note = str(self.tmp / "note.md")
+        code, out, err = self._run_both(
+            suite_runs((BACKEND, "failure", 41), ("harness", "failure", 42)),
+            suite_runs((SHARD, "cancelled", 7), (BACKEND, "failure", 7),
+                       ("harness", "failure", 8)),
+            extra=["--comment-out", comment, "--agent-note-out", note],
+        )
+        self.assertEqual(0, code)
+        self.assertEqual(inh.INHERITED + "\n", out)
+        self.assertIn(f"{BACKEND} — failure (its run was cancelled)", err)
+        for text in (Path(comment).read_text(), Path(note).read_text()):
+            self.assertIn(inh.UNREAD_HEADING, text)
+            unread_part = text.split(inh.UNREAD_HEADING, 1)[1]
+            self.assertIn(BACKEND, unread_part)
+            self.assertIn("failure (its run was cancelled)", unread_part)
+            self.assertIn("not passes", unread_part.lower())
+            self.assertNotIn("harness", unread_part,
+                             "the inherited check is not listed as unread")
+
+    def test_the_notice_has_no_unread_heading_when_all_were_read(self):
+        self.assertNotIn(inh.UNREAD_HEADING,
+                         inh.pr_comment(["harness"], BASE_SHA))
+        self.assertNotIn(inh.UNREAD_HEADING,
+                         inh.agent_note(["harness"], BASE_SHA))
+
+    def test_unevaluated_stdout_is_one_line(self):
+        path = self.tmp / "broken.json"
+        path.write_text("{not json")
+        import contextlib
+        import io
+
+        with contextlib.redirect_stdout(io.StringIO()) as out, \
+                contextlib.redirect_stderr(io.StringIO()) as err:
+            inh.main([
+                "decide",
+                "--checks-file", self._file("head.json",
+                                            runs(("harness", "failure"))),
+                "--base-checks-file", str(path),
+                "--base-sha", BASE_SHA,
+            ])
+        self.assertEqual(inh.UNEVALUATED + "\n", out.getvalue())
+        self.assertIn("not read", err.getvalue())
 
     def test_an_unreadable_head_exits_loud(self):
         path = self.tmp / "broken-head.json"
