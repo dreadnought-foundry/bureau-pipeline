@@ -397,6 +397,80 @@ class TestReplayOneRerunsAtTheCap:
         assert board.pr_notes == [] and board.moves == []
 
 
+class _GitHubOnce(_GitHub):
+    """GitHub refuses a second re-run of a run already re-run and going."""
+
+    def dispatch(self, *args):
+        if args[:2] == ("run", "rerun") and args in self.dispatched:
+            raise reconcile.ReconcileWriteError(
+                f"gh {' '.join(args)} failed rc=1: run is already running")
+        super().dispatch(*args)
+
+
+VERIFY_CANCELED_LOG = (
+    "2026-11-03T22:19:59.0000000Z ##[error]The operation was canceled.\n"
+)
+
+
+def _verify_canceled_checks():
+    """The fixture, with the Verify run's own job the one that was canceled."""
+    checks = _checks()
+    checks[4] = _check(9005, "verify / verify", "cancelled",
+                       "2026-11-03T22:20:00Z", run_id=VERIFY_RUN)
+    return checks
+
+
+def _verify_canceled_github(**over):
+    runs = {CI_RUN: _run(CI_RUN),
+            VERIFY_RUN: _run(VERIFY_RUN, conclusion="cancelled")}
+    kw = dict(checks=_verify_canceled_checks(), logs={**_logs(), 9005: VERIFY_CANCELED_LOG},
+              runs=runs, listing=_listing(conclusion="cancelled"))
+    kw.update(over)
+    return _GitHubOnce(**kw)
+
+
+class TestACanceledVerifyJob:
+    """The Verify run is both a run holding a canceled check and the Verify
+    run: it is re-run once, and named once, as the Verify run."""
+
+    def test_each_run_is_re_run_once_and_noted_once(self):
+        board, github = _Board(), _verify_canceled_github()
+        posted = board.sweep(_pr(), github)
+
+        assert github.dispatched == _reruns(CI_RUN, VERIFY_RUN)
+        assert reconcile._write_failures == []
+        notes = _notes(posted)
+        assert len(notes) == 1, posted
+        note = notes[0]
+        assert note.count(str(VERIFY_RUN)) == 1, note
+        assert f"the Verify run {VERIFY_RUN}" in note
+        assert f"(run {VERIFY_RUN})" not in note
+        assert f"(run {CI_RUN})" in note
+        assert _questions(posted) == []
+        assert board.moves == [] and board.pr_notes == []
+
+    def test_the_second_pass_reads_both_runs_back(self):
+        board, github = _Board(), _verify_canceled_github()
+        pr = _pr()
+        board.sweep(pr, github)
+        assert reconcile._cap_rerun_noted(board.card(), HEAD) == ([CI_RUN], VERIFY_RUN)
+
+        still = _verify_canceled_github(
+            runs={CI_RUN: _run(CI_RUN, attempt=4),
+                  VERIFY_RUN: _run(VERIFY_RUN, conclusion="cancelled", attempt=4)},
+            listing=_listing(conclusion="cancelled", attempt=4))
+        posted = board.sweep(pr, still)
+        assert still.dispatched == []
+        assert reconcile._write_failures == []
+        questions = _questions(posted)
+        assert len(questions) == 1, posted
+        finding = _finding(questions[0])
+        for name in ("Console backend shard 3", "Console backend (pytest)",
+                     f"the Verify run {VERIFY_RUN}"):
+            assert name in finding, finding
+        assert finding.count(str(VERIFY_RUN)) == 1, finding
+
+
 # --------------------------------------------------------------------------- #
 # replay test 2: a failed test in a log is red, and the question goes          #
 # --------------------------------------------------------------------------- #
