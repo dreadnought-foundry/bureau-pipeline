@@ -1,0 +1,7 @@
+{
+  "card": "DRE-8905",
+  "model": "claude-sonnet-5-5",
+  "run_url": "https://github.com/dreadnought-foundry/bureau-pipeline/actions/runs/41886128438",
+  "dispatched_at": "2026-11-04T18:20:02Z",
+  "record_path": "architecture/proofs/card-readers-read-through-the-door.md"
+}
