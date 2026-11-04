@@ -6185,7 +6185,8 @@ def review_cap_rerun(card: dict, pr: dict, tag: str) -> CapRerun:
     finished and no log shows a failed test. The newest `verify.yml` run at
     the head is re-runnable when it finished `failure`, `timed_out` or
     `cancelled` (`_REVIEW_CRASH_CONCLUSIONS`) and no verifier verdict is
-    bound to the head.
+    bound to the head. A Verify run whose own job was canceled is both, and
+    is re-run once and named as the Verify run.
 
     When every non-green check belongs to a re-runnable run, each is re-run
     once (`gh run rerun <id> --failed`, through `gh_dispatch`) and one note
@@ -6286,6 +6287,9 @@ def review_cap_rerun(card: dict, pr: dict, tag: str) -> CapRerun:
         elif (found.get("conclusion") in _REVIEW_CRASH_CONCLUSIONS
               and verifier not in ("PASS", "FAIL", "SKIP")):
             verify_id = int(found["databaseId"])
+            # Its own job may be the canceled one, so `split` named it too:
+            # it is re-run once, and noted as the Verify run.
+            rerun.pop(verify_id, None)
     for check in not_green:
         owner = canceled_check.run_of(check)
         if owner in rerun or (owner is not None and owner == verify_id):
