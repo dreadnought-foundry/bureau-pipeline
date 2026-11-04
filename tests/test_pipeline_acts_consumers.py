@@ -329,6 +329,18 @@ class TestATransientReadIsRetriedBeforeItIsUnread(unittest.TestCase):
         self.assertEqual(1, len(calls))
         self.assertEqual([], self.sleeps)
 
+    def test_a_timeout_is_not_retried(self):
+        """A read that already waited the full timeout is no blip, and asking
+        it again would run the five-minute job out before the skip says why."""
+        import urllib.error
+
+        for error in (TimeoutError("read"), urllib.error.URLError(TimeoutError("connect"))):
+            with self.subTest(error=error):
+                calls = self._urlopen(error, CONSOLE_KNOWS_ONE)
+                self.assertIsNone(guard._get("https://api.github.com/x", "t", "a"))
+                self.assertEqual(1, len(calls))
+                self.assertEqual([], self.sleeps)
+
     def test_a_console_that_stays_unreadable_is_still_unread(self):
         calls = self._urlopen(_http_error(503))
         self.assertIsNone(guard._get("https://api.github.com/x", "t", "a"))
