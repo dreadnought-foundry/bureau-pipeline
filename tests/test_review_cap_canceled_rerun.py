@@ -547,7 +547,10 @@ class TestTheGuards:
     def test_a_refused_rerun_is_recorded_and_the_other_is_noted(self):
         board, github = _Board(), _GitHub()
         github.refuse = {str(VERIFY_RUN)}
-        posted = board.sweep(_pr(), github)
+        before = len(board.comments)
+        with pytest.raises(SystemExit):  # a refused write turns the sweep red
+            board.sweep(_pr(), github)
+        posted = [c["body"] for c in board.comments[before:]]
         assert github.dispatched == _reruns(CI_RUN)
         assert any(str(VERIFY_RUN) in f for f in reconcile._write_failures)
         notes = _notes(posted)
@@ -558,7 +561,10 @@ class TestTheGuards:
     def test_every_rerun_refused_asks_as_today(self):
         board, github = _Board(), _GitHub()
         github.refuse = {str(CI_RUN), str(VERIFY_RUN)}
-        posted = board.sweep(_pr(), github)
+        before = len(board.comments)
+        with pytest.raises(SystemExit):  # a refused write turns the sweep red
+            board.sweep(_pr(), github)
+        posted = [c["body"] for c in board.comments[before:]]
         assert github.dispatched == []
         assert len(reconcile._write_failures) == 2
         assert _notes(posted) == []
