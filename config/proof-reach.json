@@ -103,6 +103,12 @@
       "when": "every full reconcile pass since DRE-8626, in the `Proof overdue` step's log, where the repo carries a proof-run stub: one line per overdue card, then the note line"
     },
     {
+      "tag": "proof-step-limit:",
+      "printed_by": "scripts/proof_step_limit.py",
+      "constant": "TAG",
+      "when": "since DRE-9101, on stdout in the `Dispatch proof runs`, `Close proof records that cannot merge` and `Proof overdue` steps' logs and summaries of a full reconcile pass: `cut step=\"<name>\" limit=<n>s` for each command stopped at its limit (beside a `::warning` annotation), and on the dispatch step, after a cut pass, `dispatch cut on <k> of the last <m> full passes`, or `alarm UNKNOWN (<reason>)` when the look-back or the notice call failed"
+    },
+    {
       "tag": "proof identity:",
       "printed_by": ".github/workflows/proof-task.yml",
       "constant": null,
