@@ -42,8 +42,8 @@ ROOT = Path(__file__).resolve().parent.parent
 #: The committed config naming the sandbox groom card.
 CONFIG = ROOT / "config" / "groom-sandbox.json"
 
-#: The sandbox's label, the one the console's `makeTaskCard` puts on a
-#: sandbox card — the same label the DRE-7783 fixture exclusion reads
+#: The sandbox's label, `repo:agent-bureau-demo`, the one a card on the
+#: sandbox carries — the same label the DRE-7783 fixture exclusion reads
 #: (`groom_verify_agent.SANDBOX_FIXTURE_REPO_LABEL`), held equal by
 #: tests/test_groom_sandbox.py.
 REPO_LABEL = "repo:agent-bureau-demo"

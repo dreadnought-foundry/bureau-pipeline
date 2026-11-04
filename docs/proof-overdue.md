@@ -56,7 +56,7 @@ Each diagnosis also says what the card waits on:
 
 - the card id or release tag for `release`;
 - the UTC time for `date`;
-- the mutation name, such as `createTask`, for `press`;
+- the mutation name, such as `recordLoop`, for `press`;
 - the deploy named for `deploy`;
 - the criterion cut to 70 characters for `unrepeatable`.
 

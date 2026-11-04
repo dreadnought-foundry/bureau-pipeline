@@ -46,7 +46,7 @@ the one it gets:
   * `press` — a press on the sandbox list (`plan_proof_reach.sandbox_presses`,
     the copy of `standards/card-quality.md`'s one list), on the sandbox, on a
     PROOF labeled `repo:agent-bureau` (`SANDBOX_REPO`). `waits_on` is the
-    mutation, such as `createTask`.
+    mutation, such as `recordLoop`.
   * `deploy` — a row's event or a hold's needs half naming a deploy: a
     deployment record, a deploy run, a service rollout. `waits_on` is the
     deploy named — its backticked command, or the clause that names it.
