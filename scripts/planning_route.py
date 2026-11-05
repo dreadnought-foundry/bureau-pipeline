@@ -56,7 +56,8 @@ same hole, burning a planner run each cycle.
 ## The verdict is READ OFF THE CARD, never defaulted (DRE-3038)
 
 The check routes a one-off exactly as `routing_verdict.route()` routes a child:
-role label, then the anchored title convention, then the acceptance criteria,
+role label, then the anchored title convention, then a declared
+`**Operator step:**` line in the body (DRE-9224), then the acceptance criteria,
 then NEEDS WORK when the card states none. It used to answer with one fixed
 FLEET sentence for every one-off, because `mid_epic.is_epic()` read
 `agent:planner` as "this is an epic" — and every card the relay dispatches here
@@ -758,8 +759,9 @@ def _one_off_check(card: dict, comment_bodies, shape: str,
 
     The CARD decides, and there is no default (DRE-3038). This routes exactly
     as `routing_verdict.route()` routes a child of an epic — an explicit role
-    label, then the anchored title convention, then the acceptance criteria,
-    then NEEDS WORK when the card states none — and the shape is passed through
+    label, then the anchored title convention, then a declared
+    `**Operator step:**` line in the body (DRE-9224), then the acceptance
+    criteria, then NEEDS WORK when the card states none — and the shape is passed through
     so the stamp, not the `agent:planner` label, is what answers "is this an
     epic". Reading that label as epic-ness is what sent every one-off down the
     epic branch with no verdict, leaving this function to stamp one fixed
@@ -797,7 +799,8 @@ def mechanical_verdict(title: str, description: str, labels=(),
     """`(verdict, reason)` for ONE card the planning segment is finishing with.
 
     The whole mechanical answer in one place: `routing_verdict.route()`'s strict
-    precedence — role label, anchored title convention, acceptance criteria —
+    precedence — role label, anchored title convention, a declared
+    `**Operator step:**` line in the body (DRE-9224), acceptance criteria —
     and, where that reaches a JUDGEMENT call, the promotable verdict with the
     criteria that were weighed named in the reason.
 
@@ -853,6 +856,13 @@ def person_verdict(card: dict, doc: dict | None = None) -> str:
     `proof_and_demo.py` derives the verdicts a proof may carry. A card the read
     sends to the fleet, back to Planning, or to judgement answers "" — and the
     critic reads it exactly as before.
+
+    A one-off the planner's revision rewrote as an operator step carries a
+    `**Operator step:**` line in its body (DRE-9224), because a revision can
+    only rewrite the description. `route()` reads that line, so the re-read
+    after the revision answers OPERATOR here and the card leaves without a
+    critic read. DRE-9222 was stamped FLEET without it and a build ran only to
+    ask whether it could be re-routed.
     """
     verdict, _ = mechanical_verdict(
         card.get("title") or "",

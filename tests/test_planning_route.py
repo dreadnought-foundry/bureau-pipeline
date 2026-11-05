@@ -1182,6 +1182,86 @@ class TestAPersonsCardIsRoutedBeforeTheCritic:
 
 
 # ===========================================================================
+# DRE-9224: a revision that declares an operator step routes the card OPERATOR
+# ===========================================================================
+#
+# DRE-9222 on 2026-11-04: the planner's revision rewrote it as an operator step
+# and said so, but a revision can only rewrite the description. Its labels
+# (`agent:engineer`) and title were unchanged, the exit stamped FLEET through
+# the judgement branch, and a build agent ran only to ask whether the card
+# could be re-routed OPERATOR. The replay is that card's shape: the same
+# label, the same one-off stamp, criteria naming the deploy and the re-run.
+OPERATOR_STEP_TITLE = "agent-bureau: deploy the console and re-run onboarding for the new repo"
+OPERATOR_STEP_LABELS = ("repo:agent-bureau", "agent:engineer")
+OPERATOR_STEP_LINE = (
+    "**Operator step:** run `make deploy-console` from agent-bureau, then "
+    "re-run `onboard.yml` for the new repo and confirm it finishes green."
+)
+OPERATOR_STEP_CRITERIA = (
+    "## Acceptance criteria\n\n"
+    "- [ ] `make deploy-console` has run and the console serves the new build\n"
+    "- [ ] `onboard.yml` has been re-run for the new repo and finished green\n"
+    "- [ ] the run's link is posted on this card\n"
+)
+OPERATOR_STEP_BODY = (
+    "The console change merged; what is left is a deploy and a workflow re-run.\n\n"
+    f"{OPERATOR_STEP_LINE}\n\n"
+    f"{OPERATOR_STEP_CRITERIA}"
+)
+UNDECLARED_BODY = OPERATOR_STEP_BODY.replace(f"{OPERATOR_STEP_LINE}\n\n", "")
+
+
+class TestARevisionThatDeclaresAnOperatorStep:
+    def _card(self, description: str) -> dict:
+        return _read_card(title=OPERATOR_STEP_TITLE, description=description,
+                          labels=OPERATOR_STEP_LABELS)
+
+    def test_the_replay_is_dre_9222_s_shape(self):
+        assert "agent:engineer" in OPERATOR_STEP_LABELS
+        assert "make deploy-console" in OPERATOR_STEP_CRITERIA
+        assert "onboard.yml" in OPERATOR_STEP_CRITERIA
+        assert OPERATOR_STEP_LINE in OPERATOR_STEP_BODY
+        assert OPERATOR_STEP_LINE not in UNDECLARED_BODY
+
+    def test_decide_routes_it_to_a_person_so_the_critic_is_skipped(self, tmp_path):
+        assert planning_route.person_verdict(self._card(OPERATOR_STEP_BODY)) == "OPERATOR"
+
+        card = _Card([_stamp("one-off")], description=OPERATOR_STEP_BODY,
+                     labels=OPERATOR_STEP_LABELS)
+        written = _decided(card, tmp_path)
+        assert written[planning_route.PERSON_OUTPUT] == "OPERATOR"
+        assert written["route"] == "one-off"
+        assert card.posted == [] and card.states == []
+
+    def test_the_exit_stamps_operator_and_the_sweep_marks_it_a_person_s(self):
+        exit_plan = planning_route.exit_plan(self._card(OPERATOR_STEP_BODY), [_stamp("one-off")])
+        assert exit_plan.verdict == "OPERATOR"
+        assert routing_verdict.card_marks("OPERATOR", OPERATOR_STEP_TITLE) == (
+            "operator-step", "no-code")
+
+    def test_the_label_stays_on_the_card(self):
+        """No label is written or removed: the exit's writes are the verdict
+        comment and the move, and `agent:engineer` is still there after it."""
+        card = _Card([_stamp("one-off")], description=OPERATOR_STEP_BODY,
+                     labels=OPERATOR_STEP_LABELS)
+        assert card.run(lambda: planning_route.main(["exit", CARD])) == 0
+        assert routing_verdict.verdict_on([b for _, b in card.posted]) == "OPERATOR"
+        assert "agent:engineer" in card.labels
+        assert all(label != "agent:engineer" for _, label in card.labelled)
+
+    def test_the_same_card_without_the_line_routes_as_it_does_today(self, tmp_path):
+        assert planning_route.person_verdict(self._card(UNDECLARED_BODY)) == ""
+
+        card = _Card([_stamp("one-off")], description=UNDECLARED_BODY,
+                     labels=OPERATOR_STEP_LABELS)
+        assert _decided(card, tmp_path)[planning_route.PERSON_OUTPUT] == ""
+
+        exit_plan = planning_route.exit_plan(self._card(UNDECLARED_BODY), [_stamp("one-off")])
+        assert exit_plan.verdict == "FLEET"
+        assert exit_plan.reason == planning_route._judgement_reason(UNDECLARED_BODY)
+
+
+# ===========================================================================
 # DRE-6651: an epic still to be planned whose formal blocker is open waits in
 # Queued (Backlog until DRE-6750) instead of asking the CEO
 # ===========================================================================
