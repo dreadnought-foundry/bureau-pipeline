@@ -409,7 +409,8 @@ class ReportSupersededExitTest(unittest.TestCase):
                      f"runs/{GREEN_RUN}")
         for flag in ("close-superseded", "--card DRE-5696",
                      f"--green-run {GREEN_RUN}", f"--green-url {green_url}",
-                     "--workflow-name CI", "--history-file "):
+                     "--workflow-name CI", "--repo portico",
+                     "--history-file "):
             self.assertIn(flag, closes[0])
         self.assertIn("repair-history-report.json", closes[0])
 
