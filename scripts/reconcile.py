@@ -169,6 +169,7 @@ import dependency_cycle  # noqa: E402 — DRE-3539: the loop across the epic and
 # DRE-3262: ONE grammar for "the rescue could not push and the work is in an
 # artifact" — written by the failing run's last step, read back here.
 import deliver_rescue  # noqa: E402
+import dispatch_pool  # noqa: E402 — DRE-9214: the one case-insensitive header reader
 import epic_growth  # noqa: E402 — DRE-6414: the question an epic grown past its green light asks
 import epic_todo_gate  # noqa: E402 — ONE rule for an epic in Todo (DRE-5316, DRE-5347)
 import failure_tally  # noqa: E402 — DRE-8635: a failure already on a card adds a count to it
@@ -179,6 +180,7 @@ import fix_convergence  # noqa: E402 — ONE spelling of a fix run's no-commit l
 import fix_dead_run  # noqa: E402
 import fix_exit  # noqa: E402 — DRE-8785: the one reader of a quiet line's outcome
 import gh_read_retry  # noqa: E402 — ONE read-retry seam, shared with agent-fix.yml (DRE-4157)
+import groom_lookups  # noqa: E402 — DRE-9214: the one reader of `gh api -i`'s status, headers and body
 # DRE-4150: the Urgent fast path reads the CEO's per-card exclusions off the
 # groomer's standing card with the groomer's OWN reader (`decision_records`,
 # `standing_decisions`) — a second reading of his markers would be a second
@@ -1047,7 +1049,8 @@ _degraded: list[str] = []
 
 
 def _degrade(step: str, what: str, err: object,
-             then: str = "reporting nothing this sweep") -> None:
+             then: str = "reporting nothing this sweep",
+             state: str = "unreadable") -> None:
     """Record that `step` could not read `what`, handled it by reporting
     nothing this sweep, and carried on — one ledger entry, one run-log line.
     Stdout, not stderr: it is a reading the sweep did not get, not an error.
@@ -1057,8 +1060,13 @@ def _degrade(step: str, what: str, err: object,
     step whose whole answer is to make the same attempt on the next pass says
     THAT instead (DRE-4278): "reporting nothing" and "retried next sweep" are
     different facts to whoever reads the line, and only one of them tells the
-    reader nobody owes the pull request an action."""
-    entry = f"{step}: {what} unreadable — {then}: {err}"
+    reader nobody owes the pull request an action.
+
+    `state` is why `what` was not read. "unreadable" says nothing about why;
+    a step that knows GitHub rate-limited the read says "rate-limited"
+    instead (DRE-9214). The runner-lost step logged "unreadable" four times
+    on 2026-11-04 for limits that had lifted minutes later."""
+    entry = f"{step}: {what} {state} — {then}: {err}"
     # Deduped (DRE-4486): the ledger records distinct missed READINGS, not
     # call sites. Two backstops share the branch listing — the unlanded-work
     # watchdog and the stranded-fix sweep — so one refused listing reached
@@ -15555,7 +15563,14 @@ class _RunnerLostOps:
     the re-run go out on GH_DISPATCH_TOKEN, as every other Actions call here
     does (`_actions_read`, `gh_dispatch` — the App token 403s on Actions);
     the annotations on GH_TOKEN (`_check_run_annotations`). An unreadable
-    answer is None and a `DEGRADED:` line, never an empty list."""
+    answer is None and a `DEGRADED:` line, never an empty list.
+
+    `branch` is the default branch the step read (DRE-9214), which after a
+    rate limit is its own re-read, not `default_branch()`'s cached answer.
+    None reads `default_branch()`, as before."""
+
+    def __init__(self, branch: str | None = None):
+        self._branch = branch
 
     def _read(self, path: str, what: str, key: str | None = None):
         out, detail = _actions_read(("api", path))
@@ -15579,7 +15594,7 @@ class _RunnerLostOps:
         return found if isinstance(found, list) else None
 
     def runs(self):
-        branch = urllib.parse.quote(default_branch(), safe="")
+        branch = urllib.parse.quote(self._branch or default_branch(), safe="")
         return self._read(
             f"repos/{REPO}/actions/runs?branch={branch}&event=push&per_page=100",
             "the default branch's CI runs", "workflow_runs")
@@ -15619,6 +15634,146 @@ class _RunnerLostOps:
 #: from a gh error body, not git's whole ref grammar.
 _BRANCH_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._/+-]*")
 
+#: How long, in all, the runner-lost step waits on GitHub's rate limit when
+#: its read of the default branch is refused, and how many times it asks
+#: again (DRE-9214). On 2026-11-04 agent-bureau's step was refused four times
+#: with `API rate limit exceeded for installation ID 123249480`, and each time
+#: the installation had about 4,800–5,400 of its 5,500 calls left minutes
+#: later: limits that lift in seconds to a minute or two, each of which cost
+#: the pass every stranded-run re-run.
+#:
+#: The step's share of the sweep's 10-minute job is two minutes at worst:
+#: 60 s of waiting plus two re-reads that each run to their timeout. That
+#: share is the step's own — `gh_read`'s per-sweep retry budget
+#: (GH_READ_RETRY_BUDGET) does not pay for it and is not spent by it, and a
+#: pass whose read answers spends nothing at all. An hour's bucket that is
+#: truly empty asks for its reset, which no wait here could reach; the step
+#: does not wait it, and says what GitHub asked for.
+RUNNER_LOST_RATE_LIMIT_WAIT_SECONDS = 60
+RUNNER_LOST_RATE_LIMIT_WAITS = 2
+#: The wait when the refused answer names none — always the first, because
+#: `default_branch()`'s silent read kept no headers — doubled each time:
+#: 20 s, then 40 s, exactly the bound above.
+RUNNER_LOST_RATE_LIMIT_BACKOFF = 20
+#: The `subprocess.run` timeout on each re-read, so a hung call cannot carry
+#: the step past its share.
+RUNNER_LOST_READ_TIMEOUT = 15
+
+
+def _is_branch_name(name: str) -> bool:
+    return bool(_BRANCH_NAME.fullmatch(name)) and ".." not in name
+
+
+def _rate_limit_ask(headers: dict, waited: int) -> int:
+    """The seconds a rate-limited answer asks for: its `retry-after`; else,
+    when `x-ratelimit-remaining` is 0, until its `x-ratelimit-reset`; else
+    the backoff, doubled for each wait already made. The groom lookups' rule
+    (`groom_lookups._rate_limit_wait`, DRE-8859), on this step's backoff."""
+    after = dispatch_pool._int_or_none(dispatch_pool._header(headers, "retry-after"))
+    if after is not None and after >= 0:
+        return after
+    remaining = dispatch_pool._int_or_none(
+        dispatch_pool._header(headers, "x-ratelimit-remaining"))
+    reset = dispatch_pool._int_or_none(dispatch_pool._header(headers, "x-ratelimit-reset"))
+    if remaining == 0 and reset is not None:
+        return max(0, math.ceil(reset - time.time()))
+    return RUNNER_LOST_RATE_LIMIT_BACKOFF * 2 ** waited
+
+
+def _asks_for_a_wait(headers: dict) -> bool:
+    """True when a refused answer's headers say it is a rate limit: a
+    `retry-after`, or no calls left. Not `x-ratelimit-reset` alone — every
+    GitHub answer carries it, a permission refusal included."""
+    if dispatch_pool._header(headers, "retry-after") is not None:
+        return True
+    return dispatch_pool._int_or_none(
+        dispatch_pool._header(headers, "x-ratelimit-remaining")) == 0
+
+
+def _reread_default_branch() -> tuple[str | None, dict, str, bool]:
+    """One `gh api -i repos/:r`, on the same token `default_branch()` reads
+    with: (the branch or None, the answer's headers, what GitHub said when it
+    refused, whether that refusal was a rate limit — by its words or by its
+    headers). `-i` because the headers are what say how long a limit wants."""
+    try:
+        p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
+            ["gh", "api", "-i", f"repos/{REPO}"], capture_output=True, text=True,
+            check=False, timeout=RUNNER_LOST_READ_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return None, {}, f"no answer in {RUNNER_LOST_READ_TIMEOUT} s", False
+    head, body = groom_lookups._split(p.stdout)
+    headers = groom_lookups._headers(head)
+    if p.returncode != 0:
+        said = " ".join((p.stderr.strip() or body).split())[:400]
+        limited = _is_rate_limit_refusal(f"{p.stderr}\n{body}") or _asks_for_a_wait(headers)
+        return None, headers, said, limited
+    try:
+        name = json.loads(body).get("default_branch")
+    except (ValueError, AttributeError):
+        name = None
+    if isinstance(name, str) and _is_branch_name(name):
+        return name, headers, "", False
+    return None, headers, f"not a branch name: {body[:200]!r}", False
+
+
+def _runner_lost_branch() -> str | None:
+    """The default branch for the runner-lost step, or None after one
+    `DEGRADED:` line saying why the step re-runs nothing this pass.
+
+    `default_branch()` first, as before: a name is the answer, at no cost.
+    When it handed back GitHub's rate-limit refusal instead (DRE-9214), the
+    step waits as GitHub asks and reads again, at most
+    RUNNER_LOST_RATE_LIMIT_WAITS times and RUNNER_LOST_RATE_LIMIT_WAIT_SECONDS
+    in all. A wait past what is left is not waited. Still refused at the
+    bound, the line says "rate-limited" and the waits it made — never
+    "unreadable", which hid four short limits in one day.
+
+    The re-read is the step's own: `default_branch()`'s cached answer is left
+    exactly as it was, so no other step reads the branch differently."""
+    branch = default_branch()
+    if _is_branch_name(branch):
+        return branch
+    what = f"{REPO}'s default branch"
+    if not _is_rate_limit_refusal(branch):
+        _degrade("runner-lost", what, f"not a branch name: {branch[:200]!r}",
+                 then="re-running nothing this sweep")
+        return None
+    budget = RUNNER_LOST_RATE_LIMIT_WAIT_SECONDS
+    refusal = " ".join(branch.split())[:400]
+    headers: dict = {}
+    waits: list[int] = []
+    asked = None
+    while len(waits) < RUNNER_LOST_RATE_LIMIT_WAITS:
+        seconds = _rate_limit_ask(headers, len(waits))
+        left = budget - sum(waits)
+        if seconds > left:
+            asked = (seconds, left)
+            break
+        waits.append(seconds)
+        print(f"gh-read: GitHub refused the runner-lost step's read of {what} "
+              f"for rate limit — waiting {seconds} s and asking again (wait "
+              f"{len(waits)} of {RUNNER_LOST_RATE_LIMIT_WAITS}, {sum(waits)} s "
+              f"of its {budget} s)")
+        time.sleep(seconds)
+        found, headers, said, limited = _reread_default_branch()
+        if found is not None:
+            return found
+        if not limited:
+            _degrade("runner-lost", what, said, then="re-running nothing this sweep")
+            return None
+        refusal = said
+    waited = ", then ".join(f"{w} s" for w in waits)
+    if asked is not None:
+        then = (f"re-running nothing this sweep after waiting {waited}; GitHub "
+                f"then asked for {asked[0]} s, past the {asked[1]} s left of "
+                f"the step's {budget} s")
+    else:
+        then = (f"re-running nothing this sweep after waiting {waited} "
+                f"({sum(waits)} s of the step's {budget} s) and asking again each time")
+    _degrade("runner-lost", what, refusal, then=then, state="rate-limited")
+    return None
+
 
 def rerun_runner_lost_ci() -> None:
     """DRE-5901: re-run, once, a default-branch CI run whose every non-green
@@ -15633,17 +15788,17 @@ def rerun_runner_lost_ci() -> None:
     behind the off-rail fence; and not behind the idle check, because an idle
     board is exactly when a stranded train goes unnoticed. A refused re-run is
     a write failure and turns the run red.
+
+    The branch is `_runner_lost_branch()`'s: `default_branch()` is the silent
+    gh(), and a refused call hands back its JSON error body, which would
+    otherwise go into the listing's URL as the branch and come back as an
+    empty list that says nothing was lost. A rate-limited one is waited out
+    and read again first (DRE-9214).
     """
-    branch = default_branch()
-    # `default_branch()` is the silent gh(): a refused call hands back its
-    # JSON error body, which would otherwise go into the listing's URL as the
-    # branch and come back as an empty list that says nothing was lost.
-    if not _BRANCH_NAME.fullmatch(branch) or ".." in branch:
-        _degrade("runner-lost", f"{REPO}'s default branch",
-                 f"not a branch name: {branch[:200]!r}",
-                 then="re-running nothing this sweep")
+    branch = _runner_lost_branch()
+    if branch is None:
         return
-    for line in runner_lost.sweep(REPO, branch, _RunnerLostOps()):
+    for line in runner_lost.sweep(REPO, branch, _RunnerLostOps(branch)):
         if line.startswith("ERROR:"):
             _write_failures.append(line)
             print(line, file=sys.stderr)
