@@ -37,7 +37,7 @@
       "unit": "reconcile.py#_triage_held_twice",
       "repair": "none",
       "marker": {"tag": "held-verdict-twice"},
-      "why": "the critic's verdict on the open pull request was held twice for a finding with no command output; only a person can answer the finding, then push a new commit or re-run the review"
+      "why": "the critic's verdict on the open pull request was held twice by the evidence gate for a finding it gave no evidence for; only a person can answer the finding, then push a new commit or re-run the review"
     },
     {
       "unit": "planning_route.py#_refuse_no_repo",

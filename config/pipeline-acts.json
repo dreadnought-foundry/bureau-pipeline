@@ -1554,7 +1554,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "held_verdict.reask_notice(pr[\"headRefOid\"], how, hold)",
       "kind": "undeclared-act",
-      "means": "The evidence gate held the critic's verdict on this head — it named a finding and gave no command output for it — so the sweep re-ran the review once, told why the last one was held, and says so as a hold, never as a crashed review (DRE-9230).",
+      "means": "The evidence gate held the critic's verdict on this head — it named a finding and gave no evidence for it — so the sweep re-ran the review once, told why the last one was held, and says so as a hold, never as a crashed review (DRE-9230).",
       "why": "Act-shaped — it is a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change, and the existing `review-retried-after-crash` row is the crash this receipt exists to stop being called. Its body is written by scripts/held_verdict.py, and the `held-verdict-reask @<head sha>` marker it opens with is the per-head count the next sweep reads back before it would re-ask again, so a trailer is a change to that key; the card that declares the act owns both."
     },
     {
