@@ -192,6 +192,40 @@ def test_a_held_verdicts_pull_request_comment_says_held():
     assert reconcile.CRASHED_REVIEW_DISPATCH_TAG not in body
 
 
+def _absence_hold(attempt: str = "1") -> dict:
+    """A hold the gate filed under `job-absence` — "no CI job runs X" with
+    no search — composed by the gate itself, as the post step publishes it."""
+    import verdict_evidence
+    text = (
+        "VERDICT: REQUEST_CHANGES cause:defect\n\n## Summary\n\nx\n\n"
+        "## For the fixing agent\n\nNo CI job runs `npx tsc --noEmit`.\n"
+    )
+    found = verdict_evidence.defects(text)
+    assert [d.rule for d in found] == ["job-absence"]
+    return {
+        "author": {"login": "agent-bureau-qa-bot"},
+        "createdAt": "2026-11-05T11:16:06Z",
+        "body": verdict_evidence.hold_message(found, text) + "\n\n"
+        + held_verdict.footer(SHA, RUN, attempt) + "\n",
+    }
+
+
+def test_a_job_absence_hold_is_re_asked_for_the_search_not_command_output(capsys):
+    """The gate holds for three rules. A hold for a missing search over the
+    workflow set is logged and posted as that, never as missing command
+    output — told the wrong fix, the re-asked review is held again."""
+    state = _run([_pr(comments=[_absence_hold()])])
+    out = capsys.readouterr().out
+    log = next(ln for ln in out.splitlines() if "was HELD" in ln)
+    assert "command output" not in log
+    assert "search over the workflow set" in log
+    assert len(state["receipts"]) == 1
+    body = _body(state["receipts"][0])
+    assert body.startswith(f"🔁 held-verdict-reask @{SHA}:")
+    assert "command output" not in body
+    assert "search over the workflow set" in body
+
+
 def test_a_crashed_review_keeps_its_own_wording(capsys):
     """The other case, pinned beside it: a review that crashed with no
     verdict and no hold is still logged and receipted as a crash."""

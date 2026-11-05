@@ -211,6 +211,102 @@ class TheCriticIsToldWhyTest(unittest.TestCase):
         self.assertIn("printed nothing and exited 1", proc.stdout)
 
 
+def _verdict(*body: str) -> str:
+    """A blocking verdict in the shape the critic prompt mandates."""
+    return "\n".join(
+        ["VERDICT: REQUEST_CHANGES cause:defect", "", "## Summary", "",
+         "The change does not do what the card asked for.", "",
+         "## For the fixing agent", ""] + list(body)
+    ) + "\n"
+
+
+def _gate_hold(*body: str, attempt: str = "1") -> str:
+    """The hold the gate itself composes for `body`, as the post step
+    publishes it — so the rule tags are the gate's, never typed here."""
+    text = _verdict(*body)
+    found = verdict_evidence.defects(text)
+    assert found, "the gate did not hold this verdict"
+    return _published(verdict_evidence.hold_message(found, text), attempt)
+
+
+#: Rule 2b: "no CI job runs X" with no search over the workflow set.
+ABSENCE = _gate_hold("No CI job runs `npx tsc --noEmit`.")
+#: Rule 2: "the job did not run X" with no run or job cited.
+COVERAGE = _gate_hold("The `e2e` job never ran the new spec.")
+#: Rule 1 and rule 2b in one verdict.
+MIXED = _gate_hold("No CI job runs `npx tsc --noEmit`.",
+                   "I ran `pytest -q tests/test_widget.py` and it exited 1.")
+
+
+class TheReasonIsTheRuleThatHeldItTest(unittest.TestCase):
+    """The gate holds for three rules, not one: the reason the sweep posts
+    and the re-run review reads is the rule that actually held the verdict.
+    A job-absence hold told "paste command output" is asked for the wrong
+    evidence, held again, and sent to Triage on a reason that is false."""
+
+    def test_the_gate_tags_are_read_back_as_rules(self):
+        self.assertEqual(held_verdict.read(ABSENCE).rules(), ("job-absence",))
+        self.assertEqual(held_verdict.read(COVERAGE).rules(), ("job-coverage",))
+        self.assertEqual(held_verdict.read(_published(HOLD_2, "2")).rules(),
+                         ("command-output",))
+        self.assertEqual(held_verdict.read(MIXED).rules(),
+                         ("command-output", "job-absence"))
+
+    def test_a_command_output_hold_keeps_its_wording(self):
+        hold = held_verdict.read(_published(HOLD_2, "2"))
+        self.assertEqual(held_verdict.reason(hold),
+                         "it gave no command output for the finding it named")
+
+    def test_a_job_absence_hold_names_the_missing_search(self):
+        hold = held_verdict.read(ABSENCE)
+        why = held_verdict.reason(hold)
+        self.assertNotIn("command output", why)
+        self.assertIn("search over the workflow set", why)
+        for text in (held_verdict.context_lead(hold),
+                     held_verdict.reask_line(141, SHA, hold),
+                     held_verdict.reask_notice(SHA, "re-ran it", hold)):
+            with self.subTest(text=text[:40]):
+                self.assertIn(why, text)
+                self.assertNotIn("gave no command output", text)
+        self.assertNotIn("paste the command and its actual output",
+                         held_verdict.context_lead(hold))
+        self.assertIn(".github/workflows", held_verdict.context_lead(hold))
+
+    def test_a_job_coverage_hold_names_the_missing_run_and_job(self):
+        hold = held_verdict.read(COVERAGE)
+        why = held_verdict.reason(hold)
+        self.assertNotIn("command output", why)
+        self.assertIn("run and job", why)
+        self.assertIn("run id", held_verdict.context_lead(hold))
+        self.assertNotIn("paste the command and its actual output",
+                         held_verdict.context_lead(hold))
+
+    def test_mixed_or_unknown_rules_get_the_neutral_reason(self):
+        neutral = "it gave no evidence for the finding it named"
+        self.assertEqual(held_verdict.reason(held_verdict.read(MIXED)), neutral)
+        unknown = held_verdict.Hold("", SHA, "", "", "- [new-rule] x", "x")
+        self.assertEqual(held_verdict.reason(unknown), neutral)
+        # A mixed hold is asked for every kind of evidence it lacked.
+        lead = held_verdict.context_lead(held_verdict.read(MIXED))
+        self.assertIn("paste the command and its actual output", lead)
+        self.assertIn(".github/workflows", lead)
+
+    def test_the_critics_context_for_a_job_absence_hold(self):
+        comments = [{"user": {"login": CRITIC}, "body": ABSENCE,
+                     "created_at": "2026-11-05T11:16:00Z"}]
+        block = "\n".join(review_card_context.held_verdict_block(
+            comments, CRITIC, SHA))
+        self.assertIn("RE-REVIEW AFTER AN EVIDENCE HOLD", block)
+        self.assertIn("search over the workflow set", block)
+        self.assertNotIn("gave no command output", block)
+
+    def test_the_triage_repair_row_does_not_name_one_rule(self):
+        rows = json.loads((ROOT / "config" / "triage-repair.json").read_text())
+        row = next(r for r in rows["rows"]
+                   if r.get("marker", {}).get("tag") == held_verdict.TWICE_TAG)
+        self.assertNotIn("command output", row["why"])
+
+
 class ThePostStepWritesTheLineTest(unittest.TestCase):
     """The hold the real post step publishes ends in the line, so the sweep
     and the next review can bind it to the head it held."""
