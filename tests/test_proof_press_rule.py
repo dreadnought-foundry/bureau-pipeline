@@ -95,6 +95,10 @@ ASKED = ("createTask", "snoozeTask", "markTaskDone", "makeTaskCard",
 #: is refused on `agent-bureau-demo` too, and the press is not in agent-bureau's
 #: `SANDBOX_PRESS_MUTATIONS`.
 DROPPED = ("answerInitiativeDraftQuestion",)
+#: The Desk speed script's Stop DRE-8032 admitted to agent-bureau's
+#: `SANDBOX_PRESS_MUTATIONS`, right after the two Desk presses, which DRE-9221
+#: added to this copy.
+DESK_STOPS = ("stopDeskTurn",)
 #: The twenty Initiatives presses DRE-8305 added to agent-bureau's
 #: `SANDBOX_PRESS_MUTATIONS` on 2026-10-28, in its order, after the six.
 ADDED = ("startInitiativeDraft", "saveInitiativeDraft", "discardInitiativeDraft",
@@ -123,8 +127,8 @@ KPI_WHYS = ("askKpiWhy",)
 #: under Loops (DRE-8704), the same four agent-bureau took off
 #: `SANDBOX_PRESS_MUTATIONS`.
 RETIRED = ("createTask", "snoozeTask", "markTaskDone", "makeTaskCard")
-PRESSES = (tuple(p for p in ASKED if p not in DROPPED + RETIRED) + ADDED + LOOPS + KPIS
-           + LOOP_ASKS + THOUGHTS + KPI_WHYS)
+PRESSES = (tuple(p for p in ASKED if p not in DROPPED + RETIRED) + DESK_STOPS + ADDED + LOOPS
+           + KPIS + LOOP_ASKS + THOUGHTS + KPI_WHYS)
 #: The presses DRE-8305 left off agent-bureau's list: the CEO's own answers.
 LEFT_OFF = ("approveInitiativeDraft", "answerInitiativeDraftQuestion",
             "answerInitiativeDraftQuestions", "answerDecision")
@@ -137,6 +141,7 @@ PLAIN_WORDS = {
     "answerInitiativeDraftQuestion": "answer a draft's question",
     "sendProjectAgentMessage": "send a Desk message",
     "answerDeskPermission": "answer a Desk Allow",
+    "stopDeskTurn": "stop a Desk turn",
     "startInitiativeDraft": "start an initiative draft",
     "saveInitiativeDraft": "save an initiative draft",
     "discardInitiativeDraft": "discard an initiative draft",
@@ -414,8 +419,9 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
                                    f"'- `<operation>` — <press>': {line!r}")
             ops.append(found.group(1))
         self.assertEqual(list(PRESSES), ops,
-                         f"{self.NAME}: the list is not the presses DRE-7776, DRE-8305, "
-                         "DRE-8727, DRE-8937, DRE-9034, DRE-9044 and DRE-9077 shipped, in order")
+                         f"{self.NAME}: the list is not the presses DRE-7776, DRE-8032, "
+                         "DRE-8305, DRE-8727, DRE-8937, DRE-9034, DRE-9044 and DRE-9077 "
+                         "shipped, in order")
         for op in DROPPED:
             self.assertNotIn(f"`{op}`", "\n".join(bullets),
                              f"{self.NAME} lists `{op}`, which DRE-7776 dropped")
@@ -462,6 +468,10 @@ class TheStandardStatesItOnceTest(unittest.TestCase):
                                        "DRE-8702", "CEO's own answers"),
                         f"{self.NAME} does not say DRE-9077 added `askKpiWhy` "
                         "for the KPI page epic, DRE-8702, and left the CEO's answers off")
+        self.assertTrue(_says_together(self.raw, "DRE-8032", "`stopDeskTurn`",
+                                       "DRE-9221", "`answerDeskPermission`"),
+                        f"{self.NAME} does not say DRE-8032 admitted `stopDeskTurn` "
+                        "and DRE-9221 put it after `answerDeskPermission`")
 
     def test_the_list_is_the_copy_of_agent_bureaus(self):
         for needle in ("`SANDBOX_PRESS_MUTATIONS`", "`console/backend/proof_reader_presses.py`"):

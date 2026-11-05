@@ -604,6 +604,7 @@ The proof brief and the planner's brief point to it and never restate it.
 The sandbox presses, the one list (DRE-7772):
 - `sendProjectAgentMessage` — send a Desk message, or open a conversation
 - `answerDeskPermission` — answer a Desk Allow or Deny
+- `stopDeskTurn` — stop a Desk turn
 - `startInitiativeDraft` — start an initiative draft
 - `saveInitiativeDraft` — save an initiative draft
 - `discardInitiativeDraft` — discard an initiative draft
@@ -652,7 +653,7 @@ and the epic's PROOF holds the copies equal. The epic asked for a seventh,
 answering a draft's question (`answerInitiativeDraftQuestion`), and DRE-7776
 dropped it: the console's owner gate refuses it to the proof-reader on the
 sandbox too. DRE-8305 (2026-10-28) added the twenty Initiatives presses, the
-twenty bullets after `answerDeskPermission`, and left `approveInitiativeDraft`,
+twenty bullets after `stopDeskTurn`, and left `approveInitiativeDraft`,
 `answerInitiativeDraftQuestion(s)` and `answerDecision` off, as the CEO's own
 answers. DRE-8727 (2026-11-02) added the eight loop presses, the eight
 bullets after `deleteInitiativeFile`, for the Loops 1 epic (DRE-8698), and left
@@ -668,6 +669,9 @@ Loops 4 epic (DRE-8701), and left the CEO's own answers off again. DRE-9077
 the four task presses that opened the list — `createTask`, `snoozeTask`,
 `markTaskDone` and `makeTaskCard` — when Tasks retired under Loops, and
 DRE-9201 (2026-11-04) took them off this copy.
+DRE-8032 admitted `stopDeskTurn`, the Desk speed script's Stop, to
+agent-bureau's list, and DRE-9221 (2026-11-05) added it to this copy, the
+bullet after `answerDeskPermission`.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run

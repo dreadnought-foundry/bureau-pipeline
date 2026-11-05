@@ -703,6 +703,14 @@ KPI_WHY_PRESSES = (
     ("askKpiWhy", "ask why a KPI moved", "the run asks why a KPI moved",
      "the run asked why the KPI moved", "asking why a KPI moved"),
 )
+#: The one press DRE-9221 added to this copy, DRE-8032's Desk Stop, after the
+#: two Desk presses: its operation, its plain words as the standard's bullet
+#: gives them, and the press as a criterion writes it in the present, past and
+#: -ing.
+STOP_DESK_TURN_PRESSES = (
+    ("stopDeskTurn", "stop a Desk turn", "the run stops a Desk turn",
+     "the run stopped the Desk turn", "stopping a Desk turn"),
+)
 
 
 def fixture(*, labels=None) -> dict:
@@ -791,7 +799,7 @@ class TheListIsCopied(unittest.TestCase):
 
     def test_the_operations_are_the_standards_bullets_in_order(self):
         listed = listed_operations(self.standard())
-        self.assertEqual(43, len(listed), listed)
+        self.assertEqual(44, len(listed), listed)
         self.assertEqual("", copy_differs(listed))
 
     def test_a_changed_bullet_is_named(self):
@@ -835,18 +843,20 @@ class TheListIsCopied(unittest.TestCase):
                 with self.subTest(op=op, text=text):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
-    def test_the_initiatives_presses_follow_the_two_in_order(self):
-        """DRE-8305's twenty, after the two Desk presses DRE-9201 left first."""
+    def test_the_initiatives_presses_follow_the_three_in_order(self):
+        """DRE-8305's twenty, after the two Desk presses DRE-9201 left first
+        and the Desk Stop DRE-9221 put after them."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual(["sendProjectAgentMessage", "answerDeskPermission"], ours[:2])
-        self.assertEqual([op for op, *_ in INITIATIVES_PRESSES], ours[2:22])
+        self.assertEqual(["sendProjectAgentMessage", "answerDeskPermission", "stopDeskTurn"],
+                         ours[:3])
+        self.assertEqual([op for op, *_ in INITIATIVES_PRESSES], ours[3:23])
 
     def test_the_loop_presses_follow_the_initiatives_in_order(self):
         """DRE-8727: the eight loop presses, after `deleteInitiativeFile`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
         self.assertEqual(["recordLoop", "answerLoop", "trackThis", "moveLoop", "snoozeLoop",
-                          "nudgeLoop", "closeLoop", "markNotALoop"], ours[22:30])
-        self.assertEqual([op for op, *_ in LOOP_PRESSES], ours[22:30])
+                          "nudgeLoop", "closeLoop", "markNotALoop"], ours[23:31])
+        self.assertEqual([op for op, *_ in LOOP_PRESSES], ours[23:31])
 
     def test_the_loop_presses_name_only_themselves(self):
         """DRE-8727: each loop press's plain words, in a criterion and in its
@@ -858,7 +868,7 @@ class TheListIsCopied(unittest.TestCase):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
     def test_no_existing_pattern_matches_a_loop_press(self):
-        """DRE-8727: none of the twenty-two earlier patterns reads a loop
+        """DRE-8727: none of the twenty-three earlier patterns reads a loop
         press's words, and each loop pattern reads its own."""
         for op, *texts in LOOP_PRESSES:
             for text in texts:
@@ -891,8 +901,8 @@ class TheListIsCopied(unittest.TestCase):
         """DRE-8937: the eight KPI presses, after `markNotALoop`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
         self.assertEqual(["reviseKpi", "closeKpi", "retireKpi", "moveKpi", "linkKpiLoop",
-                          "unlinkKpiLoop", "proposeKpi", "confirmKpi"], ours[30:38])
-        self.assertEqual([op for op, *_ in KPI_PRESSES], ours[30:38])
+                          "unlinkKpiLoop", "proposeKpi", "confirmKpi"], ours[31:39])
+        self.assertEqual([op for op, *_ in KPI_PRESSES], ours[31:39])
 
     def test_the_kpi_presses_name_only_themselves(self):
         """DRE-8937: each KPI press's plain words, in a criterion and in its
@@ -904,7 +914,7 @@ class TheListIsCopied(unittest.TestCase):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
     def test_no_existing_pattern_matches_a_kpi_press(self):
-        """DRE-8937: none of the thirty earlier patterns reads a KPI
+        """DRE-8937: none of the thirty-one earlier patterns reads a KPI
         press's words, and each KPI pattern reads its own."""
         for op, *texts in KPI_PRESSES:
             for text in texts:
@@ -930,8 +940,8 @@ class TheListIsCopied(unittest.TestCase):
     def test_the_loop_ask_presses_follow_the_kpis_in_order(self):
         """DRE-9034: the three loop presses, after `confirmKpi`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual(["followUpLoop", "askLoopStatus", "askLoopAgain"], ours[38:41])
-        self.assertEqual([op for op, *_ in LOOP_ASK_PRESSES], ours[38:41])
+        self.assertEqual(["followUpLoop", "askLoopStatus", "askLoopAgain"], ours[39:42])
+        self.assertEqual([op for op, *_ in LOOP_ASK_PRESSES], ours[39:42])
 
     def test_the_loop_ask_presses_name_only_themselves(self):
         """DRE-9034: each press's plain words, in a criterion and in its forms,
@@ -943,7 +953,7 @@ class TheListIsCopied(unittest.TestCase):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
     def test_no_existing_pattern_matches_a_loop_ask_press(self):
-        """DRE-9034: none of the thirty-eight earlier patterns reads one of the
+        """DRE-9034: none of the thirty-nine earlier patterns reads one of the
         three presses' words, and each of the three reads only its own."""
         for op, *texts in LOOP_ASK_PRESSES:
             for text in texts:
@@ -966,8 +976,8 @@ class TheListIsCopied(unittest.TestCase):
     def test_save_thought_follows_the_asks(self):
         """DRE-9044: `saveThought`, after `askLoopAgain`."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual(["saveThought"], ours[41:42])
-        self.assertEqual([op for op, *_ in THOUGHT_PRESSES], ours[41:42])
+        self.assertEqual(["saveThought"], ours[42:43])
+        self.assertEqual([op for op, *_ in THOUGHT_PRESSES], ours[42:43])
 
     def test_save_thought_names_only_itself(self):
         """DRE-9044: the press's plain words, in a criterion and in its forms,
@@ -979,7 +989,7 @@ class TheListIsCopied(unittest.TestCase):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
     def test_no_existing_pattern_matches_save_thought(self):
-        """DRE-9044: none of the forty-one earlier patterns reads the press's
+        """DRE-9044: none of the forty-two earlier patterns reads the press's
         words, and its own pattern reads them."""
         for op, *texts in THOUGHT_PRESSES:
             for text in texts:
@@ -1002,8 +1012,8 @@ class TheListIsCopied(unittest.TestCase):
     def test_ask_kpi_why_follows_save_thought(self):
         """DRE-9077: `askKpiWhy`, after `saveThought`, the last press."""
         ours = [op for op, _ in ppr.SANDBOX_PRESSES]
-        self.assertEqual(["askKpiWhy"], ours[42:])
-        self.assertEqual([op for op, *_ in KPI_WHY_PRESSES], ours[42:])
+        self.assertEqual(["askKpiWhy"], ours[43:])
+        self.assertEqual([op for op, *_ in KPI_WHY_PRESSES], ours[43:])
 
     def test_ask_kpi_why_names_only_itself(self):
         """DRE-9077: the press's plain words, in a criterion and in its forms,
@@ -1015,7 +1025,7 @@ class TheListIsCopied(unittest.TestCase):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
     def test_no_existing_pattern_matches_ask_kpi_why(self):
-        """DRE-9077: none of the forty-two earlier patterns reads the press's
+        """DRE-9077: none of the forty-three earlier patterns reads the press's
         words, and its own pattern reads them."""
         for op, *texts in KPI_WHY_PRESSES:
             for text in texts:
@@ -1038,6 +1048,21 @@ class TheListIsCopied(unittest.TestCase):
             for text in texts:
                 with self.subTest(op=op, text=text):
                     self.assertIsNone(re.search(why, text, re.IGNORECASE))
+                    self.assertEqual([op], ppr.sandbox_presses(text))
+
+    def test_stop_desk_turn_follows_the_two_desk_presses(self):
+        """DRE-9221: `stopDeskTurn`, third, after `answerDeskPermission`."""
+        ours = [op for op, _ in ppr.SANDBOX_PRESSES]
+        self.assertEqual(["stopDeskTurn"], ours[2:3])
+        self.assertEqual([op for op, *_ in STOP_DESK_TURN_PRESSES], ours[2:3])
+
+    def test_stop_desk_turn_names_only_itself(self):
+        """DRE-9221: the press's plain words, in a criterion and in its forms,
+        and its operation name only `stopDeskTurn`."""
+        for op, words, present, past, ing in STOP_DESK_TURN_PRESSES:
+            for text in (words, present, past, ing, op,
+                         f"Sandbox press: on agent-bureau-demo, {present}"):
+                with self.subTest(op=op, text=text):
                     self.assertEqual([op], ppr.sandbox_presses(text))
 
 
