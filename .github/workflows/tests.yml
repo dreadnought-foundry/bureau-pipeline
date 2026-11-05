@@ -656,6 +656,48 @@ jobs:
         if: always() && steps.actsreg.outputs.touched == 'true'
         run: python3 scripts/check_act_consumers.py assert-ran /tmp/acts-consumers.xml
 
+  # No new direct Linear read (DRE-9164). `scripts/check_linear_reads.py`
+  # finds every function in `scripts/` that sends Linear a read itself, and
+  # every workflow `run:` block that does, and compares them with
+  # `config/linear-direct-reads.json` read at the merge base, so a change
+  # cannot admit its own new read by adding a row beside it. A Linear write is
+  # never a finding. The pull-request run is the gate: it runs on GitHub's
+  # merge of the head into the base with `--base "origin/$BASE_REF"`, and it is
+  # the only run that refuses a new read. A push to main and the nightly
+  # schedule run pass no `--base`, so the merge base is HEAD and the run only
+  # confirms that main's ledger lists main's sites — those runs refuse nothing.
+  # The scan covers this repo alone: bureau-pipeline's `scripts/` and
+  # `.github/workflows/`, never agent-bureau's or a fleet repo's own steps.
+  # No job-level `if:`, so the nightly runs it (`tdd` stays the one job a
+  # schedule run skips); full history, because the merge base and its tree
+  # must be readable.
+  linear-reads-check:
+    name: linear reads check
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # PyYAML reads the workflows; one cached install from the one manifest.
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      - name: No new direct Linear read
+        env:
+          # Through env, never interpolated into the shell line. Set on a
+          # pull request alone; empty on a push and on the schedule.
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python3 scripts/check_linear_reads.py --base "origin/$BASE_REF"
+          else
+            python3 scripts/check_linear_reads.py
+          fi
+
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching
   # tests/ must precede the first commit changing non-test code (docs-only
