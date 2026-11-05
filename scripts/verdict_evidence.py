@@ -106,6 +106,15 @@ itself depletes; nothing is exhausted here, and a fresh review over the same
 diff, under a prompt that now states these rules, can genuinely reach an
 evidenced verdict where the last one did not.
 
+AND THE SWEEP NAMES IT HELD (DRE-9230). The same red job is what the sweep's
+crashed-review recovery reads, and on portico #1107 it called a hold a
+crashed review and re-ran the same review blind — which held again, and the
+pull request stopped. The post step now ends the hold with a line naming the
+head and the run (`held_verdict.footer`); the sweep re-asks the first hold
+once under its own receipt, the re-run review reads this module's list of
+what was missing, and a second hold on the same head sends the card to
+Triage naming both runs.
+
 CLI:
 
     verdict_evidence.py check <verdict-file> [--github-output <path>]

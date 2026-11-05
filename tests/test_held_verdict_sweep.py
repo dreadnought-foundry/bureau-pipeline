@@ -30,6 +30,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -44,15 +45,39 @@ os.environ.setdefault("GH_TOKEN", "x")
 
 import held_verdict  # noqa: E402
 import reconcile  # noqa: E402
-from test_crashed_review_recovery import SHA, _pr, _receipt, _sweep  # noqa: E402,F401
 
+SHA = "a" * 40
+REPO = "dreadnought-foundry/atlas"
 FIXTURE = json.loads((ROOT / "tests" / "fixtures" / "held-verdict-1107.json").read_text())
 RUN = FIXTURE["run"]
 HOLD_1, HOLD_2 = [c for c in FIXTURE["comments"]
                   if c["author"]["login"] == "agent-bureau-qa-bot"]
+#: The review check at every head: completed red, as a hold leaves it.
+FAILED_CHECK = [{"status": "completed", "conclusion": "failure",
+                 "name": "call / review"}]
 #: The run listing at the head: the held run, completed red.
 HELD_RUN = [{"databaseId": int(RUN), "status": "completed",
              "conclusion": "failure", "createdAt": "2026-11-05T11:12:00Z"}]
+
+
+@pytest.fixture(autouse=True)
+def _product_repo(monkeypatch):
+    monkeypatch.setattr(reconcile, "REPO", REPO)
+    monkeypatch.setattr(reconcile, "REPO_SLUG", "atlas")
+    monkeypatch.delenv("GH_DISPATCH_TOKEN", raising=False)
+    reconcile._write_failures.clear()
+    reconcile._read_failures.clear()
+    reconcile._pr_listing = None
+    yield
+    reconcile._write_failures.clear()
+    reconcile._read_failures.clear()
+    reconcile._pr_listing = None
+
+
+def _pr(number=141, sha=SHA, branch="agent/DRE-2290-widget", comments=()):
+    return {"number": number, "headRefName": branch, "headRefOid": sha,
+            "mergeStateStatus": "BLOCKED", "isDraft": False,
+            "comments": list(comments)}
 
 
 def _hold(comment: dict, attempt: str, sha: str = SHA, author="agent-bureau-qa-bot") -> dict:
@@ -80,18 +105,57 @@ def _body(argv) -> str:
     return argv[argv.index("--body") + 1]
 
 
-def _run(prs, *, moved=True, card_bodies=(), runs=HELD_RUN):
-    """`_sweep`, with the one Linear write this path adds — the lane move —
-    recorded rather than made."""
-    advances = []
+def _run(prs, *, moved=True, card_bodies=(), head_runs=HELD_RUN):
+    """Run `recover_crashed_reviews` once against a stubbed `gh` and Linear.
+
+    `head_runs` answers the run listing at the head (the run to re-run); the
+    workflow_dispatch in-flight probe answers nothing in flight. Every re-run,
+    dispatch, pull request comment, card comment and lane move is recorded,
+    never made."""
+    state = {"gh_calls": [], "dispatches": [], "receipts": [], "reports": [],
+             "advances": [], "raised": []}
+
+    def fake_run(argv, **kwargs):
+        assert argv[0] == "gh", f"unexpected call: {argv}"
+        args = list(argv[1:])
+        state["gh_calls"].append(tuple(args))
+        ok = SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[:2] == ["pr", "list"]:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(prs), stderr="")
+        if args[0] == "api" and any("/check-runs" in a for a in args[1:]):
+            return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps(
+                [{"total_count": len(FAILED_CHECK), "check_runs": FAILED_CHECK}]))
+        if args[:2] == ["run", "list"]:
+            rows = head_runs if "--commit" in args else []
+            return SimpleNamespace(returncode=0, stdout=json.dumps(list(rows)), stderr="")
+        if args[:2] == ["run", "rerun"]:
+            return ok
+        if args[:2] == ["workflow", "run"]:
+            state["dispatches"].append(args)
+            return ok
+        if args[:2] == ["pr", "comment"]:
+            state["receipts"].append(args)
+            return ok
+        raise AssertionError(f"unexpected gh call: {argv}")
 
     def advance(ident, to_state, from_csv, *flags, held=False):
-        advances.append((ident, to_state, from_csv))
+        state["advances"].append((ident, to_state, from_csv))
         return moved
 
-    with patch.object(reconcile.linear_ops, "cmd_advance", side_effect=advance):
-        state = _sweep(prs, runs=runs, card_bodies=card_bodies)
-    state["advances"] = advances
+    door = {"schema": "bureau-read/1", "read_at": "2026-11-05T11:30:00Z", "alerts": []}
+    with patch.object(reconcile.subprocess, "run", side_effect=fake_run), \
+         patch.object(reconcile.pipeline_notice, "raise_notice",
+                      side_effect=lambda notice, **kw: state["raised"].append(notice) or "raised"), \
+         patch.object(reconcile.pipeline_notice, "resolve_notice",
+                      side_effect=lambda notice, **kw: "resolved"), \
+         patch.object(reconcile.bureau_read, "open_alerts", side_effect=lambda: door), \
+         patch.object(reconcile.linear_ops, "comment_bodies",
+                      side_effect=lambda ident: list(card_bodies)), \
+         patch.object(reconcile.linear_ops, "cmd_comment",
+                      side_effect=lambda ident, body: state["reports"].append((ident, body))), \
+         patch.object(reconcile.linear_ops, "cmd_advance", side_effect=advance):
+        reconcile.recover_crashed_reviews()
+    assert reconcile._write_failures == [], reconcile._write_failures
     return state
 
 
@@ -152,7 +216,7 @@ def test_the_re_ask_re_runs_the_held_run_itself():
     state = _run([_pr(comments=[_hold(HOLD_1, "1")])])
     reruns = [c for c in state["gh_calls"] if c[:2] == ("run", "rerun")]
     assert reruns == [("run", "rerun", RUN, "--failed", "--repo",
-                       "dreadnought-foundry/atlas")]
+                       REPO)]
 
 
 # --------------------------------------------------------------------------

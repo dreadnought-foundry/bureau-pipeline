@@ -229,6 +229,7 @@ class ThePostStepWritesTheLineTest(unittest.TestCase):
             env.update({
                 "PIPELINE_DIR": str(td / ".bureau-pipeline"),
                 "CARD": "", "PR": "1107", "REAL": outputs["real"],
+                "REPO": "dreadnought-foundry/portico",
                 "REVIEWED_SHA": SHA, "CONTENT_ID": "e" * 64,
                 "MODEL_ID": "claude-opus-5", "MODEL_WHY": "advisory ladder top",
                 "GITHUB_REPOSITORY": "dreadnought-foundry/portico",
