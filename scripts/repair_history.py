@@ -21,7 +21,7 @@ This module is the fetch that gives the decision a memory. It runs in
 
     {"current": <entry> + {created_at}, "prior": [<entry>, …],
      "branch_runs": [{run_id, head_sha, status, conclusion, event,
-                      created_at}, …]}
+                      created_at, updated_at}, …]}
     <entry> = {run_id, run_attempt, workflow_path, head_sha, log, jobs:
                [{name, conclusion, steps: [{name, conclusion}]}]}
 
@@ -225,6 +225,9 @@ def _branch_run(run) -> dict:
         "conclusion": run.get("conclusion") or "",
         "event": run.get("event") or "",
         "created_at": run.get("created_at") or "",
+        # DRE-9217: when it finished — the time a superseded repair's
+        # card-close comment names. The rule itself never reads it.
+        "updated_at": run.get("updated_at") or "",
     }
 
 
