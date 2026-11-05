@@ -1601,7 +1601,7 @@ def _acceptance_evidence(description: str) -> str:
 
 
 def criteria_verdict(description: str, doc: dict | None = None) -> tuple:
-    """Precedence 3, as `(verdict, reason)`.
+    """Precedence 4 (3 until DRE-9224), as `(verdict, reason)`.
 
     `(None, reason)` means the criteria exist and name neither signal — a
     judgement call, and the only place a model is worth asking.

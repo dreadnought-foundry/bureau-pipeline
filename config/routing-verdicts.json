@@ -191,7 +191,7 @@
 
   "criteria_signals": {
     "_readme": [
-      "Precedence 3, and the whole mechanical rule: route on whether an",
+      "Precedence 4 since DRE-9224, and the whole mechanical rule: route on whether an",
       "unattended agent can SATISFY the acceptance criteria, not on whether it",
       "could write the code. That reads the card's own stated exit condition",
       "instead of guessing from the title.",

@@ -242,10 +242,13 @@ to `Triage`, and stamps no verdict on it: the refusal names the fix, and a
 **The rule is mechanical:** route on whether an unattended agent can SATISFY
 the acceptance criteria — not on whether it could write the code. Read in strict
 precedence: an explicit role label (`agent:ops`, `no-code`), then the title
-convention **anchored at the start of the title**, then the criteria rule; only
-what survives all three is a judgement call worth asking a model about.
+convention **anchored at the start of the title**, then a declared
+`**Operator step:** <what the person does>` line in the body — opening its own
+line, outside fenced code, with text after the colon — which routes OPERATOR
+(DRE-9224), then the criteria rule; only what survives all four is a judgement
+call worth asking a model about.
 
-**Precedence 3 reads static visual fidelity only (DRE-6227).** Static visual
+**Precedence 4, the criteria rule, reads static visual fidelity only (DRE-6227).** Static visual
 fidelity is FLEET-checkable — `qa-review.yml` screenshots the changed screens
 and hands the critic both the design PNG and the render. No criterion phrase
 routes a card WORKBENCH any more: "sign in", "by hand" and "in production" once
