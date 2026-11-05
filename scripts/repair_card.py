@@ -25,7 +25,9 @@ exactly one way to close, and `settle` is every other ending.
 The third is `close-superseded` (DRE-9217), the repair run's own close of the
 card it filed when its Report step has verified main green past the failure
 (DRE-5700). It cancels the card with one comment naming the green run and its
-time in PT, and leaves a card something else already finished alone. Until it
+time in PT, and leaves a card something else already finished alone. Before
+the cancel it runs settle's flaky-test step (DRE-6870), because a card it
+closes is one `settle` never reads again. Until it
 existed the card waited In Progress for the sweep: on 2026-11-04 DRE-9216
 was filed at 17:22 PT, its run ended superseded, and a person canceled it at
 17:29 PT. `settle` stays the backstop for a close the board refused.
@@ -1106,12 +1108,22 @@ def green_run_time(history, run_id) -> str:
 
 
 def superseded_note(workflow_name: str, green_run: str, green_url: str,
-                    green_at: str) -> str:
+                    green_at: str, fix=None) -> str:
     """The ONE comment the run's own close posts. It opens with
-    `SETTLE_MARKER`, so the sweep's `settle` reads the card as already said."""
+    `SETTLE_MARKER`, so the sweep's `settle` reads the card as already said.
+
+    `fix` is the flaky test's fix card, named in one sentence exactly as
+    `settle_note` names it."""
     when = _when(green_at)
     at = (f"at {_filed(when)}" if when is not None
           else "at a time the run listing did not answer")
+    flaky = ""
+    if fix is not None:
+        flaky = (
+            f"\n\nThe test {_code(fix.test)} has now turned main red twice in "
+            f"{FLAKY_WINDOW_DAYS} days and passed on its own both times, so it "
+            f"is a flaky test to fix — {fix.card} carries that work."
+        )
     return (
         f"{SETTLE_MARKER}. The repair run for this card found main already "
         f"green before it opened anything: run {green_run} of "
@@ -1123,11 +1135,13 @@ def superseded_note(workflow_name: str, green_run: str, green_url: str,
         "work this card was blocking.\n\n"
         "If the branch goes red again, the repair loop files a fresh card for "
         "that commit."
+        f"{flaky}"
     )
 
 
 def close_superseded(*, card: str, green_run: str, green_url: str,
-                     green_at: str, workflow_name: str, ops, log=print) -> str:
+                     green_at: str, workflow_name: str, repo_slug: str, ops,
+                     log=print, now=None) -> str:
     """Cancel the card this repair run filed, now that the run has verified
     main green past the failure. Never raises.
 
@@ -1135,42 +1149,79 @@ def close_superseded(*, card: str, green_run: str, green_url: str,
     the sweep, a person — and is left exactly as it is, said in the log. The
     cancel is conditional on the lane read here, and lands before the
     comment: a comment claiming a cancel Linear refused is the DRE-1254 shape.
+
+    Before the cancel it runs the step `settle` runs before its own (DRE-6870):
+    a card listing a failing test that an earlier Canceled repair card of this
+    repo also lists gets that test's fix card first, named in the comment. A
+    card canceled here is one the sweep never reads again, so skipping the
+    step would file no fix card at all. What `_flaky_fix` could not read
+    closes nothing, exactly as it settles nothing — the sweep asks again.
     """
+    if now is None:
+        from datetime import UTC, datetime
+
+        now = datetime.now(UTC)
     try:
-        state = ops.card_state(card) or ""
+        read = ops.read_card(card) or {}
     except Exception as exc:  # noqa: BLE001 — main is green; this is bookkeeping
         log(f"repair card: {card} could not be read ({exc}) — not closed; the "
             "sweep's settle pass closes it")
         return CLOSE_FAILED
+    state = read.get("state") or ""
     if state in TERMINAL_STATES:
         log(f"repair card: {card} left alone — it is already {state}, moved by "
             "something other than this run")
         return CLOSE_ALREADY_FINISHED
+    description = read.get("description") or ""
     try:
+        fix = None
+        tests = card_failing_tests(description)
+        if tests:
+            fix = _flaky_fix(
+                read, card, card_failing_sha(description) or "(not on its card)",
+                tests, repo_slug, ops, now, ())
+            if isinstance(fix, str):
+                log(f"repair card: {card} not closed — {fix}; the sweep's "
+                    "settle pass closes it")
+                return CLOSE_FAILED
         if not ops.cancel(card, state):
             log(f"repair card: {card} left alone — it left {state!r} before "
                 "the cancel landed")
             return CLOSE_ALREADY_FINISHED
         ops.cmd_comment(card, superseded_note(
-            workflow_name, green_run, green_url, green_at))
+            workflow_name, green_run, green_url, green_at, fix))
     except Exception as exc:  # noqa: BLE001
         log(f"repair card: {card} could not be closed ({exc}) — the sweep's "
             "settle pass closes it")
         return CLOSE_FAILED
-    log(f"repair card: {card} Canceled — main is green past the failure: run "
-        f"{green_run} concluded success ({green_url}), and no repair pull "
-        "request was opened")
+    why = (f"main is green past the failure: run {green_run} concluded "
+           f"success ({green_url}), and no repair pull request was opened")
+    if fix is not None:
+        why += (f"; {fix.test} turned main red twice in {FLAKY_WINDOW_DAYS} "
+                f"days, and {fix.card} is its fix card")
+    log(f"repair card: {card} Canceled — {why}")
     return CLOSED_SUPERSEDED
 
 
 class _CloseOps:
     """The Linear seam `close-superseded` writes through."""
 
-    def card_state(self, identifier: str) -> str:
+    _QUERY = """query($id: String!) { issue(id: $id) {
+         identifier description createdAt state { name }
+       } }"""
+
+    def read_card(self, identifier: str) -> dict:
+        """The card as it is now: its lane, its body and when it was filed —
+        what the close and `_flaky_fix` decide on."""
         import linear_ops
 
-        issue = linear_ops.get_issue(identifier, fresh=True)
-        return ((issue or {}).get("state") or {}).get("name") or ""
+        issue = (linear_ops.gql(self._QUERY, {"id": identifier}) or {}).get(
+            "issue") or {}
+        return {
+            "state": (issue.get("state") or {}).get("name") or "",
+            "description": issue.get("description") or "",
+            "created_at": issue.get("createdAt") or "",
+        }
 
     def cancel(self, identifier: str, lane: str) -> bool:
         import linear_ops
@@ -1182,6 +1233,11 @@ class _CloseOps:
 
         linear_ops.cmd_comment(identifier, body)
 
+    # The flaky test's three seams, exactly the ones a CLI `settle` uses.
+    repair_card_history = _SettleOps.repair_card_history
+    find_open = _SettleOps.find_open
+    create_card = _SettleOps.create_card
+
 
 def _close_superseded_cli(args) -> int:
     """Exit 1 only when the board would not take the close — the Report
@@ -1190,7 +1246,8 @@ def _close_superseded_cli(args) -> int:
         card=args.card, green_run=args.green_run, green_url=args.green_url,
         green_at=green_run_time(red_main_repair.load_history(args.history_file),
                                 args.green_run),
-        workflow_name=args.workflow_name, ops=_CloseOps(),
+        workflow_name=args.workflow_name, repo_slug=args.repo,
+        ops=_CloseOps(),
     )
     return 1 if result == CLOSE_FAILED else 0
 
@@ -1271,6 +1328,9 @@ def main(argv: list[str]) -> int:
                         "superseded` printed it")
     c.add_argument("--green-url", required=True)
     c.add_argument("--workflow-name", default="")
+    c.add_argument("--repo", required=True,
+                   help="the card's repo slug — the flaky test's fix card "
+                        "is filed and looked up under it")
     c.add_argument("--history-file", default="",
                    help="the run listing the Report step gathered; the green "
                         "run's time is read off it")

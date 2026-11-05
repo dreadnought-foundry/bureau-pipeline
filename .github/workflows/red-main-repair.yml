@@ -808,7 +808,8 @@ jobs:
       # `red_main_repair.py superseded`. A later green run ends the job green
       # and closes the card this run filed (`repair_card.py close-superseded`,
       # DRE-9217) — Canceled, one comment naming the green run and its PT
-      # time; a card already finished is left alone and the log says so.
+      # time; a card already finished is left alone and the log says so. A
+      # flaky test's fix card is filed first, as `settle` would (DRE-6870).
       # No such run, or a listing nobody could read, fails as before. On
       # 2026-10-03 run 37092915226's agent rightly opened nothing and this
       # step failed it 41 seconds after main went green on 44eb259.
@@ -929,6 +930,7 @@ jobs:
               elif ! python3 .bureau-pipeline/scripts/repair_card.py close-superseded \
                   --card "$CARD" --green-run "$GREEN_RUN" --green-url "$GREEN_URL" \
                   --workflow-name "$WF_NAME" \
+                  --repo "$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" \
                   --history-file /tmp/repair-history-report.json; then
                 echo "::warning::the repair card $CARD could not be closed — the reconcile sweep's settle pass closes it"
               fi

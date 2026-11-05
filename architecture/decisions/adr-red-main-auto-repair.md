@@ -202,7 +202,11 @@ the bot's GitHub quota burned twice). Repair must not rebuild it:
   the job green and closes the repair card this run filed through
   `repair_card.py close-superseded` (DRE-9217): Canceled, with one comment
   naming the green run and its PT time, and a card something else already
-  finished left alone with a line in the log saying so. A close the board
+  finished left alone with a line in the log saying so. Before the cancel it
+  runs `settle`'s flaky-test step (DRE-6870) — a test this card lists that an
+  earlier Canceled repair card listed within 14 days gets its fix card first,
+  named in the comment — because a card closed here is one the sweep never
+  reads again. A close the board
   refuses warns and stays green, and `settle` (DRE-4411) closes the card on
   its next lap. Until then the card waited for the sweep — DRE-9216, filed
   at 17:22 PT on 2026-11-04, sat In Progress after its run ended superseded
