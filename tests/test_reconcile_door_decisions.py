@@ -91,9 +91,9 @@ def _fresh(monkeypatch):
                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_REPOSITORY",
                  "GITHUB_EVENT_NAME", "MERGED_CARD"):
         monkeypatch.delenv(name, raising=False)
-    # No test here waits for the timeout to fire, so it only has to outlast the
-    # fakes: 0.1s did not, on a loaded runner, while the issuer signed its RS256
-    # token (DRE-9220), and every read fell back to Linear.
+    # Long enough to outlast the fakes: 0.1s did not, on a loaded runner, while
+    # the issuer signed its RS256 token (DRE-9220), and every read fell back to
+    # Linear. The one test that waits for the timeout sleeps past this budget.
     monkeypatch.setattr(bureau_read, "TOTAL_TIMEOUT", 2.0)
     monkeypatch.setattr(reconcile, "REPO_SLUG", "portico")
     monkeypatch.setattr(reconcile, "MAX_WIP", 5)
@@ -290,9 +290,13 @@ def test_the_idle_check_off_and_shadow_prints_no_read_line(monkeypatch, linear, 
 
 def test_a_door_stopped_for_the_run_prints_no_read_line(monkeypatch, linear, capsys):
     with door_at(monkeypatch, *WORLD) as door:
-        door.routes["/board"] = (200, door.envelope([]), 0.3)
-        with pytest.raises(bureau_read.ReadUnknown):
+        # An answer that would be read, sent only after the budget is spent:
+        # nothing but the timeout can stop the door.
+        door.routes["/board"] = (200, door.envelope([], lanes=["In Progress"]),
+                                 bureau_read.TOTAL_TIMEOUT + 0.5)
+        with pytest.raises(bureau_read.ReadUnknown) as exc:
             bureau_read.board(["In Progress"], max_age=60)
+        assert exc.value.reason == "timeout"
         assert not bureau_read.enabled()
         capsys.readouterr()
         reconcile._door_work_cards()
