@@ -15680,11 +15680,21 @@ def _rate_limit_ask(headers: dict, waited: int) -> int:
     return RUNNER_LOST_RATE_LIMIT_BACKOFF * 2 ** waited
 
 
+def _asks_for_a_wait(headers: dict) -> bool:
+    """True when a refused answer's headers say it is a rate limit: a
+    `retry-after`, or no calls left. Not `x-ratelimit-reset` alone — every
+    GitHub answer carries it, a permission refusal included."""
+    if dispatch_pool._header(headers, "retry-after") is not None:
+        return True
+    return dispatch_pool._int_or_none(
+        dispatch_pool._header(headers, "x-ratelimit-remaining")) == 0
+
+
 def _reread_default_branch() -> tuple[str | None, dict, str, bool]:
     """One `gh api -i repos/:r`, on the same token `default_branch()` reads
     with: (the branch or None, the answer's headers, what GitHub said when it
-    refused, whether that refusal was a rate limit). `-i` because the headers
-    are what say how long a limit wants."""
+    refused, whether that refusal was a rate limit — by its words or by its
+    headers). `-i` because the headers are what say how long a limit wants."""
     try:
         p = subprocess.run(  # nosec B603 B607 — fixed-arg gh call, shell=False
             ["gh", "api", "-i", f"repos/{REPO}"], capture_output=True, text=True,
@@ -15696,7 +15706,8 @@ def _reread_default_branch() -> tuple[str | None, dict, str, bool]:
     headers = groom_lookups._headers(head)
     if p.returncode != 0:
         said = " ".join((p.stderr.strip() or body).split())[:400]
-        return None, headers, said, _is_rate_limit_refusal(f"{p.stderr}\n{body}")
+        limited = _is_rate_limit_refusal(f"{p.stderr}\n{body}") or _asks_for_a_wait(headers)
+        return None, headers, said, limited
     try:
         name = json.loads(body).get("default_branch")
     except (ValueError, AttributeError):
