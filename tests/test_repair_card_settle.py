@@ -1036,7 +1036,10 @@ class TheSeamsMatchSettlesCallsTest(unittest.TestCase):
             # `open_card`'s Linear seam, not settle's. `find_open` and
             # `create_card` were excluded here too until DRE-6870 had settle
             # file a flaky test's fix card through them.
-            "stamp_card"}
+            "stamp_card",
+            # `close_superseded`'s Linear seam (DRE-9217), the repair run's
+            # own close — `_CloseOps`, never the sweep's.
+            "card_state"}
         for name in sorted(settle_only):
             with self.subTest(name=name):
                 self.assertTrue(
