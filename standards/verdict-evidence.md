@@ -103,6 +103,15 @@ token defanged so nothing reads the quote as a rejection, and the job's own
 red line names the hold and the rule that held it instead of saying the critic
 crashed.
 
+**A held review is re-asked with its reason, never re-run blind** (DRE-9230).
+On portico #1107 the hold failed the review job, the sweep called it a crashed
+review and re-ran the same review, told nothing, and it held again. The hold
+now ends with a line naming the head and the run that held it. The sweep reads
+that line: it names a held verdict as held, re-asks the first hold on a head
+once, and the re-run review reads what the gate found missing. A second hold on
+the same head sends the card to Triage, with one line naming the pull request,
+both runs and the held finding.
+
 ## Fix, verifier and medic agents
 
 The same obligation runs the other way. A reproduction that disputes a

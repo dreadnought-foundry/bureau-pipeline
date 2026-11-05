@@ -294,6 +294,7 @@ import reviewer_environment  # noqa: E402
 import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth question
 import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 import crashed_review_alert  # noqa: E402 — DRE-8690: a review stuck at its cap is a console alert
+import held_verdict  # noqa: E402 — DRE-9230: a verdict the evidence gate held is not a crashed review
 import read_fallback_alert  # noqa: E402 — DRE-8798: a full pass that fell back is a console alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
@@ -14038,7 +14039,7 @@ def _crashed_review_run_at_head(sha: str) -> str:
     return str(max(crashed, key=lambda r: r.get("createdAt") or "")["databaseId"])
 
 
-def _retry_crashed_review(pr: dict) -> str:
+def _retry_crashed_review(pr: dict, noun: str = "crashed review") -> str:
     """Retry one crashed review; the receipt's wording for what was done, or
     "" when nothing went through.
 
@@ -14047,12 +14048,15 @@ def _retry_crashed_review(pr: dict) -> str:
     the head. With no run to re-run, or a re-run GitHub refuses (a run past
     its re-run window), the review stub is dispatched as before: a fresh
     verdict beside a stale red check still beats no review at all.
+
+    `noun` names the run in the wording: a held verdict's run failed the job
+    the same way and is re-run the same way, but it did not crash (DRE-9230).
     """
     run_id = _crashed_review_run_at_head(pr["headRefOid"])
     if run_id:
         try:
             gh_dispatch("run", "rerun", run_id, "--failed", "--repo", REPO)
-            return f"re-ran the crashed review run {run_id}"
+            return f"re-ran the {noun} run {run_id}"
         except ReconcileWriteError as e:
             print(
                 f"WARNING: crashed-review: PR #{pr['number']} — re-running "
@@ -14422,6 +14426,61 @@ def _settle_reviewer_down_alerts(capped: list, prs: list[dict], unread: set) -> 
               f"{type(e).__name__}: {e}")
 
 
+def _holds_at_head(pr: dict) -> list:
+    """The held verdicts bound to this head, oldest first (DRE-9230).
+
+    Read off the critic's own comments only (`critic_comments`, DRE-1998): a
+    hold anybody else wrote can neither earn a re-ask nor send a card to
+    Triage. A hold carries the head it reviewed on its last line
+    (`held_verdict.footer`), so a new commit re-arms everything.
+    """
+    return held_verdict.holds_at(
+        ((c.get("createdAt") or "", c.get("body") or "") for c in critic_comments(pr)),
+        pr.get("headRefOid") or "",
+    )
+
+
+def _triage_held_twice(pr: dict, holds: list) -> None:
+    """A second held verdict on one head: the card goes to Triage with one
+    line naming the pull request, both runs and the held finding (DRE-9230).
+
+    Once per pull request and head — `held_verdict.twice_marker` on the card
+    is the key. The move is out of the review lane only, so a card somebody
+    already moved is left where it is and nothing is written on it. The line
+    is written after the move, so a card the move refused never reads as
+    parked. Nothing is dispatched: a third review told the same thing is the
+    blind loop #1107 sat in.
+    """
+    number, sha = pr["number"], pr["headRefOid"]
+    card = branch_card(pr["headRefName"])
+    if not card:
+        print(
+            f"WARNING: held-verdict: PR #{number} ({pr['headRefName']}) was "
+            "held twice and carries no card id — nowhere to send it"
+        )
+        return
+    if any(held_verdict.twice_marker(number, sha) in b
+           for b in linear_ops.comment_bodies(card)):
+        print(f"held-verdict: PR #{number} head {sha[:8]} — held twice; "
+              f"{card} was sent to Triage for this head already")
+        return
+    try:
+        moved = linear_ops.cmd_advance(card, "Triage", REVIEW_LANE)
+    except linear_ops.LinearError as e:
+        err = f"held-verdict: {card} (PR #{number}) was not moved to Triage: {e}"
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    if not moved:
+        print(f"held-verdict: PR #{number} head {sha[:8]} — held twice, but "
+              f"{card} is not in {REVIEW_LANE}; left where it is")
+        return
+    linear_ops.cmd_comment(card, held_verdict.triage_line(number, sha, holds))
+    runs = ", ".join(h.where() for h in holds)
+    print(f"held-verdict: PR #{number} head {sha[:8]} — held twice ({runs}); "
+          f"{card} moved to Triage")
+
+
 def _report_stale_verdict(pr: dict) -> None:
     """A PR whose newest verdict binds an OLDER sha than its head, with no
     review running or dispatched, is invisible the same way a crashed one
@@ -14495,6 +14554,15 @@ def recover_crashed_reviews() -> None:
         verdict in this repository after the hold, or the re-run act posted on
         the held pull request. A released head that crashes again is held a
         second time, never dispatched a third.
+      * a failed check whose run the evidence gate HELD (DRE-9230) — the
+        critic's newest word on this head is a hold carrying the head's line
+        (`held_verdict`) → not a crash, and never logged or receipted as one.
+        The first hold is re-asked ONCE per head under its own
+        `held-verdict-reask` receipt, and the re-run review reads why it was
+        held (`review_card_context.held_verdict_block`); the re-ask does not
+        spend the crash budget. A second hold on the same head moves the card
+        to Triage with one line naming the pull request, both runs and the
+        held finding, and nothing more is dispatched.
       * no crashed check but the newest verdict binds an older sha →
         reported once per head (_report_stale_verdict).
 
@@ -14524,6 +14592,7 @@ def recover_crashed_reviews() -> None:
     holds = {p.get("number"): _hold_state(p, verdict) for p in prs}
     standing = any(h.held_at and not h.release for h in holds.values())
     released = []  # held heads whose signal arrived — they join `eligible`
+    reasks = {}  # PR number -> the evidence hold its re-ask answers (DRE-9230)
     capped = []  # heads that reached `_report_reviewer_down` (DRE-8690)
     unread = set()  # PRs this pass holds only part of — their alert stays open
     for pr in prs:
@@ -14574,6 +14643,22 @@ def recover_crashed_reviews() -> None:
                         "a workflow_dispatch review run is still in flight; "
                         "waiting, never double-dispatching"
                     )
+                    continue
+                # DRE-9230: a verdict the evidence gate HELD fails the review
+                # job exactly as a crash does, and it is not one — the critic
+                # ran, reviewed and wrote a verdict. The first hold on a head
+                # is re-asked once, told why; the second goes to Triage. A
+                # re-ask already spent with no second hold behind it is a
+                # re-asked review that crashed for real: the crash path below.
+                gate_holds = _holds_at_head(pr)
+                if len(gate_holds) > held_verdict.REASK_CAP:
+                    _triage_held_twice(pr, gate_holds)
+                    continue
+                if gate_holds and _worker_receipt_count(
+                        pr, held_verdict.REASK_TAG, by=is_worker_pool_comment
+                ) < held_verdict.REASK_CAP:
+                    reasks[pr["number"]] = gate_holds[-1]
+                    eligible.append(pr)
                     continue
                 # DRE-3431: a runner-environment hold on this head answers the
                 # question before the retry budget is consulted — it is an
@@ -14638,6 +14723,15 @@ def recover_crashed_reviews() -> None:
     from_a_hold = {pr["number"] for pr, _ in released}
     eligible.sort(key=lambda p: p["number"])  # oldest first — drain in arrival order
     for pr in eligible[:CRASHED_REVIEW_SWEEP_CAP]:
+        hold = reasks.get(pr["number"])
+        if hold is not None:
+            # DRE-9230: worded as a hold, never as a crash.
+            print(held_verdict.reask_line(pr["number"], pr["headRefOid"], hold))
+            how = _retry_crashed_review(pr, noun="held review")
+            if how:
+                print(f"held-verdict: PR #{pr['number']} — {how}")
+                _post_pr_note(pr["number"], held_verdict.reask_notice(pr["headRefOid"], how, hold))
+            continue
         # A released head is NOT on its first re-dispatch, and a line saying
         # so would be the kind of reassuring log DRE-1254 was made of.
         budget = (
