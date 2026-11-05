@@ -866,23 +866,60 @@ jobs:
             # the door cannot take it. The repo slug is the same derivation as
             # the budget-exhausted step above (DRE-2680).
             REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-            TITLE="Red main needs a decision — $WF_NAME failing on the default branch"
-            {
-              echo "🙋 The repair agent looked at the broken main build and paused rather than guess — it judged this needs a human call."
-              echo ""
-              cat /tmp/repair-escalation.txt
-              echo ""
-              echo "Failed run: $RUN_URL"
-            } > /tmp/repair-question.md
-            if ! python3 .bureau-pipeline/scripts/pipeline_notice.py raise \
-                --notice "red_main:$REPO_SLUG:needs_decision" --severity CRITICAL \
-                --title "Red main in $REPO_SLUG needs a decision — $WF_NAME failing on the default branch" \
-                --body-file /tmp/repair-question.md \
-                --action-url "$RUN_URL" --action-label "Open the failed run" \
-                --fallback-title "$TITLE" --fallback-lane "Triage" \
-                --fallback-label "repo:$REPO_SLUG"; then
-              echo "::error::the repair agent's question reached neither the console nor Linear — failing for medic visibility"
-              exit 1
+            # DRE-9227: main may already be green — on 2026-11-05 a re-run
+            # passed nine minutes before the agent escalated, and the alert
+            # raised after the only all-clear stayed open. The guard asks
+            # clear-notices' question with its reads: `red_main_clear.py
+            # decide` on the tip, with github.token (actions: read — DRE-1346).
+            # Only go=true holds the alert; any other answer, or a guard that
+            # cannot run, raises: a needless raise is closed by the next
+            # all-clear, a needless suppression hides a red main. `repair
+            # settle` cancels the repair card on a green main.
+            if ! TIP_SHA=$(GH_TOKEN="$HISTORY_GH_TOKEN" gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq .sha); then
+              echo "the tip of $DEFAULT_BRANCH could not be read — raising the alert"
+              TIP_SHA=""
+            fi
+            if [ -z "$TIP_SHA" ] || ! GH_TOKEN="$HISTORY_GH_TOKEN" gh run list --repo "$GITHUB_REPOSITORY" --commit "$TIP_SHA" --limit 200 \
+                --json databaseId,workflowName,status,conclusion,event \
+                > /tmp/repair-guard-runs.json; then
+              echo "unreadable" > /tmp/repair-guard-runs.json
+            fi
+            GUARD=$(python3 .bureau-pipeline/scripts/red_main_clear.py decide \
+              --runs-file /tmp/repair-guard-runs.json \
+              --self-run-id "$GITHUB_RUN_ID" \
+              --head-sha "$TIP_SHA" --tip-sha "$TIP_SHA") || GUARD=""
+            GUARD_GO=$(printf '%s\n' "$GUARD" | sed -n 's/^go=//p' | head -1)
+            GUARD_REASON=$(printf '%s\n' "$GUARD" | sed -n 's/^reason=//p' | head -1)
+            if [ "$GUARD_GO" = "true" ]; then
+              # The agent's words go out after a prefix, so no line of them
+              # can start a workflow command.
+              NOT_RAISED="red-main-escalation: not raised — main is green at ${TIP_SHA:0:7} ($GUARD_REASON); the repair agent asked:"
+              echo "$NOT_RAISED"
+              sed 's/^/question: /' /tmp/repair-escalation.txt
+              {
+                echo "$NOT_RAISED"
+                echo ""
+                cat /tmp/repair-escalation.txt
+              } >> "$GITHUB_STEP_SUMMARY"
+            else
+              TITLE="Red main needs a decision — $WF_NAME failing on the default branch"
+              {
+                echo "🙋 The repair agent looked at the broken main build and paused rather than guess — it judged this needs a human call."
+                echo ""
+                cat /tmp/repair-escalation.txt
+                echo ""
+                echo "Failed run: $RUN_URL"
+              } > /tmp/repair-question.md
+              if ! python3 .bureau-pipeline/scripts/pipeline_notice.py raise \
+                  --notice "red_main:$REPO_SLUG:needs_decision" --severity CRITICAL \
+                  --title "Red main in $REPO_SLUG needs a decision — $WF_NAME failing on the default branch" \
+                  --body-file /tmp/repair-question.md \
+                  --action-url "$RUN_URL" --action-label "Open the failed run" \
+                  --fallback-title "$TITLE" --fallback-lane "Triage" \
+                  --fallback-label "repo:$REPO_SLUG"; then
+                echo "::error::the repair agent's question reached neither the console nor Linear — failing for medic visibility"
+                exit 1
+              fi
             fi
           elif FINISH=$(python3 .bureau-pipeline/scripts/repair_finish.py finish \
               --repo "$GITHUB_REPOSITORY" --branch "$BRANCH" \
