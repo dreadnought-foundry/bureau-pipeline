@@ -91,7 +91,10 @@ def _fresh(monkeypatch):
                  "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "GITHUB_REPOSITORY",
                  "GITHUB_EVENT_NAME", "MERGED_CARD"):
         monkeypatch.delenv(name, raising=False)
-    monkeypatch.setattr(bureau_read, "TOTAL_TIMEOUT", 0.1)
+    # No test here waits for the timeout to fire, so it only has to outlast the
+    # fakes: 0.1s did not, on a loaded runner, while the issuer signed its RS256
+    # token (DRE-9220), and every read fell back to Linear.
+    monkeypatch.setattr(bureau_read, "TOTAL_TIMEOUT", 2.0)
     monkeypatch.setattr(reconcile, "REPO_SLUG", "portico")
     monkeypatch.setattr(reconcile, "MAX_WIP", 5)
     bureau_read.reset_for_tests()
