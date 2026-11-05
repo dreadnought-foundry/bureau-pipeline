@@ -7782,21 +7782,80 @@ def _return_epic_to_planning(dep: str, because: str) -> None:
     )
 
 
-def _released_by(states: dict[str, str], released: dict[str, str] | None = None) -> str:
+def _released_by(states: dict[str, str], released: dict[str, str] | None = None,
+                 removed: Iterable[str] = ()) -> str:
     """The blockers that released a waiting epic, for its receipt's first line.
 
     A blocker the strict gate released (`released`, DRE-7831) is named as
     released — built out, or a proof of a built-out epic — never by its
-    state, which would say it is In Progress; a closed one keeps `is <state>`.
+    state, which would say it is In Progress; a closed one keeps `is <state>`,
+    so the line says Done, Canceled or Duplicate. A blocker the epic's hold
+    named whose relation is gone (`removed`, DRE-9223) is named as removed.
     """
     released = released or {}
-    if len(states) == 1 or released:
-        return "; ".join(
+    removed = sorted(removed)
+    ways = []
+    if len(states) == 1 or (states and (released or removed)):
+        ways.append("; ".join(
             f"blocker {blocker} {released.get(blocker) or f'is {states[blocker]}'}"
             for blocker in sorted(states)
-        )
-    named = ", ".join(f"{blocker} ({states[blocker]})" for blocker in sorted(states))
-    return f"blockers {named} are closed"
+        ))
+    elif states:
+        named = ", ".join(f"{blocker} ({states[blocker]})" for blocker in sorted(states))
+        ways.append(f"blockers {named} are closed")
+    if len(removed) == 1:
+        ways.append(f"the blocker relation on {removed[0]} was removed")
+    elif removed:
+        ways.append(f"the blocker relations on {', '.join(removed)} were removed")
+    elif not states:
+        ways.append("its blocker relations were removed")
+    return "; ".join(ways)
+
+
+#: The `⏸️ epic-waits:` hold's first words, as plan.yml posts it, and the act
+#: whose trailer it carries (`pipeline_act.receipt`).
+_EPIC_HOLD_OPENER = "⏸️ epic-waits:"
+_EPIC_HOLD_ACT = "epic-waits-on-blocker"
+#: The blockers the hold names: `… on its formal blocker(s) <id> (<state>), …. It is planned …`.
+_EPIC_HOLD_BLOCKERS = re.compile(r"formal blocker\(s\) (.*?)\. It is planned")
+_CARD_ID = re.compile(r"\b[A-Z][A-Z0-9]*-\d+\b")
+
+
+def _standing_hold(epic: str, record: dict) -> set[str] | None:
+    """The blockers `epic`'s standing `⏸️ epic-waits:` hold named, or None
+    when no hold of its stands (DRE-9223).
+
+    The hold stands when its newest one is a receipt of the act — opening with
+    the hold's words and carrying its trailer — and the epic's lane history
+    (`record`, newest first) moves it to no lane but the queue after it was
+    posted: an epic that went on to Planning, Green Light or anywhere else
+    since, and came back, is in Queued for some other reason. The thread is
+    `linear_ops.comment_timeline`'s, off the pass's board read. It is not
+    judged by author: plan.yml posts the hold on the planner's key, not the
+    sweep's, and the most a copy could do is send an epic nothing blocks to
+    Planning, where a person still approves its plan.
+
+    Raises on a thread that cannot be read; the caller decides what that
+    means.
+    """
+    hold = None
+    for node in linear_ops.comment_timeline(epic):  # oldest -> newest
+        body = node.get("body") or ""
+        if (body.lstrip().startswith(_EPIC_HOLD_OPENER)
+                and (pipeline_act.read_trailer(body) or {}).get("act") == _EPIC_HOLD_ACT):
+            hold = node
+    if hold is None:
+        return None
+    held_at = _moment(hold.get("createdAt"))
+    if held_at is None:
+        return None
+    for row in (record.get("history") or {}).get("nodes") or ():
+        lane = (row.get("toState") or {}).get("name")
+        moved_at = _moment(row.get("createdAt"))
+        if lane and lane not in QUEUE_LANES and (moved_at is None or moved_at > held_at):
+            return None
+    match = _EPIC_HOLD_BLOCKERS.search(hold.get("body") or "")
+    return set(_CARD_ID.findall(match.group(1))) if match else set()
 
 
 def return_waiting_epics(epics: set[str]) -> None:
@@ -7816,14 +7875,21 @@ def return_waiting_epics(epics: set[str]) -> None:
     Their relations come off the pass's epic record — one read for them all,
     and none at all when the close already made it. An epic moves when:
       * the record still reads it in Queued;
-      * it carries at least one formal `blockedBy` relation — an epic nothing
-        blocks has nothing to wait for, and a roll-up child waiting for its
-        parent's activation is the split's to send (DRE-6591);
+      * it carries at least one formal `blockedBy` relation, or its
+        `⏸️ epic-waits:` hold still stands (`_standing_hold`, DRE-9223): a
+        held epic whose relation was removed has nothing left to wait for, and
+        DRE-7695 sat twelve days in Queued that way. An epic nothing blocks
+        and nothing held has nothing to wait for either, and a roll-up child
+        waiting for its parent's activation is the split's to send
+        (DRE-6591), so it is left;
       * `epic_blockers_unmet(epic, release_at_build_done=False)` is False, the
         strict rule: every blocker in `prose_blockers.TERMINAL`, or a built-out
         In Progress epic, or a PROOF card of a Done or built-out epic — a
         waiting epic is never held by a proof (DRE-7831). The receipt names a
-        released blocker as released (`_released_by`), never as In Progress.
+        released blocker as released (`_released_by`), never as In Progress,
+        a closed one by its state, and a blocker the hold named whose
+        relation is gone as removed. The release is the live relations'
+        alone: the hold only says the epic was held, and on what.
 
     Per-epic isolation, as `close_finished_epics` has it (DRE-3148): one epic
     that cannot be read or moved is logged and skipped, and the rest are swept.
@@ -7844,11 +7910,28 @@ def return_waiting_epics(epics: set[str]) -> None:
             if ((record.get("state") or {}).get("name")) not in QUEUE_LANES:
                 continue  # moved since the promotion read: not waiting here
             states = prose_blockers.blocker_states(relations)
+            hold = None
             if not states:
-                continue  # nothing blocks it: it was never waiting on a blocker
+                try:
+                    hold = _standing_hold(epic, record)
+                except Exception as exc:  # noqa: BLE001 — unknown is not released
+                    print(f"epic-return: {epic} has no blockedBy relation and its "
+                          f"thread could not be read ({exc}) — left in {QUEUE_LANE} "
+                          "this sweep")
+                    continue
+                if hold is None:
+                    continue  # nothing blocks it, and no epic-waits hold of its stands
             if epic_blockers_unmet(epic, release_at_build_done=False):
                 continue  # the gate's own `epic-gate:` line says which holds
-            _return_epic_to_planning(epic, _released_by(states, _waiting_releases.get(epic)))
+            if states:
+                try:
+                    hold = _standing_hold(epic, record)  # only to name a removed relation
+                except Exception:  # noqa: BLE001 — the live relations already release it
+                    hold = None
+            removed = set(hold or ()) - set(states)
+            _return_epic_to_planning(
+                epic, _released_by(states, _waiting_releases.get(epic) if states else None,
+                                   removed))
         except Exception as exc:  # noqa: BLE001 — isolate one epic, sweep the rest
             print(
                 f"epic-return: could not return {epic} ({exc}) — skipped this sweep",
