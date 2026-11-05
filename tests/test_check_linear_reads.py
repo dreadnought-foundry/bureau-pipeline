@@ -383,6 +383,199 @@ def test_a_document_the_check_cannot_resolve_counts_as_a_read(tmp_path):
     assert not {"handed.constant_write", "handed.local_write"} & names
 
 
+#: Every spelling the critic sent on review of #1494 that the first scanner
+#: missed, plus their neighbors. `{doc}` is the document each one sends.
+RESOLVED_SPELLINGS = """
+    import functools
+    import subprocess
+    from functools import partial
+    from urllib.request import urlopen
+
+    import linear_ops
+    import linear_ops as lo
+    from linear_ops import gql as q
+    from linear_ops import gql_paged as pages
+
+    SEND = linear_ops.gql
+    HOST = "api.linear" + ".app"
+    URL = "https://" + HOST + "/graphql"
+
+    def aliased_import(card):
+        return q({doc}, {{"id": card}})
+
+    def aliased_paged():
+        return pages({doc})
+
+    def assigned_alias(card):
+        run = linear_ops.gql
+        return run({doc}, {{"id": card}})
+
+    def module_alias(card):
+        return SEND({doc}, {{"id": card}})
+
+    def default_alias(card, *, send=lo.gql_paged):
+        return send({doc}, {{"id": card}})
+
+    def partial_call():
+        return functools.partial(linear_ops.gql, {doc})()
+
+    def partial_bound(card):
+        ask = partial(lo.gql)
+        return ask({doc}, {{"id": card}})
+
+    def getattr_call(card):
+        return getattr(linear_ops, "gql")({doc}, {{"id": card}})
+
+    def subscript_call(card):
+        return vars(linear_ops)["gql_paged"]({doc}, {{"id": card}})
+"""
+
+
+def _resolved(doc: str) -> dict[str, str]:
+    return {"scripts/resolved.py": RESOLVED_SPELLINGS.replace("{doc}", doc)
+            .replace("{{", "{").replace("}}", "}")}
+
+
+RESOLVED_SITES = {f"resolved.{n}" for n in (
+    "aliased_import", "aliased_paged", "assigned_alias", "module_alias",
+    "default_alias", "partial_call", "partial_bound", "getattr_call",
+    "subscript_call")}
+
+
+def test_an_aliased_assigned_partial_or_getattr_transport_is_a_site(tmp_path):
+    names = site_names(tree(tmp_path, _resolved(QUERY)))
+    assert RESOLVED_SITES <= names, sorted(RESOLVED_SITES - names)
+
+
+def test_the_same_resolved_spellings_sending_a_mutation_are_not_sites(tmp_path):
+    names = site_names(tree(tmp_path, _resolved(MUTATION)))
+    assert not {n for n in names if n.startswith("resolved.")}, sorted(names)
+
+
+def test_an_aliased_import_is_refused_as_new_by_the_check(tmp_path):
+    root = listed_repo(tmp_path)
+    write(root, {"scripts/a.py": f"""
+        from linear_ops import gql as q
+
+        def peek():
+            return q({QUERY})
+    """})
+    code, out = run_check(root)
+    assert code == 1, out
+    assert re.search(r"^linear-reads-check: new a\.peek — scripts/a\.py:5$", out, re.M), out
+
+
+def test_a_getattr_off_linear_ops_by_a_name_the_check_cannot_read_is_a_site(tmp_path):
+    root = tree(tmp_path, {"scripts/dynamic.py": """
+        import linear_ops
+
+        def by_name(which, doc):
+            return getattr(linear_ops, which)(doc)
+
+        def door(lops):
+            via_door = getattr(lops, "card_via_door", None)
+            return via_door("DRE-1") if via_door else None
+    """})
+    names = site_names(root)
+    assert "dynamic.by_name" in names
+    assert "dynamic.door" not in names
+
+
+def test_anything_aimed_at_linears_host_is_a_site_however_it_is_sent(tmp_path):
+    root = tree(tmp_path, {"scripts/raw.py": """
+        import os
+        import subprocess
+        from urllib.request import urlopen
+
+        import linear_ops
+
+        HOST = "api.linear" + ".app"
+        URL = "https://api.linear.app/graphql"
+        _LINEAR_API_HOST = "api.linear.app"
+
+        def curl_literal():
+            return subprocess.run(["curl", "-s", "https://api.linear.app/graphql",
+                                   "-d", '{"query":"{ viewer { id } }"}'])
+
+        def curl_constant():
+            return subprocess.run(["curl", "-s", URL], check=True)
+
+        def curl_linear_ops_api():
+            return subprocess.check_output(["curl", "-s", linear_ops.API])
+
+        def shell():
+            return os.system("curl -s https://api.linear.app/graphql")
+
+        def built_host():
+            return urlopen("https://" + HOST + "/graphql")
+
+        def built_locally():
+            host = "api.linear" + ".app"
+            return urlopen(f"https://{host}/graphql")
+
+        def other_client(session):
+            return session.post("https://api.linear.app/graphql", json={})
+
+        def classify(line):
+            '''A log line naming api.linear.app is a Linear fault.'''
+            return _LINEAR_API_HOST in line
+
+        def elsewhere():
+            return subprocess.run(["curl", "-s", "https://example.com/graphql"])
+    """})
+    names = site_names(root)
+    expected = {f"raw.{n}" for n in (
+        "curl_literal", "curl_constant", "curl_linear_ops_api", "shell",
+        "built_host", "built_locally", "other_client")}
+    assert expected <= names, sorted(expected - names)
+    assert not {"raw.classify", "raw.elsewhere", "raw.<module>"} & names, sorted(names)
+    assert not {"linear_ops.<module>", "linear_ops._send"} & names
+
+
+def test_a_function_patched_in_as_gql_is_plumbing_and_a_closure_over_gql_is_a_site(tmp_path):
+    root = tree(tmp_path, {"scripts/seam.py": f"""
+        import linear_ops
+
+        def counting():
+            real = linear_ops.gql
+
+            def counted(query, variables=None):
+                return real(query, variables)
+
+            linear_ops.gql = counted
+            try:
+                return linear_ops.gql({QUERY})
+            finally:
+                linear_ops.gql = real
+
+        def forwarding():
+            real = linear_ops.gql
+
+            def forward(query):
+                return real(query)
+            return forward
+    """})
+    names = site_names(root)
+    assert {"seam.counting", "seam.forward"} <= names
+    assert not {"seam.counted", "seam.forwarding"} & names
+
+
+def test_a_message_naming_the_endpoint_by_its_constant_is_not_a_site_and_a_literal_is(tmp_path):
+    root = tree(tmp_path, {
+        "scripts/linear_ops.py": FAKE_OPS + '''
+
+def _refusal():
+    return RuntimeError(f"linear error from {API}: refused, no request sent")
+''',
+        "scripts/loud.py": """
+            def complain():
+                raise RuntimeError("could not reach https://api.linear.app/graphql")
+        """})
+    names = site_names(root)
+    assert "linear_ops._refusal" not in names
+    assert "loud.complain" in names
+
+
 def test_an_inner_function_is_named_by_its_own_name(tmp_path):
     root = tree(tmp_path, {
         "scripts/hygiene.py": """
@@ -555,6 +748,47 @@ def test_a_workflow_run_block_that_talks_to_linear_is_a_site(tmp_path):
     assert sites["throwaway.yml#sweep/Ask Linear by hand"].path == \
         ".github/workflows/throwaway.yml"
     assert sites["throwaway.yml#sweep/Ask Linear by hand"].line == 10
+
+
+INLINE_WORKFLOW = """
+name: Inline
+on: push
+env:
+  LINEAR_GRAPHQL: https://api.linear.app/graphql
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    env:
+      ENDPOINT: https://api.linear.app/graphql
+    steps:
+      - name: Script step
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const r = await fetch("https://api.linear.app/graphql", {method: "POST"});
+      - name: Env-held URL
+        env:
+          URL: https://api.linear.app/graphql
+        run: |
+          curl -s "$URL" -d '{"query":"{ viewer { id } }"}'
+      - name: Elsewhere
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const r = await fetch("https://example.com/graphql");
+"""
+
+
+def test_a_workflow_step_talks_to_linear_through_with_or_env_too(tmp_path):
+    write(tmp_path, {".github/workflows/inline.yml": INLINE_WORKFLOW})
+    sites = {s.name: s for s in clr.scan_workflows(tmp_path)}
+    assert set(sites) == {"inline.yml#env", "inline.yml#sweep/env",
+                          "inline.yml#sweep/Script step",
+                          "inline.yml#sweep/Env-held URL"}
+    assert sites["inline.yml#sweep/Script step"].line == 16
+    assert sites["inline.yml#sweep/Env-held URL"].line == 19
+    assert sites["inline.yml#env"].line == 5
+    assert sites["inline.yml#sweep/env"].line == 10
 
 
 # ── the four ledger rules, over throwaway git repositories ───────────────────
