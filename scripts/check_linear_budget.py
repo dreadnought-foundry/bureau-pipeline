@@ -51,10 +51,10 @@ three times; matched anywhere, that added three "unknown/rolled" lines to
 every reconcile run.
 
 A repo the token cannot read prints UNKNOWN, never 0: a zero that means
-"could not look" would hide exactly the repo that is spending. A run whose
-log `gh` cannot return (still in progress, or expired) is read again, up to
-3 attempts with a short back-off between them (DRE-3242): a run that has only
-just finished usually reads on the second look. One still unreadable after
+"could not look" would hide exactly the repo that is spending. A completed
+run whose log `gh` cannot yet return (or one that has expired) is read
+again, up to 3 attempts with a short back-off between them (DRE-3242): a run
+that has only just finished usually reads on the second look. One still unreadable after
 the last attempt is named in the footer as `<slug> <run id>`, and the last
 thing `gh` said about it goes to stderr. An empty log — `gh` answers rc 0
 with no output for a completed run whose every job was skipped — is not
@@ -121,19 +121,78 @@ config/repo-map.json; a slug the map does not hold exits 2 before any `gh`
 call, and stderr names it and the valid ones. `--workflow <name>`,
 repeatable, fetches the log of only the runs whose `workflowName` is one of
 the names; the others are never fetched. `--deadline <seconds>` reads the
-time since the script started before each `gh run list` and each `gh run
+time since the script started before each repo's listing and each `gh run
 view`; once it reaches the deadline nothing more is read, and the four
 tables print from the runs that were. The spend table's footer then carries
 one more note, `stopped at the deadline (<seconds>s)`, naming per slug how
 many of its listed runs — of the named workflows, with `--workflow` — were
 not read, and the slugs never reached. A slug never reached prints the
 UNKNOWN rows an unreadable repo prints, never 0. With none of the three,
-the output is exactly what it was.
+the tables are exactly what they were.
 
-Never writes anything: `gh run list` and `gh run view --log` are its only
-calls. Usage:
+It reads the window whole (DRE-9165). It used to list a repo's newest 100
+runs and keep the ones created in the window, so a busy hour was cut short
+without a word: on 2026-11-03, for the hour ending 12:16 PT, GitHub listed
+183 runs in bureau-pipeline and the check read at most 100 — its fallback
+table showed 3 fallbacks where the run logs held 16, and the switch-off is
+gated on that table reading zero. A repo's runs are now listed with the
+window as GitHub's own filter, every page read, as one JSON document:
+
+    gh api --paginate --slurp "repos/<owner>/<repo>/actions/runs?created=<start>..<end − 1 s>&per_page=100"
+
+GitHub's `created=<a>..<b>` includes both ends and a run's `created_at` is
+whole seconds, so `<start>..<end − 1 s>` matches exactly the runs with
+`start <= created_at < end`, the window kept here, and GitHub's
+`total_count` for that range counts the same runs. A run that slides across
+a page boundary while the pages are read is kept once, by `id`, and a
+listing that fails on any page makes the repo UNKNOWN, never a partial list.
+GitHub answers at most 1,000 runs for a run list filtered by `created`, and
+every page says how many it matched: with `total_count` above 1,000 the repo
+is UNKNOWN, the cap named on stderr, never the first 1,000. One hour fits
+well under it — bureau-pipeline's measured hour, 11:16 to 12:16 PT on
+2026-11-03, matched 183 — so at that rate only a window of about five hours
+or more reaches the cap, and a wider `--hours` can read UNKNOWN for the
+busiest repo.
+
+And it finishes when a proof run calls it (DRE-9165). On 2026-11-03 the
+sibling sweep proof ran it with `--hours 1 --by-caller` under `timeout 580`
+from 11:28 PT, and it was stopped at 11:37 PT with rc 124 and nothing on
+stdout (architecture/audits/sweep-reads-door-proof-2026-11.md). So:
+
+- `--end <time>` names the window's end, as ISO-8601 with `Z` or an offset
+  (`2026-11-04T19:00:00Z`, `2026-11-04T11:00:00-08:00`). The window is
+  `--hours` long and ends there, so a proof can read a past hour after it
+  has closed, whenever it starts; without `--end` it ends now. An `--end`
+  that does not parse, names no offset, or is in the future exits 2.
+- A run whose `status` is not `completed` is never asked for its log — no
+  read, no retry, no back-off. That covers the calling proof's own run.
+- Logs are read `LOG_WORKERS` at a time, from a thread pool, and the rows
+  are added up in run-id order, so the tables are byte for byte what reading
+  them one at a time prints. `--deadline` is read before each read starts:
+  once it is reached no new read starts, a read already started finishes and
+  counts, and the runs never started are the ones the footer names.
+- When a repo's runs have all been read, one line goes to stderr,
+  `budget-check: <slug> <n> run log(s) read in <s>s`, so a run stopped by a
+  ceiling shows the repo it stopped in. Stdout is still printed once, at
+  the end.
+
+Two lines follow the spend table's TOTAL line on every run:
+
+    runs listed, <N>h to <end>: <slug> <count>, <slug> <count>, …
+    runs in progress, not read: <slug> <run id>, <slug> <run id>, …
+
+`<end>` is the window's end in UTC. `<count>` is every run in the window,
+the ones in progress included and before `--workflow` narrows which logs
+are read; a repo whose listing failed, passed the cap or that `--deadline`
+never reached reads `<slug> UNKNOWN`. The second line reads `none` when no
+run listed is in progress.
+
+Never writes anything: its only calls are the `gh api` listing above — a
+GET, with no `--method`, no field and no `--input` — and `gh run view
+--log`. Usage:
 
     python3 scripts/check_linear_budget.py [--hours N] [--by-caller] [--repo SLUG ...] [--workflow NAME ...] [--deadline SECONDS]
+        [--end TIME]
 """
 
 from __future__ import annotations
@@ -143,7 +202,9 @@ import json
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -210,6 +271,18 @@ _sleep = time.sleep
 # The clock `--deadline` is read off (DRE-9163) — the one seam, as `_sleep`
 # is the back-off's, so a test moves it and never waits.
 _monotonic = time.monotonic
+
+# How many `gh run view --log` reads run at once (DRE-9165).
+LOG_WORKERS = 8
+# The most runs GitHub answers for a run list filtered by `created`; a
+# `total_count` above it is UNKNOWN, never the first 1,000 (DRE-9165).
+LISTING_CAP = 1000
+
+
+def _now() -> datetime:
+    """The seam "now" is read through — the window's end without `--end` and
+    the line an `--end` may not pass (DRE-9165) — so a test can fix it."""
+    return datetime.now(timezone.utc)
 
 
 class _DeadlineReached(Exception):
@@ -643,25 +716,46 @@ def _gh(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _runs_since(repo: str, since: datetime) -> list[dict] | None:
-    """The repo's runs created at or after `since`, or None when the repo
-    cannot be read (that is UNKNOWN, never an empty list)."""
-    p = _gh("run", "list", "-R", repo, "--limit", "100",
-            "--json", "databaseId,workflowName,createdAt")
+def _iso(t: datetime) -> str:
+    """`t` as ISO-8601 UTC to the second, the way GitHub writes `created_at`."""
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _runs_in(repo: str, start: datetime, end: datetime) -> list[dict] | None:
+    """The repo's runs created in `start <= created_at < end`, kept once by
+    `id` and sorted by it, each as `databaseId`, `workflowName`, `createdAt`
+    and `status` — or None when the repo cannot be read: a listing that
+    failed on any page, or one past GitHub's cap (that is UNKNOWN, never an
+    empty or a partial list).
+
+    One paged GET of the window (DRE-9165). GitHub's `created=<a>..<b>`
+    includes both ends, so the upper bound is the window's last second."""
+    window = f"{_iso(start)}..{_iso(end - timedelta(seconds=1))}"
+    p = _gh("api", "--paginate", "--slurp",
+            f"repos/{repo}/actions/runs?created={window}&per_page=100")
     if p.returncode != 0:
-        print(f"{repo}: gh run list failed rc={p.returncode}: "
+        print(f"{repo}: gh api listing failed rc={p.returncode}: "
               f"{p.stderr.strip()[:200]}", file=sys.stderr)
         return None
+    runs: dict[int, dict] = {}
     try:
-        runs = json.loads(p.stdout or "[]")
-    except json.JSONDecodeError:
+        for page in json.loads(p.stdout or "[]"):
+            if page["total_count"] > LISTING_CAP:
+                print(f"{repo}: GitHub matched {page['total_count']} runs in "
+                      f"created={window}, past its {LISTING_CAP:,}-run cap on a "
+                      "filtered run list — UNKNOWN, never the first "
+                      f"{LISTING_CAP:,}", file=sys.stderr)
+                return None
+            for run in page["workflow_runs"]:
+                created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                if start <= created < end:
+                    runs.setdefault(run["id"], {
+                        "databaseId": run["id"], "workflowName": run["name"],
+                        "createdAt": run["created_at"], "status": run["status"]})
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        print(f"{repo}: gh api listing unreadable: {e!r}"[:300], file=sys.stderr)
         return None
-    out = []
-    for run in runs:
-        created = datetime.fromisoformat(run["createdAt"].replace("Z", "+00:00"))
-        if created >= since:
-            out.append(run)
-    return out
+    return [runs[rid] for rid in sorted(runs)]
 
 
 def _run_log(repo: str, run_id: int,
@@ -688,6 +782,50 @@ def _run_log(repo: str, run_id: int,
     return None, (p.stderr.strip() or p.stdout.strip() or f"rc={p.returncode}")
 
 
+def _read_logs(repo: str, runs: list[dict],
+               expired) -> tuple[dict[int, tuple[str | None, str]], int]:
+    """`_run_log` for each run, LOG_WORKERS at a time (DRE-9165): run id →
+    what `_run_log` answered, for every run read, and how many were not.
+
+    Reads start in the order of `runs`, and `expired` is asked before each
+    one starts: once it answers True no new read starts, the reads already
+    started finish and count, and the runs never started — or whose retry
+    the deadline cut, as one at a time — are the ones not read."""
+    results: dict[int, tuple[str | None, str]] = {}
+    started = {}
+    unread = 0
+    slots = threading.Semaphore(LOG_WORKERS)
+    with ThreadPoolExecutor(max_workers=LOG_WORKERS) as pool:
+        for k, run in enumerate(runs):
+            slots.acquire()
+            if expired():
+                slots.release()
+                unread = len(runs) - k
+                break
+            future = pool.submit(_run_log, repo, run["databaseId"], expired)
+            future.add_done_callback(lambda _f: slots.release())
+            started[run["databaseId"]] = future
+    for run_id, future in started.items():
+        try:
+            results[run_id] = future.result()
+        except _DeadlineReached:
+            unread += 1
+    return results, unread
+
+
+def render_listed(listed: dict[str, int | None], in_progress: list[tuple[str, int]],
+                  *, hours: float, end: datetime) -> str:
+    """The two lines after the spend table's TOTAL line (DRE-9165): the runs
+    listed per slug asked for, in the order read — UNKNOWN for a slug whose
+    listing failed, passed the cap or was never reached — and each run listed
+    that is still in progress, as `<slug> <run id>`."""
+    counts = ", ".join(f"{slug} {UNKNOWN if n is None else n}"
+                       for slug, n in listed.items())
+    busy = ", ".join(f"{slug} {run_id}" for slug, run_id in in_progress)
+    return (f"runs listed, {hours:g}h to {_iso(end)}: {counts or 'none'}\n"
+            f"runs in progress, not read: {busy or 'none'}")
+
+
 def main(argv: list[str] | None = None) -> int:
     started = _monotonic()
     ap = argparse.ArgumentParser(
@@ -708,8 +846,31 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--deadline", type=float, metavar="SECONDS",
                     help="read nothing more once this many seconds have passed, "
                          "and print the tables from what was read")
+    ap.add_argument("--end", metavar="TIME",
+                    help="the window's end, as ISO-8601 with Z or an offset "
+                         "(e.g. 2026-11-04T19:00:00Z); default now")
     args = ap.parse_args(argv)
-    since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+
+    now = _now()
+    end = now
+    if args.end is not None:
+        try:
+            end = datetime.fromisoformat(args.end)
+        except ValueError:
+            end = None
+        if end is None or end.tzinfo is None:
+            print(f"--end: not an ISO-8601 time with Z or an offset: {args.end}",
+                  file=sys.stderr)
+            return 2
+        if end > now:
+            print(f"--end: in the future: {args.end} (now {_iso(now)})", file=sys.stderr)
+            return 2
+    # Whole seconds, as GitHub's `created_at` is: the window is `start <=
+    # created_at < end`, and the listing asks for `<start>..<end − 1 s>`.
+    end = end.astimezone(timezone.utc).replace(microsecond=0)
+    start = end - timedelta(hours=args.hours)
+    if start.microsecond:
+        start = start.replace(microsecond=0) + timedelta(seconds=1)
 
     repo_map = load_repo_map()
     wanted = set(args.repo or ())
@@ -731,23 +892,30 @@ def main(argv: list[str] | None = None) -> int:
     empty = 0
     unread: dict[str, int] = {}
     unreached: list[str] = []
+    # slug → runs listed in the window (None: UNKNOWN), and the runs listed
+    # that are still in progress, never read (DRE-9165).
+    listed: dict[str, int | None] = {slug: None for slug in slugs}
+    in_progress: list[tuple[str, int]] = []
     for i, slug in enumerate(slugs):
         repo = repo_map[slug]
         if expired():
             unreached = slugs[i:]
             break
-        runs = _runs_since(repo, since)
+        began = _monotonic()
+        runs = _runs_in(repo, start, end)
         if runs is None:
             unknown_repos.append(slug)
             continue
-        if workflows:
-            runs = [run for run in runs if run["workflowName"] in workflows]
-        for j, run in enumerate(runs):
-            try:
-                log, why = _run_log(repo, run["databaseId"], expired)
-            except _DeadlineReached:
-                unread[slug] = len(runs) - j
-                break
+        listed[slug] = len(runs)
+        in_progress += [(slug, run["databaseId"]) for run in runs
+                        if run["status"] != "completed"]
+        runs = [run for run in runs if run["status"] == "completed"
+                and (not workflows or run["workflowName"] in workflows)]
+        results, not_read = _read_logs(repo, runs, expired)
+        for run in runs:
+            if run["databaseId"] not in results:
+                continue
+            log, why = results[run["databaseId"]]
             if log is None and why:
                 print(f"{repo}: gh run view {run['databaseId']} failed after "
                       f"{LOG_ATTEMPTS} attempts: {why[:200]}", file=sys.stderr)
@@ -757,9 +925,12 @@ def main(argv: list[str] | None = None) -> int:
                 empty += 1
                 continue
             observations.append((slug, run["workflowName"], log))
-        if slug in unread:
+        if not_read:
+            unread[slug] = not_read
             unreached = slugs[i + 1:]
             break
+        print(f"budget-check: {slug} {len(results)} run log(s) read in "
+              f"{_monotonic() - began:.1f}s", file=sys.stderr)
 
     stopped = (args.deadline, unread, unreached) if unread or unreached else None
     # A slug never reached was never looked at: UNKNOWN, as an unreadable one.
@@ -767,6 +938,7 @@ def main(argv: list[str] | None = None) -> int:
     print(render_table(aggregate(observations), unknown_repos,
                        hours=args.hours, skipped=skipped, empty=empty,
                        stopped=stopped))
+    print(render_listed(listed, in_progress, hours=args.hours, end=end))
     print()
     print(render_fallbacks(aggregate_fallbacks(observations), unknown_repos,
                            hours=args.hours))
