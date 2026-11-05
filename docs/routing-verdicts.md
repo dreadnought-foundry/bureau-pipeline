@@ -34,8 +34,9 @@ Read in strict precedence:
 
 1. An explicit role label — read first, no judgement.
 2. The title convention — anchored at the start of the title, never a substring search.
-3. The acceptance-criteria rule: can an unattended agent SATISFY the stated exit condition?
-4. Only what survives all three reaches a judgement call, and only then is a model asked.
+3. A declared line in the body — `**Operator step:** <what the person does>`, opening its own line outside fenced code, with text after the colon.
+4. The acceptance-criteria rule: can an unattended agent SATISFY the stated exit condition?
+5. Only what survives all four reaches a judgement call, and only then is a model asked.
 
 ## Title conventions
 
@@ -48,6 +49,27 @@ Anchored at the start of the title, never a substring search. Each one ships an 
 
 - `^\s*sign-off \(operator\)` — The card's deliverable is a human's sign-off on live work.
 - `^\s*demo:` — A reader of HISTORICAL cards since DRE-3669 — the planner files no demo card, and the 25 open ones were cancelled on 2026-09-12 — kept because a card planned before then still routes through here. The card closes only when every end-state claim in its demo report is a PASS — somebody drives the live system and records what it did. That is an interactive flow over live state, which is WORKBENCH; it is not a deploy, so it is not OPERATOR.
+
+## Lines declared in the body
+
+Read after the role label and the title, and before the acceptance criteria (DRE-9224). A planner's revision can only rewrite a card's description, so a line there is where it says the card goes. The line opens its own line — a list marker and bold markup may precede it — is matched case-insensitively, sits outside fenced code and carries text after the colon. `config_problems()` refuses a pattern that is not anchored, ships no adversarial line, or does not match its own example.
+
+### OPERATOR — `` ^[\s>*_`~+#-]*(?:\d+[.)][\s>*_`~+#-]*)?operator\s+step[\s*_`]*:[\s*_`]*[^\s*_`] ``
+
+The card is an operator step, not code — a deploy, a migration run, a secret, a workflow re-run — and the line says what the person does. The planner writes it when a revision concludes that, because the revision cannot change the card's labels or title.
+
+Matches: `` **Operator step:** run `make deploy-console`, then re-run `onboard.yml` for the repo ``
+
+Must NOT match:
+
+- `No operator step: this is code`
+- `The operator step: is below`
+- `**Operator step:**`
+- inside fenced code:
+
+  ```
+  **Operator step:** run `make deploy-console`
+  ```
 
 ## Labels read first
 
