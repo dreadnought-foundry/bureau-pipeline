@@ -154,7 +154,9 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: the Loops 3 epic's (DRE-8700) follow-up and asks; DRE-9044 the one after
 #: those, the Loops 4 epic's (DRE-8701) saved thought; DRE-9077 the last one,
 #: the KPI page epic's (DRE-8702) ask why. DRE-9201 took the four task presses
-#: off the front when Tasks retired under Loops (DRE-8704).
+#: off the front when Tasks retired under Loops (DRE-8704). DRE-9221 put
+#: DRE-8032's `stopDeskTurn`, the Desk speed script's Stop, after the two Desk
+#: presses, so the Initiatives twenty now follow the first three.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
 _S = r"['’]s"
 SANDBOX_PRESSES = (
@@ -162,6 +164,7 @@ SANDBOX_PRESSES = (
                                 rf"|\bopen(?:s|ed|ing)?\s+{_A}conversation\b"),
     ("answerDeskPermission", rf"\banswer(?:s|ed|ing)?\s+{_A}desk\s+"
                              rf"(?:allow|deny|permission)\b"),
+    ("stopDeskTurn", rf"\bstop(?:s|ped|ping)?\s+{_A}desk\s+turn\b"),
     ("startInitiativeDraft", rf"\bstart(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
     ("saveInitiativeDraft", rf"\bsav(?:e|es|ed|ing)\s+{_A}initiative\s+draft\b"),
     ("discardInitiativeDraft", rf"\bdiscard(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
