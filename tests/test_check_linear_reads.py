@@ -1,7 +1,7 @@
 """The CI check that refuses any new direct Linear read (DRE-9164).
 
 `scripts/check_linear_reads.py` finds every function in `scripts/` that hands
-Linear a read itself, and every workflow `run:` block that does, and compares
+Linear a read itself, and every workflow step that does, and compares
 them with `config/linear-direct-reads.json`, read at the merge base. These
 tests pin, in order:
 
@@ -711,7 +711,7 @@ def test_a_nested_site_name_can_never_equal_a_top_level_one():
         "harness.scenarios.lane_contract"
 
 
-# ── transport 5: a workflow run block ────────────────────────────────────────
+# ── transport 6: a workflow step ─────────────────────────────────────────────
 
 WORKFLOW = """
 name: Throwaway

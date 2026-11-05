@@ -20,8 +20,8 @@ of the name (`groom_verify._Replacements._card` is the site
 Hygiene board read is the one site `hygiene.linear`, the inner function of
 `hygiene.read_only_linear`). Code outside any function is `<module>.<module>`.
 
-THE FIVE TRANSPORTS. The scanner reads the code of every Python file (an AST
-walk), never the host name as text, and recognizes exactly these:
+THE SIX TRANSPORTS. The scanner reads the code of every Python file (an AST
+walk) and recognizes exactly these:
 
   1. A call of `gql` or `gql_paged`, whatever it is read off: the bare name
      (imported from `linear_ops`, or a parameter or local of that name, as
@@ -30,14 +30,22 @@ walk), never the host name as text, and recognizes exactly these:
      as `lops` (`planner_score.collect`), handed in as a parameter `lops` or
      `ops` (`groomer.read_population`, `hand_work_migration.read_population`)
      or kept on an object as `self.lops` (`groom_verify._card`). The receiver
-     is never resolved or matched by name, so a new spelling of it cannot slip
-     past; nothing else in `scripts/` defines a `gql` or `gql_paged`. A callee
-     that picks one — `(gql or linear_ops.gql)(…)` in
-     `plan_initiative_context.block`, or `a if c else b` — is a transport when
-     any of its operands is one.
+     is never resolved or matched by name, so any receiver counts; nothing
+     else in `scripts/` defines a `gql` or `gql_paged`. A callee that picks
+     one — `(gql or linear_ops.gql)(…)` in `plan_initiative_context.block`,
+     or `a if c else b` — is a transport when any of its operands is one.
+     A callee bound to one is one too, and every binding is followed: an
+     import under another name (`from linear_ops import gql as q`), a local,
+     a module name, an enclosing function's local or a parameter's default
+     assigned one (`run = linear_ops.gql`), `functools.partial` of one,
+     `getattr(…, "gql")`, and `vars(linear_ops)["gql"]`. A `getattr` off
+     `linear_ops` by a name the check cannot read counts too, failing closed.
+     A function patched in as the transport (`linear_ops.gql = counted`, a
+     counting seam) is plumbing like `gql`: the code calling it is the site.
   2. A `urllib.request.Request(…)` or `urlopen(…)`, under any import form,
      aimed at Linear: its URL is `linear_ops.API`, the bare `API` inside
-     `linear_ops`, or a string naming `api.linear.app`
+     `linear_ops`, or a text holding `api.linear.app` however it is built —
+     concatenated, an f-string, or names bound to its pieces
      (`check_linear_identities.viewer_of`, which prints no `linear-read:`
      line, so only this scan names it).
   3. A `Request(…)` or `urlopen(…)`, under any import form, in a function
@@ -45,14 +53,25 @@ walk), never the host name as text, and recognizes exactly these:
      it names: the request carries the pipeline's Linear key, so it goes to
      Linear. `plan_initiative_context.fetch` downloads an approved design from
      Linear's upload host this way — no GraphQL document, a read all the same.
-  4. `linear_ops`'s own plumbing is not a site: `gql`, `gql_paged` and
+  4. Anything else aimed at Linear's host, failing closed: a child process or
+     an HTTP client's verb (`subprocess.run`, `os.system`, `session.post`,
+     `SENDERS`) handed `linear_ops.API` or a text holding `api.linear.app`,
+     built the same ways, so a `curl` from a script is a site; and any literal
+     in a function's own code holding `api.linear.app`, docstrings aside. A
+     message naming the endpoint through the constant (`f"… from {API}"` in
+     `linear_ops`'s errors) is not a literal, and is not a site.
+  5. `linear_ops`'s own plumbing is not a site: `gql`, `gql_paged` and
      `_send`, which builds the `Request` behind both, are the transport every
      site calls. The functions that call them are the sites.
-  5. In a workflow `run:` block (`.github/workflows/*.yml`): `curl` or `wget`
-     to `api.linear.app`, an inline script naming `api.linear.app` or
+  6. In a workflow step (`.github/workflows/*.yml`), read whole — its `run:`
+     block and every `with:` and `env:` value, so an `actions/github-script`
+     step and a `run:` taking its URL from `env:` are both read: `curl` or
+     `wget` to `api.linear.app`, an inline script naming `api.linear.app` or
      `linear_ops.API`, or a call of `gql(`. Each is a site named
-     `<workflow file>#<job id>/<step name>`. A step that runs an existing
-     script is not a new site: the script's functions are.
+     `<workflow file>#<job id>/<step name>`. A job's or the workflow's `env:`
+     naming Linear is a site of its own, `<job id>/env` or `env`, since any
+     step under it can send it. A step that runs an existing script is not a
+     new site: the script's functions are.
 
 A document whose operation is `mutation` is a write and is not a site. A
 `query` or an anonymous `{ … }` document is a read. A document the check
@@ -154,8 +173,18 @@ KEPT_FETCH_REASON = (
 
 TRANSPORTS = frozenset({"gql", "gql_paged"})
 REQUESTS = frozenset({"Request", "urlopen"})
+#: Calls that send what they are handed out of the process: a child process
+#: (`subprocess`, `os`) or an HTTP client's verb. One whose argument names
+#: Linear's API, however that argument is built, is a site.
+SENDERS = REQUESTS | frozenset({
+    "run", "call", "check_call", "check_output", "Popen", "system", "popen",
+    "getoutput", "getstatusoutput", "get", "post", "put", "patch", "request", "open"})
 #: Rule 4: the transport every site calls.
 PLUMBING = frozenset({"linear_ops.gql", "linear_ops.gql_paged", "linear_ops._send"})
+#: A part of a built text the check cannot read, and how many readings of
+#: one text it keeps.
+_HOLE = "\x00"
+_TEXTS_CAP = 64
 _CARD = re.compile(r"DRE-\d+")
 
 
@@ -216,17 +245,36 @@ def module_name(rel: Path) -> str:
 
 
 class _Scope:
-    """One function, method, lambda, class body or module: its own calls and
-    the names its own code binds."""
+    """One function, method, lambda, class body or module: its own calls, the
+    names its own code binds, and the strings it builds."""
 
-    def __init__(self, name: str, node: ast.AST):
+    def __init__(self, name: str, node: ast.AST, parent: _Scope | None = None):
         self.name = name
         self.node = node
+        self.parent = parent
         self.calls: list[ast.Call] = []
         self.assigned: dict[str, list[ast.AST]] = {}
+        self.strings: list[ast.AST] = []
+
+    @property
+    def is_function(self) -> bool:
+        return isinstance(self.node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda))
 
 
 _DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+
+
+def _docstrings(tree: ast.Module) -> set[int]:
+    """The ids of every docstring's constant: words about Linear, not a read."""
+    out = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef,
+                             ast.ClassDef)) and node.body:
+            first = node.body[0]
+            if isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) \
+                    and isinstance(first.value.value, str):
+                out.add(id(first.value))
+    return out
 
 
 def _scopes(tree: ast.Module) -> list[_Scope]:
@@ -236,8 +284,14 @@ def _scopes(tree: ast.Module) -> list[_Scope]:
     scope: inlined since Python 3.12, its frame is the function's."""
     top = _Scope("<module>", tree)
     scopes = [top]
+    docstrings = _docstrings(tree)
 
     def record(node: ast.AST, scope: _Scope) -> None:
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if id(node) not in docstrings:
+                scope.strings.append(node)
+        elif isinstance(node, (ast.JoinedStr, ast.BinOp)):
+            scope.strings.append(node)
         if isinstance(node, ast.Call):
             scope.calls.append(node)
         elif isinstance(node, ast.Assign):
@@ -272,7 +326,8 @@ def _scopes(tree: ast.Module) -> list[_Scope]:
             body = [child.body] if isinstance(child, ast.Lambda) else child.body
         for part in outer:
             enter(part, scope)
-        inner = _Scope("<lambda>" if isinstance(child, ast.Lambda) else child.name, child)
+        inner = _Scope("<lambda>" if isinstance(child, ast.Lambda) else child.name,
+                       child, scope)
         scopes.append(inner)
         for stmt in body:
             enter(stmt, inner)
@@ -280,18 +335,6 @@ def _scopes(tree: ast.Module) -> list[_Scope]:
     for stmt in tree.body:
         enter(stmt, top)
     return scopes
-
-
-def _is_transport(func: ast.AST) -> bool:
-    if isinstance(func, ast.Name):
-        return func.id in TRANSPORTS
-    if isinstance(func, ast.Attribute):
-        return func.attr in TRANSPORTS
-    if isinstance(func, ast.BoolOp):
-        return any(_is_transport(v) for v in func.values)
-    if isinstance(func, ast.IfExp):
-        return _is_transport(func.body) or _is_transport(func.orelse)
-    return False
 
 
 def _named(func: ast.AST, names: frozenset | set) -> bool:
@@ -318,6 +361,15 @@ class _Module:
         self.name = name
         self.rel = rel
         self.tree = tree
+        self.scopes = _scopes(tree)
+        # A function patched in as the transport (`linear_ops.gql = counted`,
+        # a counting seam) takes its place for as long as it is there: it is
+        # plumbing like `gql`, and the code calling `linear_ops.gql` is the site.
+        self.stand_ins = {
+            node.value.id for node in ast.walk(tree)
+            if isinstance(node, ast.Assign) and isinstance(node.value, ast.Name)
+            and any(isinstance(t, ast.Attribute) and t.attr in TRANSPORTS
+                    for t in node.targets)}
         self.constants: dict[str, ast.AST] = {}
         self.modules: dict[str, str] = {}  # alias -> module
         self.imported: dict[str, tuple[str, str]] = {}  # alias -> (module, name)
@@ -422,6 +474,168 @@ class _Scanner:
         names += [x.arg for x in (a.vararg, a.kwarg) if x is not None]
         return name in names
 
+    @staticmethod
+    def _default(func: ast.AST, name: str) -> ast.AST | None:
+        a = func.args
+        positional = [*a.posonlyargs, *a.args]
+        for arg, default in zip(positional[len(positional) - len(a.defaults):], a.defaults):
+            if arg.arg == name:
+                return default
+        for arg, default in zip(a.kwonlyargs, a.kw_defaults):
+            if arg.arg == name:
+                return default
+        return None
+
+    # Resolving a name to every expression it may hold, for the transport and
+    # the host: the scope's own bindings, an enclosing function's, a
+    # parameter's default, or the module's. Unlike `texts`, a name bound more
+    # than once keeps every binding, so any one of them can make a read.
+    def bindings(self, name: str, mod: _Module,
+                 scope: _Scope | None) -> list[tuple[ast.AST, _Scope | None]]:
+        first = True
+        while scope is not None and scope.node is not mod.tree:
+            if first or scope.is_function:
+                if name in scope.assigned:
+                    return [(value, scope) for value in scope.assigned[name]]
+                if self._is_parameter(scope.node, name):
+                    default = self._default(scope.node, name)
+                    return [] if default is None else [(default, scope.parent)]
+            first = False
+            scope = scope.parent
+        top = mod.scopes[0]
+        return [(value, top) for value in top.assigned.get(name, [])]
+
+    def _module_of(self, node: ast.AST, mod: _Module) -> _Module | None:
+        """The scanned module a name is an import of."""
+        if isinstance(node, ast.Name) and node.id in mod.modules:
+            return self.modules.get(mod.modules[node.id])
+        return None
+
+    def _is_linear_ops(self, node: ast.AST, mod: _Module) -> bool:
+        return isinstance(node, ast.Name) and mod.modules.get(node.id) == "linear_ops"
+
+    def transport(self, node: ast.AST, mod: _Module, scope: _Scope | None,
+                  seen: frozenset = frozenset()) -> bool:
+        """Whether a callee is `gql` or `gql_paged`, however it is reached."""
+        if isinstance(node, ast.Name):
+            if node.id in TRANSPORTS or mod.imported.get(node.id, ("", ""))[1] in TRANSPORTS:
+                return True
+            key = (id(scope), node.id)
+            if key in seen:
+                return False
+            return any(self.transport(value, mod, where, seen | {key})
+                       for value, where in self.bindings(node.id, mod, scope))
+        if isinstance(node, ast.Attribute):
+            return node.attr in TRANSPORTS
+        if isinstance(node, ast.BoolOp):
+            return any(self.transport(v, mod, scope, seen) for v in node.values)
+        if isinstance(node, ast.IfExp):
+            return (self.transport(node.body, mod, scope, seen)
+                    or self.transport(node.orelse, mod, scope, seen))
+        if isinstance(node, ast.Subscript):
+            # `vars(linear_ops)["gql"]`, `linear_ops.__dict__["gql_paged"]`
+            return isinstance(node.slice, ast.Constant) and node.slice.value in TRANSPORTS
+        if isinstance(node, ast.Call):
+            if _named(node.func, {"partial"}) and node.args:
+                return self.transport(node.args[0], mod, scope, seen)
+            if _named(node.func, {"getattr"}) and len(node.args) >= 2:
+                attr = node.args[1]
+                if isinstance(attr, ast.Constant):
+                    return attr.value in TRANSPORTS
+                # A name the check cannot read, off `linear_ops`: fail closed.
+                return self._is_linear_ops(node.args[0], mod)
+        return False
+
+    @staticmethod
+    def document(call: ast.Call) -> ast.AST | None:
+        """The document a transport call sends: a `partial`'s own when the
+        callee is one that binds it, else the call's first argument."""
+        func = call.func
+        if isinstance(func, ast.Call) and _named(func.func, {"partial"}) and len(func.args) > 1:
+            return func.args[1]
+        return _first_arg(call, "query")
+
+    def full_texts(self, node: ast.AST, mod: _Module, scope: _Scope | None,
+                   seen: frozenset = frozenset(), follow: bool = True) -> list[str] | None:
+        """Every whole text an expression may hold, a part the check cannot
+        read standing as a hole; None when it reads no part at all. Where
+        `texts` reads the opening of a document, this reads a URL whole, so a
+        host built from pieces is still the host. With `follow` off it reads
+        literals alone and never a name."""
+        if isinstance(node, ast.Constant):
+            return [node.value] if isinstance(node.value, str) else None
+        if not follow and isinstance(node, (ast.Name, ast.Attribute)):
+            return None
+        if isinstance(node, (ast.JoinedStr, ast.BinOp)):
+            if isinstance(node, ast.BinOp):
+                if not isinstance(node.op, (ast.Add, ast.Mod)):
+                    return None
+                parts = [node.left, node.right]
+            else:
+                parts = node.values
+            out, known = [""], False
+            for part in parts:
+                if isinstance(part, ast.FormattedValue):
+                    part = part.value
+                got = self.full_texts(part, mod, scope, seen, follow)
+                known = known or got is not None
+                out = [a + b for a in out for b in (got or [_HOLE])][:_TEXTS_CAP]
+            return out if known else None
+        if isinstance(node, (ast.Tuple, ast.List, ast.IfExp)):
+            items = [node.body, node.orelse] if isinstance(node, ast.IfExp) else node.elts
+            out = []
+            for item in items:
+                out += self.full_texts(item, mod, scope, seen, follow) or []
+            return out or None
+        if isinstance(node, ast.Name):
+            key = (mod.name, id(scope), node.id)
+            if key in seen:
+                return None
+            if node.id in mod.imported:
+                other, name = mod.imported[node.id]
+                target = self.modules.get(other)
+                if target is not None:
+                    return self._top_texts(target, name, seen | {key})
+            out = []
+            for value, where in self.bindings(node.id, mod, scope):
+                out += self.full_texts(value, mod, where, seen | {key}) or []
+            return out or None
+        if isinstance(node, ast.Attribute):
+            target = self._module_of(node.value, mod)
+            if target is not None:
+                return self._top_texts(target, node.attr, seen)
+        return None
+
+    def _top_texts(self, target: _Module, name: str, seen: frozenset) -> list[str] | None:
+        key = (target.name, None, name)
+        if key in seen:
+            return None
+        out = []
+        for value, where in self.bindings(name, target, None):
+            out += self.full_texts(value, target, where, seen | {key}) or []
+        return out or None
+
+    def _is_linear_api(self, node: ast.AST, mod: _Module) -> bool:
+        if isinstance(node, ast.Attribute):
+            return node.attr == "API" and self._is_linear_ops(node.value, mod)
+        if isinstance(node, ast.Name) and node.id == "API":
+            return mod.name == "linear_ops" or mod.imported.get("API", ("",))[0] == "linear_ops"
+        return False
+
+    def names_linear(self, node: ast.AST, mod: _Module, scope: _Scope | None,
+                     follow: bool = True) -> bool:
+        """Whether an expression names Linear's API: `linear_ops.API`, or a
+        text holding `api.linear.app` however it is built. With `follow` off,
+        only a literal holding the host counts."""
+        if isinstance(node, ast.Starred):
+            node = node.value
+        if follow and self._is_linear_api(node, mod):
+            return True
+        if isinstance(node, (ast.List, ast.Tuple)):
+            return any(self.names_linear(e, mod, scope, follow) for e in node.elts)
+        texts = self.full_texts(node, mod, scope, follow=follow)
+        return bool(texts) and any(HOST in t for t in texts)
+
     def is_read(self, doc: ast.AST | None, mod: _Module, scope: _Scope) -> bool:
         """Fail closed: only a document every reading of which is a mutation
         is a write."""
@@ -437,39 +651,38 @@ class _Scanner:
             return False
         if isinstance(url, ast.Attribute) and url.attr == "API":
             return True
-        if isinstance(url, ast.Name) and url.id == "API" and (
-                mod.name == "linear_ops" or mod.imported.get("API", ("",))[0] == "linear_ops"):
-            return True
-        texts = self.texts(url, mod, scope)
-        if texts and any(HOST in t for t in texts):
-            return True
-        if isinstance(url, ast.JoinedStr):
-            return any(isinstance(p, ast.Constant) and HOST in str(p.value)
-                       for p in url.values)
-        return False
+        return self.names_linear(url, mod, scope)
 
     def sites(self, mod: _Module) -> list[Site]:
         found: dict[str, Site] = {}
-        for scope in _scopes(mod.tree):
-            transports, requests, linear_requests = [], [], []
+        for scope in mod.scopes:
+            transports, requests, linear_requests, hosts = [], [], [], []
             calls_api_key = False
             for node in scope.calls:
-                if _is_transport(node.func):
-                    if self.is_read(_first_arg(node, "query"), mod, scope):
+                if self.transport(node.func, mod, scope):
+                    if self.is_read(self.document(node), mod, scope):
                         transports.append(node.lineno)
-                elif _named(node.func, REQUESTS):
+                    continue
+                if _named(node.func, REQUESTS):
                     requests.append(node.lineno)
                     if self.aims_at_linear(_first_arg(node, "url"), mod, scope):
                         linear_requests.append(node.lineno)
                 elif _named(node.func, {"api_key"}):
                     calls_api_key = True
-            lines = transports + linear_requests
+                arguments = [*node.args, *(kw.value for kw in node.keywords)]
+                if _named(node.func, SENDERS) and any(
+                        self.names_linear(a, mod, scope) for a in arguments):
+                    hosts.append(node.lineno)
+            if scope.is_function:
+                hosts += [s.lineno for s in scope.strings
+                          if self.names_linear(s, mod, scope, follow=False)]
+            lines = transports + linear_requests + hosts
             if calls_api_key:
                 lines += requests
             if not lines:
                 continue
             name = f"{mod.name}.{scope.name}"
-            if name in PLUMBING:
+            if name in PLUMBING or (scope.is_function and scope.name in mod.stand_ins):
                 continue
             line = min(lines)
             if name not in found or line < found[name].line:
@@ -515,7 +728,8 @@ _YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 def run_block_reads(text: str) -> bool:
-    """Whether a `run:` block sends Linear a read itself (rule 5)."""
+    """Whether a step's text — its `run:` block, its `with:` and `env:`
+    values — sends Linear a read itself (transport 6)."""
     if HOST in text or "linear_ops.API" in text:
         return True  # fail closed: the document is not read out of a shell line
     for call in _GQL_ANY.finditer(text):
@@ -537,7 +751,29 @@ def _line_of(lines: list[str], needle_lines: list[str], after: int) -> int:
     return after + 1
 
 
+def _strings(value) -> list[str]:
+    """Every string value under a YAML node, keys left out."""
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        return [s for v in value.values() for s in _strings(v)]
+    if isinstance(value, list):
+        return [s for v in value for s in _strings(v)]
+    return []
+
+
+def _hits(strings: list[str]) -> list[str]:
+    return [ln for s in strings for ln in s.splitlines()
+            if HOST in ln or "linear_ops.API" in ln or _GQL_ANY.search(ln)]
+
+
 def scan_workflows(root: Path) -> list[Site]:
+    """Transport 6. A step is read whole — its `run:` block and every
+    `with:` and `env:` value, its name left out — so an
+    `actions/github-script` step, or a `run:` reading its URL from `env:`, is
+    a site. An `env:` naming Linear at the job or the workflow is a site of
+    its own, `<job id>/env` or `env`: every step under it can read it, and the
+    check cannot tell which does."""
     wf_dir = root / WORKFLOWS
     out: list[Site] = []
     if not wf_dir.is_dir():
@@ -545,26 +781,40 @@ def scan_workflows(root: Path) -> list[Site]:
     for path in sorted(wf_dir.glob("*.yml")):
         text = path.read_text(encoding="utf-8")
         if HOST not in text and "linear_ops.API" not in text and "gql" not in text:
-            continue  # nothing rule 5 reads
+            continue  # nothing transport 6 reads
         try:
             doc = yaml.load(text, Loader=_YAML_LOADER) or {}
         except yaml.YAMLError as exc:
             raise ScanError(f"{WORKFLOWS}/{path.name} cannot be parsed: {exc}") from None
         lines = text.splitlines()
+        rel = f"{WORKFLOWS}/{path.name}"
+
+        def site(name: str, strings: list[str], anchor: int) -> None:
+            if run_block_reads("\n".join(strings)):
+                out.append(Site(f"{path.name}#{name}", rel,
+                                _line_of(lines, _hits(strings), anchor)))
+
+        if isinstance(doc, dict):
+            site("env", _strings(doc.get("env")), 0)
         jobs = doc.get("jobs") if isinstance(doc, dict) else None
         for job_id, job in (jobs or {}).items():
-            steps = job.get("steps") if isinstance(job, dict) else None
-            for n, step in enumerate(steps or [], 1):
-                run = step.get("run") if isinstance(step, dict) else None
-                if not isinstance(run, str) or not run_block_reads(run):
+            if not isinstance(job, dict):
+                continue
+            anchor = next((i for i, ln in enumerate(lines)
+                           if re.match(rf"\s*{re.escape(str(job_id))}:\s*$", ln)), 0)
+            site(f"{job_id}/env", _strings(job.get("env")), anchor)
+            for n, step in enumerate(job.get("steps") or [], 1):
+                if not isinstance(step, dict):
                     continue
                 step_name = step.get("name") or f"step {n}"
-                hits = [ln for ln in run.splitlines()
-                        if HOST in ln or "linear_ops.API" in ln or _GQL_ANY.search(ln)]
-                anchor = next((i for i, ln in enumerate(lines)
-                               if re.match(rf"\s*{re.escape(str(job_id))}:\s*$", ln)), 0)
-                out.append(Site(f"{path.name}#{job_id}/{step_name}",
-                                f"{WORKFLOWS}/{path.name}", _line_of(lines, hits, anchor)))
+                at = anchor
+                if step.get("name"):
+                    named = re.compile(rf"\s*-?\s*name:\s*['\"]?{re.escape(str(step_name))}"
+                                       r"['\"]?\s*$")
+                    at = next((i for i in range(anchor, len(lines))
+                               if named.match(lines[i])), anchor)
+                site(f"{job_id}/{step_name}",
+                     _strings({k: v for k, v in step.items() if k != "name"}), at)
     return out
 
 
