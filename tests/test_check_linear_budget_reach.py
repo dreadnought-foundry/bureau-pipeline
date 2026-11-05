@@ -71,34 +71,49 @@ _PROOF = "Reconcile / sweep / proof_overdue_sweep.py"
 _AGENT = "Agent Task / execute / linear_ops.py"
 
 
+# "Now", for every run of `main` here: the window the two `runs listed`
+# lines name (DRE-9165) ends at it — 12:16 PT on 2026-11-03.
+_NOW = datetime(2026, 11, 3, 20, 16, 0, tzinfo=timezone.utc)
+
+
 @pytest.fixture(autouse=True)
 def _no_sleep(monkeypatch):
     monkeypatch.setattr(clb, "_sleep", lambda _s: None, raising=False)
+    monkeypatch.setattr(clb, "_now", lambda: _NOW)
+    # These pin the ORDER of the log reads and a deadline tripped by the
+    # second, which only one read at a time can fix. Reading several at once
+    # is pinned in test_check_linear_budget_runs_listed.py (DRE-9165).
+    monkeypatch.setattr(clb, "LOG_WORKERS", 1)
 
 
 class _FakeGh:
-    """Stands in for `_gh`, recording every call. `run list` answers each
-    repo's runs, created now; `run view <id> --log` that run's log. `on_view`
-    is called after each view, with how many views there have been."""
+    """Stands in for `_gh`, recording every call. The `api --paginate
+    --slurp` listing answers each repo's runs as the one page GitHub prints,
+    created in the window's last second (DRE-9165); `run view <id> --log`
+    that run's log. `on_view` is called after each view, with how many views
+    there have been."""
 
     def __init__(self, runs, on_view=None):
         self.runs, self.on_view = runs, on_view
         self.calls: list[tuple[str, ...]] = []
 
     def listed(self) -> list[str]:
-        return [c[c.index("-R") + 1] for c in self.calls if c[:2] == ("run", "list")]
+        return [c[-1].split("/actions/")[0].removeprefix("repos/")
+                for c in self.calls if c[0] == "api"]
 
     def viewed(self) -> list[int]:
         return [int(c[2]) for c in self.calls if c[:2] == ("run", "view")]
 
     def __call__(self, *args):
         self.calls.append(args)
-        if args[:2] == ("run", "list"):
-            repo = args[args.index("-R") + 1]
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            out = [{"databaseId": rid, "workflowName": wf, "createdAt": now}
+        if args[0] == "api":
+            url = args[-1]
+            repo = url.split("/actions/")[0].removeprefix("repos/")
+            last = url.split("created=")[1].split("&")[0].split("..")[1]
+            out = [{"id": rid, "name": wf, "created_at": last, "status": "completed"}
                    for rid, wf, _log_text in self.runs.get(repo, [])]
-            return subprocess.CompletedProcess(args, 0, json.dumps(out), "")
+            page = {"total_count": len(out), "workflow_runs": out}
+            return subprocess.CompletedProcess(args, 0, json.dumps([page]), "")
         assert args[:2] == ("run", "view") and "--log" in args, args
         rid = int(args[2])
         log = next(text for runs in self.runs.values()
@@ -143,7 +158,8 @@ _HOUR = {
 
 
 # What `main` printed for `_HOUR` before DRE-9163, byte for byte — taken from
-# the script as it stood, in this file's first commit.
+# the script as it stood, in this file's first commit — with the two `runs
+# listed` lines DRE-9165 prints after the spend table's TOTAL.
 _PINNED = (
     'linear budget, last 1h\n'
     'repo                 workflow                          runs   spent  max/run\n'
@@ -153,6 +169,8 @@ _PINNED = (
     'portico              Reconcile                            1       4        4\n'
     '----------------------------------------------------------------------------\n'
     'TOTAL                                                     4      46\n'
+    'runs listed, 1h to 2026-11-03T20:16:00Z: bureau-pipeline 3, portico 1\n'
+    'runs in progress, not read: none\n'
     '\n'
     "read fallbacks, last 1h — reads only: Linear writes and the console's own Linear sync never print the line\n"
     'repo                 reader                                     read             reason          count\n'
@@ -195,6 +213,8 @@ _PINNED_BY_CALLER = (
     'portico              Reconcile                            1       4        4\n'
     '----------------------------------------------------------------------------\n'
     'TOTAL                                                     4      46\n'
+    'runs listed, 1h to 2026-11-03T20:16:00Z: bureau-pipeline 3, portico 1\n'
+    'runs in progress, not read: none\n'
     '\n'
     "read fallbacks, last 1h — reads only: Linear writes and the console's own Linear sync never print the line\n"
     'repo                 reader                                     read             reason          count\n'
@@ -240,7 +260,10 @@ def test_with_no_new_flag_main_prints_exactly_what_it_did(monkeypatch, capsys, a
     rc, out, err = _main(monkeypatch, capsys, fake, *argv)
     assert rc == 0
     assert out == pinned
-    assert err == ""
+    # DRE-9165: one line on stderr as each repo is done, and nothing else.
+    assert [ln.split(" in ")[0] for ln in err.splitlines()] == [
+        "budget-check: bureau-pipeline 3 run log(s) read",
+        "budget-check: portico 1 run log(s) read"]
     assert fake.listed() == ["o/bureau-pipeline", "o/portico"]
     assert fake.viewed() == [101, 102, 103, 201]
 
@@ -399,7 +422,7 @@ def test_the_deadline_is_read_before_every_list_and_view(monkeypatch, capsys):
     monkeypatch.setattr(clb, "_gh", busy)
     assert clb.main(["--deadline", "40"]) == 0
     out = capsys.readouterr().out
-    assert [a[:2] for a in asks] == [("run", "list"), ("run", "view")]
+    assert [a[:2] for a in asks] == [("api", "--paginate"), ("run", "view")]
     tail = _total_line(out)
     assert "skipped" not in tail
     assert "(stopped at the deadline (40s): bureau-pipeline 1 run(s) not read)" in tail
