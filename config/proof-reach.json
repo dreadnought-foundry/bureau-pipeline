@@ -331,16 +331,16 @@
       "when": "every process whose read-door mode was `on`, since DRE-8897, at exit on stderr after its `linear-read:` lines, whether or not it sent Linear a request: one line naming the reader, the reads the door served, each read and reason that fell back with its count (`-` for none), the bucket and the process token; never in `off` or `shadow`"
     },
     {
-      "tag": "operator-agent:",
-      "printed_by": "scripts/operator_decide.py",
-      "constant": "LOG_TAG",
-      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines). Since DRE-9052 (part 3) the decide step's log also holds `operator-agent: <CARD> triggered — <hand-work entry|hand-work-overdue alarm> at <YYYY-MM-DD HH:MM> PT · <action>` after a triggered card's own line and `operator-agent: <CARD> left in Green Light — <why>` for a Green Light row the agent does not take, and the `apply` job prints `operator-agent: <CARD> moved — Green Light → Planning` or `operator-agent: <CARD> not moved — it is in <lane> now` for a `repair` or `answer`"
-    },
-    {
       "tag": "linear-reads-check:",
       "printed_by": "scripts/check_linear_reads.py",
       "constant": "TAG",
       "when": "every run of the Pipeline Tests job `linear reads check` since DRE-9164, on stdout: one summary line `<n> read site(s) found, <l> listed (<k> kept), <p> pending, <a> new, <g> gone`, then one `new <site> — <file>:<line>`, `gone <site>` or `pending <site>` line for each, and, on a run whose merge base has no ledger, `no ledger at the merge base <sha7> — judged against the head's ledger`"
+    },
+    {
+      "tag": "operator-agent:",
+      "printed_by": "scripts/operator_decide.py",
+      "constant": "LOG_TAG",
+      "when": "every Operator Agent run (DRE-8744): one line per card in the decide step's log — a decision line, an `unread` line or a `left alone` line — plus the mode line of the `Decide dry run` step. Since DRE-8928 it is also printed for the `do` step: the do mode line of the `Decide do dry run` step, and by the `do` job (the env line, and scripts/operator_do.py's `would run:`, `ran:` and `do refused` lines), by the `close` job (the env line and `do-close`'s `closed`, `close waits`, `nothing owed` and `write refused` lines) and by the `credentials` job (the credential lines). Since DRE-9052 (part 3) the decide step's log also holds `operator-agent: <CARD> triggered — <hand-work entry|hand-work-overdue alarm> at <YYYY-MM-DD HH:MM> PT · <action>` after a triggered card's own line and `operator-agent: <CARD> left in Green Light — <why>` for a Green Light row the agent does not take, and the `apply` job prints `operator-agent: <CARD> moved — Green Light → Planning` or `operator-agent: <CARD> not moved — it is in <lane> now` for a `repair` or `answer`"
     }
   ],
   "causes": [
