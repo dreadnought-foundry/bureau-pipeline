@@ -9,7 +9,6 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 
 import pytest
 
@@ -50,9 +49,10 @@ def _no_sleep(monkeypatch):
 
 
 class _FakeGh:
-    """Stands in for `_gh` and records every call. `run list` answers each
-    repo's runs, created now, or rc 1 for a repo listed in `unreadable`;
-    `run view <id> --log` answers that run's log."""
+    """Stands in for `_gh` and records every call. The `api --paginate
+    --slurp` listing answers each repo's runs as the one page GitHub prints,
+    created in the window's last second (DRE-9165), or rc 1 for a repo listed
+    in `unreadable`; `run view <id> --log` answers that run's log."""
 
     def __init__(self, runs: dict[str, list[tuple[int, str, str]]],
                  unreadable: tuple[str, ...] = ()):
@@ -61,14 +61,16 @@ class _FakeGh:
 
     def __call__(self, *args: str) -> subprocess.CompletedProcess:
         self.calls.append(args)
-        if args[:2] == ("run", "list"):
-            repo = args[args.index("-R") + 1]
+        if args[0] == "api":
+            url = args[-1]
+            repo = url.split("/actions/")[0].removeprefix("repos/")
             if repo in self.unreadable:
                 return subprocess.CompletedProcess(args, 1, "", "HTTP 404")
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            out = [{"databaseId": rid, "workflowName": wf, "createdAt": now}
+            last = url.split("created=")[1].split("&")[0].split("..")[1]
+            out = [{"id": rid, "name": wf, "created_at": last, "status": "completed"}
                    for rid, wf, _log_text in self.runs.get(repo, [])]
-            return subprocess.CompletedProcess(args, 0, json.dumps(out), "")
+            page = {"total_count": len(out), "workflow_runs": out}
+            return subprocess.CompletedProcess(args, 0, json.dumps([page]), "")
         assert args[:2] == ("run", "view") and "--log" in args, args
         rid = int(args[2])
         for runs in self.runs.values():
@@ -85,15 +87,17 @@ def _drive(monkeypatch, capsys, fake: _FakeGh,
     assert clb.main(["--hours", "1"]) == 0
     got = capsys.readouterr()
     if quiet:
-        assert got.err == ""
+        # DRE-9165: the one line a repo prints when it is done is all it holds.
+        assert all(ln.startswith("budget-check: ") for ln in got.err.splitlines())
     return got.out
 
 
 def _fallback_section(out: str) -> list[str]:
-    """Every line printed after the spend table's TOTAL line, up to the
-    direct-read table that follows the fallback table (DRE-8897)."""
+    """Every line printed after the spend table's TOTAL line and the two
+    `runs listed` lines under it (DRE-9165), up to the direct-read table that
+    follows the fallback table (DRE-8897)."""
     lines = out.splitlines()
-    total = next(i for i, line in enumerate(lines) if line.startswith("TOTAL"))
+    total = next(i for i, line in enumerate(lines) if line.startswith("TOTAL")) + 2
     end = next((i for i, line in enumerate(lines)
                 if line.startswith("direct Linear reads")), len(lines))
     return [line for line in lines[total + 1:end] if line.strip()]
@@ -174,12 +178,12 @@ def test_the_spend_table_is_byte_identical_to_render_table(monkeypatch, capsys):
 
 
 def test_the_reader_makes_no_gh_call_it_did_not_make_before(monkeypatch, capsys):
-    """One `run list` per repo and one `run view --log` per run — the logs the
-    spend table already fetched — and nothing else."""
+    """One `api` listing per repo and one `run view --log` per run — the logs
+    the spend table already fetched — and nothing else."""
     fake, repo_map = _two_repos()
     _drive(monkeypatch, capsys, fake, repo_map)
     assert sorted(c[:2] for c in fake.calls) == (
-        [("run", "list")] * 2 + [("run", "view")] * 3
+        [("api", "--paginate")] * 2 + [("run", "view")] * 3
     )
 
 

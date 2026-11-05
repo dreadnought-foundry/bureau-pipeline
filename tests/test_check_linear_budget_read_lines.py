@@ -61,22 +61,31 @@ def _no_sleep(monkeypatch):
     monkeypatch.setattr(clb, "_sleep", lambda _s: None, raising=False)
 
 
+# "Now", for every run of `main` here: the window the two `runs listed`
+# lines name (DRE-9165) ends at it.
+_NOW = datetime(2026, 11, 2, 18, 0, 0, tzinfo=timezone.utc)
+
+
 class _FakeGh:
-    """Stands in for `_gh`: `run list` answers each repo's runs, created now,
-    or rc 1 for a repo in `unreadable`; `run view <id> --log` its log."""
+    """Stands in for `_gh`: the `api --paginate --slurp` listing answers each
+    repo's runs as the one page GitHub prints, created in the window's last
+    second (DRE-9165), or rc 1 for a repo in `unreadable`; `run view <id>
+    --log` its log."""
 
     def __init__(self, runs, unreadable=()):
         self.runs, self.unreadable = runs, unreadable
 
     def __call__(self, *args):
-        if args[:2] == ("run", "list"):
-            repo = args[args.index("-R") + 1]
+        if args[0] == "api":
+            url = args[-1]
+            repo = url.split("/actions/")[0].removeprefix("repos/")
             if repo in self.unreadable:
                 return subprocess.CompletedProcess(args, 1, "", "HTTP 404")
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            out = [{"databaseId": rid, "workflowName": wf, "createdAt": now}
+            last = url.split("created=")[1].split("&")[0].split("..")[1]
+            out = [{"id": rid, "name": wf, "created_at": last, "status": "completed"}
                    for rid, wf, _log_text in self.runs.get(repo, [])]
-            return subprocess.CompletedProcess(args, 0, json.dumps(out), "")
+            page = {"total_count": len(out), "workflow_runs": out}
+            return subprocess.CompletedProcess(args, 0, json.dumps([page]), "")
         rid = int(args[2])
         for runs in self.runs.values():
             for run_id, _wf, log_text in runs:
@@ -89,6 +98,7 @@ def _main(monkeypatch, capsys, runs, *argv, unreadable=(), repos=None):
     repos = repos or {"bureau-pipeline": "o/bureau-pipeline"}
     monkeypatch.setattr(clb, "load_repo_map", lambda: dict(repos))
     monkeypatch.setattr(clb, "_gh", _FakeGh(runs, unreadable))
+    monkeypatch.setattr(clb, "_now", lambda: _NOW)
     assert clb.main(list(argv)) == 0
     return capsys.readouterr().out
 
@@ -255,7 +265,8 @@ _OLD_LOG = (
     'sweep / reconcile.py" read=board reason=stale\n'
 )
 
-# The first two tables as they printed before DRE-8897, byte for byte.
+# The first two tables as they printed before DRE-8897, byte for byte, with
+# the two `runs listed` lines DRE-9165 prints after the spend table's TOTAL.
 _OLD_TABLES = (
     "linear budget, last 1h\n"
     "repo                 workflow                          runs   spent  max/run\n"
@@ -264,6 +275,8 @@ _OLD_TABLES = (
     "portico              UNKNOWN                          UNKNOWN UNKNOWN  UNKNOWN\n"
     "----------------------------------------------------------------------------\n"
     "TOTAL                                                     1       7   (+ 1 repo(s) UNKNOWN)\n"
+    "runs listed, 1h to 2026-11-02T18:00:00Z: bureau-pipeline 1, portico UNKNOWN\n"
+    "runs in progress, not read: none\n"
     "\n"
     "read fallbacks, last 1h — reads only: Linear writes and the console's own Linear "
     "sync never print the line\n"
