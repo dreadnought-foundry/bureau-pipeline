@@ -184,7 +184,18 @@ import os, sys
 open(os.environ["CALLS"], "a").write({name!r} + " " + " ".join(sys.argv[1:]) + "\\n")
 """
 
-_CARD_PR_STUB = _RECORDER.format(name="card_pr")
+# A pull request on the branch when the test names one in FAKE_PR.
+_CARD_PR_STUB = _RECORDER.format(name="card_pr") + """\
+if os.environ.get("FAKE_PR"):
+    sys.stdout.write("1\\t" + os.environ["FAKE_PR"] + "\\n")
+"""
+
+# DRE-9217: the card close, recorded; exits with FAKE_CLOSE_RC.
+_REPAIR_CARD_STUB = _RECORDER.format(name="repair_card") + """\
+sys.exit(int(os.environ.get("FAKE_CLOSE_RC", "0")))
+"""
+
+_NOTICE_STUB = _RECORDER.format(name="pipeline_notice")
 
 # No branch was pushed, so the finish helper has nothing to open.
 _FINISH_STUB = _RECORDER.format(name="repair_finish") + """\
@@ -224,7 +235,8 @@ def report_step() -> dict:
 class ReportSupersededExitTest(unittest.TestCase):
     """The step's `run:` body, executed as GitHub executes it (`bash -e`)."""
 
-    def run_step(self, *, claim, history):
+    def run_step(self, *, claim, history, card="DRE-5696", pr="",
+                 escalation=None, close_rc=0):
         with tempfile.TemporaryDirectory() as tmp:
             scripts = os.path.join(tmp, ".bureau-pipeline", "scripts")
             os.makedirs(scripts)
@@ -233,6 +245,8 @@ class ReportSupersededExitTest(unittest.TestCase):
                     ("repair_finish.py", _FINISH_STUB),
                     ("linear_ops.py", _LINEAR_STUB),
                     ("repair_history.py", _HISTORY_STUB),
+                    ("repair_card.py", _REPAIR_CARD_STUB),
+                    ("pipeline_notice.py", _NOTICE_STUB),
                     ("red_main_repair.py",
                      _DECISION_SHIM.format(scripts=os.path.abspath(SCRIPTS)))):
                 with open(os.path.join(scripts, name), "w") as fh:
@@ -246,6 +260,9 @@ class ReportSupersededExitTest(unittest.TestCase):
             if claim is not None:
                 with open(os.path.join(tmp, "repair-superseded.txt"), "w") as fh:
                     fh.write(claim)
+            if escalation is not None:
+                with open(os.path.join(tmp, "repair-escalation.txt"), "w") as fh:
+                    fh.write(escalation)
             calls = os.path.join(tmp, "calls.txt")
             summary = os.path.join(tmp, "summary.md")
             open(calls, "w").close()
@@ -254,6 +271,9 @@ class ReportSupersededExitTest(unittest.TestCase):
                 **os.environ,
                 "CALLS": calls,
                 "FAKE_HISTORY": history,
+                "FAKE_PR": pr,
+                "FAKE_CLOSE_RC": str(close_rc),
+                "CARD": card,
                 "GH_TOKEN": WORKER_TOKEN,
                 "HISTORY_GH_TOKEN": HISTORY_TOKEN,
                 "BRANCH": f"repair/DRE-5696-{FAILED_SHA[:12]}",
@@ -291,8 +311,9 @@ class ReportSupersededExitTest(unittest.TestCase):
         self.assertIn(str(GREEN_RUN), summary)
         self.assertIn(CLAIM, summary)
 
-    def test_a_verified_claim_writes_nothing_to_linear_or_github(self):
-        # No PR, no card, no comment: the repair card is `settle`'s to close.
+    def test_a_verified_claim_opens_nothing(self):
+        # No PR and no new card. The card this run filed is closed through
+        # repair_card.py (DRE-9217), never by a Linear call of the step's own.
         done, calls, _ = self.run_step(
             claim=CLAIM, history=json.dumps(_history(_branch_run())))
         self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
@@ -373,6 +394,73 @@ class ReportSupersededExitTest(unittest.TestCase):
         self.assertIn(self.DEAD, done.stdout)
         self.assertNotIn("repair_history", calls)
 
+    # -- the card this run filed (DRE-9217) --------------------------------- #
+
+    def close_calls(self, calls):
+        return [ln for ln in calls.splitlines() if ln.startswith("repair_card ")]
+
+    def test_a_verified_claim_closes_the_card_this_run_filed(self):
+        done, calls, _ = self.run_step(
+            claim=CLAIM, history=json.dumps(_history(_branch_run())))
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        closes = self.close_calls(calls)
+        self.assertEqual(len(closes), 1, calls)
+        green_url = ("https://github.com/dreadnought-foundry/portico/actions/"
+                     f"runs/{GREEN_RUN}")
+        for flag in ("close-superseded", "--card DRE-5696",
+                     f"--green-run {GREEN_RUN}", f"--green-url {green_url}",
+                     "--workflow-name CI", "--history-file "):
+            self.assertIn(flag, closes[0])
+        self.assertIn("repair-history-report.json", closes[0])
+
+    def test_a_pull_request_leaves_the_card_open(self):
+        # The PR's merge closes the card; the superseded note is never read.
+        done, calls, _ = self.run_step(
+            claim=CLAIM, history=json.dumps(_history(_branch_run())),
+            pr="https://github.com/dreadnought-foundry/portico/pull/12")
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertIn("repair PR opened", done.stdout)
+        self.assertEqual(self.close_calls(calls), [])
+
+    def test_an_escalation_leaves_the_card_open(self):
+        done, calls, _ = self.run_step(
+            claim=None, history=json.dumps(_history(_branch_run())),
+            escalation="Should we revert the release?")
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertIn("pipeline_notice", calls)
+        self.assertEqual(self.close_calls(calls), [])
+
+    def test_an_unverified_claim_leaves_the_card_open(self):
+        done, calls, _ = self.run_step(
+            claim=CLAIM, history=json.dumps(_history(
+                _branch_run(conclusion="failure"))))
+        self.assertNotEqual(done.returncode, 0)
+        self.assertEqual(self.close_calls(calls), [])
+
+    def test_a_dead_agent_leaves_the_card_open(self):
+        done, calls, _ = self.run_step(
+            claim=None, history=json.dumps(_history(_branch_run())))
+        self.assertEqual(done.returncode, 1)
+        self.assertEqual(self.close_calls(calls), [])
+
+    def test_no_filed_card_closes_nothing_and_says_so(self):
+        done, calls, _ = self.run_step(
+            claim=CLAIM, history=json.dumps(_history(_branch_run())), card="")
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertEqual(self.close_calls(calls), [])
+        self.assertIn("no repair card was filed", done.stdout)
+
+    def test_a_close_that_fails_warns_and_stays_green(self):
+        # Main is green; a board that refused the write is bookkeeping, and
+        # the sweep's settle pass is the backstop that closes the card.
+        done, calls, _ = self.run_step(
+            claim=CLAIM, history=json.dumps(_history(_branch_run())),
+            close_rc=1)
+        self.assertEqual(done.returncode, 0, done.stderr + done.stdout)
+        self.assertEqual(len(self.close_calls(calls)), 1)
+        self.assertIn("::warning::", done.stdout)
+        self.assertIn("DRE-5696", done.stdout)
+
 
 # --------------------------------------------------------------------------- #
 # The record                                                                   #
@@ -389,6 +477,15 @@ class AdrTest(unittest.TestCase):
         for fact in ("DRE-5700", "/tmp/repair-superseded.txt",
                      "Report step", "superseding_run"):
             self.assertIn(fact, bullet)
+
+    def test_the_adr_says_the_superseded_exit_closes_its_card(self):
+        with open(ADR) as fh:
+            text = fh.read()
+        start = text.index("(DRE-5069).**")
+        end = text.index("- **Bounded attempts", start)
+        bullet = text[start:end]
+        self.assertIn("DRE-9217", bullet)
+        self.assertIn("close-superseded", bullet)
 
 
 if __name__ == "__main__":
