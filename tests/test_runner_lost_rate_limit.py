@@ -209,6 +209,38 @@ def test_a_second_wait_runs_to_the_reset_when_nothing_is_left(sweep, monkeypatch
     assert len(state["dispatched"]) == 1
 
 
+def _bare_refusal(status_line="HTTP/2.0 403 Forbidden", **headers):
+    """A refusal whose words say nothing of a rate limit — only its headers."""
+    done = _answer(status_line, headers, '{"message": "Forbidden"}', 1)
+    done.stderr = f"gh: Forbidden ({status_line.split()[0]} {status_line.split()[1]})"
+    return done
+
+
+def test_a_refusal_carrying_retry_after_is_a_rate_limit_whatever_it_says(sweep):
+    state = sweep(_bare_refusal(**{"Retry-After": "5"}), answered("main"))
+    assert state["sleeps"] == [reconcile.RUNNER_LOST_RATE_LIMIT_BACKOFF, 5]
+    assert len(state["dispatched"]) == 1
+
+
+def test_a_refusal_with_no_calls_left_is_a_rate_limit_whatever_it_says(sweep, monkeypatch):
+    monkeypatch.setattr(reconcile.time, "time", lambda: 1_000_000.0)
+    state = sweep(_bare_refusal(**{"X-Ratelimit-Remaining": "0",
+                                   "X-Ratelimit-Reset": "1000009"}),
+                  answered("main"))
+    assert state["sleeps"] == [reconcile.RUNNER_LOST_RATE_LIMIT_BACKOFF, 9]
+    assert len(state["dispatched"]) == 1
+
+
+def test_a_reset_header_alone_is_not_a_rate_limit(sweep, capsys):
+    """Every GitHub answer carries `x-ratelimit-reset`, a permission refusal
+    included: with calls left and no `retry-after`, it is not waited on."""
+    state = sweep(_bare_refusal(**{"X-Ratelimit-Remaining": "4100",
+                                   "X-Ratelimit-Reset": "1000009"}))
+    assert state["sleeps"] == [reconcile.RUNNER_LOST_RATE_LIMIT_BACKOFF]
+    line, = _degraded_lines(capsys.readouterr().out)
+    assert "unreadable" in line
+
+
 def test_the_re_read_has_a_timeout_so_a_hung_call_cannot_spend_the_job(sweep):
     state = sweep(answered("main"))
     (_argv, kwargs), = state["gh"].calls
