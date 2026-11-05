@@ -806,7 +806,10 @@ jobs:
       # listing (the same call as "Gather repair history", on its own file)
       # and asks the decide step's superseded rule again through
       # `red_main_repair.py superseded`. A later green run ends the job green
-      # with no card and no comment — the repair card is `settle`'s to close.
+      # and closes the card this run filed (`repair_card.py close-superseded`,
+      # DRE-9217) — Canceled, one comment naming the green run and its PT
+      # time; a card already finished is left alone and the log says so. A
+      # flaky test's fix card is filed first, as `settle` would (DRE-6870).
       # No such run, or a listing nobody could read, fails as before. On
       # 2026-10-03 run 37092915226's agent rightly opened nothing and this
       # step failed it 41 seconds after main went green on 44eb259.
@@ -826,6 +829,9 @@ jobs:
           # Empty when the card could not be filed; the helper then names the
           # card from the branch, or says it is owed (DRE-6525).
           CARD_URL: ${{ steps.card.outputs.card_url }}
+          # DRE-9217: the card the superseded exit closes. Empty when none
+          # was filed, and then nothing is closed.
+          CARD: ${{ steps.card.outputs.card }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # DRE-5700: the superseded exit's re-gather, with the env the
           # "Gather repair history" step hands the same call. Its token is
@@ -913,8 +919,21 @@ jobs:
             if GREEN_RUN=$(python3 .bureau-pipeline/scripts/red_main_repair.py superseded \
                 --history-file /tmp/repair-history-report.json); then
               GREEN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GREEN_RUN"
-              echo "superseded: run $GREEN_RUN of this workflow went green on a later commit of the default branch ($GREEN_URL) — the agent: $CLAIM — no PR, no card."
+              echo "superseded: run $GREEN_RUN of this workflow went green on a later commit of the default branch ($GREEN_URL) — the agent: $CLAIM — no PR."
               echo "Superseded by [run $GREEN_RUN]($GREEN_URL) while the repair agent worked — the agent: $CLAIM" >> "$GITHUB_STEP_SUMMARY"
+              # DRE-9217: the card this run filed closes here, not when the
+              # sweep next laps it. A card already finished is left alone and
+              # the helper says so; a close the board refused warns and stays
+              # green — main is green, and settle is the backstop.
+              if [ -z "$CARD" ]; then
+                echo "no repair card was filed for this run — nothing to close"
+              elif ! python3 .bureau-pipeline/scripts/repair_card.py close-superseded \
+                  --card "$CARD" --green-run "$GREEN_RUN" --green-url "$GREEN_URL" \
+                  --workflow-name "$WF_NAME" \
+                  --repo "$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')" \
+                  --history-file /tmp/repair-history-report.json; then
+                echo "::warning::the repair card $CARD could not be closed — the reconcile sweep's settle pass closes it"
+              fi
             else
               echo "::error::the repair agent claimed the fault was superseded ($CLAIM), and the record shows no later green run of this workflow on the default branch — failing for medic visibility"
               exit 1

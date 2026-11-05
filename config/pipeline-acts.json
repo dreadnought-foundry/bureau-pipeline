@@ -1838,6 +1838,13 @@
       "why": "It reports an OUTCOME of the work — a flake that passed on its re-run, or somebody else's merge turning main green — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as the dependabot card's `cancel_note` two rows on, and as the merge→Done seam's `✅ Merged` line from the other end: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It carries its own idempotency key (repair_card.SETTLE_MARKER), read back off the card's own comments so a second sweep over a card whose cancel landed and whose comment did not writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {
+      "file": "scripts/repair_card.py",
+      "anchor": "cmd_comment(card, superseded_note(",
+      "kind": "not-an-act",
+      "means": "The repair card a Red-Main Repair run filed records, beside its move to Canceled, that the run found main already green before it opened anything — naming the green run, its link and the time it finished in PT (DRE-9217).",
+      "why": "It reports an OUTCOME of the work — somebody else's merge turning main green while the repair agent worked — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as `settle_note`, whose ending it is, written by the repair run itself instead of the next sweep: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It opens with the same idempotency key (repair_card.SETTLE_MARKER), so the sweep's settle pass reads the card as already said and never writes a second comment; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
+    },
+    {
       "file": "scripts/mirror_check.py",
       "anchor": "comment_note(result, run_url)",
       "kind": "not-an-act",
