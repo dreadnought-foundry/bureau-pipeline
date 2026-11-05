@@ -204,8 +204,10 @@ def reask_notice(sha: str, how: str, hold: Hold) -> str:
 
 
 def twice_marker(number: int, sha: str) -> str:
-    """The Triage line's idempotency key: once per pull request and head."""
-    return f"{TWICE_TAG} PR #{number} @{sha}:"
+    """The Triage line's idempotency key: once per pull request and head.
+    It opens `<tag>:`, the shape the Triage Repair table matches a note's
+    tag by (config/triage-repair.json)."""
+    return f"{TWICE_TAG}: PR #{number} @{sha}:"
 
 
 def triage_line(number: int, sha: str, holds: list[Hold]) -> str:

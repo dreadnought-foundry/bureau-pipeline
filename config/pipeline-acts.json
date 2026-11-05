@@ -1562,7 +1562,7 @@
       "anchor": "linear_ops.cmd_comment(card, held_verdict.triage_line(number, sha, holds))",
       "kind": "undeclared-act",
       "means": "The evidence gate held the critic's verdict twice on the same head, so the sweep moved the card to Triage with one line naming the pull request, both runs and the held finding, and dispatched nothing more (DRE-9230).",
-      "why": "Act-shaped — a hold that ends with a person — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its body is written by scripts/held_verdict.py, and its `held-verdict-twice PR #<n> @<head sha>:` marker is what keeps the sweep from moving and saying it twice, so a trailer is a change to that key; the card that declares the act owns both."
+      "why": "Act-shaped — a hold that ends with a person — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its body is written by scripts/held_verdict.py, and its `held-verdict-twice: PR #<n> @<head sha>:` marker is what keeps the sweep from moving and saying it twice, so a trailer is a change to that key; the card that declares the act owns both."
     },
     {
       "file": "scripts/reconcile.py",
