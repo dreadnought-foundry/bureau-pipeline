@@ -119,14 +119,18 @@ with open(os.environ["CALLS"], "a", encoding="utf-8") as fh:
 '''
 
 # `gh`, answering `gh run list` with FAKE_RUNS and `gh api` with FAKE_TIP
-# (failing every call on FAKE_GH_RC, or only `gh api` on FAKE_TIP_RC).
+# (failing every call on FAKE_GH_RC, only `gh api` on FAKE_TIP_RC, or only
+# `gh run list` on FAKE_LIST_RC). Each call records the token it was made with.
 _GH_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ["CALLS"], "a", encoding="utf-8") as fh:
-    fh.write(json.dumps({"tool": "gh", "args": sys.argv[1:]}) + "\n")
+    fh.write(json.dumps({"tool": "gh", "args": sys.argv[1:],
+                         "token": os.environ.get("GH_TOKEN", "")}) + "\n")
 rc = int(os.environ.get("FAKE_GH_RC", "0"))
 if sys.argv[1:2] == ["api"]:
     rc = rc or int(os.environ.get("FAKE_TIP_RC", "0"))
+else:
+    rc = rc or int(os.environ.get("FAKE_LIST_RC", "0"))
 if rc:
     print("HTTP 403: Resource not accessible by integration", file=sys.stderr)
     sys.exit(rc)
@@ -331,6 +335,148 @@ def test_a_lost_escalation_fails_the_step(tmp_path):
 def test_the_report_step_reaches_the_door():
     env = _report_step().get("env") or {}
     assert env.get("BUREAU_READ_URL") == "${{ vars.BUREAU_READ_URL }}"
+
+
+# ── the escalation's guard: main already green raises nothing (DRE-9227) ─────
+#
+# 2026-11-05, agent-bureau: CI failed at d653a0d9f, its re-run passed at
+# 11:50 PM PT and clear-notices found nothing open, and nine minutes later the
+# repair agent for the failed attempt escalated. The Report step raised
+# `needs_decision` on a main that was already green, and nothing cleared it.
+# The guard asks the all-clear's own question — `red_main_clear.py decide` on
+# the default branch's tip — and raises only when the answer is not go.
+
+WORKER_TOKEN = "worker-token-not-for-actions-reads"
+HISTORY_TOKEN = "github-token-with-actions-read"
+GUARD_ENV = {"GITHUB_RUN_ID": "999", "GH_TOKEN": WORKER_TOKEN,
+             "HISTORY_GH_TOKEN": HISTORY_TOKEN}
+NOT_RAISED = f"red-main-escalation: not raised — main is green at {HEAD_SHA[:7]}"
+
+
+def _run_guarded(tmp_path, runs: str, **extra):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "repair-escalation.txt").write_text(ESCALATION + "\n")
+    return _run_step(tmp_path, _report_step(),
+                     {**REPORT_ENV, **GUARD_ENV, "FAKE_RUNS": runs, **extra},
+                     real=("red_main_clear.py",))
+
+
+def _incident_runs() -> str:
+    """The failed CI run's latest attempt passed; this repair run, started by
+    `workflow_run`, is still in progress."""
+    return _runs(("Pipeline Tests", "completed", "success", "push"),
+                 ("Red-Main Repair", "in_progress", "", "workflow_run"))
+
+
+def _raises(calls) -> list:
+    return [c for c in calls if c["tool"] == "pipeline_notice"]
+
+
+def test_the_incident_raises_nothing_when_main_is_already_green(tmp_path):
+    done, calls, _, _ = _run_guarded(tmp_path, _incident_runs(), FAKE_TIP=HEAD_SHA)
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert _raises(calls) == [], calls
+    lines = [ln for ln in done.stdout.splitlines() if ln.startswith(NOT_RAISED)]
+    assert len(lines) == 1, done.stdout
+    assert "all-green" in lines[0]
+    assert ESCALATION in done.stdout
+
+
+def test_the_unraised_question_is_on_the_step_summary(tmp_path):
+    _run_guarded(tmp_path, _incident_runs(), FAKE_TIP=HEAD_SHA)
+    summary = (tmp_path / "summary.md").read_text()
+    assert NOT_RAISED in summary
+    assert ESCALATION in summary
+
+
+def test_the_guard_reads_the_tip_and_every_run_on_it_as_the_all_clear_does(tmp_path):
+    _, calls, _, _ = _run_guarded(tmp_path, _incident_runs(), FAKE_TIP=HEAD_SHA)
+    gh = [c for c in calls if c["tool"] == "gh"]
+    tip = [c for c in gh if c["args"][:1] == ["api"]]
+    assert len(tip) == 1, gh
+    assert tip[0]["args"][1] == f"repos/{REPO}/commits/main"
+    assert _flag(tip[0]["args"], "--jq") == ".sha"
+    listing = [c for c in gh if c["args"][:2] == ["run", "list"]]
+    assert len(listing) == 1, gh
+    args = listing[0]["args"]
+    assert _flag(args, "--repo") == REPO
+    assert _flag(args, "--commit") == HEAD_SHA
+    assert _flag(args, "--limit") == "200"
+    assert _flag(args, "--json") == "databaseId,workflowName,status,conclusion,event"
+    # actions: read is github.token's, never the worker App's (DRE-1346).
+    assert {c["token"] for c in gh} == {HISTORY_TOKEN}
+
+
+def test_the_guard_passes_this_run_as_self():
+    branch = _escalation_branch(_report_step()["run"])
+    assert "red_main_clear.py decide" in branch
+    assert '--self-run-id "$GITHUB_RUN_ID"' in branch
+    assert '--head-sha "$TIP_SHA" --tip-sha "$TIP_SHA"' in branch
+    assert branch.index("red_main_clear.py decide") < branch.index(
+        "pipeline_notice.py raise")
+
+
+def test_main_moved_on_and_still_running_raises(tmp_path):
+    done, calls, _, _ = _run_guarded(
+        tmp_path, _runs(("Pipeline Tests", "in_progress", "", "push")),
+        FAKE_TIP=NEWER_SHA)
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert len(_raises(calls)) == 1, calls
+    listing = [c["args"] for c in calls
+               if c["tool"] == "gh" and c["args"][:2] == ["run", "list"]]
+    assert [_flag(a, "--commit") for a in listing] == [NEWER_SHA]
+    assert NOT_RAISED[:30] not in done.stdout
+
+
+def test_a_failure_on_the_tip_raises(tmp_path):
+    done, calls, _, _ = _run_guarded(
+        tmp_path, _runs(("Pipeline Tests", "completed", "success", "push"),
+                        ("Integration Harness", "completed", "failure", "push")),
+        FAKE_TIP=HEAD_SHA)
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert len(_raises(calls)) == 1, calls
+
+
+@pytest.mark.parametrize("failing", ["FAKE_GH_RC", "FAKE_LIST_RC"])
+def test_an_unreadable_run_listing_raises(tmp_path, failing):
+    done, calls, _, _ = _run_guarded(tmp_path, _incident_runs(),
+                                     FAKE_TIP=HEAD_SHA, **{failing: "1"})
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert len(_raises(calls)) == 1, calls
+
+
+def test_an_unreadable_tip_raises(tmp_path):
+    done, calls, _, _ = _run_guarded(tmp_path, _incident_runs(),
+                                     FAKE_TIP=HEAD_SHA, FAKE_TIP_RC="1")
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert len(_raises(calls)) == 1, calls
+
+
+def test_a_guard_that_cannot_run_raises(tmp_path):
+    """No decide script at all — the step still raises, exactly as today."""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    (scratch / "repair-escalation.txt").write_text(ESCALATION + "\n")
+    done, calls, _, _ = _run_step(
+        tmp_path, _report_step(),
+        {**REPORT_ENV, **GUARD_ENV, "FAKE_RUNS": _incident_runs(),
+         "FAKE_TIP": HEAD_SHA})
+    assert done.returncode == 0, done.stderr + done.stdout
+    assert len(_raises(calls)) == 1, calls
+
+
+def test_a_guarded_raise_is_the_raise_of_today(tmp_path):
+    _, calls, _, _ = _run_guarded(
+        tmp_path, _runs(("Pipeline Tests", "completed", "failure", "push")),
+        FAKE_TIP=HEAD_SHA)
+    raise_ = _raises(calls)[0]
+    args = raise_["args"]
+    assert _flag(args, "--notice") == f"red_main:{SLUG}:needs_decision"
+    assert _flag(args, "--severity") == "CRITICAL"
+    assert _flag(args, "--action-url") == RUN_URL
+    assert _flag(args, "--fallback-lane") == "Triage"
+    assert ESCALATION in raise_["files"]["--body-file"]
 
 
 def test_the_workflow_mints_no_card_of_its_own():
