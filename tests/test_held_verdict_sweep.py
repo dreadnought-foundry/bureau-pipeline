@@ -296,7 +296,7 @@ def test_replay_1107_two_held_verdicts_go_to_triage(receipt, capsys):
     assert ident == "DRE-9229"
     assert "\n" not in line, "the finding is one line"
     assert line == (
-        f"🚦 held-verdict-twice PR #1107 @{sha}: the evidence gate held the "
+        f"🚦 held-verdict-twice: PR #1107 @{sha}: the evidence gate held the "
         f"critic's verdict on this head twice — run {RUN} attempt 1 and run "
         f"{RUN} attempt 2 — the second time on the finding: "
         '`gh pr view 1107 --json body -q .body | grep -in "what\'s new"` '
