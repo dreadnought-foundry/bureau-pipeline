@@ -51,6 +51,11 @@ NAMED_ROWS = ("check_linear_identities.viewer_of", "plan_initiative_context.bloc
               "groomer.read_population", "hand_work_migration.read_population",
               "groom_verify._card")
 ALARM_ROW = "alarm-repair.yml#repair/Assemble the alarm's context"
+#: The reads that decide or confirm a write, kept on Linear by name (DRE-9171).
+WRITE_READ_CARD = "DRE-9171"
+WRITE_READ_ROWS = ("linear_ops.get_issue", "linear_ops.landed",
+                   "linear_ops._clobbered_terminal_state", "linear_ops.find_open",
+                   "linear_ops.find_open_prefix")
 
 QUERY = '"query($id: String!) { issue(id: $id) { id title } }"'
 MUTATION = '"mutation($id: String!) { issueArchive(id: $id) { success } }"'
@@ -173,7 +178,7 @@ def test_the_check_passes_on_this_branch_and_prints_its_summary():
     assert code == 0, out
     found, listed, kept, pending, new, gone = summary(out)
     assert (new, gone) == (0, 0)
-    assert found == listed and kept == 1
+    assert found == listed and kept == 1 + len(WRITE_READ_ROWS)
 
 
 def test_the_ledger_lists_every_site_the_scan_finds_and_nothing_else():
@@ -181,15 +186,34 @@ def test_the_ledger_lists_every_site_the_scan_finds_and_nothing_else():
     assert set(_rows()) == set(sites)
 
 
-def test_every_row_is_move_with_no_card_but_the_design_download():
+def test_every_row_is_move_with_no_card_but_the_kept_ones():
     for caller, row in _rows().items():
         assert set(row) == {"caller", "class", "reason", "card"}, caller
         assert row["reason"].strip(), caller
         if caller == "plan_initiative_context.fetch":
             assert row == {"caller": caller, "class": "kept", "card": THIS_CARD,
                            "reason": clr.KEPT_FETCH_REASON}
+        elif caller in WRITE_READ_ROWS:
+            assert (row["class"], row["card"]) == ("kept", WRITE_READ_CARD), caller
         else:
             assert (row["class"], row["card"]) == ("move", None), caller
+
+
+def test_a_writes_own_reads_are_kept_because_the_store_trails_linear():
+    # DRE-9171's six reads, as the scan names them: `_card_look`'s read is
+    # its inner `landed`. `_comment_look` sends nothing itself — it reads
+    # through `_fetch_thread`, every thread read's site — so it has no row.
+    sites = clr.scan(ROOT)
+    rows = _rows()
+    assert "linear_ops._comment_look" not in sites
+    assert "linear_ops._card_look" not in sites
+    for caller in WRITE_READ_ROWS:
+        reason = rows[caller]["reason"]
+        assert reason.startswith(clr.stays_reason(ROOT, sites[caller])), caller
+        assert "store trails Linear" in reason, caller
+        assert ("decides a write" in reason) != ("confirms a write" in reason), caller
+        assert reason.endswith(" " + clr.NEW_CALLER_SENTENCE), caller
+    assert rows["linear_ops._fetch_thread"]["class"] == "move"
 
 
 def test_kept_fetch_reason_is_the_cards_words():
