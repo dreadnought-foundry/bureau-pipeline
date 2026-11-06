@@ -1,0 +1,869 @@
+{
+  "schema": "linear-direct-reads/1",
+  "reads": [
+    {
+      "caller": "agent_task_snapshot._from_linear",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "alarm-repair.yml#repair/Assemble the alarm's context",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "alarm_repair.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "answer_into_card._read_description",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "backlog_cutover.read_population",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "board_snapshot.read_board",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "break_glass.counts",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "break_glass.marker_provenance",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "card_snapshot._from_linear",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "check_linear_identities.viewer_of",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "check_prose_blockers.live_identifiers",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "check_prose_blockers.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "classifier_cost.main",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "critic_score.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "dedupe_dispatch._one_off_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "epic_cap._paged",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "epic_cap.read_epic",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "epic_todo_gate.lane_before_todo",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_context.read_closed_cards",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_context.read_epics",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_context.read_initiatives",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_lookups._matched_work",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_lookups._search",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_priority.annotate",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_readiness.read_epics",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_readiness.read_named",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_verify._card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_verify.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groom_verify_agent._read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groomer._drafts_to_post",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groomer.accepted_draft",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groomer.cycle_ids",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groomer.hold_states",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groomer.read_cycles",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "groomer.read_population",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hand_work_migration.current_lane",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hand_work_migration.read_operator_backlog",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hand_work_migration.read_population",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hand_work_migration.read_relations",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hand_work_migration.read_thread",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "harness.scenarios.lane_contract.board_states",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hold._read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "hygiene.linear",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "hygiene.newest_summary_digest",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "lane_contract._live_board",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._clobbered_terminal_state",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door serves no history, and the entry it reads back is seconds old. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._comment_target",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._fetch_thread",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._issue_has_children",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._issue_label_names",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._linear_state_list",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._redispatch_in_place",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops._team_label_id",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.add_label",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_child_descriptions",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier. The store holds a card's children, and the door names them by internal id rather than identifier: that is the door's shape, not something the store lacks. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_children",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier. The store holds a card's children, and the door names them by internal id rather than identifier: that is the door's shape, not something the store lacks. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_children_detail",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier. The store holds a card's children, and the door names them by internal id rather than identifier: that is the door's shape, not something the store lacks. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_children_json",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door's node lists a card's children by internal id, not identifier. The store holds a card's children, and the door names them by internal id rather than identifier: that is the door's shape, not something the store lacks. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_description",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_epics_in_flight",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.cmd_oneoff",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.comment_count",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.create_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.find_by_pr_url",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.find_open",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.find_open_prefix",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.get_issue",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): it is the write path's read, and `team { id }`, `state { id type }` and `project { id }` are not on the door's node; `fresh=True` is the DRE-2316 pre-write re-read, which must be live. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.landed",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): it asks whether a create landed seconds ago, which a door answer trailing real time cannot say. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.lane_history",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.remove_label",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.repo_cards_by_title_prefix",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "linear_ops.viewer_id",
+      "class": "move",
+      "reason": "It stays on Linear (DRE-8898): authorship is judged against this process's own key, and the door's viewer is the console's. A new caller of this function is not a new read site.",
+      "card": null
+    },
+    {
+      "caller": "medic_retry.card_facts",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "merge_sweep_gate.decide",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "mid_epic.read_epic",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "name_roster._linear_users",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "operator_agent_apply._linear_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "operator_agent_apply._receipt_url",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "operator_agent_apply.blockers",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "operator_do._linear_user",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "operator_do.project_status",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "operator_do.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "parts_cleanup.filed",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "plan_initiative_context.block",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "plan_initiative_context.fetch",
+      "class": "kept",
+      "reason": "Downloads an approved design file from Linear's upload host with the pipeline's Linear key. The console's store holds no file bytes, so only Linear can serve it.",
+      "card": "DRE-9164"
+    },
+    {
+      "caller": "plan_proof_reach.operator_cards",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planner_allowance.held_line",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planner_allowance.read",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planner_score.collect",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planner_score.collect_month",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planning_classify.roll_up_parent",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planning_route._read_epic_wait",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "planning_route._read_returned_child",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch._epic_children",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch._with_relation_times",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch.blocking",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch.card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch.fix_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch.lane",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_dispatch.states",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_gap.epic_of",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_overdue._epic_children",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_overdue._lane_entry",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_overdue._linear_lane_proofs",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_overdue.card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_overdue.proofs",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_overdue_act.card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_record_stuck._one",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_shadow.__call__",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "proof_shadow.read_cards",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "ready_lane_writers.observed_default",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._blocker_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._blocker_epic",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._fetch_active_cards",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._read_epic_records",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._read_one_epic_record",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._recent_urgent_moves",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._redispatch_epic_start",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._release_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile._repo_held_read",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.advance_unblocked_epics",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.advance_urgent_intake",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.backlog_children",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.card_parked_for_human",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.card_state",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.complete_inverse_relations",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.merged_card_scope",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.report_intake_blockers",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "reconcile.sweep_idle",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "release_linear._default_call",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "repair_card.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "repair_card.repair_cards",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "repo_held_epics._paged",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "rereview_watch._lane",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "rereview_watch._state_history",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "review_rerun._cmd_dispatch",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "shadow_replay.linear_critic_comments",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "stacked_landing.card_state",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "structural_repair.fetch_backlog",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "switch_reason.read_states",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "triage_repair._lineage",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "validate_card._fetch_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "validate_card.cmd_check_children",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    },
+    {
+      "caller": "verify_scope.read_card",
+      "class": "move",
+      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "card": null
+    }
+  ]
+}

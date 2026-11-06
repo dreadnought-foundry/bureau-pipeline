@@ -331,6 +331,12 @@
       "when": "every process whose read-door mode was `on`, since DRE-8897, at exit on stderr after its `linear-read:` lines, whether or not it sent Linear a request: one line naming the reader, the reads the door served, each read and reason that fell back with its count (`-` for none), the bucket and the process token; never in `off` or `shadow`"
     },
     {
+      "tag": "linear-reads-check:",
+      "printed_by": "scripts/check_linear_reads.py",
+      "constant": "TAG",
+      "when": "every run of the Pipeline Tests job `linear reads check` since DRE-9164, on stdout: one summary line `<n> read site(s) found, <l> listed (<k> kept), <p> pending, <a> new, <g> gone`, then one `new <site> — <file>:<line>`, `gone <site>` or `pending <site>` line for each, and, on a run whose merge base has no ledger, `no ledger at the merge base <sha7> — judged against the head's ledger`"
+    },
+    {
       "tag": "operator-agent:",
       "printed_by": "scripts/operator_decide.py",
       "constant": "LOG_TAG",
