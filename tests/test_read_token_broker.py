@@ -157,6 +157,44 @@ def test_stop_ends_the_broker(issuer, tmp_path):
         _ask(state["url"], headers={"X-Bureau-Broker-Secret": state["secret"]})
 
 
+def test_stop_never_signals_a_live_process_that_is_not_a_broker(tmp_path):
+    state_file = tmp_path / "broker.json"
+    bystander = subprocess.Popen(["sleep", "30"])
+    try:
+        state_file.write_text(json.dumps({"pid": bystander.pid}))
+        proc = _broker("stop", "--state-file", str(state_file), env=_clean_env())
+        assert proc.returncode == 0
+        assert "nothing signaled" in proc.stdout, proc.stdout
+        assert bystander.poll() is None, "stop signaled a process that is not a broker"
+        assert not state_file.exists()
+    finally:
+        bystander.kill()
+        bystander.wait()
+
+
+def test_stop_on_a_dead_pid_signals_nothing(tmp_path):
+    state_file = tmp_path / "broker.json"
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    state_file.write_text(json.dumps({"pid": gone.pid}))
+    proc = _broker("stop", "--state-file", str(state_file), env=_clean_env())
+    assert proc.returncode == 0
+    assert "nothing signaled" in proc.stdout, proc.stdout
+    assert not state_file.exists()
+
+
+@pytest.mark.parametrize("content", [None, "", "not json", "[]", '{"url": "x"}',
+                                     '{"pid": 0}', '{"pid": 1}', '{"pid": -5}',
+                                     '{"pid": true}', '{"pid": "123"}'])
+def test_stop_with_no_broker_named_signals_nothing_and_exits_0(tmp_path, content):
+    state_file = tmp_path / "broker.json"
+    if content is not None:
+        state_file.write_text(content)
+    proc = _broker("stop", "--state-file", str(state_file), env=_clean_env())
+    assert proc.returncode == 0
+    assert "nothing to stop" in proc.stdout, proc.stdout
+
+
 # ── a client with no OIDC variables mints through it ────────────────────────
 
 
@@ -406,9 +444,18 @@ def _normalized(proc) -> tuple:
     return proc.returncode, proc.stdout, err
 
 
-@pytest.mark.parametrize("where", ["a-directory", "under-a-missing-directory"])
+@pytest.mark.parametrize("where", ["a-directory", "under-a-missing-directory",
+                                   "a-fifo-with-no-reader"])
 def test_an_unwritable_lines_file_changes_nothing_else(tmp_path, where):
-    path = tmp_path if where == "a-directory" else tmp_path / "missing" / "lines.txt"
+    if where == "a-directory":
+        path = tmp_path
+    elif where == "under-a-missing-directory":
+        path = tmp_path / "missing" / "lines.txt"
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("no FIFOs on this platform")
+        path = tmp_path / "lines.txt"
+        os.mkfifo(path)  # no reader: a blocking open would wait forever
     without = _session()
     with_bad_path = _session(BUREAU_READ_LINES_FILE=str(path))
     assert _normalized(with_bad_path) == _normalized(without)
