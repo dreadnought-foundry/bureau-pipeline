@@ -4,7 +4,7 @@
     {
       "caller": "agent_task_snapshot._from_linear",
       "class": "move",
-      "reason": "Not yet moved to the door; part two of the switch-off decides.",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. Its viewer half, the viewer { id } it reads beside the card, stays on Linear under DRE-9172 when the card half moves, through linear_ops.viewer_id.",
       "card": null
     },
     {
@@ -57,9 +57,9 @@
     },
     {
       "caller": "check_linear_identities.viewer_of",
-      "class": "move",
-      "reason": "Not yet moved to the door; part two of the switch-off decides.",
-      "card": null
+      "class": "kept",
+      "reason": "Kept on Linear by name: only Linear can say who a key is — the operator's identity check asks each key which user it belongs to, and the console's store holds the console's own key, never the one being checked.",
+      "card": "DRE-9172"
     },
     {
       "caller": "check_prose_blockers.live_identifiers",
@@ -256,7 +256,7 @@
     {
       "caller": "hygiene.linear",
       "class": "move",
-      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. Its two viewer reads, hygiene_green_light.pipeline_user and hygiene_triage's pipeline_user, stay on Linear under DRE-9172 when the rest moves. A new caller of this function is not a new read site.",
       "card": null
     },
     {
@@ -292,7 +292,7 @@
     {
       "caller": "linear_ops._fetch_thread",
       "class": "move",
-      "reason": "Not yet moved to the door; part two of the switch-off decides. A new caller of this function is not a new read site.",
+      "reason": "Not yet moved to the door; part two of the switch-off decides. Its viewer half, the viewer { id } it reads beside the card's comments, stays on Linear under DRE-9172 when the card half moves, through viewer_id. A new caller of this function is not a new read site.",
       "card": null
     },
     {
@@ -435,9 +435,9 @@
     },
     {
       "caller": "linear_ops.viewer_id",
-      "class": "move",
-      "reason": "It stays on Linear (DRE-8898): authorship is judged against this process's own key, and the door's viewer is the console's. A new caller of this function is not a new read site.",
-      "card": null
+      "class": "kept",
+      "reason": "It stays on Linear (DRE-8898): authorship is judged against this process's own key, and the door's viewer is the console's. Kept on Linear by name: only Linear can say who a key is, and the console's store holds the console's own key, never this process's, so the pipeline tells its own comments from everyone else's by asking Linear, at most once per key. A new caller of this function is not a new read site.",
+      "card": "DRE-9172"
     },
     {
       "caller": "medic_retry.card_facts",
@@ -483,9 +483,9 @@
     },
     {
       "caller": "operator_do._linear_user",
-      "class": "move",
-      "reason": "Not yet moved to the door; part two of the switch-off decides.",
-      "card": null
+      "class": "kept",
+      "reason": "Kept on Linear by name: only Linear can say who a key is — the credentials step asks which user the key belongs to and whether that user is an admin or a guest, and the console's store holds the console's own key, never this one.",
+      "card": "DRE-9172"
     },
     {
       "caller": "operator_do.project_status",
@@ -531,9 +531,9 @@
     },
     {
       "caller": "planner_allowance.read",
-      "class": "move",
-      "reason": "Not yet moved to the door; part two of the switch-off decides.",
-      "card": null
+      "class": "kept",
+      "reason": "Kept on Linear by name: only Linear can say what a key has left — one cheap request's rate-limit headers report the planner's own key's allowance, and the console's store holds the console's own key, never the planner's.",
+      "card": "DRE-9172"
     },
     {
       "caller": "planner_score.collect",
