@@ -378,7 +378,7 @@ jobs:
       # `on` and the door can give the whole answer, else ONE Linear read.
       #
       # A pull_request verify on an `agent/` or `repair/DRE-<n>-…` branch asks
-      # the door for its own card, the one read the door serves such a run
+      # the door for its own card, a read the door serves such a run
       # (agent-bureau DRE-8807, `bureau_read.own_card`, DRE-8812), as a
       # workflow_dispatch re-verify does. Every other pull_request run, and
       # every pull_request_target run, is one Linear read where an in-scope

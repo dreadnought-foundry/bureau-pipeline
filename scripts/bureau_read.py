@@ -64,13 +64,16 @@ log: the job prints it after the model step, and only ever through
 have forged. A failure to write the file never fails or slows the process.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
   refuses those tokens by design (its check 7, review S7), so the client never
-  mints one or asks (BP-8) — with ONE exception (DRE-8812). A `pull_request`
-  run whose head branch (`GITHUB_HEAD_REF`) names a card asks `/cards` for
-  exactly that card, which the door serves it (agent-bureau DRE-8807): QA
-  Review's and Verify's card snapshot, and since DRE-8899 the `linear_ops`
-  card reads of Linear Sync, QA Review and Verify steps that name a
-  `BUREAU_READ_CARD_MAX_AGE`. Every other read on those runs reads Linear
-  exactly as before.
+  mints one or asks (BP-8) — with three exceptions. A `pull_request` run whose
+  head branch (`GITHUB_HEAD_REF`) names a card sends the door the three reads
+  it serves such a run: `/cards` for exactly that card (DRE-8812, agent-bureau
+  DRE-8807) — QA Review's and Verify's card snapshot, and since DRE-8899 the
+  `linear_ops` card reads of Linear Sync, QA Review and Verify steps that name
+  a `BUREAU_READ_CARD_MAX_AGE` — and, since DRE-9170 (agent-bureau DRE-9166),
+  `/workflow-states` and `/cards/<id>/dependents` for that same card: Linear
+  Sync `card-done`'s lane lookup and `merge_sweep_gate`'s dependents. Every
+  other read on those runs — another card's dependents included — reads
+  Linear exactly as before.
 
 Every read that falls back to Linear in mode `on` is named by the client
 itself, once, on stderr (DRE-8794):
@@ -231,17 +234,20 @@ RELATIONS_MAX_AGE = 1200
 #: long before the pull request it is reviewing.
 REVIEW_CARD_MAX_AGE = 120
 
-#: The events whose runs the door serves one read at most (its check 7, review
-#: S7): a private repo that sends write tokens to fork pull requests would
-#: otherwise hand a fork a door token. A `pull_request_target` run is served
-#: nothing. A `pull_request` run is served exactly one read since agent-bureau
-#: DRE-8807: `/cards` for the ONE card its head branch names (`own_card()`,
-#: by `CARD_BRANCH`), at repo scope — QA Review's and Verify's card read,
-#: `card_snapshot._door`. The client sends that read like any other and asks
-#: nothing else on these events: every other read is refused here, before a
-#: token is minted, because asking buys nothing but a refusal the door counts
-#: toward its refused-and-never-served alarm (M2), and the run reads Linear as
-#: it always did (DRE-8812).
+#: The events whose runs the door serves three reads at most (its check 7,
+#: review S7): a private repo that sends write tokens to fork pull requests
+#: would otherwise hand a fork a door token. A `pull_request_target` run is
+#: served nothing. A `pull_request` run whose head branch names ONE card
+#: (`own_card()`, by `CARD_BRANCH`) is served exactly three reads: `/cards` for
+#: that card, at repo scope, since agent-bureau DRE-8807 — QA Review's and
+#: Verify's card read, `card_snapshot._door` (DRE-8812) — and, since
+#: agent-bureau DRE-9166, `/workflow-states` and `/cards/<id>/dependents` for
+#: that same card — Linear Sync `card-done`'s two other reads (DRE-9170). The
+#: client sends those three like any other read and asks nothing else on these
+#: events: every other read is refused here, before a token is minted, because
+#: asking buys nothing but a refusal the door counts toward its
+#: refused-and-never-served alarm (M2), and the run reads Linear as it always
+#: did.
 EVENT_ENV = "GITHUB_EVENT_NAME"
 HEAD_REF_ENV = "GITHUB_HEAD_REF"
 PULL_REQUEST_EVENT = "pull_request"
@@ -779,13 +785,18 @@ def own_card() -> str | None:
 
 
 def _reads_own_card(endpoint: str, query: dict) -> bool:
-    """Is this the one read the door serves a `pull_request` run (DRE-8807)?
+    """Is this one of the three reads the door serves a `pull_request` run?
     `/cards` with `ids` exactly the run's own card and `scope` absent or
-    `repo`. Only those two are checked: `comments`, `relations` and the
+    `repo` (DRE-8807), `/workflow-states`, or `/cards/<own card>/dependents`
+    (DRE-9166) — and only on a run whose branch names a card. Only the path,
+    `ids` and `scope` are checked: `lanes`, `comments`, `relations` and the
     max-age headers go out as on every other read."""
     card = own_card()
-    return (card is not None and endpoint == "/cards" and query.get("ids") == card
-            and query.get("scope", "repo") == "repo")
+    if card is None:
+        return False
+    if endpoint == "/cards":
+        return query.get("ids") == card and query.get("scope", "repo") == "repo"
+    return endpoint in ("/workflow-states", f"/cards/{card}/dependents")
 
 
 def _get(endpoint: str, query: dict, *, max_age: int,

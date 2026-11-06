@@ -217,20 +217,22 @@ jobs:
           # grants `id-token: write`, and a reusable can only take permissions
           # away.
           #
-          # This is a `pull_request` run, and the door serves it ONE read:
-          # `/cards` for the card its head branch names (agent-bureau
-          # DRE-8807). `card-done`'s own reads of the merged card — a PROOF
-          # card's whole thread, the pre-read before each comment — ask the
-          # door for it first (`linear_ops.card_via_door`, DRE-8899), at most
-          # BUREAU_READ_CARD_MAX_AGE old: 60 seconds, because the card has just
-          # merged. Everything else stays on Linear, each read named by its
-          # `read-fallback:` line or its `linear-reads:` caller: the
-          # workflow-state list for the Done (`/workflow-states` is refused on
-          # this event), the write path's own reads, the gate's and the
-          # passes' board, dependents and other cards, `stacked_landing.py`'s
-          # other cards, and `proof_gap.epic_of`'s parent read for a fix card
-          # a PROOF record with gaps files. A dependabot head names no card,
-          # so its run reads Linear as it always did.
+          # This is a `pull_request` run, and the door serves it THREE reads
+          # for the card its head branch names: `/cards` for it (agent-bureau
+          # DRE-8807), and `/workflow-states` and `/cards/<it>/dependents`
+          # (agent-bureau DRE-9166, DRE-9170). `card-done`'s own reads of the
+          # merged card — a PROOF card's whole thread, the pre-read before each
+          # comment — ask the door for it first (`linear_ops.card_via_door`,
+          # DRE-8899), at most BUREAU_READ_CARD_MAX_AGE old: 60 seconds,
+          # because the card has just merged. The workflow-state list for the
+          # Done and `merge_sweep_gate.py`'s dependents of the merged card ask
+          # the door too. Everything else stays on Linear, each read named by
+          # its `read-fallback:` line or its `linear-reads:` caller: the write
+          # path's own reads, the passes' board, other cards and their
+          # dependents, `stacked_landing.py`'s other cards, and
+          # `proof_gap.epic_of`'s parent read for a fix card a PROOF record
+          # with gaps files. A dependabot head names no card, so its run reads
+          # Linear as it always did.
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}

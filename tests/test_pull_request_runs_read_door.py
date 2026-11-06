@@ -1,8 +1,9 @@
 """The pull-request runs read their own card through the read door (DRE-8899).
 
 Linear Sync, QA Review and Verify run on a `pull_request` event. The door
-serves such a run exactly one read: `/cards` for the card its head branch
-names (agent-bureau DRE-8807, `bureau_read.own_card`, DRE-8812). These steps
+serves such a run `/cards` for the card its head branch names (agent-bureau
+DRE-8807, `bureau_read.own_card`, DRE-8812), and that card's workflow states
+and dependents since DRE-9170. These steps
 carry the door's four variables, set exactly as `reconcile.yml` sets them, and
 the step's own card max-age (`BUREAU_READ_CARD_MAX_AGE`, DRE-8898), so their
 `linear_ops` card reads ask the door first:

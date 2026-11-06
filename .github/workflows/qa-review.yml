@@ -927,7 +927,7 @@ jobs:
       # give the whole answer, else ONE Linear read of the description and the
       # same comment window the old thread read took.
       #
-      # A pull_request RUN GETS ONE READ FROM THE DOOR: its own card, the one
+      # A pull_request RUN READS ITS CARD FROM THE DOOR: its own card, the one
       # its `agent/` or `repair/DRE-<n>-…` head branch names (agent-bureau
       # DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review is
       # such a run, so this read is served by the door like a workflow_dispatch
@@ -1071,7 +1071,7 @@ jobs:
       # DRE-8719's fixture trees.
       #
       # THE READ DOOR (DRE-8899). The CEO's answer is read off the card's
-      # thread, and this run's own card is the one read the door serves a
+      # thread, and this run's own card is a read the door serves a
       # pull_request run (agent-bureau DRE-8807). The four door variables are
       # reconcile.yml's, and BUREAU_READ_CARD_MAX_AGE is the review card's
       # bound (`bureau_read.REVIEW_CARD_MAX_AGE`, 120 seconds): the thread
