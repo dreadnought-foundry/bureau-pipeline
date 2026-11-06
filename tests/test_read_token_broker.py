@@ -51,6 +51,7 @@ def _clean_env(**extra) -> dict:
     for name in (*OIDC_ENV, *BROKER_ENV, "BUREAU_READ", "BUREAU_READ_URL",
                  "BUREAU_READ_AUDIENCE", "BUREAU_PIPELINE_REF", "BUREAU_READ_LINES_FILE",
                  "GITHUB_WORKFLOW", "GITHUB_JOB", "GITHUB_EVENT_NAME",
+                 "BUREAU_READ_CARD_MAX_AGE", "BUREAU_READ_CARD_SEEN_AFTER",
                  "LINEAR_API_KEY_FALLBACK", "LINEAR_KEY_HOME", "BUREAU_LINEAR_READ_ONLY"):
         if name not in extra:
             env.pop(name, None)
@@ -371,7 +372,8 @@ runpy.run_path(scripts + "/linear_ops.py", run_name="__main__")
 
 def _session(**extra) -> subprocess.CompletedProcess:
     env = _clean_env(LINEAR_API_KEY="test-key", LINEAR_IDENTITY="fleet", BUREAU_READ="on",
-                     BUREAU_READ_URL="https://door.invalid", GITHUB_WORKFLOW="Plan",
+                     BUREAU_READ_URL="https://door.invalid", BUREAU_READ_CARD_MAX_AGE="60",
+                     GITHUB_WORKFLOW="Plan",
                      GITHUB_JOB="plan", **extra)
     return subprocess.run([sys.executable, "-c", _SESSION_SCRIPT, str(SCRIPTS)],
                           capture_output=True, env=env, timeout=60)
