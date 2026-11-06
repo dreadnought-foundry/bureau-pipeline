@@ -1508,8 +1508,8 @@ jobs:
       # lines file in `env:`. "Read token broker — print the sessions' read
       # lines, and stop" after the last of them prints the lines and ends it.
       #
-      # Gated as the install above is: every route that runs a model starts
-      # it, and the two bail paths above run none.
+      # Gated on the install above having run: every route that runs a model
+      # starts it, and the two bail paths above, which run none, do not.
       #
       # The vendor boundary (standards/vendor-boundaries.md):
       #   Q1 the actor — unchanged: the same plan job, the same identity.
@@ -1531,7 +1531,7 @@ jobs:
       #      `always()`.
       - name: Read token broker — start it for the agent sessions
         id: read_broker
-        if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
+        if: steps.install_claude.outcome == 'success'
         continue-on-error: true
         run: |
           python3 .bureau-pipeline/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
