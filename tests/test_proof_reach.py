@@ -117,8 +117,10 @@ class DeclarationTest(unittest.TestCase):
                           "local-screen": True, "product-identity": "optional"},
                          {k: held[k] for k in proof_reach.REQUIRED_READINGS})
         self.assertEqual([], _reading(doc, "repo-variable")["held_for"])
-        self.assertEqual(["portico"], _reading(doc, "product-identity")["held_for"])
-        self.assertEqual({"portico": "infra/scripts/proof-reader.ts"},
+        self.assertEqual(["portico", "deltasolv"],
+                         _reading(doc, "product-identity")["held_for"])
+        self.assertEqual({"portico": "infra/scripts/proof-reader.ts",
+                          "deltasolv": "infra/lib/proof-role.ts"},
                          _reading(doc, "product-identity")["queries_declared_by"])
         for r in doc["readings"]:
             for field in ("id", "held", "what", "names", "why", "brief"):
@@ -344,12 +346,26 @@ class OutOfReachTest(unittest.TestCase):
         self.assertEqual(1, len(self.reach("Local screen: page `documents` lists the upload.",
                                            local=None)))
 
-    def test_the_product_identity_is_held_for_portico_only(self):
+    def test_the_product_identity_is_held_for_portico_and_deltasolv(self):
         criterion = ("Live request: `infra/scripts/proof-reader.ts query` answers the "
                      "document count as the proof-reader identity.")
         got = self.reach(criterion, caller_slug="bureau-pipeline")
         self.assertEqual(1, len(got), got)
         self.assertEqual([], self.reach(criterion, caller_slug="portico"))
+
+    def test_deltasolv_reads_through_its_own_proof_role(self):
+        # DRE-9247: DeltaSolv's stack builds a read-only proof role
+        # (`infra/lib/proof-role.ts`) and its stub maps `PROOF_ROLE_ARN`.
+        reading = _reading(_doc(), "product-identity")
+        self.assertIn("portico", reading["why"])
+        self.assertIn("deltasolv", reading["why"])
+        self.assertNotIn("portico is the one", reading["why"])
+        criterion = ("Live request: through `PROOF_ROLE_ARN`, the ECS service reports "
+                     "one running task.")
+        self.assertEqual([], self.reach(criterion, caller_slug="deltasolv"))
+        self.assertEqual([], self.reach(criterion, caller_slug="DeltaSolv/deltasolv"))
+        got = self.reach(criterion, caller_slug="bureau-pipeline")
+        self.assertEqual([f"{reading['what']} — {reading['why']}"], got)
 
     def test_the_sandbox_press_is_held_for_agent_bureau_only(self):
         # DRE-7779: the console proof-reader presses on the sandbox, and only
