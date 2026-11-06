@@ -504,6 +504,10 @@ jobs:
           # DRE-7287: the model a proof shadow runs on, beside each confirmed
           # real dispatch — unset or empty starts no shadow.
           PROOF_SHADOW_MODEL: ${{ vars.PROOF_SHADOW_MODEL }}
+          # DRE-9238: behind `| tee` Python buffers stdout, so a line reached
+          # the log only at the next flushed `read-door:` line, and a cut pass
+          # lost what was still buffered. Each line is written when printed.
+          PYTHONUNBUFFERED: "1"
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG
@@ -558,6 +562,8 @@ jobs:
           REPO: ${{ github.repository }}
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
           PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+          # DRE-9238: each line written when printed, as `Dispatch proof runs`.
+          PYTHONUNBUFFERED: "1"
         run: |
           if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
             echo "proof-record-sweep: no proof-run stub in this repository — nothing read, nothing closed"
@@ -611,6 +617,8 @@ jobs:
           REPO: ${{ github.repository }}
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
           PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+          # DRE-9238: each line written when printed, as `Dispatch proof runs`.
+          PYTHONUNBUFFERED: "1"
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG

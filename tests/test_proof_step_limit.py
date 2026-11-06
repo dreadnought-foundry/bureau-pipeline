@@ -592,3 +592,59 @@ def test_the_summaries_lift_the_limit_lines():
         grep = next(line for line in _step_named(name)["run"].splitlines()
                     if line.strip().startswith("SUMMARY="))
         assert "proof-step-limit:" in grep, name
+
+
+# --------------------------------------------------------------------------- #
+# each line written when it is printed (DRE-9238)                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_three_proof_steps_write_python_output_unbuffered():
+    """Behind `| tee`, Python buffers stdout, so a line reached the log only at
+    the next flushed `read-door:` line, a full buffer or exit — and a cut pass
+    lost what was still buffered (DRE-9101)."""
+    for name in (DISPATCH, CLOSE, OVERDUE):
+        assert _step_named(name)["env"].get("PYTHONUNBUFFERED") == "1", name
+
+
+def test_no_other_step_sets_pythonunbuffered():
+    doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    setting = []
+    for job_id, job in doc["jobs"].items():
+        assert "PYTHONUNBUFFERED" not in (job.get("env") or {}), job_id
+        for step in job.get("steps") or ():
+            if "PYTHONUNBUFFERED" in (step.get("env") or {}):
+                setting.append(step.get("name"))
+    assert sorted(setting) == sorted([DISPATCH, CLOSE, OVERDUE])
+
+
+PRINTED = "proof-dispatch: printed before the wait"
+
+
+def _cut_stand_in(tmp_path, unbuffered: bool) -> str:
+    """A stand-in for `Dispatch proof runs`' command, run the way the step runs
+    it — through the real limiter, behind `2>&1 | tee` — that prints a line,
+    flushes nothing and sleeps past a 2 s limit. The log it leaves."""
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    if unbuffered:
+        env["PYTHONUNBUFFERED"] = _step_named(DISPATCH)["env"]["PYTHONUNBUFFERED"]
+    stand_in = f"import time; print({PRINTED!r}); time.sleep(30)"
+    command = " ".join(shlex.quote(a) for a in (
+        sys.executable, str(SCRIPT), "run", "--step", DISPATCH, "--limit", "2", "--",
+        sys.executable, "-c", stand_in))
+    done = subprocess.run(["bash", "-c", f"set -o pipefail; {command} 2>&1 | tee out.log"],
+                          cwd=tmp_path, env=env, capture_output=True, text=True, timeout=60)
+    assert done.returncode == 0, done.stdout + done.stderr
+    log = (tmp_path / "out.log").read_text()
+    assert f'proof-step-limit: cut step="{DISPATCH}" limit=2s' in log
+    return log
+
+
+def test_a_line_printed_before_a_cut_is_in_the_log_with_the_steps_env(tmp_path):
+    assert PRINTED in _cut_stand_in(tmp_path, unbuffered=True).splitlines()
+
+
+def test_without_it_the_cut_loses_the_buffered_line(tmp_path):
+    """The control: the same pass with no PYTHONUNBUFFERED loses the line, so
+    the test above passes because of the variable."""
+    assert PRINTED not in _cut_stand_in(tmp_path, unbuffered=False)
