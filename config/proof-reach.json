@@ -61,13 +61,14 @@
     {
       "id": "product-identity",
       "held": "optional",
-      "held_for": ["portico"],
+      "held_for": ["portico", "deltasolv"],
       "what": "the product's own scripted proof identities, reached through the caller's `PROOF_ROLE_ARN`",
       "names": ["infra/scripts/proof-reader\\.ts", "proof-moderator", "mcp-token", "PROOF_ROLE_ARN", "hosted sign-in"],
-      "why": "briefs/proof.md: only a caller that provides `PROOF_ROLE_ARN` hands the run an AWS session, and portico is the one that does today",
+      "why": "briefs/proof.md: only a caller that provides `PROOF_ROLE_ARN` hands the run an AWS session; portico and deltasolv provide one (DeltaSolv's read-only proof role, DRE-9247)",
       "brief": "When no caller provides one, the Identities section records `aws: none`",
       "queries_declared_by": {
-        "portico": "infra/scripts/proof-reader.ts"
+        "portico": "infra/scripts/proof-reader.ts",
+        "deltasolv": "infra/lib/proof-role.ts"
       }
     },
     {
