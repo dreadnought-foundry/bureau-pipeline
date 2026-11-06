@@ -18,6 +18,7 @@ tests pin, in order:
 
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -51,6 +52,14 @@ NAMED_ROWS = ("check_linear_identities.viewer_of", "plan_initiative_context.bloc
               "groomer.read_population", "hand_work_migration.read_population",
               "groom_verify._card")
 ALARM_ROW = "alarm-repair.yml#repair/Assemble the alarm's context"
+#: The reads that decide or confirm a write, kept on Linear by name (DRE-9171).
+WRITE_READ_CARD = "DRE-9171"
+WRITE_READ_ROWS = ("linear_ops.get_issue", "linear_ops.landed",
+                   "linear_ops._clobbered_terminal_state", "linear_ops.find_open",
+                   "linear_ops.find_open_prefix", "linear_ops._comment_look")
+#: The one row with no site yet: `_comment_look` reads through `_fetch_thread`
+#: today, so its row lands first and its own read later (rule 2, pending).
+PENDING_ROWS = ("linear_ops._comment_look",)
 
 QUERY = '"query($id: String!) { issue(id: $id) { id title } }"'
 MUTATION = '"mutation($id: String!) { issueArchive(id: $id) { success } }"'
@@ -173,23 +182,64 @@ def test_the_check_passes_on_this_branch_and_prints_its_summary():
     assert code == 0, out
     found, listed, kept, pending, new, gone = summary(out)
     assert (new, gone) == (0, 0)
-    assert found == listed and kept == 1
+    assert pending == len(PENDING_ROWS)
+    assert f"linear-reads-check: pending {PENDING_ROWS[0]}" in out.splitlines()
+    assert found == listed and kept == 1 + len(WRITE_READ_ROWS) - len(PENDING_ROWS)
 
 
 def test_the_ledger_lists_every_site_the_scan_finds_and_nothing_else():
     sites = clr.scan(ROOT)
-    assert set(_rows()) == set(sites)
+    assert set(_rows()) == set(sites) | set(PENDING_ROWS)
+    assert not set(PENDING_ROWS) & set(sites)
 
 
-def test_every_row_is_move_with_no_card_but_the_design_download():
+def test_every_row_is_move_with_no_card_but_the_kept_ones():
     for caller, row in _rows().items():
         assert set(row) == {"caller", "class", "reason", "card"}, caller
         assert row["reason"].strip(), caller
         if caller == "plan_initiative_context.fetch":
             assert row == {"caller": caller, "class": "kept", "card": THIS_CARD,
                            "reason": clr.KEPT_FETCH_REASON}
+        elif caller in WRITE_READ_ROWS:
+            assert (row["class"], row["card"]) == ("kept", WRITE_READ_CARD), caller
         else:
             assert (row["class"], row["card"]) == ("move", None), caller
+
+
+def _site_or_pending(sites: dict, caller: str):
+    """The scan's site, or for a pending row the function it names."""
+    if caller in sites:
+        return sites[caller]
+    path = "scripts/" + caller.split(".")[0] + ".py"
+    for node in ast.walk(ast.parse((ROOT / path).read_text(encoding="utf-8"))):
+        if isinstance(node, ast.FunctionDef) and node.name == caller.split(".")[-1]:
+            return clr.Site(caller, path, node.lineno)
+    raise AssertionError(f"{caller} names no function in {path}")
+
+
+def test_a_writes_own_reads_are_kept_because_the_store_trails_linear():
+    # DRE-9171's six reads, as the scan names them: `_card_look`'s read is
+    # its inner `landed`. `_comment_look` reads through `_fetch_thread`, every
+    # thread read's site, so its row is pending until it sends its own.
+    sites = clr.scan(ROOT)
+    rows = _rows()
+    assert "linear_ops._card_look" not in sites
+    for caller in WRITE_READ_ROWS:
+        reason = rows[caller]["reason"]
+        assert reason.startswith(clr.stays_reason(ROOT, _site_or_pending(sites, caller))), caller
+        assert "store trails Linear" in reason, caller
+        assert ("decides a write" in reason) != ("confirms a write" in reason), caller
+        assert reason.endswith(" " + clr.NEW_CALLER_SENTENCE), caller
+
+
+def test_the_comment_look_is_kept_by_name_though_it_reads_through_the_thread_site():
+    # Part two moving `_fetch_thread` must leave the look a live read of its own.
+    rows = _rows()
+    look = rows["linear_ops._comment_look"]
+    assert (look["class"], look["card"]) == ("kept", WRITE_READ_CARD)
+    assert "`_fetch_thread`" in look["reason"] and "`door=False`" in look["reason"]
+    assert "a read of its own under this name" in look["reason"]
+    assert rows["linear_ops._fetch_thread"]["class"] == "move"
 
 
 def test_kept_fetch_reason_is_the_cards_words():
@@ -205,15 +255,15 @@ def test_every_reason_opens_with_its_docstring_reason_or_the_default():
     for caller, row in _rows().items():
         if caller == "plan_initiative_context.fetch":
             continue
-        own = clr.stays_reason(ROOT, sites[caller])
+        own = clr.stays_reason(ROOT, _site_or_pending(sites, caller))
         if own:
             stays += 1
             assert own.startswith(clr.STAYS_MARK)
         assert row["reason"].startswith(own or clr.DEFAULT_REASON), caller
     # get_issue, _clobbered_terminal_state, find_open, find_open_prefix,
-    # viewer_id, the four children reads, and `landed` (the look
-    # `_card_look` returns) carry the mark.
-    assert stays == 10
+    # viewer_id, the four children reads, `landed` (the look `_card_look`
+    # returns) and the pending `_comment_look` carry the mark.
+    assert stays == 11
     assert clr.DEFAULT_REASON == "Not yet moved to the door; part two of the switch-off decides."
 
 
