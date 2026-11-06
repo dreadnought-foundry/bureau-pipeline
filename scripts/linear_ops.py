@@ -1261,7 +1261,9 @@ def _report_budget_at_exit() -> None:
     the SIGTERM handler below. A process that never touched Linear prints
     only the door line, and that only when its read door was on; one that did
     neither says nothing. Each is composed on its own, so a failure composing
-    one can never cost the others."""
+    one can never cost the others. Each is also copied to
+    `BUREAU_READ_LINES_FILE` when it is set (`bureau_read.copy_to_lines_file`,
+    DRE-9168), which never raises."""
     if _budget["reported"]:
         return
     try:
@@ -1275,6 +1277,7 @@ def _report_budget_at_exit() -> None:
                 print(door, file=sys.stderr, flush=True)
             except Exception:  # pragma: no cover
                 pass
+            bureau_read.copy_to_lines_file(door)
         return
     _budget["reported"] = True
     try:
@@ -1296,6 +1299,7 @@ def _report_budget_at_exit() -> None:
             print(line, file=sys.stderr, flush=True)
         except Exception:  # pragma: no cover
             pass
+        bureau_read.copy_to_lines_file(line)
 
 
 atexit.register(_report_budget_at_exit)
