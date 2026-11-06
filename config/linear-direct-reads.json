@@ -273,9 +273,9 @@
     },
     {
       "caller": "linear_ops._clobbered_terminal_state",
-      "class": "move",
-      "reason": "It stays on Linear (DRE-8898): the door serves no history, and the entry it reads back is seconds old. A new caller of this function is not a new read site.",
-      "card": null
+      "class": "kept",
+      "reason": "It stays on Linear (DRE-8898): the door serves no history, and the entry it reads back is seconds old. Kept on Linear by name: the console's store trails Linear by its sync's delay, and this read confirms a write — it reads the pipeline's own state change back out of the card's history, seconds after it landed, to see what it overwrote. A new caller of this function is not a new read site.",
+      "card": "DRE-9171"
     },
     {
       "caller": "linear_ops._comment_target",
@@ -387,27 +387,27 @@
     },
     {
       "caller": "linear_ops.find_open",
-      "class": "move",
-      "reason": "It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone. A new caller of this function is not a new read site.",
-      "card": null
+      "class": "kept",
+      "reason": "It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone. Kept on Linear by name: the console's store trails Linear by its sync's delay, and this read decides a write — its callers reuse the open card it finds or file a new one, so a card filed seconds earlier and missed on a trailing copy would be filed twice. A new caller of this function is not a new read site.",
+      "card": "DRE-9171"
     },
     {
       "caller": "linear_ops.find_open_prefix",
-      "class": "move",
-      "reason": "It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone. A new caller of this function is not a new read site.",
-      "card": null
+      "class": "kept",
+      "reason": "It stays on Linear (DRE-8898): the door serves its fleet-wide search to the sweeps alone. Kept on Linear by name: the console's store trails Linear by its sync's delay, and this read decides a write — whether to file the fleet-outage card, where two repos' sweeps can cross the threshold in the same minute and each file one. A new caller of this function is not a new read site.",
+      "card": "DRE-9171"
     },
     {
       "caller": "linear_ops.get_issue",
-      "class": "move",
-      "reason": "It stays on Linear (DRE-8898): it is the write path's read, and `team { id }`, `state { id type }` and `project { id }` are not on the door's node; `fresh=True` is the DRE-2316 pre-write re-read, which must be live. A new caller of this function is not a new read site.",
-      "card": null
+      "class": "kept",
+      "reason": "It stays on Linear (DRE-8898): it is the write path's read, and `team { id }`, `state { id type }` and `project { id }` are not on the door's node; `fresh=True` is the DRE-2316 pre-write re-read, which must be live. Kept on Linear by name: the console's store trails Linear by its sync's delay, and this read decides a write — decided on that trailing copy, a write can undo a change made moments earlier, the race DRE-2316 lost by 280 ms. A new caller of this function is not a new read site.",
+      "card": "DRE-9171"
     },
     {
       "caller": "linear_ops.landed",
-      "class": "move",
-      "reason": "It stays on Linear (DRE-8898): it asks whether a create landed seconds ago, which a door answer trailing real time cannot say. A new caller of this function is not a new read site.",
-      "card": null
+      "class": "kept",
+      "reason": "It stays on Linear (DRE-8898): it asks whether a create landed seconds ago, which a door answer trailing real time cannot say. Kept on Linear by name: the console's store trails Linear by its sync's delay, and this read confirms a write — whether a create sent seconds ago landed, so a write whose answer was lost is never sent twice. A new caller of this function is not a new read site.",
+      "card": "DRE-9171"
     },
     {
       "caller": "linear_ops.lane_history",
