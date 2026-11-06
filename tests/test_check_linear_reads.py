@@ -60,6 +60,13 @@ WRITE_READ_ROWS = ("linear_ops.get_issue", "linear_ops.landed",
 #: The one row with no site yet: `_comment_look` reads through `_fetch_thread`
 #: today, so its row lands first and its own read later (rule 2, pending).
 PENDING_ROWS = ("linear_ops._comment_look",)
+#: The reads that ask Linear who a key is, or what it has left, kept on Linear
+#: by name (DRE-9172): only Linear can answer either for a given key.
+VIEWER_CARD = "DRE-9172"
+VIEWER_ROWS = ("linear_ops.viewer_id", "operator_do._linear_user",
+               "planner_allowance.read", "check_linear_identities.viewer_of")
+#: A kept row whose function's docstring carries no reason opens with this.
+KEPT_OPENING = "Kept on Linear by name: only Linear can say"
 
 QUERY = '"query($id: String!) { issue(id: $id) { id title } }"'
 MUTATION = '"mutation($id: String!) { issueArchive(id: $id) { success } }"'
@@ -184,7 +191,8 @@ def test_the_check_passes_on_this_branch_and_prints_its_summary():
     assert (new, gone) == (0, 0)
     assert pending == len(PENDING_ROWS)
     assert f"linear-reads-check: pending {PENDING_ROWS[0]}" in out.splitlines()
-    assert found == listed and kept == 1 + len(WRITE_READ_ROWS) - len(PENDING_ROWS)
+    assert found == listed
+    assert kept == 1 + len(WRITE_READ_ROWS) - len(PENDING_ROWS) + len(VIEWER_ROWS)
 
 
 def test_the_ledger_lists_every_site_the_scan_finds_and_nothing_else():
@@ -202,6 +210,8 @@ def test_every_row_is_move_with_no_card_but_the_kept_ones():
                            "reason": clr.KEPT_FETCH_REASON}
         elif caller in WRITE_READ_ROWS:
             assert (row["class"], row["card"]) == ("kept", WRITE_READ_CARD), caller
+        elif caller in VIEWER_ROWS:
+            assert (row["class"], row["card"]) == ("kept", VIEWER_CARD), caller
         else:
             assert (row["class"], row["card"]) == ("move", None), caller
 
@@ -242,6 +252,51 @@ def test_the_comment_look_is_kept_by_name_though_it_reads_through_the_thread_sit
     assert rows["linear_ops._fetch_thread"]["class"] == "move"
 
 
+def test_a_keys_who_am_i_reads_are_kept_because_only_linear_can_say():
+    rows = _rows()
+    for caller in VIEWER_ROWS:
+        reason = rows[caller]["reason"]
+        assert "only Linear can say who a key is" in reason or \
+            "only Linear can say what a key has left" in reason, caller
+        assert "store holds the console's own key" in reason, caller
+    assert "what a key has left" in rows["planner_allowance.read"]["reason"]
+    # viewer_id keeps its docstring's opening and the sentence DRE-9164 ends it with.
+    viewer = rows["linear_ops.viewer_id"]["reason"]
+    assert viewer.startswith(
+        "It stays on Linear (DRE-8898): authorship is judged against this "
+        "process's own key, and the door's viewer is the console's. ")
+    assert viewer.endswith(" " + clr.NEW_CALLER_SENTENCE)
+
+
+#: The sentence each combined read's row gains, and where (DRE-9172).
+VIEWER_HALVES = {
+    "hygiene.linear": (
+        "Its two viewer reads, hygiene_green_light.pipeline_user and "
+        "hygiene_triage's pipeline_user, stay on Linear under DRE-9172 when the "
+        "rest moves."),
+    "linear_ops._fetch_thread": (
+        "Its viewer half, the viewer { id } it reads beside the card's comments, "
+        "stays on Linear under DRE-9172 when the card half moves, through viewer_id."),
+    "agent_task_snapshot._from_linear": (
+        "Its viewer half, the viewer { id } it reads beside the card, stays on "
+        "Linear under DRE-9172 when the card half moves, through linear_ops.viewer_id."),
+}
+
+
+def test_a_combined_reads_viewer_half_is_named_on_its_move_row():
+    rows = _rows()
+    for caller, sentence in VIEWER_HALVES.items():
+        row = rows[caller]
+        assert (row["class"], row["card"]) == ("move", None), caller
+        if caller == "agent_task_snapshot._from_linear":
+            expected = f"{clr.DEFAULT_REASON} {sentence}"
+        else:
+            expected = f"{clr.DEFAULT_REASON} {sentence} {clr.NEW_CALLER_SENTENCE}"
+        assert row["reason"] == expected, caller
+    # Hygiene's two viewer reads ride on its one sender's row, never their own.
+    assert not any("pipeline_user" in caller for caller in rows)
+
+
 def test_kept_fetch_reason_is_the_cards_words():
     assert clr.KEPT_FETCH_REASON == (
         "Downloads an approved design file from Linear's upload host with the "
@@ -259,6 +314,10 @@ def test_every_reason_opens_with_its_docstring_reason_or_the_default():
         if own:
             stays += 1
             assert own.startswith(clr.STAYS_MARK)
+        elif caller in VIEWER_ROWS:
+            # Kept with no docstring reason: "not yet moved" would be untrue.
+            assert row["reason"].startswith(KEPT_OPENING), caller
+            continue
         assert row["reason"].startswith(own or clr.DEFAULT_REASON), caller
     # get_issue, _clobbered_terminal_state, find_open, find_open_prefix,
     # viewer_id, the four children reads, `landed` (the look `_card_look`
