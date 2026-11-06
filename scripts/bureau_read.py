@@ -39,6 +39,29 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   next `scope=repo` read, which stops the door for the run as before.
 * No OIDC token: the stub did not grant `id-token: write`. That is a fallback,
   never a red run.
+
+  A model session (claude-code-action) is not handed the runner's
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` even
+  when the stub grants `id-token: write`, and it is never given them: with
+  them it could mint a token for any audience, an AWS role's included, and
+  it reads card text the pipeline treats as untrusted. The token broker,
+  `scripts/read_token_broker.py` (DRE-9168), is the one way a session with no
+  OIDC variables reaches the door. The job starts it before the model step,
+  on 127.0.0.1, holding the variables itself, and it mints only door tokens
+  — this module's audience, one fresh token per request, so the door's
+  one-claim-per-`jti` rule still holds. `_mint` asks it only when
+  `ACTIONS_ID_TOKEN_REQUEST_URL` is absent, and only when
+  `BUREAU_READ_TOKEN_BROKER` (an `http://127.0.0.1:<port>/…` URL; any other
+  host is refused) and `BUREAU_READ_TOKEN_BROKER_SECRET` are both set. Any
+  broker failure is `no-token`, the detail naming the broker.
+
+`BUREAU_READ_LINES_FILE=<path>` copies every line this module prints, and
+every exit line `linear_ops` prints, to `<path>` as well, verbatim, one per
+line — the tags are `LINES_FILE_TAGS`. A session's stderr lands in its
+transcript, not the job log, so this file is how its read lines reach the
+log: the job prints it after the model step, and only ever through
+`read_token_broker.py print-lines`, which drops any line the session could
+have forged. A failure to write the file never fails or slows the process.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
   refuses those tokens by design (its check 7, review S7), so the client never
   mints one or asks (BP-8) — with ONE exception (DRE-8812). A `pull_request`
@@ -242,6 +265,21 @@ FALLBACK_TAG = "read-fallback:"
 EVENT_REFUSED = "event-refused"
 PULL_REQUEST_REASON = "pull-request"
 
+#: The token broker a model session mints through (DRE-9168): its URL, the
+#: secret it checks, and the one host it may be on.
+BROKER_ENV = "BUREAU_READ_TOKEN_BROKER"
+BROKER_SECRET_ENV = "BUREAU_READ_TOKEN_BROKER_SECRET"
+BROKER_SECRET_HEADER = "X-Bureau-Broker-Secret"
+BROKER_HOST = "127.0.0.1"
+
+#: The file every read line is copied to as well (DRE-9168), and the tags of
+#: the lines copied: this module's two, and `linear_ops`'s four exit lines.
+#: The one list both the writer here and `read_token_broker.py print-lines`
+#: read.
+LINES_FILE_ENV = "BUREAU_READ_LINES_FILE"
+LINES_FILE_TAGS = ("read-fallback:", "read-door:", "linear-budget:", "linear-calls:",
+                   "linear-read:", "linear-door:")
+
 # ── The node shape (design §3, byte-compatible with Linear's GraphQL) ───────
 # A nested dict of the field PATHS a node must carry: `None` is a leaf, a dict
 # is a selection. `nodes` under a connection means "each node has this shape".
@@ -348,6 +386,26 @@ def _say(line: str) -> None:
     """Telemetry goes to stderr, the way `linear-budget:` does: some workflows
     read a script's stdout through `$(...)`, and the sweep's step tees both."""
     print(line, file=sys.stderr, flush=True)
+    copy_to_lines_file(line)
+
+
+def copy_to_lines_file(line: str) -> None:
+    """Append `line` to `BUREAU_READ_LINES_FILE` when it is set and the line
+    opens with one of `LINES_FILE_TAGS`. Never raises and never waits: the
+    file is opened non-blocking, so a FIFO with no reader is a failure, not a
+    hang, and every failure is swallowed — the copy is telemetry."""
+    path = os.environ.get(LINES_FILE_ENV)
+    if not path or not line.startswith(LINES_FILE_TAGS):
+        return
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NONBLOCK", 0), 0o600)
+        try:
+            os.write(fd, (line + "\n").encode("utf-8", "replace"))
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001 — a lines file must never fail the process
+        pass
 
 
 def mode() -> str:
@@ -531,13 +589,84 @@ def pipeline_ref_problem(claims: dict, pipeline_ref: str | None) -> str | None:
     return None
 
 
+def _broker_url(raw: str) -> str:
+    """The broker URL, or `no-token`: plain http to 127.0.0.1 only. The
+    secret is sent in clear text, so it never leaves this machine, and a
+    `localhost` that resolves elsewhere is not this machine."""
+    try:
+        parts = urllib.parse.urlsplit(raw)
+        host, _port = parts.hostname, parts.port
+    except ValueError as e:
+        raise ReadUnknown("no-token", f"the token broker {BROKER_ENV}={raw!r} is not a "
+                          f"URL: {e}", unavailable=True) from e
+    if parts.scheme != "http" or host != BROKER_HOST or parts.username is not None \
+            or parts.password is not None:
+        raise ReadUnknown("no-token", f"the token broker {BROKER_ENV}={raw!r} is refused: "
+                          f"it must be http://{BROKER_HOST}:<port>/…", unavailable=True)
+    return raw
+
+
+def _mint_from_broker(raw: str, secret: str) -> str:
+    """One fresh door token from the job's token broker (DRE-9168). The
+    broker mints for the door's audience only, so no audience is sent."""
+    url = _broker_url(raw)
+    parts = urllib.parse.urlsplit(url)
+    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    # http.client, not urlopen: a proxy in the environment must never be
+    # handed the broker's secret.
+    conn = http.client.HTTPConnection(parts.hostname, parts.port or 80,
+                                      timeout=TOTAL_TIMEOUT)
+    try:
+        conn.request("GET", target, headers={BROKER_SECRET_HEADER: secret,
+                                             "Accept": "application/json"})
+        resp = conn.getresponse()
+        status, body = resp.status, resp.read()
+    except Exception as e:  # noqa: BLE001 — a dead broker is a fallback
+        raise ReadUnknown("no-token", f"the token broker at {url} could not be asked: "
+                          f"{type(e).__name__}: {e}", unavailable=True) from e
+    finally:
+        conn.close()
+    if status != 200:
+        text = body.decode("utf-8", "replace").strip()[:200]
+        raise ReadUnknown("no-token", f"the token broker at {url} answered {status}: "
+                          f"{text or 'no body'}", unavailable=True)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except ValueError as e:
+        raise ReadUnknown("no-token", f"the token broker at {url} answered no JSON",
+                          unavailable=True) from e
+    value = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(value, str) or not value:
+        raise ReadUnknown("no-token", f"the token broker at {url} returned no token value",
+                          unavailable=True)
+    return value
+
+
 def _mint() -> str:
     url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
     request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not url:
+        broker = os.environ.get(BROKER_ENV)
+        secret = os.environ.get(BROKER_SECRET_ENV)
+        if broker and secret:
+            return _mint_from_broker(broker, secret)
     if not url or not request_token:
         raise ReadUnknown("no-token", "no ACTIONS_ID_TOKEN_REQUEST_URL — the calling "
-                          "stub does not grant id-token: write", unavailable=True)
-    audience = os.environ.get(AUDIENCE_ENV) or DEFAULT_AUDIENCE
+                          "stub does not grant id-token: write, and no token broker "
+                          f"({BROKER_ENV}) is set", unavailable=True)
+    return mint_from_runner(url, request_token, door_audience())
+
+
+def door_audience() -> str:
+    """The audience a door token is minted for: `BUREAU_READ_AUDIENCE`, or
+    `DEFAULT_AUDIENCE`. The token broker mints for this and nothing else."""
+    return os.environ.get(AUDIENCE_ENV) or DEFAULT_AUDIENCE
+
+
+def mint_from_runner(url: str, request_token: str, audience: str) -> str:
+    """One token from the runner's OIDC endpoint, or `no-token`. Shared with
+    `read_token_broker.py`, which holds the request variables for a model
+    session that is never given them."""
     joined = "&" if "?" in url else "?"
     req = urllib.request.Request(
         f"{url}{joined}audience={urllib.parse.quote(audience, safe='')}",
