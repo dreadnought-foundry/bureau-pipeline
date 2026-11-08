@@ -1108,7 +1108,7 @@
       "discharges": null,
       "subscriber": "plan.yml",
       "cadence_s": null,
-      "cadence_why": "Null: the wait ends when no formal blocker of the epic still holds under the sweep's strict rule — each is Done, an In Progress epic that is built out, or the proof of an epic that is Done or built out — and scripts/reconcile.py declares no bound on when that happens — a blocker is built and proved at its own pace — so there is no bound on the wait to read as stuck.",
+      "cadence_why": "Null: the wait ends when no formal blocker of the epic still holds under the sweep's strict rule — each is Done, Canceled or Duplicate, an In Progress epic that is built out, or the proof of an epic that is Done or built out, or its relation was removed while this hold stood (DRE-9223) — and scripts/reconcile.py declares no bound on when that happens — a blocker is built and proved at its own pace — so there is no bound on the wait to read as stuck.",
       "why": "DRE-6651. DRE-6589 reached Planning blocked by DRE-6587, In Progress, and the planner could only ask the CEO \"wait, or plan now?\" — a question the board already answered. `planning_route.py decide` reads an epic's formal `blocks` relations, its children and its lane history, and writes `wait=true` when it has no children, its history never moves it to In Progress (its green light) and a blocker still holds under the sweep's strict rule, `reconcile.epic_blockers_unmet(..., release_at_build_done=False)`, asked of the helpers it is built from (DRE-7962): a blocker that is Done, an In Progress epic that is built out, or the proof of an epic that is Done or built out does not hold. A failed read of the epic's relations, children or history writes `wait=false`; a failed built-out check or title-and-parent read of a blocker holds that blocker, as the sweep does. `plan.yml`'s `Epic waits on its blocker — Queued, no planner` step posts this receipt, `⏸️ epic-waits: …`, then moves the epic to Queued, and `Route — plan or activate` is skipped on `wait`, so no planner, no attempt boundary, no heartbeat and no critic follow. A HOLD: the auto-advance in `reconcile.py` returns the epic to Planning once no blocker holds under that same rule (DRE-6653, DRE-7831), so the epic it returns is planned, not parked again. The console learned the tag first (DRE-6672). It discharges nothing.",
       "emits": {
         "file": ".github/workflows/plan.yml",
@@ -1552,6 +1552,20 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "held_verdict.reask_notice(pr[\"headRefOid\"], how, hold)",
+      "kind": "undeclared-act",
+      "means": "The evidence gate held the critic's verdict on this head — it named a finding and gave no evidence for it — so the sweep re-ran the review once, told why the last one was held, and says so as a hold, never as a crashed review (DRE-9230).",
+      "why": "Act-shaped — it is a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change, and the existing `review-retried-after-crash` row is the crash this receipt exists to stop being called. Its body is written by scripts/held_verdict.py, and the `held-verdict-reask @<head sha>` marker it opens with is the per-head count the next sweep reads back before it would re-ask again, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(card, held_verdict.triage_line(number, sha, holds))",
+      "kind": "undeclared-act",
+      "means": "The evidence gate held the critic's verdict twice on the same head, so the sweep moved the card to Triage with one line naming the pull request, both runs and the held finding, and dispatched nothing more (DRE-9230).",
+      "why": "Act-shaped — a hold that ends with a person — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its body is written by scripts/held_verdict.py, and its `held-verdict-twice: PR #<n> @<head sha>:` marker is what keeps the sweep from moving and saying it twice, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "head_desync.resync_notice(number, head, tip, age)",
       "kind": "undeclared-act",
       "means": "GitHub never moved this pull request to its branch's newest commit, so the sweep closed and reopened it once for that commit and says so, naming both commits (DRE-6217).",
@@ -1838,6 +1852,13 @@
       "why": "It reports an OUTCOME of the work — a flake that passed on its re-run, or somebody else's merge turning main green — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as the dependabot card's `cancel_note` two rows on, and as the merge→Done seam's `✅ Merged` line from the other end: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It carries its own idempotency key (repair_card.SETTLE_MARKER), read back off the card's own comments so a second sweep over a card whose cancel landed and whose comment did not writes nothing; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
     },
     {
+      "file": "scripts/repair_card.py",
+      "anchor": "cmd_comment(card, superseded_note(",
+      "kind": "not-an-act",
+      "means": "The repair card a Red-Main Repair run filed records, beside its move to Canceled, that the run found main already green before it opened anything — naming the green run, its link and the time it finished in PT (DRE-9217).",
+      "why": "It reports an OUTCOME of the work — somebody else's merge turning main green while the repair agent worked — rather than a refusal, a recovery, a hold or a progress act the pipeline chose for itself. The same class as `settle_note`, whose ending it is, written by the repair run itself instead of the next sweep: its only reader is a person looking at the card, and the state change beside it is the machine-readable half. It opens with the same idempotency key (repair_card.SETTLE_MARKER), so the sweep's settle pass reads the card as already said and never writes a second comment; a trailer beside that key would be a second grammar over a comment whose presence is load-bearing."
+    },
+    {
       "file": "scripts/mirror_check.py",
       "anchor": "comment_note(result, run_url)",
       "kind": "not-an-act",
@@ -1897,7 +1918,7 @@
       "file": "scripts/reconcile.py",
       "anchor": "🧹 Auto-advanced {QUEUE_LANE} → Planning",
       "kind": "undeclared-act",
-      "means": "A waiting epic advances on its own from Queued to Planning, where the planner is dispatched, because no blocker still holds it: each one is closed, or is a built-out epic or a proof of one (DRE-7831).",
+      "means": "A waiting epic advances on its own from Queued to Planning, where the planner is dispatched, because no blocker still holds it: each one is closed, or is a built-out epic or a proof of one (DRE-7831), or the relation its `⏸️ epic-waits:` hold named was removed (DRE-9223). Its first line says which: a blocker Done, Canceled or Duplicate, released, or a relation removed.",
       "why": "Act-shaped, and the registry has no row for it. DRE-2825 declared thirteen acts by reading reconcile.py's ten tag constants, the fix loop's three notices and the medic; this receipt was not among them. Giving it a row is a REGISTRY change — a tag, a kind, a state, a next actor, a subscriber, and the reasoning that fixes each — not an emission change, and this card converts what the registry declares. Named here so the debt is countable rather than invisible."
     },
     {
@@ -2076,6 +2097,13 @@
       "kind": "not-an-act",
       "means": "A review-lane card whose open pull request is a draft is nudged by neither budget, because the critic skips drafts by design (DRE-5801) and the gate never merges one; the sweep says so once per head under `review-nudge-draft @<head>`, and the review budget for that head restarts from zero once the pull request is marked ready (DRE-6423).",
       "why": "Nothing was done, so nothing is announced as done: the comment records that the sweep deliberately did not act, and why. Its key carries no `(` after the head, so it is never read as a `review-nudge` or `gate-nudge` spend; the sweep posts it again only once a receipt for the head stands after it, which means the pull request was ready since."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "f\"🧹 Reconcile: {REVIEW_NUDGE_CAP_RERUN_KEY} @{head} — the merge-gate \"",
+      "kind": "undeclared-act",
+      "means": "At the merge-gate nudge cap, a head the critic approved whose only non-green checks were stopped rather than failed — a canceled CI job, a summary job red only because of one, a Verify run that finished without posting a verdict — has each of those runs re-run once, and the card says so under `review-nudge-cap-rerun @<head>`, naming the jobs and run ids, instead of being parked in Green Light with a question nobody can answer (DRE-9191).",
+      "why": "Act-shaped — it reports a recovery — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change. Its `review-nudge-cap-rerun @<head>` key is the once-per-head count the next sweep reads back before it would re-run that head again, and the run ids it names are what that sweep waits on, so a trailer is a change to that key; the card that declares the act owns both. Spelled `_KEY`, not `_TAG`, so pipeline_act does not read it as a declared act."
     },
     {
       "file": "scripts/reconcile.py",

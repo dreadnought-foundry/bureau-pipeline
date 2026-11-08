@@ -51,6 +51,15 @@ jobs:
   # 30-minute cap on five pull-request runs from 10-26, with no test failed —
   # holding two approved pull requests out of the merge. One more part takes
   # about a fifth off each share and keeps the cap below as it is.
+  # SIX PARTS SINCE DRE-9231 (2026-11-05): part 3 of main push run
+  # 42050047370 (559b3ef6c) was canceled at its 30-minute cap at 88%, with no
+  # test failed, so the promoter refused the commit and stable sat 60 minutes
+  # behind. The five parts were already even — the record re-measured on
+  # 11-04 (run 41816178413) predicts each at 18.7 minutes of 93 — and every
+  # part reached 22 minutes or more on the twelve main runs that followed, so
+  # any part could hit the cap on a slow runner and no rebalance could help.
+  # Six parts put the heaviest predicted share at 15.6 minutes; the cap below
+  # stays as it is.
   unit:
     name: scripts unit tests (part ${{ matrix.part }})
     runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
@@ -59,7 +68,7 @@ jobs:
       # own failures behind somebody else's.
       fail-fast: false
       matrix:
-        part: [1, 2, 3, 4, 5]
+        part: [1, 2, 3, 4, 5, 6]
     # The jobs here that run the WHOLE suite between them, so the only ones
     # whose clock tracks the suite's growth (DRE-3130). It sat at 5 until run
     # 33987398284 reported `6277 passed, 1 skipped, 649 subtests passed in
@@ -290,7 +299,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ github.run_id }}
-          PARTS: 5
+          PARTS: 6
         run: |
           mkdir -p "$RUNNER_TEMP/part-logs"
           gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/jobs?filter=latest&per_page=100" \
@@ -646,6 +655,48 @@ jobs:
       - name: The guard did not skip
         if: always() && steps.actsreg.outputs.touched == 'true'
         run: python3 scripts/check_act_consumers.py assert-ran /tmp/acts-consumers.xml
+
+  # No new direct Linear read (DRE-9164). `scripts/check_linear_reads.py`
+  # finds every function in `scripts/` that sends Linear a read itself, and
+  # every workflow `run:` block that does, and compares them with
+  # `config/linear-direct-reads.json` read at the merge base, so a change
+  # cannot admit its own new read by adding a row beside it. A Linear write is
+  # never a finding. The pull-request run is the gate: it runs on GitHub's
+  # merge of the head into the base with `--base "origin/$BASE_REF"`, and it is
+  # the only run that refuses a new read. A push to main and the nightly
+  # schedule run pass no `--base`, so the merge base is HEAD and the run only
+  # confirms that main's ledger lists main's sites — those runs refuse nothing.
+  # The scan covers this repo alone: bureau-pipeline's `scripts/` and
+  # `.github/workflows/`, never agent-bureau's or a fleet repo's own steps.
+  # No job-level `if:`, so the nightly runs it (`tdd` stays the one job a
+  # schedule run skips); full history, because the merge base and its tree
+  # must be readable.
+  linear-reads-check:
+    name: linear reads check
+    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      # PyYAML reads the workflows; one cached install from the one manifest.
+      - name: Install test tooling (cached)
+        uses: ./.github/actions/setup-python-cached
+        with:
+          python-version: "3.12"
+          requirements: |
+            requirements-dev.txt
+      - name: No new direct Linear read
+        env:
+          # Through env, never interpolated into the shell line. Set on a
+          # pull request alone; empty on a push and on the schedule.
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if [ -n "$BASE_REF" ]; then
+            python3 scripts/check_linear_reads.py --base "origin/$BASE_REF"
+          else
+            python3 scripts/check_linear_reads.py
+          fi
 
   # TDD commit discipline (DRE-2022): this repo's PRs are hand-built, so the
   # rail's test-first order is enforced mechanically here — a commit touching

@@ -158,7 +158,8 @@ class DocumentShapeTest(unittest.TestCase):
         gh = FakeGh()
         green = {"id": RUN_ID + 7, "path": WF_PATH, "head_sha": "f" * 40,
                  "status": "completed", "conclusion": "success",
-                 "event": "push", "created_at": "2026-09-25T22:12:40Z"}
+                 "event": "push", "created_at": "2026-09-25T22:12:40Z",
+                 "updated_at": "2026-09-25T22:31:05Z"}
         gh.runs = [green] + gh.runs
         doc = _gather(gh, run_created_at="2026-09-25T20:06:14Z")
         self.assertEqual(doc["current"]["created_at"], "2026-09-25T20:06:14Z")
@@ -166,6 +167,9 @@ class DocumentShapeTest(unittest.TestCase):
             "run_id": RUN_ID + 7, "head_sha": "f" * 40,
             "status": "completed", "conclusion": "success",
             "event": "push", "created_at": "2026-09-25T22:12:40Z",
+            # DRE-9217: when the run finished, the time a superseded repair's
+            # card-close comment names in PT.
+            "updated_at": "2026-09-25T22:31:05Z",
         })
         self.assertEqual(len(doc["branch_runs"]), 1 + len(PRIOR_SHAS))
         self.assertEqual([c for c in gh.calls if c[0] == "runs"],

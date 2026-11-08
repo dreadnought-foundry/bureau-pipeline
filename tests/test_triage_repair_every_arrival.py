@@ -33,6 +33,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import dedupe_dispatch  # noqa: E402
 import hold  # noqa: E402
+import held_verdict  # noqa: E402
 import hygiene  # noqa: E402
 import medic_next_step  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -75,6 +76,10 @@ PROSE_DESCRIPTION = ("Fix the release note.\n\n**Blocked by:** " + NOWHERE + "\n
 #: write; the run reads this as now, so every card added is days old unless
 #: a test says otherwise.
 NOW = datetime(2026, 11, 1, 18, 0, tzinfo=UTC)
+
+#: One critic verdict the evidence gate held (DRE-9230), as
+#: `held_verdict.Hold` reads it off the pull request.
+HELD = held_verdict.Hold("", SHA, "42", "1", "- command output", FINDING)
 
 
 def _iso(when: datetime) -> str:
@@ -166,10 +171,10 @@ class TestTheTable:
         assert triage_repair.unhandled_units() == []
         assert set(units) == set(_declared_units())
 
-    def test_the_nineteen_split_twelve_one_two_three_one(self):
-        assert len(_rows()) == 19
+    def test_the_twenty_split_twelve_one_two_four_one(self):
+        assert len(_rows()) == 20
         assert collections.Counter(r["repair"] for r in _rows()) == {
-            "rewrite": 12, "replan": 1, "relabel": 2, "none": 3, "wait": 1}
+            "rewrite": 12, "replan": 1, "relabel": 2, "none": 4, "wait": 1}
 
     def test_a_unit_declared_tomorrow_with_no_row_is_named(self):
         reasons = json.loads(REASONS.read_text(encoding="utf-8"))
@@ -226,6 +231,12 @@ class TestTheTable:
         assert tags["reconcile.py#_route_to_defect_lane"] == prose_blockers.CARD_TAG
         assert prose_blockers.card_refusal("DRE-1", {NOWHERE}).startswith(
             f"🚨 {prose_blockers.CARD_TAG}:")
+        # A critic verdict held twice on one head (DRE-9230): its Triage line
+        # opens with its tag, so the row finds the card and no planner
+        # rewrites a card whose pull request is still open.
+        assert tags["reconcile.py#_triage_held_twice"] == held_verdict.TWICE_TAG
+        assert held_verdict.triage_line(1107, SHA, [HELD, HELD]).startswith(
+            f"🚦 {held_verdict.TWICE_TAG}:")
 
     def test_the_description_marker_is_in_what_the_notice_writer_files(self):
         marker = next(r["marker"]["description"] for r in _rows()
@@ -439,6 +450,28 @@ class TestTheCardCreatedStraightIntoTriage:
         assert board.lane(card) == "Planning"
         assert _outcomes(board, card) == ["started", "rewritten"]
         assert not [b for b in board.bodies(card) if b.startswith(hold.LIFT_PREFIX)]
+
+
+class TestTheVerdictHeldTwice:
+    """DRE-9230: the review sweep moves a card to Triage when the evidence
+    gate holds the critic's verdict twice on one head. Only a person can
+    answer the held finding, so the repair claims it and says so."""
+
+    def _card(self, board) -> str:
+        board.add("DRE-9229", labels=["repo:agent-bureau", "agent:engineer"],
+                  description=DESCRIPTION, comments=[held_verdict.triage_line(1107, SHA, [HELD, HELD])])
+        return "DRE-9229"
+
+    def test_it_is_unrepairable_and_never_rewritten(self, tmp_path):
+        board = TriageRepairBoard()
+        card = self._card(board)
+        rows = _select(board, tmp_path)
+        assert [(r["card"], r["action"]) for r in rows] == [(card, "none")]
+        assert _claim(board, card) == 0
+        assert _apply_as_the_workflow_does(board, rows[0], tmp_path / "temp", tmp_path) == 0
+        assert _outcomes(board, card) == ["started", "unrepairable"]
+        assert board.description(card) == DESCRIPTION
+        assert board.lane(card) == "Triage"
 
 
 class TestTheRelabel:

@@ -17,8 +17,8 @@
       "title": "Extend name_implies_undeclared to the modifier catalog",
       "repo": "atlas",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -37,8 +37,8 @@
       "title": "MenuCalc serves soft-deleted ingredients into live recipes",
       "repo": "atlas",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -57,9 +57,9 @@
       "title": "The harness's gate-paths scenario hangs to its 70-minute de…",
       "repo": "bureau-pipeline",
       "main": {
-        "ended": null,
-        "at": null,
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": true
       }
     },
     {
@@ -77,8 +77,8 @@
       "title": "DEMO: walk the CEO through PR #407 before and after — the s…",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "excluded",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -97,9 +97,9 @@
       "title": "The runner fail-back moves the workflows but not the jobs a…",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": true
       }
     },
     {
@@ -117,9 +117,9 @@
       "title": "A build on the mini LIGHT tier was SIGKILLed twice at ~34 m…",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
-        "passes": null
+        "ended": "rewrite",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": true
       }
     },
     {
@@ -137,8 +137,8 @@
       "title": "portico: DRE-5400's proof record carries the ship.sh --veri…",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -157,9 +157,9 @@
       "title": "portico: DRE-5400's proof record carries the step-4 moderat…",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": true
       }
     },
     {
@@ -177,8 +177,8 @@
       "title": "The console release row follows the NEWEST train run, so a …",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -197,9 +197,9 @@
       "title": "Every card read drags 3.3 KB of Linear description per row …",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": true
       }
     },
     {
@@ -217,8 +217,8 @@
       "title": "agent-bureau's console, website and relay write their Linea…",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -237,9 +237,9 @@
       "title": "Capacity folds into the KPI tiles — one header carrying bot…",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": true
       }
     },
     {
@@ -257,8 +257,8 @@
       "title": "Every new project is born on the release train — its first …",
       "repo": "agent-bureau",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -277,8 +277,8 @@
       "title": "Every new company gets its Portico share when its first pro…",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -297,8 +297,8 @@
       "title": "[EPIC] portico: Source list rebuild, part 4b — the viewer, …",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "excluded",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -317,8 +317,8 @@
       "title": "portico: the document route loads on demand — draw what a r…",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -337,8 +337,8 @@
       "title": "portico: the initial download — measure what is actually se…",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -357,8 +357,8 @@
       "title": "qa-review posts a STALE verdict with no @sha when Resolve P…",
       "repo": "bureau-pipeline",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -377,8 +377,8 @@
       "title": "Flip the portal CSP from Report-Only to enforcing — author …",
       "repo": "portico",
       "main": {
-        "ended": null,
-        "at": null,
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
         "passes": null
       }
     },
@@ -397,9 +397,9 @@
       "title": "bureau-pipeline: groom_replay.py turns a stored groom proposal into a run's input and reports where each card ended",
       "repo": "bureau-pipeline",
       "main": {
-        "ended": "cancel",
-        "at": "2026-11-01T10:14:53Z",
-        "passes": true
+        "ended": "not-verified",
+        "at": "2026-11-08T10:14:47Z",
+        "passes": null
       }
     }
   ]

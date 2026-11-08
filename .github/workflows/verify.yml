@@ -378,7 +378,7 @@ jobs:
       # `on` and the door can give the whole answer, else ONE Linear read.
       #
       # A pull_request verify on an `agent/` or `repair/DRE-<n>-…` branch asks
-      # the door for its own card, the one read the door serves such a run
+      # the door for its own card, a read the door serves such a run
       # (agent-bureau DRE-8807, `bureau_read.own_card`, DRE-8812), as a
       # workflow_dispatch re-verify does. Every other pull_request run, and
       # every pull_request_target run, is one Linear read where an in-scope
@@ -463,7 +463,25 @@ jobs:
             python3 -c 'import json, sys; [print(f["filename"]) for f in json.load(open(sys.argv[1])).get("files") or []]' \
               /tmp/verify-compare.json > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
           else
-            gh pr diff "$PR" --name-only > /tmp/verify/changed.txt 2>/dev/null || : > /tmp/verify/changed.txt
+            # A failed read is not an empty diff (DRE-9190): agent-bureau
+            # #4676 changed 16 files, read as none, and no verdict came for
+            # the merge gate to read. Ask up to 3 times; only a read that
+            # exits 0 becomes the list. Three failures write read_failed and
+            # no in_scope, and the next step turns the run red.
+            read_ok=false
+            for try in 1 2 3; do
+              if gh pr diff "$PR" --name-only > /tmp/verify/changed.try 2> /tmp/verify/changed.err; then
+                mv /tmp/verify/changed.try /tmp/verify/changed.txt
+                read_ok=true
+                break
+              fi
+              [ "$try" -lt 3 ] && sleep "${VERIFY_DIFF_READ_WAIT:-5}"
+            done
+            if [ "$read_ok" != "true" ]; then
+              echo "::error::could not read PR #$PR's changed files after 3 tries: $(tr '\n' ' ' < /tmp/verify/changed.err)"
+              echo "read_failed=true" >> "$GITHUB_OUTPUT"
+              exit 1
+            fi
           fi
           # The card comes from the job's one snapshot (fix #14), never from
           # Linear here: no snapshot is no card signal, as a failed read was.
@@ -477,8 +495,19 @@ jobs:
             echo "scope decision: the gate could not decide — SKIP (degrade, never block)"
           fi
 
+      # The scope step keeps continue-on-error, so its own exit cannot turn
+      # the run red. This step does when the changed files could not be read:
+      # a red run is retried by the medic, and the gate does not merge on it.
+      - name: Fail when the changed files could not be read
+        if: steps.scope.outputs.read_failed == 'true'
+        env:
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          echo "::error::Verify could not read pull request #$PR's changed files, so it posted no verdict. Re-run Verify once GitHub answers."
+          exit 1
+
       - name: Out of scope — skip (no verdict, no block)
-        if: steps.scope.outputs.in_scope != 'true'
+        if: steps.scope.outputs.in_scope != 'true' && steps.scope.outputs.read_failed != 'true'
         run: |
           echo "Card ${{ steps.pr.outputs.card }} is single-system with no UI signal (no **Design:** line, no UI role label on a frontend diff) — Verifier does not run. No verdict posted; merge is not gated on a Verifier PASS for this PR."
 

@@ -927,7 +927,7 @@ jobs:
       # give the whole answer, else ONE Linear read of the description and the
       # same comment window the old thread read took.
       #
-      # A pull_request RUN GETS ONE READ FROM THE DOOR: its own card, the one
+      # A pull_request RUN READS ITS CARD FROM THE DOOR: its own card, the one
       # its `agent/` or `repair/DRE-<n>-…` head branch names (agent-bureau
       # DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review is
       # such a run, so this read is served by the door like a workflow_dispatch
@@ -1071,7 +1071,7 @@ jobs:
       # DRE-8719's fixture trees.
       #
       # THE READ DOOR (DRE-8899). The CEO's answer is read off the card's
-      # thread, and this run's own card is the one read the door serves a
+      # thread, and this run's own card is a read the door serves a
       # pull_request run (agent-bureau DRE-8807). The four door variables are
       # reconcile.yml's, and BUREAU_READ_CARD_MAX_AGE is the review card's
       # bound (`bureau_read.REVIEW_CARD_MAX_AGE`, 120 seconds): the thread
@@ -2938,11 +2938,12 @@ jobs:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          # The read door (DRE-8899), as Assemble critic context has it. Every
-          # read the move makes stays on Linear: the In Review state's id
-          # (`/workflow-states` is refused on a pull_request run, and with the
-          # mode set it says `reason=pull-request`), and `get_issue` and the
-          # DRE-2316 re-read, which are the write path's own.
+          # The read door (DRE-8899), as Assemble critic context has it. The
+          # In Review state's id asks the door first: `/workflow-states` is a
+          # read the door serves a pull_request run whose head branch names
+          # its own card (agent-bureau DRE-9166, DRE-9170), and this step only
+          # moves that card. `get_issue` and the DRE-2316 re-read stay on
+          # Linear, because they are the write path's own.
           BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}

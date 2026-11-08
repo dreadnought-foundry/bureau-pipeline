@@ -147,26 +147,24 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: The sandbox presses, the copy of `standards/card-quality.md`'s one list
 #: (DRE-7772), in its order: each console operation, and the press in plain
 #: words. The epic's PROOF holds both equal to agent-bureau's
-#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the twenty after the six, the
-#: Initiatives page's writes; DRE-8727 the eight after those, the Loops 1
-#: epic's (DRE-8698) loop presses; DRE-8937 the eight after those, the Loops 2
-#: epic's (DRE-8699) KPI presses; DRE-9034 the three after those, the Loops 3
-#: epic's (DRE-8700) follow-up and asks; DRE-9044 the one after those, the
-#: Loops 4 epic's (DRE-8701) saved thought; DRE-9077 the last one, the KPI page
-#: epic's (DRE-8702) ask why.
+#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the twenty after the first two
+#: (then six), the Initiatives page's writes; DRE-8727 the eight after those,
+#: the Loops 1 epic's (DRE-8698) loop presses; DRE-8937 the eight after those,
+#: the Loops 2 epic's (DRE-8699) KPI presses; DRE-9034 the three after those,
+#: the Loops 3 epic's (DRE-8700) follow-up and asks; DRE-9044 the one after
+#: those, the Loops 4 epic's (DRE-8701) saved thought; DRE-9077 the last one,
+#: the KPI page epic's (DRE-8702) ask why. DRE-9201 took the four task presses
+#: off the front when Tasks retired under Loops (DRE-8704). DRE-9221 put
+#: DRE-8032's `stopDeskTurn`, the Desk speed script's Stop, after the two Desk
+#: presses, so the Initiatives twenty now follow the first three.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
 _S = r"['’]s"
 SANDBOX_PRESSES = (
-    ("createTask", rf"\b(?:make|makes|made|making|create|creates|created|creating)"
-                   rf"\s+{_A}task\b(?!['’]s|\s+card)"),
-    ("snoozeTask", rf"\bsnooz(?:e|es|ed|ing)\s+{_A}task\b"),
-    ("markTaskDone", rf"\bmark(?:s|ed|ing)?\s+{_A}task\s+(?:as\s+)?done\b"),
-    ("makeTaskCard", rf"\b(?:file|files|filed|filing|make|makes|made|making)"
-                     rf"\s+{_A}task(?:['’]s)?\s+card\b"),
     ("sendProjectAgentMessage", rf"\b(?:send|sends|sent|sending)\s+{_A}desk\s+message\b"
                                 rf"|\bopen(?:s|ed|ing)?\s+{_A}conversation\b"),
     ("answerDeskPermission", rf"\banswer(?:s|ed|ing)?\s+{_A}desk\s+"
                              rf"(?:allow|deny|permission)\b"),
+    ("stopDeskTurn", rf"\bstop(?:s|ped|ping)?\s+{_A}desk\s+turn\b"),
     ("startInitiativeDraft", rf"\bstart(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
     ("saveInitiativeDraft", rf"\bsav(?:e|es|ed|ing)\s+{_A}initiative\s+draft\b"),
     ("discardInitiativeDraft", rf"\bdiscard(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),

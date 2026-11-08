@@ -9,6 +9,13 @@ is the one writer that closes them. The `clear-notices` job in
 the default branch concludes `success`, lists every run on that commit with
 `gh run list --commit <sha>`, and asks this script two things.
 
+`decide` has a second caller (DRE-9227): the Report step's escalation branch
+in the same workflow, which asks it about the default branch's tip — passed as
+both `--head-sha` and `--tip-sha` — before it raises `needs_decision`, with the
+same two reads as `clear-notices`. On go it raises nothing, because main is
+already green and the all-clear that would close the alert may have run
+before it; any other answer raises.
+
 ## decide — go only when nothing on the commit is red or unfinished
 
 `judge` reads the listing and answers go only when every run that judges the

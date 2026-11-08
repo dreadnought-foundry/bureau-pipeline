@@ -80,7 +80,15 @@ to get wrong:
   When the pre-approval critic sends a one-off back for a defect in the card, it
   comes to YOU (DRE-5376): revise that card in place — never re-file it — so
   every finding is answered, and say per finding what you changed. The critic
-  reads it again. Only a decision the CEO owns goes to him, as one plain-English
+  reads it again. When your revision concludes the card is an operator step
+  rather than code — a deploy, a migration run, a secret, a workflow re-run —
+  write exactly one `**Operator step:** <what the person does>` line in the
+  revised description, opening its own line and outside fenced code, and say
+  so in your revision summary (DRE-9224). The revision cannot change the
+  card's labels or title, so that line is the only thing that routes it:
+  `decide` reads it, the critic is skipped, and the exit stamps OPERATOR. A
+  leftover `agent:engineer` label does not outrank it and stays on the card.
+  Only a decision the CEO owns goes to him, as one plain-English
   question. A card carrying a `## Decisions from the CEO` block is carrying the
   pipeline's copy of his signed answers: keep that block where it is, word for
   word, and write the rest of the card to agree with it.
@@ -486,7 +494,11 @@ Read in strict precedence, and stop at the first that answers:
    substring: `SIGN-OFF (OPERATOR): …` → OPERATOR. The vocabulary carries the
    full list (`docs/routing-verdicts.md`), including prefixes that only appear
    on cards planned before 2026-09-12.
-3. **The acceptance-criteria rule** — a criterion naming static visual fidelity
+3. **A declared line in the body** — `**Operator step:** <what the person
+   does>`, opening its own line (a list marker and bold markup are optional),
+   outside fenced code, with text after the colon → OPERATOR (DRE-9224). A
+   sentence that only mentions the words is prose.
+4. **The acceptance-criteria rule** — a criterion naming static visual fidelity
    ("renders", "screenshot", "design tokens") is FLEET. That is the only signal
    it reads (DRE-6227): no criterion phrase routes a card to a person. Buildable
    code is FLEET. A criterion that can only be met by watching the change run
@@ -495,7 +507,7 @@ Read in strict precedence, and stop at the first that answers:
    two-cards shape in `standards/card-quality.md` (DRE-3075), never as a hold
    on the build.
 
-Only what survives all three is a judgement call worth thinking about. See
+Only what survives all four is a judgement call worth thinking about. See
 `standards/design-parity.md` for what the visual check does and does not
 actually decide today.
 
@@ -618,16 +630,17 @@ the record lists, and the read that shows the result, as a step the run does:
 the run makes it as the console proof-reader on the sandbox project
 `agent-bureau-demo`.
 
-    - [ ] Sandbox press: on `agent-bureau-demo`, the run makes one task titled
-          `SANDBOX FIXTURE (proof DRE-<n>)` (`createTask`); the record quotes
-          the command's JSON object, its `outcome` `ok` and the task's id in
-          `ids`, reads the task back in the project's task list, and the run
-          marks it done (`markTaskDone`).
+    - [ ] Sandbox press: on `agent-bureau-demo`, the run records one loop titled
+          `SANDBOX FIXTURE (proof DRE-<n>)` (`recordLoop`); the record quotes
+          the command's JSON object, its `outcome` `ok` and the loop's id in
+          `ids`, reads the loop back on the project's Loops page, and the run
+          closes it with an ending (`closeLoop`).
 
 The record quotes the command's JSON object, never a tagged line, because the
 command's printer lives in agent-bureau and `config/proof-reach.json` keeps
 only lines printed in this repo. DRE-7711's six sandbox tasks, which waited on
-a person from 2026-10-19, are a press the run now makes. The plan critic
+a person from 2026-10-19, were a press the run made until Tasks retired under
+Loops (DRE-8704). The plan critic
 refuses a PROOF card labeled `repo:agent-bureau` that sends a press on the
 list, on the sandbox, to a person (DRE-7779).
 

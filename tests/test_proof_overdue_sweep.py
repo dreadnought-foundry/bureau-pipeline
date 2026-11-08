@@ -15,7 +15,9 @@ that does, `scripts/proof_overdue_sweep.py`:
     step red only after every other card is handled — except a card read
     GitHub refused for its rate limit, which is named, skipped and read on
     the next pass (DRE-8696);
-  * the `Proof overdue` step in `reconcile.yml`, and the two config entries.
+  * the `Proof overdue` step in `reconcile.yml` — both its commands on one
+    120 s budget through `proof_step_limit.py run` (DRE-9101) — and the two
+    config entries.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_proof_overdue_sweep.py -v
 """
@@ -24,6 +26,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -654,11 +657,17 @@ def _step(name: str) -> dict:
 
 
 _FAKE = """\
-import json, os, sys
+import json, os, sys, time
 open(os.environ["CALLS"], "a").write(json.dumps([sys.argv[0].rsplit("/", 1)[-1]] + sys.argv[1:]) + "\\n")
-print("{line}")
+print("{line}", flush=True)
+time.sleep(float(os.environ.get("{sleep_var}") or 0))
 sys.exit(int(os.environ.get("{exit_var}") or 0))
 """
+
+#: The step's one budget for both commands (DRE-9101), and the shortened one
+#: the cut tests run it at.
+BUDGET = "UNTIL=$(( $(date +%s) + 120 ))"
+SHORT = "UNTIL=$(( $(date +%s) + 2 ))"
 
 
 class StepShapeTest(unittest.TestCase):
@@ -697,7 +706,10 @@ class StepRunTest(unittest.TestCase):
         self.scripts.mkdir(parents=True)
         (self.scripts / "proof_overdue_sweep.py").write_text(_FAKE.format(
             line="proof-overdue: note · widgets · 1 proof record(s) older than 7 days · "
-                 "oldest DRE-1 (9.0 days, class=date)", exit_var="SWEEP_EXIT"), encoding="utf-8")
+                 "oldest DRE-1 (9.0 days, class=date)", exit_var="SWEEP_EXIT",
+            sleep_var="SWEEP_SLEEP"), encoding="utf-8")
+        shutil.copy(ROOT / "scripts" / "proof_step_limit.py",
+                    self.scripts / "proof_step_limit.py")
         (self.tmp / ".github" / "workflows").mkdir(parents=True)
         self.calls = self.tmp / "calls.jsonl"
         self.summary = self.tmp / "summary.md"
@@ -707,16 +719,23 @@ class StepRunTest(unittest.TestCase):
 
     def _ship_act(self):
         (self.scripts / "proof_overdue_act.py").write_text(_FAKE.format(
-            line="proof-overdue-act: acted", exit_var="ACT_EXIT"), encoding="utf-8")
+            line="proof-overdue-act: acted", exit_var="ACT_EXIT", sleep_var="ACT_SLEEP"),
+            encoding="utf-8")
 
-    def _run(self, *, stub=True, sweep_exit=0, act_exit=0):
+    def _run(self, *, stub=True, sweep_exit=0, act_exit=0, sweep_sleep=0, act_sleep=0,
+             short=False):
+        run = _step(STEP)["run"]
+        if short:
+            self.assertIn(BUDGET, run)
+            run = run.replace(BUDGET, SHORT)
         if stub:
             (self.tmp / STUBS[0]).write_text("name: proof\n", encoding="utf-8")
         env = {"PATH": os.environ["PATH"], "HOME": os.environ.get("HOME", str(self.tmp)),
                "CALLS": str(self.calls), "GITHUB_STEP_SUMMARY": str(self.summary),
                "GITHUB_REPOSITORY": "acme/Widgets", "REPO": "acme/Widgets",
-               "SWEEP_EXIT": str(sweep_exit), "ACT_EXIT": str(act_exit)}
-        return subprocess.run(["bash", "-e", "-c", _step(STEP)["run"]], cwd=self.tmp,
+               "SWEEP_EXIT": str(sweep_exit), "ACT_EXIT": str(act_exit),
+               "SWEEP_SLEEP": str(sweep_sleep), "ACT_SLEEP": str(act_sleep)}
+        return subprocess.run(["bash", "-e", "-c", run], cwd=self.tmp,
                               env=env, capture_output=True, text=True, timeout=60)
 
     def _called(self):
@@ -757,6 +776,42 @@ class StepRunTest(unittest.TestCase):
         done = self._run(act_exit=3)
         self.assertNotEqual(0, done.returncode)
         self.assertEqual(2, len(self._called()))
+
+    def test_both_commands_run_through_the_limit_on_one_budget(self):
+        run = _step(STEP)["run"]
+        self.assertEqual(1, run.count(BUDGET))
+        for part, script in (("sweep", 'proof_overdue_sweep.py --repo "$REPO_SLUG"'),
+                             ("act", "proof_overdue_act.py")):
+            with self.subTest(script=script):
+                self.assertIn('python3 .bureau-pipeline/scripts/proof_step_limit.py run '
+                              f'--step "Proof overdue / {part}" --until "$UNTIL" -- '
+                              f"python3 .bureau-pipeline/scripts/{script}", run)
+
+    def test_a_sweep_past_the_budget_is_cut_the_act_is_not_started_and_the_step_is_green(self):
+        self._ship_act()
+        done = self._run(sweep_sleep=30, short=True)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual([["proof_overdue_sweep.py", "--repo", "widgets"]], self._called())
+        text = self.summary.read_text(encoding="utf-8")
+        # `date +%s` truncates, so the script reads 1 to 2 s left of the
+        # shortened budget: `limit=1s` when its clock read crosses a second.
+        self.assertRegex(text, r'proof-step-limit: cut step="Proof overdue / sweep" limit=[12]s')
+        self.assertIn('proof-step-limit: cut step="Proof overdue / act" limit=0s', text)
+
+    def test_the_act_runs_in_what_the_sweep_left_and_is_cut_there(self):
+        self._ship_act()
+        done = self._run(act_sleep=30, short=True)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertEqual(2, len(self._called()))
+        text = self.summary.read_text(encoding="utf-8")
+        self.assertNotIn('step="Proof overdue / sweep"', text)
+        self.assertRegex(text, r'proof-step-limit: cut step="Proof overdue / act" limit=[12]s')
+
+    def test_a_failed_sweep_inside_the_budget_stays_red(self):
+        self._ship_act()
+        done = self._run(sweep_exit=1, short=True)
+        self.assertEqual(1, done.returncode)
+        self.assertNotIn("proof-step-limit: cut", self.summary.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

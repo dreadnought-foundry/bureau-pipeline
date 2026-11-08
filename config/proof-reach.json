@@ -61,13 +61,14 @@
     {
       "id": "product-identity",
       "held": "optional",
-      "held_for": ["portico"],
+      "held_for": ["portico", "deltasolv"],
       "what": "the product's own scripted proof identities, reached through the caller's `PROOF_ROLE_ARN`",
       "names": ["infra/scripts/proof-reader\\.ts", "proof-moderator", "mcp-token", "PROOF_ROLE_ARN", "hosted sign-in"],
-      "why": "briefs/proof.md: only a caller that provides `PROOF_ROLE_ARN` hands the run an AWS session, and portico is the one that does today",
+      "why": "briefs/proof.md: only a caller that provides `PROOF_ROLE_ARN` hands the run an AWS session; portico and deltasolv provide one (DeltaSolv's read-only proof role, DRE-9247)",
       "brief": "When no caller provides one, the Identities section records `aws: none`",
       "queries_declared_by": {
-        "portico": "infra/scripts/proof-reader.ts"
+        "portico": "infra/scripts/proof-reader.ts",
+        "deltasolv": "infra/lib/proof-role.ts"
       }
     },
     {
@@ -101,6 +102,12 @@
       "printed_by": "scripts/proof_overdue_sweep.py",
       "constant": "TAG",
       "when": "every full reconcile pass since DRE-8626, in the `Proof overdue` step's log, where the repo carries a proof-run stub: one line per overdue card, then the note line"
+    },
+    {
+      "tag": "proof-step-limit:",
+      "printed_by": "scripts/proof_step_limit.py",
+      "constant": "TAG",
+      "when": "since DRE-9101, on stdout in the `Dispatch proof runs`, `Close proof records that cannot merge` and `Proof overdue` steps' logs and summaries of a full reconcile pass: `cut step=\"<name>\" limit=<n>s` for each command stopped at its limit (beside a `::warning` annotation), and on the dispatch step, after a cut pass, `dispatch cut on <k> of the last <m> full passes`, or `alarm UNKNOWN (<reason>)` when the look-back or the notice call failed"
     },
     {
       "tag": "proof identity:",
@@ -323,6 +330,18 @@
       "printed_by": "scripts/linear_ops.py",
       "constant": "DOOR_TAG",
       "when": "every process whose read-door mode was `on`, since DRE-8897, at exit on stderr after its `linear-read:` lines, whether or not it sent Linear a request: one line naming the reader, the reads the door served, each read and reason that fell back with its count (`-` for none), the bucket and the process token; never in `off` or `shadow`"
+    },
+    {
+      "tag": "linear-reads-check:",
+      "printed_by": "scripts/check_linear_reads.py",
+      "constant": "TAG",
+      "when": "every run of the Pipeline Tests job `linear reads check` since DRE-9164, on stdout: one summary line `<n> read site(s) found, <l> listed (<k> kept), <p> pending, <a> new, <g> gone`, then one `new <site> — <file>:<line>`, `gone <site>` or `pending <site>` line for each, and, on a run whose merge base has no ledger, `no ledger at the merge base <sha7> — judged against the head's ledger`"
+    },
+    {
+      "tag": "agent read lines:",
+      "printed_by": "scripts/read_token_broker.py",
+      "constant": "SUMMARY_TAG",
+      "when": "since DRE-9168, once on stdout wherever `python3 scripts/read_token_broker.py print-lines --file <path>` runs, after the filtered lines of a session's `BUREAU_READ_LINES_FILE`: `agent read lines: kept <k>, dropped <d>`, or `agent read lines: no file at <path>` when the session wrote none; in the planning run's log once the card wiring it into plan.yml lands"
     },
     {
       "tag": "operator-agent:",

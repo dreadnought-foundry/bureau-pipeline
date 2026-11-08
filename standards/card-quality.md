@@ -242,10 +242,13 @@ to `Triage`, and stamps no verdict on it: the refusal names the fix, and a
 **The rule is mechanical:** route on whether an unattended agent can SATISFY
 the acceptance criteria — not on whether it could write the code. Read in strict
 precedence: an explicit role label (`agent:ops`, `no-code`), then the title
-convention **anchored at the start of the title**, then the criteria rule; only
-what survives all three is a judgement call worth asking a model about.
+convention **anchored at the start of the title**, then a declared
+`**Operator step:** <what the person does>` line in the body — opening its own
+line, outside fenced code, with text after the colon — which routes OPERATOR
+(DRE-9224), then the criteria rule; only what survives all four is a judgement
+call worth asking a model about.
 
-**Precedence 3 reads static visual fidelity only (DRE-6227).** Static visual
+**Precedence 4, the criteria rule, reads static visual fidelity only (DRE-6227).** Static visual
 fidelity is FLEET-checkable — `qa-review.yml` screenshots the changed screens
 and hands the critic both the design PNG and the render. No criterion phrase
 routes a card WORKBENCH any more: "sign in", "by hand" and "in production" once
@@ -602,12 +605,9 @@ oldest since 2026-10-08 (DRE-7772). This is the one full statement of the rule.
 The proof brief and the planner's brief point to it and never restate it.
 
 The sandbox presses, the one list (DRE-7772):
-- `createTask` — make a task
-- `snoozeTask` — snooze a task
-- `markTaskDone` — mark a task done
-- `makeTaskCard` — file a task's card into Intake
 - `sendProjectAgentMessage` — send a Desk message, or open a conversation
 - `answerDeskPermission` — answer a Desk Allow or Deny
+- `stopDeskTurn` — stop a Desk turn
 - `startInitiativeDraft` — start an initiative draft
 - `saveInitiativeDraft` — save an initiative draft
 - `discardInitiativeDraft` — discard an initiative draft
@@ -656,7 +656,7 @@ and the epic's PROOF holds the copies equal. The epic asked for a seventh,
 answering a draft's question (`answerInitiativeDraftQuestion`), and DRE-7776
 dropped it: the console's owner gate refuses it to the proof-reader on the
 sandbox too. DRE-8305 (2026-10-28) added the twenty Initiatives presses, the
-twenty bullets after `answerDeskPermission`, and left `approveInitiativeDraft`,
+twenty bullets after `stopDeskTurn`, and left `approveInitiativeDraft`,
 `answerInitiativeDraftQuestion(s)` and `answerDecision` off, as the CEO's own
 answers. DRE-8727 (2026-11-02) added the eight loop presses, the eight
 bullets after `deleteInitiativeFile`, for the Loops 1 epic (DRE-8698), and left
@@ -668,7 +668,13 @@ Loops 3 epic (DRE-8700), and left the CEO's own answers off as well. DRE-9044
 (2026-11-03) added `saveThought`, the bullet after `askLoopAgain`, for the
 Loops 4 epic (DRE-8701), and left the CEO's own answers off again. DRE-9077
 (2026-11-03) added `askKpiWhy`, the last bullet, for the KPI page epic
-(DRE-8702), and left the CEO's own answers off as before.
+(DRE-8702), and left the CEO's own answers off as before. DRE-8704 removed
+the four task presses that opened the list — `createTask`, `snoozeTask`,
+`markTaskDone` and `makeTaskCard` — when Tasks retired under Loops, and
+DRE-9201 (2026-11-04) took them off this copy.
+DRE-8032 admitted `stopDeskTurn`, the Desk speed script's Stop, to
+agent-bureau's list, and DRE-9221 (2026-11-05) added it to this copy, the
+bullet after `answerDeskPermission`.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run
