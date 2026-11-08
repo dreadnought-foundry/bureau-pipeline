@@ -793,7 +793,9 @@ class StepRunTest(unittest.TestCase):
         self.assertEqual(0, done.returncode, done.stdout + done.stderr)
         self.assertEqual([["proof_overdue_sweep.py", "--repo", "widgets"]], self._called())
         text = self.summary.read_text(encoding="utf-8")
-        self.assertIn('proof-step-limit: cut step="Proof overdue / sweep" limit=2s', text)
+        # `date +%s` truncates, so the script reads 1 to 2 s left of the
+        # shortened budget: `limit=1s` when its clock read crosses a second.
+        self.assertRegex(text, r'proof-step-limit: cut step="Proof overdue / sweep" limit=[12]s')
         self.assertIn('proof-step-limit: cut step="Proof overdue / act" limit=0s', text)
 
     def test_the_act_runs_in_what_the_sweep_left_and_is_cut_there(self):
