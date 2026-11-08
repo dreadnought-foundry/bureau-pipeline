@@ -43,7 +43,8 @@ LIVE workflow files (the pattern tests/test_self_host_stubs.py uses). A fourth
 trigger, a third cron line, a `mode` on the scheduled job that could be anything
 but `propose`, or ANY other scheduled job anywhere in this repo calling
 `groomer.yml` — but the one weekly replay, `groom-week.yml`'s `replay-main`,
-with its literals — turns this red: a clock that could reach `drain` is the
+with its literals, and the sandbox groom proposal (DRE-8782),
+`self-groomer.yml`'s `sandbox`, with its own — turns this red: a clock that could reach `drain` is the
 CEO's Approve being bypassed, and a `propose` reachable from the approval
 dispatch is an unaudited model call on a trigger nobody watches.
 
@@ -151,7 +152,7 @@ SCHEDULE_WITH = {
 }
 
 #: The jobs of the stub that call the reusable, and the one that does not.
-CALLING_JOBS = {"call", "drain", "schedule"}
+CALLING_JOBS = {"call", "drain", "schedule", "sandbox"}
 STEP_JOBS = {"gate"}
 
 #: What the three superseded records said, in the spellings they used. None of
@@ -175,7 +176,17 @@ FOURTH_DECISION = ("DRE-6648", "2026-10-25", "DRE-7975")
 #: Every job anywhere in this repo that can run on a `schedule` event and
 #: calls `groomer.yml`: the morning proposal, and the weekly replay.
 SCHEDULED_GROOMER_CALLS = [("groom-week.yml", "replay-main"),
-                           ("self-groomer.yml", "schedule")]
+                           ("self-groomer.yml", "schedule"),
+                           ("self-groomer.yml", "sandbox")]
+
+#: The morning's second run (DRE-8782): the sandbox groom proposal, each a
+#: LITERAL — `propose` with `sandbox` set, so a `drain` there would refuse
+#: before any write. Its `card` is the gate's reading of committed config.
+SANDBOX_LITERALS = {
+    "mode": "propose",
+    "pipeline_ref": "main",
+    "sandbox": "true",
+}
 
 #: The weekly replay's inputs that keep it a replay, each a LITERAL: with
 #: `replay` set the reusable posts to no card and refuses a drain before any
@@ -375,7 +386,10 @@ class ScheduleGateTest(unittest.TestCase):
             written = {line.split("=", 1)[0]
                        for line in out.read_text().splitlines()}
         self.assertEqual(code, 0, "the off-hour run must stay green")
-        outputs = self.job.get("outputs") or {}
+        outputs = dict(self.job.get("outputs") or {})
+        # The sandbox groom card (DRE-8782) is the one output another step
+        # writes — `tests/test_groomer_sandbox_wiring.py` holds it there.
+        outputs.pop("sandbox_card", None)
         self.assertEqual(set(outputs), written)
         step_id = self._gate_step().get("id")
         self.assertTrue(step_id, "the gate step needs an `id` to read from")
@@ -1138,7 +1152,7 @@ class VerifyJobHoldsNoWriteTokenTest(unittest.TestCase):
     def test_the_app_token_is_read_only_and_scoped_to_the_cards_repo(self):
         mint = _verify_step(self.job, "target_token")
         self.assertTrue(str(mint.get("uses")).startswith(
-            "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1"))
+            "actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510"))
         with_ = mint.get("with") or {}
         self.assertEqual(with_.get("permission-contents"), "read")
         self.assertEqual(_expression(with_.get("app-id")), "secrets.BUREAU_APP_ID")
@@ -2131,6 +2145,13 @@ def check_scheduled_groomer_calls(workflows: Path) -> list:
             assert "${{" not in str(mode), f"{where} computes its mode"
             assert mode == "propose", (
                 f"{where} runs the groomer on a schedule in mode {mode!r}")
+            if (path.name, name) == ("self-groomer.yml", "sandbox"):
+                for key, literal in SANDBOX_LITERALS.items():
+                    value = given.get(key)
+                    assert value == literal, (
+                        f"{where} passes {key}={value!r}, not the literal "
+                        f"{literal!r}")
+                continue
             if (path.name, name) != ("groom-week.yml", "replay-main"):
                 continue
             for key, literal in REPLAY_MAIN_LITERALS.items():

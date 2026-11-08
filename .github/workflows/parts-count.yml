@@ -1,0 +1,188 @@
+# The one-time parts count (DRE-8844): one cleanup card per copy of a shared
+# part already in a listed repo.
+#
+# `config/parts-count.json` lists the repos whose count is switched on. A push
+# to `main` that changes it counts every repo it lists; a dispatch counts the
+# one repo its `repo` input names, which the file must list. Per repo, the
+# `count` leg mints a read-only App token for that one repository, checks the
+# repo out at the workspace root with no credential left on disk, checks this
+# run's own commit out at `.bureau-pipeline` (on the push, the merge commit
+# that changed the file), runs `scripts/parts_check.py count --json` (DRE-8841)
+# and hands its output to `scripts/parts_cleanup.py file` (DRE-8843) with the
+# entry's `agent` and `initiative` labels, and `--owned-by` when the entry
+# carries `owned_by`. The filer files each card in Intake.
+#
+# THE RECORD is this run's log: the count's `parts-count:` line and the
+# filer's per-copy lines and its `parts-cleanup:` line, unchanged. The push
+# run on `main` at a repo's listing commit is that repo's count.
+#
+# This file only wires the two scripts; what a copy is and what is filed live
+# in them and their tests. The wiring is held by
+# tests/test_parts_count_workflow.py.
+#
+# WHAT IF THE RUN GOES RED: "Parts Count" is in the Red-Main Repair caller's
+# and the medic's watch lists (self-red-main-repair.yml, self-medic.yml), and
+# scripts/check_workflow_watchers.py fails the build if it ever leaves them.
+#
+# THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
+#   Q1 actor — a push to `main` initiates as the merger (the qa-bot), a
+#      dispatch as the person or `github-actions`. No step gates on the actor.
+#   Q2 secrets — a push or dispatch in this repository reads its own full
+#      store: BUREAU_APP_ID and BUREAU_APP_PRIVATE_KEY for the mint, and
+#      LINEAR_API_KEY, on the filing step's env only.
+#   Q3 retry — a re-run counts again from the files, and the filer's duplicate
+#      search files nothing twice, so re-running, or listing a second repo,
+#      never re-files a card.
+#   Q4 command limits — none.
+#   Q5 crash — a crash mid-filing leaves the cards already filed; the re-run
+#      files only the rest. A count that cannot answer exits 1 and the filer
+#      never runs.
+name: Parts Count
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - config/parts-count.json
+  workflow_dispatch:
+    inputs:
+      repo:
+        description: "The repo to count — a slug config/parts-count.json lists."
+        type: string
+        required: true
+
+# READ ONLY. The counted repo is read on a minted App token; Linear is written
+# through scripts/parts_cleanup.py.
+permissions:
+  contents: read
+
+# One run at a time, queued and never canceled: a run in flight files its
+# cards before the next one searches for them.
+concurrency:
+  group: parts-count
+  cancel-in-progress: false
+
+jobs:
+  select:
+    name: Select the repos
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 5
+    outputs:
+      repos: ${{ steps.select.outputs.repos }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # One row per repo to count, with the owner and name the mint needs: an
+      # expression has no split. A dispatch for a repo the file does not list,
+      # or an entry config/repo-map.json does not carry, fails here, before
+      # anything is minted.
+      - name: Select the repos to count
+        id: select
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REQUESTED: ${{ inputs.repo }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          entries = json.load(open("config/parts-count.json"))["repos"]
+          repo_map = json.load(open("config/repo-map.json"))
+          if os.environ["EVENT_NAME"] == "workflow_dispatch":
+              requested = os.environ["REQUESTED"].strip()
+              entries = [e for e in entries if e["repo"] == requested]
+              if not entries:
+                  print(f"::error::{requested!r} is not a repo config/parts-count.json lists")
+                  sys.exit(1)
+          rows = []
+          for e in entries:
+              full = repo_map.get(e["repo"], "")
+              if "/" not in full:
+                  print(f"::error::{e['repo']!r} is not a repo config/repo-map.json carries")
+                  sys.exit(1)
+              owner, name = full.split("/", 1)
+              rows.append({"repo": e["repo"], "owner": owner, "name": name,
+                           "agent": e["agent"], "initiative": e["initiative"],
+                           "owned_by": e.get("owned_by", "")})
+          for row in rows:
+              print(f"to count: {row['repo']} ({row['owner']}/{row['name']})")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"repos={json.dumps(rows)}\n")
+          PY
+
+  # One leg per repo, one at a time. The leg lays out what the count reads:
+  # the repo at the workspace root and this repo at `.bureau-pipeline`, a
+  # path segment the count never reads.
+  count:
+    name: Count ${{ matrix.repo }}
+    needs: select
+    if: needs.select.outputs.repos != '' && needs.select.outputs.repos != '[]'
+    runs-on: ${{ fromJSON(vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 20
+    # Whose Linear bucket the filer spends: the fleet's.
+    env:
+      LINEAR_IDENTITY: fleet
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.repos) }}
+    steps:
+      # Per repo, because an App installation token is scoped to ONE
+      # installation — triage-repair.yml's mint, for the one repository and
+      # for reading it.
+      - name: Mint a read-only token for the repository
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: ${{ matrix.owner }}
+          repositories: ${{ matrix.name }}
+          permission-contents: read
+
+      # The default branch, and no credential left on disk. First, because a
+      # checkout at the workspace root clears it.
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ matrix.owner }}/${{ matrix.name }}
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+
+      # This run's own commit: on the push, the merge commit that listed the
+      # repo, so the count and the filer are the ones that merge carried.
+      - name: Check out bureau-pipeline
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: .bureau-pipeline
+          persist-credentials: false
+
+      # The JSON goes to a file for the filer; the `parts-count:` line goes to
+      # stderr, the log. Exit 1 is the count's UNKNOWN, and the filer never
+      # runs past it. Its path is on this step and the filer's, never the
+      # job's `env:`: the `runner` context does not exist when a job's `env:`
+      # is evaluated, and GitHub refuses the whole file that names it there
+      # (DRE-8913, scripts/check_workflow_contexts.py).
+      - name: Count the copies of shared parts
+        env:
+          SLUG: ${{ matrix.repo }}
+          COUNT_JSON: ${{ runner.temp }}/parts-count.json
+        run: |
+          python3 .bureau-pipeline/scripts/parts_check.py count --repo "$SLUG" --json > "$COUNT_JSON"
+
+      # The Linear key is on this step's env and no other.
+      - name: File the cleanup cards
+        env:
+          SLUG: ${{ matrix.repo }}
+          AGENT: ${{ matrix.agent }}
+          INITIATIVE: ${{ matrix.initiative }}
+          OWNED_BY: ${{ matrix.owned_by }}
+          COUNT_JSON: ${{ runner.temp }}/parts-count.json
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+        run: |
+          if [ -n "$OWNED_BY" ]; then
+            python3 .bureau-pipeline/scripts/parts_cleanup.py file --repo "$SLUG" --count-json "$COUNT_JSON" --agent "$AGENT" --initiative "$INITIATIVE" --owned-by "$OWNED_BY"
+          else
+            python3 .bureau-pipeline/scripts/parts_cleanup.py file --repo "$SLUG" --count-json "$COUNT_JSON" --agent "$AGENT" --initiative "$INITIATIVE"
+          fi

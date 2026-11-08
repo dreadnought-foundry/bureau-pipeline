@@ -179,6 +179,57 @@ DOCUMENTED_EXCEPTIONS = {
         "its card writes in a separate job for the same reason. Pinned by "
         "tests/test_triage_repair_workflow.py."
     ),
+    (
+        "alarm-repair.yml",
+        "Repair the alarm",
+    ): (
+        "The Alarm Repair agent is denied Linear ON PURPOSE (DRE-8634 + "
+        "DRE-2696). It runs a model over untrusted card text, and every "
+        "Linear read and write of the run is made by the `select`, `claim` "
+        "and `apply` steps of scripts/alarm_repair.py and the context step, "
+        "each holding the key on its own step's env. Its tool set is "
+        "\"Read,Glob,Grep,Write\" with no Bash, so it cannot move a card, "
+        "edit text or file a card: it writes one decision.json to one "
+        "directory, which `apply` reads and checks against the live card. "
+        "Its Write still reaches the workspace, so no step holding the key "
+        "runs a script from there: each runs from a read-only copy of "
+        "bureau-pipeline taken before any model runs, outside the workspace "
+        "and outside the agent's `--add-dir`, as triage-repair.yml's do. "
+        "Pinned by tests/test_alarm_repair_workflow.py."
+    ),
+    (
+        "operator-agent.yml",
+        "Read the cards",
+    ): (
+        "The Operator Agent's model is denied Linear ON PURPOSE (DRE-8747 + "
+        "DRE-2696), waived as the Triage Repair waives it. It reads untrusted "
+        "card text for every card waiting on a person across the fleet, and "
+        "every Linear read and write of the run is made by `select` in the "
+        "`decide` job and by `claim` and `apply` in the `apply` job, each "
+        "holding the key on its own step's env. Its tool set is "
+        "\"Read,Glob,Grep,Write\" with no Bash, and it posts no heartbeat: it "
+        "writes one answer file per card, and a choices file for a business "
+        "choice, to one directory, which `decide` reads with no key. Its "
+        "Write still reaches the workspace, so `decide` runs from a "
+        "read-only copy of bureau-pipeline taken before any model runs, and "
+        "the `apply` job makes every write from a fresh checkout. Pinned by "
+        "tests/test_operator_agent_workflow.py."
+    ),
+    (
+        "operator-agent.yml",
+        "Plan the step",
+    ): (
+        "The Operator Agent's `do` planner is denied Linear ON PURPOSE "
+        "(DRE-8928 + DRE-2696), as the part 1 reader beside it is. It reads "
+        "one card's untrusted text and writes one plan file, which "
+        "`operator_do.py check` checks against the card before anything "
+        "runs. Every Linear read and write of its leg is made by `read`, "
+        "`do-claim`, the run step and `do-post`, each holding the key on "
+        "its own step's env. Its tool set is \"Read,Glob,Grep,Write\" with "
+        "no Bash and no write token, and every step after it runs from a "
+        "read-only copy of bureau-pipeline taken before it. Pinned by "
+        "tests/test_operator_do_workflow.py."
+    ),
 }
 
 # The eight agent steps counted in the DRE-2696 sweep. More is fine (new

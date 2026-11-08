@@ -77,7 +77,7 @@ CLI:
     python3 stranded_fix.py lane --repo R --workflow agent-fix.yml --out F
     python3 stranded_fix.py guard --repo R --pr N        # the pre-push hook
     python3 stranded_fix.py route --repo R --pr N --compare-file F \\
-        [--card DRE-N] [--pushed] --out-title T --out-body B
+        [--card DRE-N] [--pushed] --out-title T --out-body B [--out-occurrence O]
 """
 
 from __future__ import annotations
@@ -421,6 +421,23 @@ def card_title(slug: str, branch: str) -> str:
     return f"{slug}: a fix commit is stranded on the merged branch {branch}"
 
 
+def occurrence(stranded: Stranded) -> str:
+    """This instance of the failure, for `failure_tally` (DRE-8635):
+    `<branch>@<sha8 of the newest stranded commit>`.
+
+    The title above stays the per-branch key; the occurrence is what tells a
+    later sweep over the same commits (nothing new) from a new commit pushed
+    onto the same branch (the failure again). Newest by committer date, the
+    same date `orphaned` read the commit by, and by position when two tie.
+    """
+    newest = max(
+        enumerate(stranded.commits),
+        key=lambda pair: (_committed(pair[1]) or datetime.min.replace(
+            tzinfo=timezone.utc), pair[0]),
+    )[1]
+    return f"{stranded.branch}@{(newest.get('sha') or '')[:8]}"
+
+
 def _subject(entry) -> str:
     commit = entry.get("commit") if isinstance(entry, dict) else None
     message = (commit or {}).get("message") or ""
@@ -718,8 +735,9 @@ def _cmd_guard(args) -> int:
 def _cmd_route(args) -> int:
     """Compose the title and body of the card a stranded fix is routed onto.
 
-    Writes nothing to Linear — the caller does that through `linear_ops.py`,
-    which is the one seam that talks to the board. Exit 1 means "no finding",
+    Writes nothing to Linear — the caller does that through
+    `failure_tally.py file`, which files the card or counts this occurrence
+    on the one already filed (DRE-8635). Exit 1 means "no finding",
     so a caller can gate its card creation on the exit code alone.
     """
     try:
@@ -755,6 +773,9 @@ def _cmd_route(args) -> int:
     with open(args.out_body, "w", encoding="utf-8") as fh:
         fh.write(card_body(repo=args.repo, stranded=found, card=args.card,
                            pushed=args.pushed == "yes"))
+    if args.out_occurrence:
+        with open(args.out_occurrence, "w", encoding="utf-8") as fh:
+            fh.write(occurrence(found))
     print(f"stranded_fix: {len(found.commits)} commit(s) stranded on "
           f"{found.branch} after #{found.pr} merged")
     return 0
@@ -789,6 +810,9 @@ def main(argv=None) -> int:
                             "the work has to be rebuilt)")
     route.add_argument("--out-title", required=True)
     route.add_argument("--out-body", required=True)
+    route.add_argument("--out-occurrence", default="",
+                       help="where to write `<branch>@<sha8>`, the occurrence "
+                            "failure_tally.py counts the card by (DRE-8635)")
     route.set_defaults(fn=_cmd_route)
 
     local = sub.add_parser("local-compare",

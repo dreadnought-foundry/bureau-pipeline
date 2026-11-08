@@ -265,7 +265,7 @@ _STOOD_DOWN = (
     "rerun_runner_lost_ci", "resync_desynced_heads", "restart_answered_blockers", "card_dependabot_prs", "review_dependabot_prs",
     "recover_crashed_reviews", "report_fleet_reviewer_outage",
     "check_dependabot_capacity", "settle_repair_cards", "report_intake_depth",
-    "advance_urgent_intake", "repair_frozen_planning_holds", "release_groom_queue",
+    "advance_urgent_intake", "repair_frozen_planning_holds",
     "carry_epics_out_of_todo", "promote_ready", "move_hand_built_to_review",
     "report_break_glass", "report_fix_concurrency", "report_evicted_fix_runs",
 )
@@ -288,7 +288,6 @@ def _main_world(board, *, idle=None, closed=frozenset(), scope=None, close_spend
             enter(mock.patch.object(reconcile, name))
         enter(mock.patch.object(reconcile, "close_finished_epics", side_effect=close))
         enter(mock.patch.object(reconcile, "flag_stranded", return_value=set()))
-        enter(mock.patch.object(reconcile, "serve_planner_line", return_value=0))
         enter(mock.patch.object(reconcile, "report_epic_growth", return_value=[]))
         enter(mock.patch.object(reconcile, "active_cards", return_value=[]))
         enter(mock.patch.object(reconcile, "sweep_idle", return_value=idle))
@@ -602,8 +601,8 @@ def test_a_newer_comment_from_a_person_does_not_count_as_taken():
 @pytest.mark.parametrize("thread", [
     pytest.param(lambda: [_started(_cadence_minutes() - 10)], id="younger-than-the-cadence"),
     pytest.param(lambda: [_started(_cadence_minutes() + 30),
-                          _row("🎟️ planner-slot: waiting — place 2 of 3", 20)],
-                 id="planner-slot-waiting"),
+                          _row("🪫 planner-hold: held · card DRE-401 · run 7", 20)],
+                 id="planner-hold-held"),
     pytest.param(lambda: [_started(_cadence_minutes() + 30),
                           _row("Approved under the old rule — handed back to Planning", 20)],
                  id="newer-pipeline-comment"),

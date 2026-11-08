@@ -45,6 +45,14 @@ it counts toward the convergence halt (`fix_convergence.is_no_progress`): two
 quiet rounds on one commit stop the loop, and the approved-but-red sweep
 cannot dispatch quiet runs forever.
 
+THE OUTCOME MARKER (DRE-8785). The quiet line closes with a hidden
+`<!-- fix-exit-outcome: <word> -->` (`outcome_marker`). The approved-but-red
+sweep passes over a head whose fix run pushed no commit (DRE-6583), but an
+`approved` round was never sent to fix that head's red check: on
+agent-bureau #4445 (2026-11-01) one such line held a one-line red test away
+from the fix agent for nine hours. `overtaken_by_approval` is the one reader,
+so the sweep never matches this module's English.
+
 Verdicts are read with the merge gate's own grammar (`merge_gate`), from the
 critic's identity only, so a quoted or planted verdict is not one.
 
@@ -101,6 +109,10 @@ NOTHING = "nothing-to-fix"
 
 #: What the quiet line opens with. Not 🛑 (a blocker) and not 🔧 (a push).
 QUIET_PREFIX = "🔕"
+
+#: The quiet line's outcome, machine-readable (DRE-8785): a hidden comment
+#: closing its first line, read back by `overtaken_by_approval` only.
+OUTCOME_TAG = "fix-exit-outcome"
 
 #: A blocked attempt's cause (DRE-5745): one sentence, said on the PR after
 #: CAUSE_LABEL and opening the card receipt, from `blocked_cause` only.
@@ -254,7 +266,24 @@ def quiet_line(kind: str, attempt, head: str) -> str:
     }[kind]
     return (f"{QUIET_PREFIX} Fix attempt {attempt} pushed no new commit "
             f"(head `{(head or '')[:8]}`) and none is needed: {because}. "
-            "No person is needed, and the card stays where it is.")
+            "No person is needed, and the card stays where it is. "
+            + outcome_marker(kind))
+
+
+def outcome_marker(kind: str) -> str:
+    """The hidden marker a quiet line of `kind` closes with (DRE-8785)."""
+    return f"<!-- {OUTCOME_TAG}: {kind} -->"
+
+
+def overtaken_by_approval(body: Optional[str]) -> bool:
+    """Is this the quiet line of a round the critic overtook — `approved`, a
+    run that had nothing to fix because the head was approved first?
+
+    Read off the marker on the FIRST line, so a comment that quotes one below
+    its own first line is not one. The sweep's approved-but-red pass reads it
+    (DRE-8785): such a round failed to fix nothing, so it never passes a red
+    head over. Who wrote the comment is the caller's to check."""
+    return outcome_marker(APPROVED) in first_line(body)
 
 
 def _read(path: Optional[str]) -> str:

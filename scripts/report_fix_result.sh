@@ -17,9 +17,11 @@ set -e
 #    `stranded_fix.py local-compare` lists the local commits the base
 #    does not hold, and `stranded_fix.py route` decides whether any work
 #    is stranded and whether the push reached the branch. When work is
-#    stranded it files one card with `linear_ops.py oneoff`, unless
-#    `find-open` finds that card already. It posts nothing on the merged
-#    pull request and exits 0.
+#    stranded it hands the card to `failure_tally.py file`, which files it,
+#    or adds a count to the card already filed for that branch in the last
+#    30 days in any state, or does nothing when that card already names the
+#    same newest commit. It posts nothing on the merged pull request and
+#    exits 0.
 # 3. It reads the agent's three handoff files through `fix_handoff.py
 #    read`: the refutation, the blocker and the conflict agent's no-push
 #    reason. Exit 4 means the file is not this run's, and the script
@@ -63,6 +65,16 @@ set -e
 #      its post printed (a refused delete is a warning), and parks the
 #      card. A second one on the same head, the hold's included, posts
 #      `fix-attempt-disputed` with both quoted and parks the card.
+#    - Design question: the agent stopped on a critic verdict, stored in
+#      `.bureau-pipeline/critic-verdict.md`, that is a REQUEST_CHANGES
+#      carrying the `🎨 design-question:` block with its three lines in
+#      order. `park_for_question` reads `design_answer.py state` for the
+#      part and path the block names. On `none` or `unknown` it posts the
+#      question on the card (the block's first line, then the three lines
+#      `console_escalation.render` writes) and moves the card to Green
+#      Light; on `asked` it only moves it; on `answered` it parks nothing and
+#      runs `design_answer.py handback`. Each says so in one line on the PR.
+#      `handed-back` is a broken loop and takes the blocker route below.
 #    - Blocker: the agent stopped and pushed nothing. `fix_exit.py cause`
 #      reads the thread and the head's check runs for the one cause, and
 #      it posts `fix-attempt-disputed` with the answer format and that
@@ -84,8 +96,9 @@ set -e
 #      attempt or, in conflict mode, a conflict resolution round. In fix
 #      mode the round's convergence classification from
 #      `fix_convergence.py` is appended.
-#    Every receipt is composed by `pipeline_act.py receipt` and falls
-#    back to the bare body with `|| printf` when composition fails.
+#    Every receipt is composed by `pipeline_act.py receipt`, its body piped
+#    in on `--body-file=-`, and falls back to the bare body with `|| printf`
+#    when composition fails.
 # 6. Parking means the `needs-human` label and a move to Triage through
 #    `linear_ops.py advance`, falling back to `state --park`. Each park
 #    also posts a plain-English note on the card. A draft's card is never
@@ -97,7 +110,8 @@ set -e
 #    until the planning exit moves (DRE-6742), then `Queued` (DRE-6745).
 #    The start lane is `lane_contract.START_LANE`, and the Triage park's
 #    from-list reads `lane_contract.START_LANES` beside In Review, both
-#    read the same way (DRE-7111).
+#    read the same way (DRE-7111). The one park that is not this one is the
+#    design question's, in Green Light with no hold and no label (DRE-8735).
 #
 # Inputs, all from the step's `env:`:
 #   GH_TOKEN         the worker App's token: every PR read and comment
@@ -292,6 +306,32 @@ set -e
 #   three facts the run escalates as before, and the log says which fact was
 #   missing. Neither new line says "pushed no new commit", which the
 #   convergence halt counts.
+#
+# 2026-11-02, DRE-8779. Every receipt body is piped to `pipeline_act.py
+#   receipt --body-file=-`, never passed as `--body "$VAR"`. Linux refuses
+#   any single argument over 128 KiB with "Argument list too long" (exit
+#   126), so a long hold body made the receipt call fail and the
+#   `|| printf` fallback posted it without the act trailer the sweep and
+#   qa-review.yml read back. DRE-8758 hit the same limit on a plan note.
+# 2026-11-02, DRE-8635. `find-open` saw only an OPEN card, so a stranded-fix
+#   card a person canceled was filed again on the next sweep: DRE-4828,
+#   DRE-4831 and DRE-4861 were one branch filed three times.
+#   `failure_tally.py file` replaced the `find-open` and `oneoff` pair, with
+#   `<branch>@<sha8>` from `stranded_fix.py route` as the occurrence.
+
+# 2026-11-02, DRE-8735, DRE-8722, DRE-2776. The critic's design question is a
+#   decision, not a broken card. Its REQUEST_CHANGES carries the
+#   `🎨 design-question:` block, the fix agent writes it to its blocker file,
+#   and this script parked it in Triage under `fix-dispute`, the failure
+#   DRE-2776 removed for the engineer's question. It now goes to Green Light,
+#   asked once per part: `design_answer.py state` says whether the card
+#   already holds it, and an answer the CEO has given goes back to the critic
+#   through `design_answer.py handback` rather than being asked again. The
+#   question is posted before the move, because a card in his queue with
+#   nothing to answer is a silent park. Asked again after its hand-back, it is
+#   a loop that went wrong and parks in Triage as before. The PR line says
+#   "pushed nothing", never "pushed no new commit", which the convergence
+#   halt counts: Green Light stops the loop by itself.
 
 # Every read and comment belongs to this (repo, PR, head) or nothing posts (DRE-3951).
 handoff() { CMD=$1; shift; python3 .bureau-pipeline/scripts/fix_handoff.py \
@@ -320,16 +360,13 @@ if [ "$PRSTATE" = "MERGED" ]; then
        --compare-file /tmp/stranded-compare.json \
        --card "$CARD" --pushed "$LANDED" \
        --out-title /tmp/stranded-title.txt \
-       --out-body /tmp/stranded-body.md; then
+       --out-body /tmp/stranded-body.md \
+       --out-occurrence /tmp/stranded-occurrence.txt; then
     TITLE=$(cat /tmp/stranded-title.txt)
-    EXISTING=$(python3 .bureau-pipeline/scripts/linear_ops.py find-open "$TITLE" || true)
-    if [ -z "$EXISTING" ]; then
-      python3 .bureau-pipeline/scripts/linear_ops.py oneoff "$TITLE" \
-        /tmp/stranded-body.md --label "repo:$SLUG" --label agent:engineer \
-        || echo "::error::could not file the stranded-fix card for $REPO#$PR — the commits are named in this run's log above"
-    else
-      echo "stranded fix already filed as $EXISTING"
-    fi
+    python3 .bureau-pipeline/scripts/failure_tally.py file --title "$TITLE" \
+      --body-file /tmp/stranded-body.md --occurrence "$(cat /tmp/stranded-occurrence.txt)" \
+      --repo "$SLUG" --label "repo:$SLUG" --label agent:engineer \
+      || echo "::error::could not file or count the stranded-fix card for $REPO#$PR — the commits are named in this run's log above"
   else
     echo "::warning::PR #$PR merged during this fix run and nothing provable is stranded on ${BRANCHREF:-its branch} — filing no card"
   fi
@@ -368,6 +405,79 @@ park_for_human() {
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage" --park || true
 }
 
+# The critic's design question (rule 4c of DRE-8708), read off the stored
+# verdict: a REQUEST_CHANGES whose block is its first line and the three lines,
+# one each, in order. Sets DQ_PART, DQ_PATH and DQ_LINES (the three lines as
+# console_escalation renders them); anything else leaves DQ_PART empty.
+read_design_question() {
+  DQ_OUT=$(python3 -c '
+import re, sys
+sys.path.insert(0, ".bureau-pipeline/scripts")
+import console_escalation as ce
+import merge_gate
+text = open(sys.argv[1], encoding="utf-8").read()
+lines = text.lstrip().split("\n")
+if merge_gate.verdict_token(lines[0], merge_gate.CRITIC_MARKER) != "REQUEST_CHANGES":
+    sys.exit(0)
+mark = re.compile(r"^🎨 design-question: `([^`\n]+)` at `([^`\n]+)`\s*$")
+prefixes = (ce.FINDING_PREFIX, ce.QUESTION_PREFIX, ce.RECOMMENDATION_PREFIX)
+for at, line in enumerate(lines):
+    found = mark.match(line.strip())
+    after = [kept.strip() for kept in lines[at + 1:at + 4]]
+    if found and len(after) == 3 and all(
+            kept.startswith(p) and kept[len(p):].strip() for kept, p in zip(after, prefixes)):
+        esc = ce.parse("\n".join(after))
+        print(found.group(1))
+        print(found.group(2))
+        print(ce.render(ce.Escalation(esc.finding, esc.question, esc.recommendation,
+                                      esc.why or "the reviewer stated no why")))
+        break
+' .bureau-pipeline/critic-verdict.md 2>/dev/null || true)
+  DQ_PART=$(printf '%s\n' "$DQ_OUT" | sed -n 1p)
+  DQ_PATH=$(printf '%s\n' "$DQ_OUT" | sed -n 2p)
+  DQ_LINES=$(printf '%s\n' "$DQ_OUT" | sed -n '3,5p')
+}
+
+# Whether a blocker is the critic's design question for the CEO, and its state
+# on the card (DRE-8735). A question raised again after its hand-back is a
+# broken loop, not a decision, so `handed-back` is not this route's.
+design_question_owns_it() {
+  [ -n "$CARD" ] || return 1
+  read_design_question
+  [ -n "$DQ_PART" ] && [ -n "$DQ_PATH" ] || return 1
+  DQ_STATE=$(python3 .bureau-pipeline/scripts/design_answer.py state "$CARD" \
+    --part "$DQ_PART" --path "$DQ_PATH" || true)
+  [ -n "$DQ_STATE" ] || DQ_STATE=unknown
+  echo "design question: \`$DQ_PART\` at \`$DQ_PATH\` is $DQ_STATE on $CARD"
+  [ "$DQ_STATE" != "handed-back" ]
+}
+
+# The CEO's decision, asked in Green Light once per part (DRE-8735): no
+# fix-dispute hold and no needs-human, because nothing went wrong. An answer
+# already on the card goes back to the critic instead.
+park_for_question() {
+  if [ "$DQ_STATE" = "answered" ]; then
+    gh pr comment "$PR" --repo "$REPO" --body "🎨 Fix attempt $ATTEMPT pushed nothing: the reviewer's finding is a design question about \`$DQ_PART\` at \`$DQ_PATH\`, and the CEO has answered it on the card, so his answer goes back to the reviewer as one more look at this commit.
+
+$ANSWERS"
+    python3 .bureau-pipeline/scripts/design_answer.py handback "$CARD" --repo "$REPO" || true
+    return 0
+  fi
+  gh pr comment "$PR" --repo "$REPO" --body "🎨 Fix attempt $ATTEMPT pushed nothing: the reviewer's finding is a design question about \`$DQ_PART\` at \`$DQ_PATH\`, which is the CEO's to answer. It is asked on the card, in Green Light.
+
+$ANSWERS"
+  # On `unknown` it asks: a second copy is visible, a lost question is a stall nobody sees.
+  if [ "$DQ_STATE" != "asked" ]; then
+    DQ_FILE=$(mktemp)
+    {
+      echo "🎨 design-question: \`$DQ_PART\` at \`$DQ_PATH\`"
+      printf '%s\n' "$DQ_LINES"
+    } > "$DQ_FILE"
+    python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" --body-file="$DQ_FILE" || true
+  fi
+  python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "In Review,$START_LANES" || true
+}
+
 # The head moved: one fix-attempt-landed receipt for both wordings (DRE-2826).
 report_landed() {
   if [ "$MODE" = "conflict" ]; then
@@ -380,8 +490,8 @@ report_landed() {
 $CLASSIFICATION"
   fi
   # Both wordings are one act, fix-attempt-landed (DRE-2826).
-  python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
-    --body "$BODY" --out /tmp/act-fix-pushed.md \
+  printf '%s' "$BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-landed \
+    --body-file=- --out /tmp/act-fix-pushed.md \
     || printf '%s' "$BODY" > /tmp/act-fix-pushed.md
   # Who made the push, after the trailer like the cause (DRE-6351).
   [ -n "${RESCUE_LINE:-}" ] && printf '\n\n%s' "$RESCUE_LINE" >> /tmp/act-fix-pushed.md
@@ -465,8 +575,8 @@ if [ "$ROUTE" = "committed" ]; then
 $FORMAT"
     # The fixer pushed nothing the reviewer can see: the dispute act, which
     # the sweep discharges on an operator's answer as it does every one.
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-      --body "$HOLD_BODY" --out /tmp/act-fix-refused-again.md \
+    printf '%s' "$HOLD_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+      --body-file=- --out /tmp/act-fix-refused-again.md \
       || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refused-again.md
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refused-again.md
     gh pr comment "$PR" --repo "$REPO" --body-file /tmp/act-fix-refused-again.md
@@ -570,8 +680,8 @@ $REFUTED_TAIL
 
 $REFUTE_KEY"
   if [ -z "${PRIOR:-}" ]; then
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \
-      --body "$REFUTED_BODY" --out /tmp/act-fix-refuted.md \
+    printf '%s' "$REFUTED_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-finding-refuted \
+      --body-file=- --out /tmp/act-fix-refuted.md \
       || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted.md
     # Posted before the dispatch: the re-review reads it off the thread.
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted.md
@@ -611,8 +721,8 @@ A person decides which reading is right.
 $FORMAT
 
 $REFUTE_KEY"
-      python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-        --body "$HOLD_BODY" --out /tmp/act-fix-refuted-hold.md \
+      printf '%s' "$HOLD_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+        --body-file=- --out /tmp/act-fix-refuted-hold.md \
         || printf '%s' "$HOLD_BODY" > /tmp/act-fix-refuted-hold.md
       printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-hold.md
       gh pr comment "$PR" --repo $REPO \
@@ -634,8 +744,8 @@ $REFUTE_KEY"
     # nothing, the branch holds a stale REQUEST_CHANGES, and the
     # answer is picked up by the sweep and discharged by
     # `fix-loop-restarted` exactly as it is there.
-    python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-      --body "$REFUTED_BODY" --out /tmp/act-fix-refuted-capped.md \
+    printf '%s' "$REFUTED_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+      --body-file=- --out /tmp/act-fix-refuted-capped.md \
       || printf '%s' "$REFUTED_BODY" > /tmp/act-fix-refuted-capped.md
     printf '\n\n%s\n' "$ANSWERS" >> /tmp/act-fix-refuted-capped.md
     gh pr comment "$PR" --repo $REPO \
@@ -646,6 +756,9 @@ $REFUTE_KEY"
     fi
     park_for_human
   fi
+elif [ "$BLOCKED_RC" -eq 0 ] && design_question_owns_it; then
+  # The critic asked the CEO a design question: Green Light, not Triage (DRE-8735).
+  park_for_question
 elif [ "$BLOCKED_RC" -eq 0 ]; then
   # One cause, said on the PR and on the card alike (DRE-5745).
   if [ -z "${EXIT_THREAD:-}" ]; then
@@ -664,8 +777,8 @@ elif [ "$BLOCKED_RC" -eq 0 ]; then
   BLOCKED_BODY="🛑 Fix attempt $ATTEMPT blocked: $BLOCKER
 
 $FORMAT"
-  python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
-    --body "$BLOCKED_BODY" --out /tmp/act-fix-blocked.md \
+  printf '%s' "$BLOCKED_BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-attempt-disputed \
+    --body-file=- --out /tmp/act-fix-blocked.md \
     || printf '%s' "$BLOCKED_BODY" > /tmp/act-fix-blocked.md
   # The cause rides after the trailer, so the body the registry froze is untouched.
   printf '\n\nWhy it stopped: %s\n\n%s\n' "$CAUSE" "$ANSWERS" >> /tmp/act-fix-blocked.md

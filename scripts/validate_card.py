@@ -343,9 +343,10 @@ _FALLBACK_REPO_MAP = {
     "bureau-pipeline": "dreadnought-foundry/bureau-pipeline",
     "portico": "dreadnought-foundry/portico",
     "foundry": "dreadnought-foundry/foundry",
-    "onboard-sandbox-5": "dreadnought-foundry/onboard-sandbox-5",
-    "archive-sandbox": "dreadnought-foundry/archive-sandbox",
     "delete-sandbox": "dreadnought-foundry/delete-sandbox",
+    "handover-sandbox": "dreadnought-foundry/handover-sandbox",
+    "pause-sandbox": "dreadnought-foundry/pause-sandbox",
+    "onboard-sandbox-6": "dreadnought-foundry/onboard-sandbox-6",
 }
 # --- END generated repo mirror ---
 

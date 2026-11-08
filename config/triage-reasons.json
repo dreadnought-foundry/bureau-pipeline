@@ -39,6 +39,12 @@
       "note": "The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug."
     },
     {
+      "unit": "reconcile.py#_triage_held_twice",
+      "reason_at": "reconcile.py#_triage_held_twice",
+      "anchor": "held_verdict.triage_line(number, sha, holds)",
+      "note": "One line names the pull request, the two runs whose critic verdicts the evidence gate held on the same head, and the held finding, and says the way back: answer the finding, then push a new commit or re-run the review by hand (DRE-9230)."
+    },
+    {
       "unit": "planning_route.py#_refuse_no_repo",
       "reason_at": "planning_route.py#_refuse_no_repo",
       "anchor": "no_repo_note(identifier, unknown)",
@@ -61,6 +67,12 @@
       "reason_at": "agent-fix.yml#Report",
       "anchor": "--reason fix-dispute",
       "note": "A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back."
+    },
+    {
+      "unit": "medic.yml#Hold the card on an inherited red main",
+      "reason_at": "medic.yml#Hold the card on an inherited red main",
+      "anchor": "--reason inherited-red-main",
+      "note": "An inherited-red-main hold stamp at the failed run's head says every failing check on the pull request failed on the merge base too, and the medic's receipt after it names the repo, the checks and the merge base, and says the sweep returns the card once main is green on them (DRE-8849)."
     },
     {
       "unit": "medic.yml#Ask a person about the diagnosis",

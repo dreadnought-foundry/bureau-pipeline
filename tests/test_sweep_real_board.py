@@ -201,6 +201,19 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: refuses the card, so a live board pays it each pass for each such card
 #: past the window, whether or not the comment is already there.
 #:
+#: It was 59 until DRE-8622 (measured 2026-11-02: 58) deleted the planner
+#: line's backstop with the cap. Its one paged read of Green Light, charged to
+#: `serve_planner_line` since DRE-5178, is no longer asked, and no other phase
+#: reads that lane: 59 − 1 = 58.
+#:
+#: It is 59 since DRE-8849 (measured 2026-11-02: 58 before, 59 after) returned
+#: a card the medic held in Triage on an inherited red main. The return pass
+#: (`reconcile.return_inherited_red_main_holds`) reads this repo's Triage
+#: cards that wear `needs-human`, once, on a full pass, charged to
+#: `return_inherited_red_main_holds` — the one-filtered-read shape
+#: `lift_wip_cap_holds` took under DRE-7755. The board holds no such stamp, so
+#: no card is read further: 58 + 1 = 59.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
 REAL_BOARD_SWEEP_BUDGET = 59

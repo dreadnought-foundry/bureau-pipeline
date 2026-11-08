@@ -83,6 +83,15 @@ fixing agent` sections are the critic's own words written while reading an
 attacker-authored diff, so they enter only through `_fenced`. A thread that
 cannot be read says the round is unknown and costs nothing else.
 
+DRE-9230 adds a FIFTH block, right after the round: why the last verdict on
+this head was held. On portico #1107 the evidence gate held the critic's
+verdict twice in one run, and the second review was the first one again,
+told nothing — so it held for the same reason. When the critic's newest
+comment is a hold bound to this head (`held_verdict.read`), the review reads
+the gate's own list of what was missing under a lead that says what to do
+about it. The lead is ours and unfenced; the list quotes the critic's claim
+and enters only through `_fenced`.
+
 Like repair_context.py: the script NEVER exits non-zero (a context-builder
 failure must not wedge the gate — the prompt carries a static empty-block
 fallback), and the context is written to $GITHUB_OUTPUT as a heredoc under
@@ -138,9 +147,9 @@ _REFUTATION_LEAD = (
 )
 
 _NO_CARD_COMMON = (
-    "There is no card description, no **Spec:** directory, and no "
-    "**Design:** ref — do NOT hunt for them, and their absence is NOT a "
-    "finding. Skip every card-bookkeeping step; do not name a card in your "
+    "There is no card description, no spec a **Spec:** line names, a file "
+    "or a directory, and no **Design:** ref — do NOT hunt for them, and "
+    "their absence is NOT a finding. Skip every card-bookkeeping step; do not name a card in your "
     "verdict."
 )
 
@@ -285,6 +294,47 @@ def _review_round_tail(comments, critic_login, head_sha) -> list[str]:
         return ["", _ROUND_UNKNOWN]
 
 
+def held_verdict_block(comments, critic_login, head_sha) -> list[str]:
+    """Why the last verdict on this head was held, or nothing (DRE-9230).
+
+    Only when the critic's NEWEST comment on the thread is a hold bound to
+    `head_sha`: a later verdict or notice has already answered it, and a
+    hold on an older head is about a commit nobody is reviewing. Author-gated
+    on the critic's own live login, as the round is. The lead is ours and
+    enters unfenced; the gate's list quotes the critic's claim, so it enters
+    only through `_fenced`.
+    """
+    login = (critic_login or "").strip()
+    if comments is None or not login.removesuffix("[bot]"):
+        return []
+    import held_verdict
+
+    own = [c for c in comments
+           if (c.get("user") or {}).get("login") == login
+           and "QA Critic" in (c.get("body") or "")]
+    if not own:
+        return []
+    newest = own[-1]
+    found = held_verdict.holds_at(
+        [(newest.get("created_at") or "", newest.get("body") or "")], head_sha)
+    if not found:
+        return []
+    hold = found[-1]
+    return ["", held_verdict.context_lead(hold),
+            *_fenced(hold.missing or hold.finding)]
+
+
+def _held_verdict_tail(comments, critic_login, head_sha) -> list[str]:
+    """`held_verdict_block`, fail-soft: a thread it cannot read costs this
+    block, never the context."""
+    try:
+        return held_verdict_block(comments, critic_login, head_sha)
+    except Exception as exc:
+        print(f"review_card_context: held-verdict block skipped ({exc})",
+              file=sys.stderr)
+        return []
+
+
 def _acts_consumer_block(result) -> list[str]:
     """The act-registry consumer check's verdict, or nothing (DRE-3091).
 
@@ -418,7 +468,7 @@ def _whats_new_tail(branch, pr_body) -> list[str]:
 
 
 def build_context(card, branch, pr_body, refutation="", acts_consumer="",
-                  review_round=None) -> str:
+                  review_round=None, held=None) -> str:
     """The critic's CARD CONTEXT block for one PR shape.
 
     `refutation` is appended to every shape, never substituted for one: check
@@ -427,12 +477,15 @@ def build_context(card, branch, pr_body, refutation="", acts_consumer="",
     is appended the same way, for the same reason, and the What's new block
     after both (DRE-5512). `review_round` — the lines `review_round_block`
     builds, or None when no thread was handed in — leads the tail, ahead of
-    the refutation (DRE-6533).
+    the refutation (DRE-6533). `held` — the lines `held_verdict_block`
+    builds — follows the round: why the last verdict on this head was held
+    (DRE-9230).
     """
     card = (card or "").strip()
     branch = branch or ""
     tail = (
         list(review_round or [])
+        + list(held or [])
         + _refutation_block(refutation)
         + _acts_consumer_block(acts_consumer)
         + _whats_new_tail(branch, pr_body)
@@ -443,8 +496,8 @@ def build_context(card, branch, pr_body, refutation="", acts_consumer="",
             [
                 f"It implements Linear card {card}. Judge check 1 against "
                 "that card's acceptance criteria — the card description "
-                "quoted in the PR body, and any **Spec:** directory it "
-                "references.",
+                "quoted in the PR body, and the spec the card's **Spec:** "
+                "line names, a file or a directory.",
                 *tail,
             ]
         )
@@ -543,9 +596,14 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
 
     review_round = None
+    held = None
     if args.comments_file:
+        comments = _read_comments(args.comments_file)
         review_round = _review_round_tail(
-            _read_comments(args.comments_file), args.critic_login, args.head_sha)
+            comments, args.critic_login, args.head_sha)
+        # DRE-9230: the same thread says whether the last verdict on this
+        # head was held, and why.
+        held = _held_verdict_tail(comments, args.critic_login, args.head_sha)
 
     try:
         context = build_context(
@@ -559,6 +617,7 @@ def main(argv: list[str]) -> int:
             if args.acts_consumer_file
             else "",
             review_round=review_round,
+            held=held,
         )
     except Exception as exc:  # degrade to the prompt's static fallback
         context = ""

@@ -7,14 +7,18 @@ DRE-7971 writes and the verified proposal a replay leaves behind:
     paths with `git diff --name-only <base>...<head>`, and answers true when
     it cannot (fail open);
   * `judge` — where did each case end on the change, and did any case that
-    passes on `main` fail? Only that case, `regressed`, fails the run;
+    passes on `main` fail? That case, `regressed`, fails the run — and so,
+    failing closed (DRE-8741), does a case that passes on `main` and that the
+    replay did not check, and a run that checked no case at all;
   * `record-main` — the only writer of each case's `main` block.
 
 The failures this file holds shut: a change to the Cancel refusals in
 `groomer.py` not replayed; a new `groom_*` import nobody decided about; a case
 that never passed on `main` blocking a pull request; a card with no verify
-record read as a pass; the search a case was judged on changing a verdict;
-`record-main` touching any byte of a case but its `main` block.
+record read as a pass; a crashed verify leg's `unverified` record read as a
+pass (DRE-8741, bureau-pipeline #1362); a run that checked nothing exiting 0;
+the search a case was judged on changing a verdict; `record-main` touching any
+byte of a case but its `main` block.
 
 Run: cd bureau-pipeline && python3 -m pytest tests/test_groom_replay_gate.py -q
 """
@@ -341,11 +345,12 @@ def _cases_file(tmp_path, cases=None) -> Path:
     return path
 
 
-def _row(card, verdict):
+def _row(card, verdict, reason=None):
     row = {"identifier": card, "title": card, "position": 1, "repo": "bureau-pipeline",
            "reason": ""}
     if verdict is not None:
-        row["verify"] = {"verdict": verdict, "summary": "s", "proof": [], "rested_on": []}
+        row["verify"] = {"verdict": verdict, "summary": "s", "proof": [], "rested_on": [],
+                         "reason": reason}
     return row
 
 
@@ -356,13 +361,20 @@ VERDICT_OF = {groom_replay.PLANNING: gva.STILL_NEEDED,
               groom_replay.EXCLUDED: gva.EXCLUDED}
 
 
-def _proposal(tmp_path, ends: dict, *, no_record=()) -> Path:
+#: The reason `apply` writes on each unproved verdict's record here.
+REASON_OF = {groom_replay.NOT_VERIFIED: gva.NO_PROOF,
+             groom_replay.EXCLUDED: "hand-built"}
+
+
+def _proposal(tmp_path, ends: dict, *, no_record=(), reasons=None) -> Path:
     """A verified proposal: `ends` is `{card: where it ended}`; a card in
-    `no_record` carries no verify record."""
+    `no_record` carries no verify record; `reasons` is `{card: the reason an
+    unproved verdict's record carries}`, else `REASON_OF`'s."""
     outcomes = {"now": [], "not-now": [], "dead": [], gva.REWRITE: []}
     seq = []
     for card, where in ends.items():
-        row = _row(card, None if card in no_record else VERDICT_OF[where])
+        reason = (reasons or {}).get(card, REASON_OF.get(where))
+        row = _row(card, None if card in no_record else VERDICT_OF[where], reason)
         if where == groom_replay.PLANNING:
             outcomes["now"].append(row)
         elif where == groom_replay.CANCEL:
@@ -370,10 +382,10 @@ def _proposal(tmp_path, ends: dict, *, no_record=()) -> Path:
         elif where == groom_replay.REWRITE:
             outcomes[gva.REWRITE].append(row)
         elif where == groom_replay.NOT_VERIFIED:
-            row["reason"] = gva.UNVERIFIED_PREFIX + "no proof"
+            row["reason"] = gva.UNVERIFIED_PREFIX + reason
             outcomes["not-now"].append(row)
         elif where == groom_replay.EXCLUDED:
-            row["reason"] = gva.EXCLUDED_PREFIX + "hand-built"
+            row["reason"] = gva.EXCLUDED_PREFIX + reason
             outcomes["not-now"].append(row)
         seq.append(dict(row))
     path = tmp_path / "proposal-verified.json"
@@ -419,8 +431,9 @@ def test_a_passing_case_that_ends_on_planning_is_regressed(tmp_path, capsys):
     assert doc["regressed"] == ["c-planning"]
 
 
-@pytest.mark.parametrize("where", ["cancel", "rewrite", "not-verified"])
-def test_a_passing_case_off_planning_passes(where, tmp_path, capsys):
+@pytest.mark.parametrize("where", ["cancel", "rewrite"])
+def test_a_passing_case_off_planning_on_a_real_verdict_passes(where, tmp_path, capsys):
+    """A genuine answer is unchanged by failing closed (DRE-8741)."""
     proposal = _proposal(tmp_path, {"DRE-101": where, "DRE-102": "planning"})
     code, lines, doc = _judge(tmp_path, proposal, capsys)
     assert code == 0
@@ -455,38 +468,277 @@ def test_a_case_that_failed_on_main_and_passes_now_says_so(tmp_path, capsys):
     assert lines[-1] == f"{TAG} 3 cases — 3 pass, 0 fail, 0 not judged, 0 regressed"
 
 
-@pytest.mark.parametrize("excluded", [False, True])
-def test_a_card_with_no_record_or_an_excluded_verdict_is_not_judged(
-        excluded, tmp_path, capsys):
-    """Whatever its `main.passes` — the passing case most of all."""
-    if excluded:
-        proposal = _proposal(tmp_path, {"DRE-101": "excluded", "DRE-102": "excluded"})
-    else:
-        proposal = _proposal(tmp_path, {"DRE-101": "planning", "DRE-102": "planning"},
-                             no_record=("DRE-101", "DRE-102"))
+# --------------------------------------------------------------------------
+# failing closed (DRE-8741) — a case the replay did not check fails the gate
+# --------------------------------------------------------------------------
+@pytest.mark.parametrize("reason", [gva.STEP_FAILED, gva.STEP_SKIPPED, gva.NO_FILE,
+                                    gva.NO_PROOF])
+def test_a_passing_case_whose_record_is_unverified_fails_closed_naming_the_reason(
+        reason, tmp_path, capsys):
+    """Gate run 41370789518: the leg crashed on startup, `verdict` wrote
+    `unverified (agent step failed)`, the card ended `not-verified`, and the
+    judge read `not-verified != planning` as a pass."""
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": reason})
     code, lines, doc = _judge(tmp_path, proposal, capsys)
-    assert code == 0
-    for case_id in ("c-planning", "c-cancel", "c-none"):
-        assert _line(lines, case_id).endswith(" not judged")
-    assert doc["not_judged"] == ["c-planning", "c-cancel", "c-none"]
-    assert doc["regressed"] == []
-    assert lines[-1] == f"{TAG} 3 cases — 0 pass, 0 fail, 3 not judged, 0 regressed"
+    assert code == 1
+    assert _line(lines, "c-planning") == (
+        f"{TAG} c-planning expect=off-planning main=pass head=not-verified "
+        f"search=none not judged — UNCHECKED: unverified ({reason})")
+    assert lines[-2] == f"{TAG} 3 cases — 0 pass, 1 fail, 2 not judged, 0 regressed"
+    assert lines[-1] == (f"{TAG} failed closed — 1 case passes on main and was "
+                         f"not checked: c-planning (DRE-101, unverified ({reason}))")
+    assert doc["unchecked"] == ["c-planning"] and doc["regressed"] == []
+    assert doc["cases"][0]["result"] == "not judged"
+    assert doc["cases"][0]["unchecked"] is True
+    assert doc["cases"][0]["why"] == f"unverified ({reason})"
+    # A crash is no rate limit (DRE-8859): nothing calls it infrastructure.
+    assert doc["rate_limited"] == []
+    assert not any("rate-limited" in line for line in lines)
 
 
-def test_an_excluded_verdict_is_not_judged_wherever_the_card_ended(tmp_path, capsys):
+# --------------------------------------------------------------------------
+# a case left unchecked by a rate-limited lookup is named infrastructure
+# (DRE-8859) — and still fails closed
+# --------------------------------------------------------------------------
+LIMITED = ("lookup failed: dreadnought-foundry/bureau-pipeline did not answer — "
+           "rate limited: gh: API rate limit exceeded for installation ID 42 (HTTP 403)")
+RERUN = ("not a finding about this change — re-run all jobs: re-running only "
+         "the failed job re-reads the same lookup")
+
+
+def test_a_passing_case_unchecked_on_a_rate_limit_is_named_infrastructure(
+        tmp_path, capsys):
+    """bureau-pipeline #1396, gate run 41439594582: the lookup leg was
+    throttled, the seed case's card was recorded `unverified (lookup failed:
+    … rate limited: …)`, and the judge failed closed with nothing saying the
+    cause was GitHub's and a full re-run the cure."""
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": LIMITED})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    case = _line(lines, "c-planning")
+    assert case == (f"{TAG} c-planning expect=off-planning main=pass "
+                    f"head=not-verified search=none not judged — UNCHECKED: "
+                    f"unverified ({LIMITED})")
+    # The result is `not judged`, never `fail`, and never REGRESSED.
+    assert case.split(" search=none ")[1].startswith("not judged — UNCHECKED: ")
+    assert "REGRESSED" not in case
+    limited = (f"{TAG} failed closed — rate-limited: could not read "
+               f"dreadnought-foundry/bureau-pipeline for c-planning (DRE-101), {RERUN}")
+    assert limited in lines
+    # Before the existing failed-closed lines, which are unchanged.
+    assert lines[-2] == limited
+    assert lines[-1] == (f"{TAG} failed closed — 1 case passes on main and was "
+                         f"not checked: c-planning (DRE-101, unverified ({LIMITED}))")
+    assert doc["rate_limited"] == ["c-planning"]
+    assert doc["unchecked"] == ["c-planning"] and doc["regressed"] == []
+
+
+def test_a_rate_limit_whose_reason_names_no_repo_says_the_cards_repo(tmp_path, capsys):
+    reason = ("lookup failed: no repo answered — dreadnought-foundry: rate limited: "
+              "gh: API rate limit exceeded for installation ID 42 (HTTP 403)")
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": reason})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    assert (f"{TAG} failed closed — rate-limited: could not read the card's repo "
+            f"for c-planning (DRE-101), {RERUN}") in lines
+    assert doc["rate_limited"] == ["c-planning"]
+
+
+@pytest.mark.parametrize("reason", [
+    "board context unread: Linear said 429: rate limited",
+    "lookup failed: dreadnought-foundry/bureau-pipeline did not answer — "
+    "time budget of 300 s spent",
+], ids=["rate-limit-not-a-lookup", "lookup-not-a-rate-limit"])
+def test_only_a_rate_limited_lookup_is_named_infrastructure(reason, tmp_path, capsys):
+    proposal = _proposal(tmp_path, {"DRE-101": "not-verified", "DRE-102": "cancel"},
+                         reasons={"DRE-101": reason})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    assert doc["rate_limited"] == []
+    assert not any("rate-limited" in line for line in lines)
+
+
+def test_a_rate_limited_case_that_never_passed_on_main_is_not_named(tmp_path, capsys):
+    """Only an unchecked case — one that passes on `main` — is listed."""
+    proposal = _proposal(tmp_path, {"DRE-101": "cancel", "DRE-102": "not-verified"},
+                         reasons={"DRE-102": LIMITED})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 0, lines
+    assert doc["rate_limited"] == []
+    assert not any("rate-limited" in line for line in lines)
+
+
+def test_an_unverified_record_on_a_case_that_never_passed_fails_nothing(tmp_path, capsys):
+    """The ratchet holds: only a case that passes on `main` fails closed."""
+    proposal = _proposal(tmp_path, {"DRE-101": "cancel", "DRE-102": "not-verified",
+                                    "DRE-103": "not-verified"},
+                         reasons={"DRE-102": gva.STEP_FAILED, "DRE-103": gva.STEP_FAILED})
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 0, lines
+    assert _line(lines, "c-cancel").endswith(" not judged")
+    assert _line(lines, "c-none").endswith(" not judged")
+    assert lines[-1] == f"{TAG} 3 cases — 1 pass, 0 fail, 2 not judged, 0 regressed"
+    assert doc["unchecked"] == []
+
+
+@pytest.mark.parametrize("how,why", [
+    ("no-record", "no verify record"),
+    ("excluded", "excluded (hand-built)"),
+    ("missing", "not on the replayed proposal"),
+])
+def test_a_passing_case_left_unjudged_any_other_way_fails_closed_too(
+        how, why, tmp_path, capsys):
+    """Whatever left it unjudged — never a pass, never left out silently."""
+    ends = {"DRE-102": "cancel"}
+    if how == "no-record":
+        ends["DRE-101"] = "planning"
+    elif how == "excluded":
+        ends["DRE-101"] = "excluded"
+    proposal = _proposal(tmp_path, ends,
+                         no_record=("DRE-101",) if how == "no-record" else ())
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    assert _line(lines, "c-planning").endswith(f" not judged — UNCHECKED: {why}")
+    assert lines[-1] == (f"{TAG} failed closed — 1 case passes on main and was "
+                         f"not checked: c-planning (DRE-101, {why})")
+    assert doc["unchecked"] == ["c-planning"]
+
+
+def test_an_excluded_verdict_fails_closed_wherever_the_card_ended(tmp_path, capsys):
     """The verdict decides, not the list: an `excluded` record on a card the
-    proposal left on Planning is still not judged, so never regressed."""
-    proposal = _proposal(tmp_path, {"DRE-101": "planning"})
+    proposal left on Planning is not judged, so never regressed — and, since
+    the case passes on `main`, it fails the gate unchecked."""
+    proposal = _proposal(tmp_path, {"DRE-101": "planning", "DRE-102": "cancel"})
     doc = json.loads(proposal.read_text())
     for row in doc["outcomes"]["now"] + doc["sequence"]:
-        row["verify"]["verdict"] = gva.EXCLUDED
+        if row["identifier"] == "DRE-101":
+            row["verify"].update(verdict=gva.EXCLUDED, reason="hand-built")
     proposal.write_text(json.dumps(doc), encoding="utf-8")
     code, lines, out = _judge(tmp_path, proposal, capsys)
-    assert code == 0
+    assert code == 1
     assert _line(lines, "c-planning") == (
         f"{TAG} c-planning expect=off-planning main=pass head=planning "
-        "search=none not judged")
-    assert out["regressed"] == []
+        "search=none not judged — UNCHECKED: excluded (hand-built)")
+    assert out["regressed"] == [] and out["unchecked"] == ["c-planning"]
+
+
+@pytest.mark.parametrize("ends,no_record", [
+    ({}, ()),
+    ({"DRE-101": "planning", "DRE-102": "planning", "DRE-103": "planning"},
+     ("DRE-101", "DRE-102", "DRE-103")),
+    ({"DRE-101": "not-verified", "DRE-102": "not-verified", "DRE-103": "excluded"}, ()),
+], ids=["empty-proposal", "no-record-at-all", "every-leg-unverified-or-excluded"])
+def test_a_run_that_checked_no_case_fails_saying_so(ends, no_record, tmp_path, capsys):
+    """A verify run that exited before checking anything is not a pass."""
+    proposal = _proposal(tmp_path, ends, no_record=no_record)
+    code, lines, doc = _judge(tmp_path, proposal, capsys)
+    assert code == 1
+    for case_id in ("c-planning", "c-cancel", "c-none"):
+        assert " not judged" in _line(lines, case_id)
+    assert lines[-3] == f"{TAG} 3 cases — 0 pass, 0 fail, 3 not judged, 0 regressed"
+    assert lines[-2].startswith(f"{TAG} failed closed — 1 case passes on main and "
+                                "was not checked: c-planning (DRE-101, ")
+    assert lines[-1] == (f"{TAG} failed closed — no case was checked: the replay "
+                         "judged none of the 3 cases")
+    assert doc["checked"] == 0 and doc["unchecked"] == ["c-planning"]
+
+
+def test_no_case_checked_fails_even_when_no_case_passes_on_main(tmp_path, capsys):
+    cases = [_case("c-cancel", "DRE-102", "off-cancel", False),
+             _case("c-none", "DRE-103", "off-planning", None)]
+    proposal = _proposal(tmp_path, {"DRE-102": "not-verified"},
+                         reasons={"DRE-102": gva.STEP_FAILED})
+    out = tmp_path / "judged.json"
+    code = gate.main(["judge", "--proposal", str(proposal),
+                      "--cases", str(_cases_file(tmp_path, cases)), "--out", str(out)])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert code == 1
+    assert lines[-1] == (f"{TAG} failed closed — no case was checked: the replay "
+                         "judged none of the 2 cases")
+    assert json.loads(out.read_text())["unchecked"] == []
+
+
+def test_one_checked_case_beside_an_unchecked_passing_one_still_fails(tmp_path, capsys):
+    cases = [_case("c-planning", "DRE-101", "off-planning", True),
+             _case("c-kept", "DRE-104", "off-planning", True)]
+    proposal = _proposal(tmp_path, {"DRE-101": "cancel", "DRE-104": "not-verified"},
+                         reasons={"DRE-104": gva.STEP_FAILED})
+    out = tmp_path / "judged.json"
+    code = gate.main(["judge", "--proposal", str(proposal),
+                      "--cases", str(_cases_file(tmp_path, cases)), "--out", str(out)])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert code == 1
+    assert _line(lines, "c-planning").endswith(" pass")
+    assert lines[-1] == (f"{TAG} failed closed — 1 case passes on main and was not "
+                         "checked: c-kept (DRE-104, unverified (agent step failed))")
+    doc = json.loads(out.read_text())
+    assert doc["checked"] == 1 and doc["unchecked"] == ["c-kept"]
+
+
+def test_a_regressed_case_beside_an_unchecked_one_says_both(tmp_path, capsys):
+    cases = [_case("c-planning", "DRE-101", "off-planning", True),
+             _case("c-kept", "DRE-104", "off-planning", True)]
+    proposal = _proposal(tmp_path, {"DRE-101": "planning", "DRE-104": "not-verified"},
+                         reasons={"DRE-104": gva.STEP_FAILED})
+    out = tmp_path / "judged.json"
+    code = gate.main(["judge", "--proposal", str(proposal),
+                      "--cases", str(_cases_file(tmp_path, cases)), "--out", str(out)])
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert code == 1
+    assert _line(lines, "c-planning").endswith(" fail — REGRESSED")
+    assert lines[-1].startswith(f"{TAG} failed closed — 1 case passes on main")
+    doc = json.loads(out.read_text())
+    assert doc["regressed"] == ["c-planning"] and doc["unchecked"] == ["c-kept"]
+
+
+def test_the_gate_fails_closed_over_the_cases_file_as_it_ships(tmp_path, capsys):
+    """The run's own shape: the shipped cases, of which only the seed passes
+    on `main`, and a replay whose one leg crashed on startup."""
+    shipped = json.loads((ROOT / grc.CASES_PATH).read_text(encoding="utf-8"))
+    seed = next(c for c in shipped["cases"] if c["case"] == "seed-DRE-7239")
+    seed["main"] = {"ended": "cancel", "at": AT, "passes": True}
+    for case in shipped["cases"]:
+        if case is not seed:
+            case["main"] = {"ended": None, "at": None, "passes": None}
+    path = tmp_path / "cases.json"
+    path.write_text(json.dumps(shipped), encoding="utf-8")
+    proposal = _proposal(tmp_path, {"DRE-7239": "not-verified"},
+                         reasons={"DRE-7239": gva.STEP_FAILED})
+    code = gate.main(["judge", "--proposal", str(proposal), "--cases", str(path)])
+    said = capsys.readouterr().out
+    assert code == 1
+    assert (f"{TAG} seed-DRE-7239 expect=off-planning main=pass head=not-verified "
+            "search=none not judged — UNCHECKED: unverified (agent step failed)") in said
+    assert "seed-DRE-7239 (DRE-7239, unverified (agent step failed))" in said
+    assert "no case was checked" in said
+    assert "rate-limited" not in said
+
+
+def test_the_throttled_run_over_the_cases_file_as_it_ships(tmp_path, capsys):
+    """Gate run 41439594582's shape: the seed case's card unverified because
+    the lookup leg was rate limited (DRE-8859)."""
+    shipped = json.loads((ROOT / grc.CASES_PATH).read_text(encoding="utf-8"))
+    for case in shipped["cases"]:
+        case["main"] = {"ended": None, "at": None, "passes": None}
+        if case["case"] == "seed-DRE-7239":
+            case["main"] = {"ended": "cancel", "at": AT, "passes": True}
+    path = tmp_path / "cases.json"
+    path.write_text(json.dumps(shipped), encoding="utf-8")
+    proposal = _proposal(tmp_path, {"DRE-7239": "not-verified"},
+                         reasons={"DRE-7239": LIMITED})
+    out = tmp_path / "judged.json"
+    code = gate.main(["judge", "--proposal", str(proposal), "--cases", str(path),
+                      "--out", str(out)])
+    said = capsys.readouterr().out
+    assert code == 1
+    assert (f"{TAG} failed closed — rate-limited: could not read "
+            f"dreadnought-foundry/bureau-pipeline for seed-DRE-7239 (DRE-7239), "
+            f"{RERUN}") in said
+    assert "no case was checked" in said
+    assert json.loads(out.read_text())["rate_limited"] == ["seed-DRE-7239"]
 
 
 def test_a_card_missing_from_the_proposal_is_head_none(tmp_path, capsys):
@@ -499,7 +751,8 @@ def test_a_card_missing_from_the_proposal_is_head_none(tmp_path, capsys):
 def test_the_out_file_carries_every_case(tmp_path, capsys):
     proposal = _proposal(tmp_path, {"DRE-101": "planning", "DRE-102": "planning"})
     _, _, doc = _judge(tmp_path, proposal, capsys)
-    assert set(doc) == {"cases", "regressed", "now_passes", "not_judged"}
+    assert set(doc) == {"cases", "regressed", "now_passes", "not_judged",
+                        "unchecked", "rate_limited", "checked"}
     assert [c["case"] for c in doc["cases"]] == ["c-planning", "c-cancel", "c-none"]
     first = doc["cases"][0]
     assert first["card"] == "DRE-101" and first["expect"] == "off-planning"

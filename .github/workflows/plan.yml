@@ -223,6 +223,18 @@ jobs:
       # fleet key instead of spending a 401 in every process. Empty until the
       # console publishes the variable, and empty changes nothing.
       LINEAR_PLANNER_KEY_EXPIRES_AT: ${{ vars.LINEAR_PLANNER_KEY_EXPIRES_AT }}
+      # The read door, for every reader in this job (DRE-8903): set exactly as
+      # reconcile.yml sets it, the mode the caller's variable and `off` when
+      # unset, and the stub grants `id-token: write` (DRE-4348). Every
+      # `linear_ops` thread read and comment pre-read asks the door first
+      # (DRE-8898), and so do the classifier's parent read and the critic's
+      # card read. Sixty seconds, because the planner needs its card as it is
+      # now; a write this job made is a floor no answer may predate.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: 60
       # The secrets context is not readable in a step-level `if:`, so the
       # dispatch-pool probe mints check slot PRESENCE via these job-env
       # mirrors (app ids only — NEVER keys). Empty ⇒ the probe is skipped
@@ -255,7 +267,7 @@ jobs:
           echo "bureau-card: $CARD"
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -495,7 +507,7 @@ jobs:
         id: probe_2
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -503,7 +515,7 @@ jobs:
         id: probe_3
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -511,7 +523,7 @@ jobs:
         id: probe_4
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -543,7 +555,7 @@ jobs:
       - name: Mint read token (selected pool app)
         id: reader
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -639,7 +651,7 @@ jobs:
         id: model_home
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1073,7 +1085,7 @@ jobs:
               if [ "$SAID" -gt 0 ]; then
                 echo "$EPIC already carries this planning attempt's epic-queued receipt — not posted again"
               else
-                python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" "$(cat "$RUNNER_TEMP/epic-cap-receipt.md")" --act=epic-approval-queued
+                python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$RUNNER_TEMP/epic-cap-receipt.md" --act=epic-approval-queued
               fi
               python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Green Light"
               echo "mode=queued" >> "$GITHUB_OUTPUT"
@@ -1482,6 +1494,56 @@ jobs:
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true' && steps.allowance.outputs.start == 'true' && steps.classify.outputs.escalate != 'true' && steps.classify.outputs.requeue != 'true'
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
+      # The read token broker, started ONCE for every agent session in this
+      # job (DRE-9169). A model session is never handed the runner's OIDC
+      # request variables, so every door read the planner and both critics
+      # made fell back with `reason=no-token` — the fourth fallback the CEO's
+      # decision of 2026-11-03 named, the planning run that "fell back itself,
+      # because the store could not identify it". The broker
+      # (scripts/read_token_broker.py, DRE-9168) holds the variables and mints
+      # door tokens only; it serves the thirteen model steps below — `oocritic`,
+      # `oorevise`, `claude`, `claude_retry`, `prea`, `replan`, `replan_retry`,
+      # `preb`, `posta`, `postreplan`, `postreplan_retry`, `rollup` and
+      # `rollup_retry` — each of which carries its URL, its secret and the
+      # lines file in `env:`. "Read token broker — print the sessions' read
+      # lines, and stop" after the last of them prints the lines and ends it.
+      #
+      # Gated on the install above having run: every route that runs a model
+      # starts it, and the two bail paths above, which run none, do not.
+      #
+      # The vendor boundary (standards/vendor-boundaries.md):
+      #   Q1 the actor — unchanged: the same plan job, the same identity.
+      #   Q2 the credentials — this step holds the job's OIDC request
+      #      variables, which the calling stub already grants
+      #      (`id-token: write`), and passes them to the broker on its stdin.
+      #      The model steps receive only the broker's URL and secret, as this
+      #      step's outputs — the secret masked before it is written, never
+      #      echoed, and never put in $GITHUB_ENV, so no other step holds it.
+      #      With them a session obtains door tokens and nothing else, and a
+      #      door token cannot assume an AWS role: its audience is the door's.
+      #   Q3 a re-run — starts its own broker, on a fresh port, on a fresh
+      #      runner; nothing of a previous attempt's broker survives it.
+      #   Q4 the limits — one token per door request, as today, so the door's
+      #      one-claim-per-`jti` rule still holds.
+      #   Q5 our crash — `continue-on-error`: a broker that fails to start
+      #      leaves its outputs empty, and every session falls back with
+      #      `no-token` exactly as before. The print-and-stop step runs under
+      #      `always()`.
+      - name: Read token broker — start it for the agent sessions
+        id: read_broker
+        if: steps.install_claude.outcome == 'success'
+        continue-on-error: true
+        run: |
+          python3 .bureau-pipeline/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
+          python3 - "$RUNNER_TEMP/read-token-broker.json" <<'PY'
+          import json, os, sys
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"::add-mask::{state['secret']}", flush=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"url={state['url']}\n")
+              out.write(f"secret={state['secret']}\n")
+          PY
+
       - name: Pre-approval critic — the one-off exit
         id: oocritic
         if: steps.shape.outputs.route == 'one-off' && steps.oomodel.outputs.model != ''
@@ -1495,6 +1557,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1628,9 +1695,9 @@ jobs:
           # comment — the record is only a credential while nothing else can be
           # written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "$(cat "${{ runner.temp }}/one-off-note.md")"
+            --body-file="${{ runner.temp }}/one-off-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "$(cat "${{ runner.temp }}/one-off-record.txt")"
+            --body-file="${{ runner.temp }}/one-off-record.txt"
 
       # THE TOMBSTONE, and it is what makes the raise above possible (DRE-4381).
       # The re-read is not a step in this job — it is the CEO answering and the
@@ -1672,7 +1739,7 @@ jobs:
           # nothing else can be written in the same comment beside it
           # (`plan_critic._sole_record`).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-            "$(cat "${{ runner.temp }}/one-off-ran-out-record.txt")"
+            --body-file="${{ runner.temp }}/one-off-ran-out-record.txt"
 
       # --- A critic that decided nothing is read ONCE more (DRE-7491) --------
       #
@@ -1683,9 +1750,12 @@ jobs:
       # never reached, or out of turns — is `rerun`: the card stays in
       # Planning and a fresh planning run reads it again, as it stands. The
       # decision reads "first" off the card's own round records, so the
-      # second in a row is `escalate` and names both runs, and the loop
-      # limit is the escalation itself: Green Light is a lane only a person
-      # leaves. Posted AFTER the tombstone above, because the re-run's
+      # second in a row is `park` and names both runs (DRE-8772): "re-run the
+      # review, or settle it yourself?" is housekeeping for the operator,
+      # never the CEO's decision, so it takes `One-off critic — park in
+      # Triage` below — the bound exit first, then Triage. The loop limit is
+      # that park: Triage is a lane only a person leaves. Posted AFTER the
+      # tombstone above, because the re-run's
       # ceiling is sized from it (DRE-4381) and must be on the card before
       # the next run reads it.
       #
@@ -1697,7 +1767,7 @@ jobs:
       - name: Re-mint bot token — one-off no-result re-read
         id: app_oorerun
         if: steps.oneoff.outputs.action == 'rerun'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -1809,7 +1879,7 @@ jobs:
       - name: Re-mint bot token — one-off revision
         id: app_oorevise
         if: steps.oneoff.outputs.action == 'revise'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -1834,6 +1904,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED runs.
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
@@ -1964,10 +2039,12 @@ jobs:
             # check first. The rewrite may have dropped the CEO's answers
             # block: the writer puts it back before anyone reads the card
             # again (DRE-6360) — a no-op when the planner kept it.
-            python3 .bureau-pipeline/scripts/linear_ops.py set-description "$CARD" "$(cat "$DESC")"
+            python3 .bureau-pipeline/scripts/linear_ops.py set-description "$CARD" --body-file="$DESC"
             python3 .bureau-pipeline/scripts/answer_into_card.py write "$CARD"
+            printf '🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\n%s' \
+              "$(cat "$SUMMARY")" > "$RUNNER_TEMP/one-off-revision-comment.md"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-              "$(printf '🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\n%s' "$(cat "$SUMMARY")")"
+              --body-file="$RUNNER_TEMP/one-off-revision-comment.md"
           fi
 
       # Fresh App token for the dispatch (DRE-3940): the revision above is a
@@ -1975,7 +2052,7 @@ jobs:
       - name: Re-mint bot token — one-off re-read
         id: app_oorereading
         if: steps.oorevised.outputs.outcome == 'revised'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2016,10 +2093,11 @@ jobs:
       # Planning, so it is not carrying a verdict out of it.
       #
       # Since DRE-5376 it is the ONLY way a one-off reaches Green Light, and it
-      # carries a question: the critic's (`escalate`, which also covers a
-      # critic that decided nothing twice in a row, DRE-7491 — still never a
-      # pass; the first is `rerun` above), or the planner's own
-      # while revising (`asked`). Both wrote the same reason file. A send-back
+      # carries a question: the critic's (`escalate`), or the planner's own
+      # while revising (`asked`). Both wrote the same reason file. A critic
+      # that decided nothing is never here (DRE-8772): the first is `rerun`
+      # above and the second in a row is `park` below, because a re-run is
+      # not the CEO's decision. A send-back
       # is the planner's and the bound is the operator's, so neither is here —
       # tests/test_plan_critic_one_off_revise.py derives these gates from the
       # module's own action constants rather than trusting this line.
@@ -2049,7 +2127,7 @@ jobs:
       - name: Re-mint bot token — one-off park
         id: app_oopark
         if: steps.oneoff.outputs.action == 'park' || steps.oorevised.outputs.outcome == 'unfinished'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2063,9 +2141,11 @@ jobs:
              || secrets.BUREAU_APP_PRIVATE_KEY }}
 
       # THE BOUND parks in Triage, the operator's defect queue — never in Green
-      # Light (DRE-5376, the lane contract DRE-5275 landed for plans). The
-      # decision step's note above already names every finding raised so far;
-      # a revision that did not finish writes its own note here first.
+      # Light (DRE-5376, the lane contract DRE-5275 landed for plans), and so
+      # does a critic that decided nothing twice in a row (DRE-8772). The
+      # decision step's note above already names every finding raised so far,
+      # or both runs that decided nothing; a revision that did not finish
+      # writes its own note here first.
       #
       # Before any of that, the bound exit (scripts/plan_bound.py, DRE-6452)
       # tries the bound without a person, as the six epic parks do: exit 0 is
@@ -2088,7 +2168,7 @@ jobs:
             exit 0   # the exit asked the CEO a question or granted the planner a rewrite — nothing to park
           fi
           if [ -s "$PARK_NOTE" ]; then
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" "$(cat "$PARK_NOTE")"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" --body-file="$PARK_NOTE"
           fi
           python3 .bureau-pipeline/scripts/hold.py apply "$CARD" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Triage"
@@ -2144,7 +2224,7 @@ jobs:
       - name: Re-mint bot token — planner
         id: app_plan
         if: steps.route.outputs.mode == 'plan'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2183,6 +2263,11 @@ jobs:
           # that ends its turn on background work loses that work the same
           # way. Pinned by tests/test_planner_no_background_wait.py.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2398,7 +2483,7 @@ jobs:
         id: model_home_plan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'plan') && steps.claude.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -2427,7 +2512,7 @@ jobs:
       - name: Re-mint bot token — Plan epic on the next rung
         id: app_plan_retry
         if: (steps.route.outputs.mode == 'plan') && steps.plan_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -2450,6 +2535,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -2829,7 +2919,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
               python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
             fi
             exit 1
@@ -2981,7 +3071,7 @@ jobs:
         id: model_home_premodel
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -3137,9 +3227,13 @@ jobs:
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
           # The same file the critic is handed, so the list on the epic is
-          # byte-for-byte the list the model read.
+          # byte-for-byte the list the model read. From the file, never as one
+          # argument: a 138 KiB note was exit 126 here on 2026-11-01 (DRE-8758).
+          # The critic reads "$NOTE" itself, so a post Linear refuses costs the
+          # epic its copy of the list, never the critics' run.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE" \
+            || echo "::warning title=Mechanical note not posted::The list ($(wc -c < "$NOTE") bytes) could not be posted on $EPIC. The critic still reads it, and it is printed in this step's log above."
 
       # Fresh App token for round 1 (DRE-3940) — the incident step: the planner
       # above is a model run and passed the hour on 2026-09-14. The rule and its
@@ -3147,7 +3241,7 @@ jobs:
       - name: Re-mint bot token — first critic
         id: app_prea
         if: steps.route.outputs.mode == 'plan' && steps.kids.outputs.count != '0' && steps.escalated.outputs.escalated != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3169,6 +3263,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3284,9 +3383,9 @@ jobs:
           # comment — the record is only a credential while nothing else can
           # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+            --body-file="${{ runner.temp }}/plan-critic-record.txt"
 
       # The re-plan's turn ceiling, sized from the plan (DRE-5288). Both of
       # this route's re-plan steps carried a literal ceiling of 60, and epic
@@ -3322,7 +3421,7 @@ jobs:
       - name: Re-mint bot token — re-plan
         id: app_replan
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3345,6 +3444,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3403,7 +3507,7 @@ jobs:
         id: model_home_replan_cap
         if: "!cancelled() && (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -3432,7 +3536,7 @@ jobs:
       - name: Re-mint bot token — Re-plan after send-back on the next rung
         id: app_replan_retry
         if: (steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true') && steps.replan_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3455,6 +3559,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3567,7 +3676,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
               python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Planning"
             fi
             exit 1
@@ -3653,8 +3762,10 @@ jobs:
               --epic-file "$EPIC_FILE" \
               --structural-file "${{ runner.temp }}/plan-structural.txt" \
               --note-file "$NOTE" < "$CHILDREN"
+          # From the file, and a refused post never stops the critic (DRE-8758).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE" \
+            || echo "::warning title=Mechanical note not posted::The list ($(wc -c < "$NOTE") bytes) could not be posted on $EPIC. The critic still reads it, and it is printed in this step's log above."
 
       # Fresh App token for round 2 (DRE-3940): the re-plan above is a full
       # planner run. The rule and its reasons are on
@@ -3662,7 +3773,7 @@ jobs:
       - name: Re-mint bot token — first critic round 2
         id: app_preb
         if: steps.pre1.outputs.action == 'hold' && steps.pre1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3684,6 +3795,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -3791,9 +3907,9 @@ jobs:
           # comment — the record is only a credential while nothing else can
           # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+            --body-file="${{ runner.temp }}/plan-critic-record.txt"
 
       # Hand the checked source to the publish job — jobs do not share a
       # workspace, and the portal is never written from this one. (The review
@@ -3817,7 +3933,7 @@ jobs:
       - name: Re-mint bot token — hand-off to the second critic
         id: app_handoff
         if: steps.route.outputs.mode == 'plan' && (steps.pre1.outputs.action == 'proceed' || steps.pre2.outputs.action == 'proceed')
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -3920,7 +4036,7 @@ jobs:
           # about to be asked to approve rather than in a run log.
           if [ -s "$HELD" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$HELD")"
+              --body-file="$HELD"
           fi
 
       # --- The plan route's last move: the hand-off (DRE-5284) ---------------
@@ -3989,7 +4105,7 @@ jobs:
       - name: Re-mint bot token — the first critic's bound
         id: app_prepark
         if: steps.route.outputs.mode == 'plan' && (steps.pre1.outputs.bound == 'true' || steps.pre2.outputs.bound == 'true')
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4048,7 +4164,7 @@ jobs:
         id: model_home_postmodel
         if: steps.route.outputs.mode == 'review'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -4233,7 +4349,7 @@ jobs:
       - name: Re-mint bot token — second critic
         id: app_posta
         if: steps.route.outputs.mode == 'review'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4275,6 +4391,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -4418,7 +4539,7 @@ jobs:
           # while nothing else can be written in the same comment beside it
           # (`plan_critic._sole_record`).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$RECEIPT")"
+            --body-file="$RECEIPT"
 
       # DID THE REVIEW DECIDE? (DRE-3501). One question, asked of the FILE the
       # critic was told to write, because the step outcome above answers a
@@ -4454,7 +4575,7 @@ jobs:
       - name: Re-mint bot token — after the second critic
         id: app_post
         if: steps.route.outputs.mode == 'review'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4540,9 +4661,9 @@ jobs:
             --record-file "$RECORD"
           # The note, then the tombstone ALONE in its own comment.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-death-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-death-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$RECORD")"
+            --body-file="$RECORD"
           SUBTYPE=$(sed -n 's/.*[[:space:]]subtype=\([^[:space:]]*\).*/\1/p' "$RECORD")
           THREAD="${{ runner.temp }}/plan-critic-death-thread.json"
           PARK_NOTE="${{ runner.temp }}/plan-critic-death-park.md"
@@ -4575,7 +4696,7 @@ jobs:
             python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$PARK_NOTE")"
+              --body-file="$PARK_NOTE"
           fi
           exit 1
 
@@ -4613,9 +4734,9 @@ jobs:
           # comment — the record is only a credential while nothing else can
           # be written in the same comment beside it.
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-note.md")"
+            --body-file="${{ runner.temp }}/plan-critic-note.md"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "${{ runner.temp }}/plan-critic-record.txt")"
+            --body-file="${{ runner.temp }}/plan-critic-record.txt"
 
       # --- REVIEW MODE: what the decision reached (DRE-5280) ------------------
       #
@@ -4674,7 +4795,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
             fi
             exit 1
           fi
@@ -4682,7 +4803,7 @@ jobs:
             --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
           if [ -s "$HELD" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$HELD")"
+              --body-file="$HELD"
           fi
           python3 .bureau-pipeline/scripts/linear_ops.py dump-comments "$EPIC" \
             --with-authors > "$THREAD"
@@ -4708,7 +4829,7 @@ jobs:
       - name: Re-mint bot token — the held plan's bound
         id: app_heldpark
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.result == 'PASS' && steps.post1.outputs.pre_passed != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -4755,7 +4876,7 @@ jobs:
             --with-authors > "$THREAD" || : > "$THREAD"
           python3 .bureau-pipeline/scripts/plan_critic.py held-park < "$THREAD" > "$NOTE"
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE"
 
       # NO_RESULT: a crash is not a rejection, and it is not a pass. Below
       # `plan_critic.MAX_ROUNDS` no-result rounds on this attempt (read through
@@ -4840,7 +4961,7 @@ jobs:
       - name: Mint bot token — portal checkout (review)
         id: app_portal
         if: vars.PLAN_PORTAL_REPO != '' && steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -4955,6 +5076,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -5044,7 +5170,7 @@ jobs:
         id: model_home_postreplan_cap
         if: "!cancelled() && (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.allowance.outputs.start == 'true') && steps.postreplan.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -5073,7 +5199,7 @@ jobs:
       - name: Re-mint bot token — Re-plan after the second critic sent it back on the next rung
         id: app_post_retry
         if: (steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.allowance.outputs.start == 'true') && steps.postreplan_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5096,6 +5222,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -5215,7 +5346,7 @@ jobs:
       - name: Re-mint bot token — re-check (review mode)
         id: app_recheck_review
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold' && steps.post1.outputs.bound != 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5304,7 +5435,7 @@ jobs:
               --epic "$EPIC" --comment-file "$HELD" < "$CHILDREN"
             if [ -s "$HELD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$HELD")"
+                --body-file="$HELD"
             fi
             echo "ok=true" >> "$GITHUB_OUTPUT"
             echo "the revision passed the plan's own gates"
@@ -5324,7 +5455,7 @@ jobs:
           BOUNCED=""
           if [ -s "$BOUNCE_FILE" ]; then
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "$(cat "$BOUNCE_FILE")"
+              --body-file="$BOUNCE_FILE"
             # The proof check's note is written for the plan route, where a
             # bounce goes back to Planning; on this route it parks, so the
             # note below says which lane is true.
@@ -5421,8 +5552,10 @@ jobs:
               --artifact "${{ runner.temp }}/plan-artifact.md" \
               --epic-file "$EPIC_FILE" \
               --note-file "$NOTE" < "$CHILDREN"
+          # From the file, and a refused post never stops the critic (DRE-8758).
           python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "$(cat "$NOTE")"
+            --body-file="$NOTE" \
+            || echo "::warning title=Mechanical note not posted::The list ($(wc -c < "$NOTE") bytes) could not be posted on $EPIC. The critic still reads it, and it is printed in this step's log above."
 
       # REVIEW MODE (DRE-5299): hand the re-checked revision to the publish
       # job, exactly as the plan route's `Plan artifact — upload source` does —
@@ -5447,7 +5580,7 @@ jobs:
       - name: Re-mint bot token — send-back
         id: app_sendback
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.action == 'hold'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5483,12 +5616,19 @@ jobs:
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          # What the re-plan changed goes into a file, and each comment is
+          # composed around it and posted with `--body-file` (DRE-8819): the
+          # summary is the planner's own, with no bound on its size, and Linux
+          # refuses one argument over 128 KiB (E2BIG, exit 126). `printf` and
+          # `$(< …)` are bash's own, so the summary is never an argument.
+          CHANGED_FILE="$RUNNER_TEMP/post-replan-changed.md"
+          COMMENT_FILE="$RUNNER_TEMP/post-replan-review-comment.md"
           if [ -s "$SUMMARY" ]; then
-            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+            printf 'What the re-plan changed: %s' "$(< "$SUMMARY")" > "$CHANGED_FILE"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
-            CHANGED="The re-plan ran but wrote no summary."
+            printf '%s' "The re-plan ran but wrote no summary." > "$CHANGED_FILE"
           else
-            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+            printf '%s' "The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it." > "$CHANGED_FILE"
           fi
           case "$ROUND" in ''|*[!0-9]*) ROUND=1;; esac
           NEXT=$((ROUND + 1))
@@ -5496,11 +5636,19 @@ jobs:
                --epic "$EPIC" \
                --repo "$GITHUB_REPOSITORY" \
                --reason re-review --trigger-state planning; then
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. ${CHANGED} The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+            {
+              printf '%s' "🔁 The second critic sent the plan back and the planner has revised it. The critic's finding: ${FINDING}. "
+              cat "$CHANGED_FILE"
+              printf '%s' " The review is being run again by the pipeline, on its own, as round ${NEXT} — nothing here is yours to decide, and the epic stays in Planning. If it sends the plan back again with a finding this revision did not settle, or the plan keeps growing new gaps, the epic parks in Triage with needs-human for an operator."
+            } > "$COMMENT_FILE"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
           else
-            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-              "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. ${CHANGED} This run is red, so the medic picks it up; nothing here is yours to do."
+            {
+              printf '%s' "🚨 The revised plan's review could NOT be asked for — the dispatch did not go through, so nothing is reading the plan. The critic's finding: ${FINDING}. "
+              cat "$CHANGED_FILE"
+              printf '%s' " This run is red, so the medic picks it up; nothing here is yours to do."
+            } > "$COMMENT_FILE"
+            python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
             exit 1
           fi
 
@@ -5510,7 +5658,7 @@ jobs:
       - name: Re-mint bot token — the second critic's bound
         id: app_postpark
         if: steps.route.outputs.mode == 'review' && steps.post1.outputs.bound == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5543,12 +5691,16 @@ jobs:
           EPIC="${{ github.event.client_payload.identifier }}"
           HOW=$(PYTHONPATH=.bureau-pipeline/scripts python3 -c 'import plan_critic; print(plan_critic.REAPPROVE_HOW)')
           SUMMARY="${{ runner.temp }}/post-replan-summary.md"
+          # Into a file and posted with `--body-file`, never an argument
+          # (DRE-8819) — the re-review step above says why.
+          CHANGED_FILE="$RUNNER_TEMP/post-replan-changed.md"
+          COMMENT_FILE="$RUNNER_TEMP/post-replan-bound-comment.md"
           if [ -s "$SUMMARY" ]; then
-            CHANGED="What the re-plan changed: $(cat "$SUMMARY")"
+            printf 'What the re-plan changed: %s' "$(< "$SUMMARY")" > "$CHANGED_FILE"
           elif [ "$REPLAN_OUTCOME" = "success" ]; then
-            CHANGED="The re-plan ran but wrote no summary — read the children before re-planning."
+            printf '%s' "The re-plan ran but wrote no summary — read the children before re-planning." > "$CHANGED_FILE"
           else
-            CHANGED="The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it."
+            printf '%s' "The re-plan did not finish (outcome: ${REPLAN_OUTCOME:-not run}), so the plan is as the critic saw it." > "$CHANGED_FILE"
           fi
           if [ -z "$NOTE" ]; then NOTE="The critic's finding this round: ${FINDING}."; fi
           if python3 .bureau-pipeline/scripts/plan_bound.py exit "$EPIC" --stage post \
@@ -5557,8 +5709,12 @@ jobs:
           fi
           python3 .bureau-pipeline/scripts/hold.py apply "$EPIC" --reason plan-critic-bound --by plan.yml
           python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "Triage"
-          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-            "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} ${CHANGED} When it is settled, ${HOW}."
+          {
+            printf '%s' "🛑 Parked in Triage with needs-human for an operator — nothing reaches Green Light until a person settles it. ${NOTE} "
+            cat "$CHANGED_FILE"
+            printf '%s' " When it is settled, ${HOW}."
+          } > "$COMMENT_FILE"
+          python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" --body-file="$COMMENT_FILE"
 
       # --- APPROVE MEANS GO (DRE-5281) --------------------------------------
       #
@@ -5576,7 +5732,7 @@ jobs:
       - name: Re-mint bot token — activate
         id: app_activate
         if: steps.route.outputs.mode == 'activate'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5670,7 +5826,7 @@ jobs:
               if [ -s "$BOUNCE_FILE" ]; then
                 printf '\n%s\n' "That says this epic is back in Planning, but it has not moved: the activation stopped here, before it wrote a lane or promoted a child, and this run is red." >> "$BOUNCE_FILE"
                 python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                  "$(cat "$BOUNCE_FILE")"
+                  --body-file="$BOUNCE_FILE"
               fi
               exit 1
             fi
@@ -5680,7 +5836,7 @@ jobs:
             # epic rather than in a run log nobody reads.
             if [ -s "$HELD" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$HELD")"
+                --body-file="$HELD"
             fi
             python3 .bureau-pipeline/scripts/linear_ops.py state "$EPIC" "In Progress"
             python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
@@ -5764,7 +5920,7 @@ jobs:
       - name: Re-mint bot token — roll-up
         id: app_rollup
         if: steps.shape.outputs.route == 'roll-up'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5787,6 +5943,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -5905,7 +6066,7 @@ jobs:
         id: model_home_rollup_cap
         if: "!cancelled() && (steps.shape.outputs.route == 'roll-up') && steps.rollup.outcome == 'failure'"
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -5935,7 +6096,7 @@ jobs:
       - name: Re-mint bot token — Roll-up route — split into child epics on the next rung
         id: app_rollup_retry
         if: (steps.shape.outputs.route == 'roll-up') && steps.rollup_cap.outputs.retry == 'true'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -5958,6 +6119,11 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           # BACKGROUND TASKS OFF (DRE-5564) — see the Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read door for this session (DRE-9169) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -6138,7 +6304,7 @@ jobs:
                  --epic "$EPIC" --comment-file "$BOUNCE_FILE" < "$CHILDREN"; then
             if [ -s "$BOUNCE_FILE" ]; then
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$EPIC" \
-                "$(cat "$BOUNCE_FILE")"
+                --body-file="$BOUNCE_FILE"
             fi
             exit 1
           fi
@@ -6155,6 +6321,28 @@ jobs:
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
         run: |
           python3 .bureau-pipeline/scripts/epic_split.py activate "${{ github.event.client_payload.identifier }}"
+
+      # The agent sessions' read lines, into this job's log, and the broker
+      # stopped (DRE-9169). After `rollup_retry`, the last model step, so
+      # whichever route ran, every session has finished writing. A session's
+      # stderr lands in its transcript, not the job log, so its `read-fallback:`
+      # and `linear-door:` lines reach check_linear_budget.py only from here.
+      #
+      # The lines file sits where the sessions can write, and a session reads
+      # card text the pipeline does not trust, so it is NEVER printed raw — no
+      # cat, no echo. `print-lines` prints only the lines of the tags in
+      # bureau_read.LINES_FILE_TAGS that speak for this job's own reader, each
+      # unchanged, and drops every other line, a workflow command among them.
+      # A missing file prints one line saying so. Both commands exit 0 whatever
+      # they find; `always()` so a failed model step still has its lines
+      # printed and its broker stopped, and `continue-on-error` so cleanup
+      # never changes the job's conclusion.
+      - name: Read token broker — print the sessions' read lines, and stop
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 .bureau-pipeline/scripts/read_token_broker.py print-lines --file "$RUNNER_TEMP/agent-read-lines.log" || true
+          python3 .bureau-pipeline/scripts/read_token_broker.py stop --state-file "$RUNNER_TEMP/read-token-broker.json"
 
       # THE RUN'S OWN DEATH-CAUSE RECEIPT (DRE-4340). 69 of the fleet's 1,310
       # failures over 22 days — $97 of model work — could not be attributed to
@@ -6307,7 +6495,7 @@ jobs:
       - name: Re-mint bot token — the GitHub-calls reading
         id: app_calls
         if: always() && steps.calls_before.outcome == 'success'
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -6454,7 +6642,7 @@ jobs:
     steps:
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -6566,10 +6754,21 @@ jobs:
           echo "url=$URL" >> "$GITHUB_OUTPUT"
 
       # The CEO's entry point, and the address anchored feedback binds to.
+      # Its `linear_ops.py comment` pre-reads the epic's `id`
+      # (`_comment_target`, DRE-8898), the one Linear read this job makes, so
+      # this step alone gets the read door (DRE-8903), set as the plan job sets
+      # it. An `id` never changes, so the pre-read holds no floor. The token
+      # comes from the caller: the stub grants `id-token: write`, and this job
+      # declares no `permissions:` to take it away.
       - name: Plan artifact — announce
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 60
         run: |
           EPIC="${{ github.event.client_payload.identifier }}"
           URL="${{ steps.publish.outputs.url }}"

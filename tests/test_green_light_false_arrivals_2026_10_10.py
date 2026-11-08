@@ -34,6 +34,16 @@ re-run the review or settle the card, and the next read passed it. Its
 arrival is `one-off-no-result`, and it was for the critic, which now reads
 the card again on its own before anything goes to the CEO.
 
+And one card from the proof's third window (DRE-8772). DRE-8752 arrived in
+Green Light at 2026-11-01 17:49:17 PST from the one-off critic's second empty
+result in a row (round 3, run 41374148409): the CEO was asked to re-run the
+review or settle the card, which is a re-run and not a decision. Its arrival
+is `one-off-no-result-twice`: the decision now parks it, and the park step's
+bound exit grants the planner its one rewrite on the round-1 send-back the
+card still carried — the reading the record's §5 predicted (`rewrite`). Its
+fixture is the thread the round-3 decision read: every comment on the card
+before that run wrote its own, all of them the pipeline's.
+
 Every fixture is driven through the mechanism its `arrival` names, with the
 siblings' own harnesses, and over every one of them no stubbed lane write —
 `linear_ops.cmd_state` or `cmd_advance` — names `Green Light`. What the rule
@@ -106,7 +116,8 @@ SIX = {
     "DRE-6636": "switch-card",
 }
 #: A card from DRE-6673's proof record, not the night of 2026-10-10 (DRE-7491).
-LATER = {"DRE-2498": "one-off-no-result"}
+LATER = {"DRE-2498": "one-off-no-result",
+         "DRE-8752": "one-off-no-result-twice"}
 
 #: The shared schema: every key a fixture carries, and its type.
 REQUIRED = {
@@ -121,6 +132,7 @@ ARRIVALS = {
     "blocked-epic": "planner",
     "switch-card": "operator",
     "one-off-no-result": "critic",
+    "one-off-no-result-twice": "planner",
 }
 FOR = {"planner", "proof-run", "operator", "critic"}
 #: The per-arrival extras the contract names.
@@ -129,6 +141,7 @@ EXTRAS = {
     "blocked-epic": ("relations",),
     "switch-card": ("filed",),
     "one-off-no-result": ("result", "run_id"),
+    "one-off-no-result-twice": ("result", "run_id"),
 }
 
 #: How the text a rule writes instead of Green Light names each recipient,
@@ -561,6 +574,53 @@ def _one_off_no_result(doc: dict, tmp_path: Path) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# one-off-no-result-twice — DRE-8772                                           #
+# --------------------------------------------------------------------------- #
+
+
+def _one_off_no_result_twice(monkeypatch, doc: dict, lanes: _Lanes,
+                             tmp_path: Path) -> str:
+    """The round-3 decision as plan.yml runs it, then the bound exit `One-off
+    critic — park in Triage` runs on `park`, over the thread with the note and
+    the record that decision posted. Returns what the exit writes."""
+    paths = {name: tmp_path / f"one-off-{name}.txt"
+             for name in ("result", "note", "record", "escalation", "out")}
+    paths["result"].write_text(doc["result"], encoding="utf-8")
+    out = subprocess.run(
+        [sys.executable, str(ROOT / "scripts" / "plan_critic.py"), "decide",
+         "--stage", plan_critic.STAGE_ONE_OFF, "--epic", doc["card"],
+         "--result-file", str(paths["result"]),
+         "--github-output", str(paths["out"]),
+         "--note-file", str(paths["note"]),
+         "--record-file", str(paths["record"]),
+         "--escalation-file", str(paths["escalation"]),
+         "--run-id", doc["run_id"]],
+        input=json.dumps(doc["comments"]), capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    outputs = dict(line.split("=", 1) for line
+                   in paths["out"].read_text(encoding="utf-8").splitlines()
+                   if "=" in line and not line.startswith(" "))
+    assert outputs["action"] == plan_critic.PARK, (
+        f"{doc['card']}: the one-off decision answered {outputs['action']!r}")
+    assert outputs["bound"] == "true"
+    assert not paths["escalation"].exists(), (
+        f"{doc['card']}: the second no-result wrote a reason for the CEO")
+    note = paths["note"].read_text(encoding="utf-8")
+    record = paths["record"].read_text(encoding="utf-8").strip()
+    earlier = plan_critic.parse_markers(doc["comments"])[-1]["run"]
+    for run in (earlier, doc["run_id"]):
+        assert f"run {run}" in note, f"{doc['card']}: the note names no {run}"
+    assert "for the operator, not the CEO" in note
+    assert f"result={plan_critic.NO_RESULT}" in record
+    assert f"run={doc['run_id']}" in record
+
+    posted = [{"body": body, "authored_by_pipeline": True,
+               "created_at": doc["as_of"]} for body in (note.strip(), record)]
+    return _plan_bound(monkeypatch, {**doc, "comments": doc["comments"] + posted},
+                       lanes)
+
+
+# --------------------------------------------------------------------------- #
 # the replay                                                                   #
 # --------------------------------------------------------------------------- #
 
@@ -594,6 +654,8 @@ def test_the_card_does_not_land_in_green_light(monkeypatch, tmp_path, capsys, pa
         written = _blocked_epic(monkeypatch, doc, lanes, tmp_path, capsys)
     elif arrival == "one-off-no-result":
         written = _one_off_no_result(doc, tmp_path)
+    elif arrival == "one-off-no-result-twice":
+        written = _one_off_no_result_twice(monkeypatch, doc, lanes, tmp_path)
     else:
         written = _switch_card(monkeypatch, doc, lanes)
 

@@ -20,7 +20,9 @@ The `DRE-<n>` the entry opens with, followed by `:`. The three appenders that
 name a card write it there, two behind one tag word, which is read past:
 
 * `_report_epic_prose_defect` — `DRE-7305: a prose blocker declaring …`;
-* `promotion_stall.ledger_line` — `promotion-stalled DRE-41: refused …`;
+* `promotion_stall.ledger_line` — `promotion-stalled DRE-41: refused …` —
+  and its epic's twin, `epic_ledger_line` — `promotion-stalled DRE-40: 9
+  children wait on it …` (DRE-8815);
 * limit recovery's `STOOD_PHRASE` line, its `ERROR: ` prefix stripped —
   `limit-recovery DRE-42: the limit-death marker has stood …`.
 
@@ -78,7 +80,7 @@ printed as the client returned it.
 ## The vendor boundary (`standards/vendor-boundaries.md`)
 
 * Q1, the actor: the reconcile reusable already raises notices
-  (`groom_stall`, `reviewer_outage:fleet`), and the console door admits it.
+  (`reviewer_outage:fleet`), and the console door admits it.
 * Q2, the credentials: the sweep job already holds `id-token: write` and
   `BUREAU_READ_URL`, the two the notice client and the read door need.
 * Q3, a retry: a re-run repeats the same raise, and the door answers `repeat`

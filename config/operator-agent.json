@@ -1,0 +1,74 @@
+{
+  "ceo_acts": [
+    {
+      "id": "aws-access",
+      "label": "AWS access: IAM users, roles and policies",
+      "phrases": ["IAM change", "AWS role", "AWS identity"]
+    },
+    {
+      "id": "billing-and-account-settings",
+      "label": "billing and account settings",
+      "phrases": ["own AWS account", "paid seat"]
+    },
+    {
+      "id": "github-org-membership",
+      "label": "membership of the GitHub organization, and a GitHub App's permissions on it",
+      "phrases": ["GitHub App permission", "Organization permissions"]
+    },
+    {
+      "id": "github-org-creation",
+      "label": "creating a GitHub organization",
+      "phrases": ["throwaway org"]
+    },
+    {
+      "id": "github-secrets",
+      "label": "GitHub secrets",
+      "phrases": ["org-level secrets"]
+    },
+    {
+      "id": "github-branch-protection",
+      "label": "GitHub branch protection",
+      "phrases": ["branch protection"]
+    }
+  ],
+  "destructive_go": {
+    "destructive": ["force-push", "rewrites every commit"],
+    "go": ["go again right before"]
+  },
+  "studio_access": ["the operator's AWS profile", "production deploy"],
+  "deploy": ["bootstrap deploy", "production deploy"],
+  "studio": {
+    "blocker": "DRE-8582",
+    "deploy_epic": "DRE-8487",
+    "never_blocker": "DRE-8486",
+    "host_limits": {
+      "source": "agent-bureau:infra/deploy/stacks/StudioDeskStack.md",
+      "read_on": "2026-11-01 PT",
+      "cannot": [
+        "In this child the studio user can do everything but deploy.",
+        "Its boundary denies every IAM write.",
+        "Its boundary denies billing and account settings.",
+        "Its boundary denies secret writes and secret values.",
+        "Its boundary denies every CloudFormation write."
+      ]
+    }
+  },
+  "leave_alone": [
+    {
+      "card": "DRE-8748",
+      "why": "the switch that turns this agent on — a person closes it once the first live run's URL is recorded on it"
+    },
+    {
+      "card": "DRE-8830",
+      "why": "the switch's off-reason — a person sets it before the workflow merges, and DRE-8748 deletes the variable it sets when it turns the agent on"
+    },
+    {
+      "card": "DRE-8927",
+      "why": "the switch that turns the agent's `do` step on (OPERATOR_AGENT_DO_LIVE, DRE-8928) — the agent never decides it"
+    },
+    {
+      "card": "DRE-9053",
+      "why": "the proof's fixture step — a person files one sandbox question in Green Light and cancels it once its planning run has finished; the agent never decides the card that sets up its own proof"
+    }
+  ]
+}

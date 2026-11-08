@@ -53,8 +53,11 @@ it and that refusal never fires now. Get it right and the gate is a no-op.
 - **`**Design:** <png path>`** — UI cards ONLY (e.g.
   `console/design/images/screens/desktop/board.png`). **Forbidden** on non-UI
   cards; its absence is normal. (See `standards/design.md`.)
-- **`**Spec:** openspec/changes/<id>/`** — only when the work needs a
-  cross-component contract; read it before coding.
+- **`**Spec:** docs/specs/<slug>.md`** — only when the work needs a
+  cross-component contract; read it before coding. A spec is one Markdown
+  file in the product repo. A line naming a directory instead — the older
+  `openspec/changes/<id>/` shape — is still read, for cards filed before
+  2026-11-02.
 - **A dependency is a Linear `blockedBy` relation.** That relation is the
   dependency — the only thing the promotion gate, the epic gate, the console
   and the auto-close path read. Linear models dependencies natively and renders
@@ -239,10 +242,13 @@ to `Triage`, and stamps no verdict on it: the refusal names the fix, and a
 **The rule is mechanical:** route on whether an unattended agent can SATISFY
 the acceptance criteria — not on whether it could write the code. Read in strict
 precedence: an explicit role label (`agent:ops`, `no-code`), then the title
-convention **anchored at the start of the title**, then the criteria rule; only
-what survives all three is a judgement call worth asking a model about.
+convention **anchored at the start of the title**, then a declared
+`**Operator step:** <what the person does>` line in the body — opening its own
+line, outside fenced code, with text after the colon — which routes OPERATOR
+(DRE-9224), then the criteria rule; only what survives all four is a judgement
+call worth asking a model about.
 
-**Precedence 3 reads static visual fidelity only (DRE-6227).** Static visual
+**Precedence 4, the criteria rule, reads static visual fidelity only (DRE-6227).** Static visual
 fidelity is FLEET-checkable — `qa-review.yml` screenshots the changed screens
 and hands the critic both the design PNG and the render. No criterion phrase
 routes a card WORKBENCH any more: "sign in", "by hand" and "in production" once
@@ -386,9 +392,22 @@ hand-move children (it double-dispatches and reverts in-progress work).
 closes an In Progress epic on the pass after its last build card is Done, with
 a child Done among them. Its open PROOF and after-merge OPERATOR cards — the
 follow-on work, `epic_cap.follow_on`: a proof, or a card marked for a person —
-carry on under the closed epic, are still promoted and dispatched, and close
-on their own. The close comment names them. Roll-up parents still close when
-every child is Done.
+are promoted and dispatched whether the epic is still In Progress or already
+Done, carry on under it once it closes, and close on their own. The close
+comment names them. A PROOF is promoted to Hand-work by the merge of its last
+build card, before the sweep's next pass closes the epic, so it enters
+Hand-work while the epic is still In Progress. The proof run may be
+dispatched under either epic state, In Progress or Done (`EPIC_ACTIVE` in
+`scripts/proof_dispatch.py`). So a PROOF criterion never asks for the proof
+to enter Hand-work, or to be dispatched, after its epic entered Done.
+DRE-7956's row asked for that and closed as a gap (DRE-8233). The row it
+should have been: "This card's Linear history shows it entering Hand-work no
+earlier than the last of the epic's build cards entering Done, and the epic's
+history shows it entering Done while this card was not Done (all three times
+quoted in PT). Its first `🔬 proof-run: dispatched` receipt is later than its
+Hand-work entry, and the `proof-dispatch:` line naming this card `dispatched`
+is quoted from that sweep run's log, with the run's id." Roll-up parents still
+close when every child is Done.
 
 **A card has no children.** Giving a card sub-issues silently converts it INTO
 an epic — the gate infers `agent:planner` from having children, and reconcile
@@ -586,12 +605,9 @@ oldest since 2026-10-08 (DRE-7772). This is the one full statement of the rule.
 The proof brief and the planner's brief point to it and never restate it.
 
 The sandbox presses, the one list (DRE-7772):
-- `createTask` — make a task
-- `snoozeTask` — snooze a task
-- `markTaskDone` — mark a task done
-- `makeTaskCard` — file a task's card into Intake
 - `sendProjectAgentMessage` — send a Desk message, or open a conversation
 - `answerDeskPermission` — answer a Desk Allow or Deny
+- `stopDeskTurn` — stop a Desk turn
 - `startInitiativeDraft` — start an initiative draft
 - `saveInitiativeDraft` — save an initiative draft
 - `discardInitiativeDraft` — discard an initiative draft
@@ -612,6 +628,27 @@ The sandbox presses, the one list (DRE-7772):
 - `addInitiativeFile` — add a file to an initiative
 - `updateInitiativeFile` — update an initiative's file
 - `deleteInitiativeFile` — delete an initiative's file
+- `recordLoop` — record a loop
+- `answerLoop` — answer a loop
+- `trackThis` — track an ask as a loop
+- `moveLoop` — move a loop to Later or Focus
+- `snoozeLoop` — snooze a loop
+- `nudgeLoop` — nudge a loop
+- `closeLoop` — close a loop with an ending
+- `markNotALoop` — mark a loop not a loop
+- `reviseKpi` — revise a KPI
+- `closeKpi` — close a KPI at its goal
+- `retireKpi` — retire a KPI
+- `moveKpi` — move a KPI to Later or Focus
+- `linkKpiLoop` — link a KPI and a loop
+- `unlinkKpiLoop` — unlink a KPI and a loop
+- `proposeKpi` — propose a KPI from plain words
+- `confirmKpi` — confirm a proposed KPI
+- `followUpLoop` — send a follow-up on a loop
+- `askLoopStatus` — ask a loop for a status
+- `askLoopAgain` — ask a gone-quiet loop again
+- `saveThought` — save a thought for later
+- `askKpiWhy` — ask why a KPI moved
 
 The list is the copy of agent-bureau's `SANDBOX_PRESS_MUTATIONS`
 (`console/backend/proof_reader_presses.py`), which bureau-pipeline cannot read,
@@ -619,9 +656,25 @@ and the epic's PROOF holds the copies equal. The epic asked for a seventh,
 answering a draft's question (`answerInitiativeDraftQuestion`), and DRE-7776
 dropped it: the console's owner gate refuses it to the proof-reader on the
 sandbox too. DRE-8305 (2026-10-28) added the twenty Initiatives presses, the
-last twenty bullets, and left `approveInitiativeDraft`,
+twenty bullets after `stopDeskTurn`, and left `approveInitiativeDraft`,
 `answerInitiativeDraftQuestion(s)` and `answerDecision` off, as the CEO's own
-answers.
+answers. DRE-8727 (2026-11-02) added the eight loop presses, the eight
+bullets after `deleteInitiativeFile`, for the Loops 1 epic (DRE-8698), and left
+the CEO's own answers off too. DRE-8937 (2026-11-03) added the eight KPI
+presses, the eight bullets after `markNotALoop`, for the Loops 2 epic
+(DRE-8699), and left the CEO's own answers off as before. DRE-9034 (2026-11-03)
+added the three loop presses, the three bullets after `confirmKpi`, for the
+Loops 3 epic (DRE-8700), and left the CEO's own answers off as well. DRE-9044
+(2026-11-03) added `saveThought`, the bullet after `askLoopAgain`, for the
+Loops 4 epic (DRE-8701), and left the CEO's own answers off again. DRE-9077
+(2026-11-03) added `askKpiWhy`, the last bullet, for the KPI page epic
+(DRE-8702), and left the CEO's own answers off as before. DRE-8704 removed
+the four task presses that opened the list — `createTask`, `snoozeTask`,
+`markTaskDone` and `makeTaskCard` — when Tasks retired under Loops, and
+DRE-9201 (2026-11-04) took them off this copy.
+DRE-8032 admitted `stopDeskTurn`, the Desk speed script's Stop, to
+agent-bureau's list, and DRE-9221 (2026-11-05) added it to this copy, the
+bullet after `answerDeskPermission`.
 
 **Which row a press gets.** A `Sandbox press:` step is for a press on the
 list, on a PROOF card labeled `repo:agent-bureau`, the one repo whose proof run

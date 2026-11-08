@@ -1,0 +1,196 @@
+[
+  {
+    "card": "DRE-8637",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: turn on the Alarm Repair — set the repository variable ALARM_REPAIR_LIVE to true",
+    "labels": [
+      "repo:bureau-pipeline",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "In bureau-pipeline's repository settings, under Actions variables, set `ALARM_REPAIR_LIVE` to `true`, in the operator's name."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "To turn the repair off again, set the variable to anything else."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8623",
+    "lane": "Hand-work",
+    "title": "bureau-pipeline: delete the PLANNER_MAX_RUNNING repo variable from agent-bureau, bureau-pipeline, portico and agent-bureau-demo, and release any card the groom queue left in Intake (operator)",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "For each of `dreadnought-foundry/agent-bureau`, `dreadnought-foundry/bureau-pipeline`, `dreadnought-foundry/portico` and `dreadnought-foundry/agent-bureau-demo`: `gh variable delete PLANNER_MAX_RUNNING -R <owner/repo>`."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "`gh variable list -R <owner/repo>` for the four above and for `dreadnought-foundry/foundry`, `dreadnought-foundry/onboard-sandbox-5`, `EveryBite/atlas` and `DeltaSolv/deltasolv`."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "`python3 scripts/proof_release.py check --repo dreadnought-foundry/agent-bureau --merge DRE-8620:<pr>:<merge sha>` prints `proof-release: ready` — the console release carrying DRE-8620 is live."
+      }
+    ]
+  },
+  {
+    "card": "DRE-8846",
+    "lane": "Hand-work",
+    "title": "agent-bureau: the operator opens one canary pull request adding a copy of Notice, so the proof can watch the duplicate check go red",
+    "labels": [
+      "initiative:bureau",
+      "agent:devops",
+      "repo:agent-bureau",
+      "no-code",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "One draft pull request titled `canary: parts check — do not merge` was opened in agent-bureau from the branch `agent/parts-check-canary`, after the stub merged, adding one local `function Notice` outside the components folders and nothing else."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "If no Merge Gate run has started 15 minutes after the last workflow run on the head completed, start one with `gh workflow run merge-gate.yml --repo dreadnought-foundry/agent-bureau -f pr_number=<n>` and say so in the comment below."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Close the pull request unmerged and delete the branch, then comment on this card: the pull request number, its head sha, and the Merge Gate run's id."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7579",
+    "lane": "Done",
+    "title": "agent-bureau: archive the Linear project and Initiative of retired onboard-sandbox",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The Linear project `onboard-sandbox: Onboard Sandbox` — put it in a terminal state and archive it."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Any Initiative for Onboard Sandbox — put it in Completed and archive it."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The onboarding process creates none, so there may be nothing to do."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7942",
+    "lane": "Done",
+    "title": "agent-bureau: archive the Linear project and Initiative of retired onboard-sandbox-4",
+    "labels": [
+      "repo:agent-bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The Linear project `onboard-sandbox-4: Onboard Sandbox 4` — put it in a terminal state and archive it."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Any Initiative for Onboard Sandbox 4 — put it in Completed and archive it."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7978",
+    "lane": "Done",
+    "title": "bureau-pipeline: the operator opens one throwaway pull request that breaks the verify step, sees the replay gate hold it, and closes it unmerged",
+    "labels": [
+      "repo:bureau-pipeline",
+      "initiative:bureau",
+      "agent:devops",
+      "no-code",
+      "operator-step"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "From `main`, open one draft pull request on a branch named `operator/replay-gate-negative-control`."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "So such a case is expected on `main` after the first Sunday's pull request merges, whether or not any recorded removal passes yet."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Close the pull request unmerged, and delete the branch."
+      }
+    ]
+  },
+  {
+    "card": "DRE-7328",
+    "lane": "Hand-work",
+    "title": "OPERATOR: set NO_RECORD_RETURN_MODE=enforce on the live relay, then close this card through the console's Record the outcome",
+    "labels": [
+      "repo:agent-bureau",
+      "initiative:bureau",
+      "no-code",
+      "agent:devops",
+      "operator-step",
+      "hand-step:machine"
+    ],
+    "excerpts": [
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Turn the relay's no-record return on, live."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "The code ships behind `NO_RECORD_RETURN_MODE`, which defaults to `off`, and only the bootstrap deploy sets a relay environment variable — it needs the operator's AWS profile, which no agent holds."
+      },
+      {
+        "from": "description",
+        "created_at": null,
+        "text": "Then close THIS card through the console's **Record the outcome**, with a one-sentence outcome saying what was set and when."
+      }
+    ]
+  }
+]

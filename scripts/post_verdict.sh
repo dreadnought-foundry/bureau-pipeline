@@ -25,7 +25,8 @@ set -e
 #      never started.
 #   5. Evidence hold — the critic finished but blocked on a claim about a
 #      run it did not carry. The comment is the hold message the evidence
-#      gate wrote to /tmp/qa-evidence-hold.md.
+#      gate wrote to /tmp/qa-evidence-hold.md, and its last line is the hold
+#      line (below).
 #   6. Out of turns — an attempt hit its turn ceiling. The comment says
 #      what the attempts spent and asks for a split.
 #   7. Finished without a verdict — an attempt ended cleanly and left
@@ -48,6 +49,16 @@ set -e
 # and it carries no "VERDICT:" line, so the merge is held and the fix agent
 # is not woken for findings nobody made. When REFUTED is true a footer under
 # any of the ten says why this head carries two verdicts.
+#
+# The hold line. On branch 5 alone, after every other footer, the comment
+# ends with held_verdict.py's one line naming the head the review read and
+# the run and attempt that held it:
+#
+#   🧷 evidence-hold @<reviewed-sha> · run <run id> attempt <attempt>
+#
+# The sweep reads it to tell a held verdict from a crashed review, and the
+# next review of the same head reads it to learn why the last one was held.
+# Both read only the last line, because the hold quotes the held review.
 #
 # The name guard. When NAME_GUARD_LIVE is `true`, the composed comment goes
 # through name_redact.py's one redaction seam (`redact --in-place`), which
@@ -137,8 +148,10 @@ set -e
 #                     when empty, the owner half of REPO
 #
 # From the runner: PIPELINE_DIR (the pipeline checkout, outside the working
-# tree), GITHUB_REPOSITORY (for the description's last-edit time) and
-# RUNNER_NAME (shown as data, its control characters and backticks dropped).
+# tree), GITHUB_REPOSITORY (for the description's last-edit time),
+# RUNNER_NAME (shown as data, its control characters and backticks dropped),
+# and GITHUB_RUN_ID and GITHUB_RUN_ATTEMPT (named on the hold line; digits
+# only, or left out).
 # Files: it reads /tmp/qa-verdict.md and /tmp/qa-evidence-hold.md, and
 # writes /tmp/qa-comment.md and /tmp/qa-linear.md.
 #
@@ -250,6 +263,12 @@ set -e
 #   job's red line says the same word. Branch 9 sits after branch 8, so an
 #   attempt stopped mid-review is still told it was stopped.
 #
+# 2026-11-05 · DRE-9230. Portico #1107's review was held by the evidence
+#   gate twice in run 42016908858, and the sweep logged both as a crashed
+#   review and re-ran the same review blind between them: nothing in the
+#   hold said which head it held, and nothing told the next review why. A
+#   hold now ends with the hold line above.
+#
 # 2026-10-27 · DRE-8170. On 2026-10-20 the critic's approval on
 #   bureau-pipeline #985 quoted the `grep` it had run, and that command
 #   carried a person's surname. Every composed comment now goes through the
@@ -275,6 +294,7 @@ elif [ "$PIPELINE_OK" != "true" ]; then
 else
 # RAN: set only for an attempt that finished cleanly with no verdict.
 RAN=""
+EVIDENCE_HOLD=""
 if [ "${A1_OUTCOME:-}" = "completed_no_verdict" ]; then
   RAN="the first attempt ran ${A1_TURNS:-?} turns and billed about \$${A1_COST:-?}"
 fi
@@ -329,6 +349,7 @@ elif [ "${INSTALL_FAILED:-}" = "true" ]; then
 elif [ "${A2_EVIDENCE:-${A1_EVIDENCE:-}}" = "defective" ] && [ -s /tmp/qa-evidence-hold.md ]; then
   # Branch 5, evidence hold: the message arrives as a file, never env.
   cp /tmp/qa-evidence-hold.md /tmp/qa-comment.md
+  EVIDENCE_HOLD=true
 elif [ "${A1_OUTCOME:-}" = "turn_exhaustion" ] || [ "${A2_OUTCOME:-}" = "turn_exhaustion" ]; then
   # Branch 6, out of turns. Not medic's infra-error marker: no infra failed.
   printf '%s\n\n%s\n' \
@@ -435,6 +456,15 @@ if [ "${REFUTED:-}" = "true" ]; then
   printf '\n%s\n' "♻️ re-review after refutation — the fixing agent contested this reviewer's previous finding on this same commit with evidence, so the pipeline ordered one more look. Nothing was pushed between the two verdicts; this one is the answer." \
     >> /tmp/qa-comment.md
 fi
+# The hold line (DRE-9230), last on an evidence hold: the head this review
+# read and the run and attempt that held it. The sweep and the next review
+# read only the last line, so it goes after every other footer.
+if [ -n "${EVIDENCE_HOLD:-}" ]; then
+  if HOLD_LINE=$(python3 "$PIPELINE_DIR"/scripts/held_verdict.py footer \
+       --sha "${REVIEWED_SHA:-}" --run "${GITHUB_RUN_ID:-}" --attempt "${GITHUB_RUN_ATTEMPT:-}"); then
+    printf '\n%s\n' "$HOLD_LINE" >> /tmp/qa-comment.md
+  fi
+fi
 # The name guard (DRE-8170), once the comment is composed and before
 # anything posts it: the one redaction seam, then the guard. A comment the
 # guard refuses is held — replaced by a neutral status that carries the
@@ -469,7 +499,7 @@ if [ -n "$CARD" ]; then
   { cat /tmp/qa-comment.md
     printf '\n\n🧠 model: %s — %s\n' "$MODEL_ID" "$MODEL_WHY"
   } > /tmp/qa-linear.md
-  python3 "$PIPELINE_DIR"/scripts/linear_ops.py comment "$CARD" "$(cat /tmp/qa-linear.md)" || true
+  python3 "$PIPELINE_DIR"/scripts/linear_ops.py comment "$CARD" --body-file=/tmp/qa-linear.md || true
 fi
 
 # On a real APPROVE, bring the formal review into line (DRE-1874).

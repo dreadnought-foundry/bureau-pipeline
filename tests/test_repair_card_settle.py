@@ -1005,11 +1005,21 @@ class TheNewReadsAreLazyTest(unittest.TestCase):
         self.assertEqual(ops.branch_reads, [])
 
 
+#: The functions the settle path runs through. `open_card`'s seam and
+#: `close_superseded`'s (DRE-9217) are other seams, with methods of their own
+#: — `_CloseOps.cancel` takes the lane it read — so the scan reads settle's
+#: functions alone rather than exempting other paths' names by hand.
+_SETTLE_PATH = ("settle", "_settle_one", "_flaky_fix", "_unlanded_branches")
+
+
 def _settle_ops_calls() -> set:
     """Every `ops.<name>(…)` call `repair_card`'s settle path makes."""
     tree = ast.parse(open(os.path.join(SCRIPTS, "repair_card.py")).read())
     return {
-        n.func.attr for n in ast.walk(tree)
+        n.func.attr
+        for fn in tree.body
+        if isinstance(fn, ast.FunctionDef) and fn.name in _SETTLE_PATH
+        for n in ast.walk(fn)
         if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
         and isinstance(n.func.value, ast.Name) and n.func.value.id == "ops"
     }
@@ -1017,6 +1027,16 @@ def _settle_ops_calls() -> set:
 
 class TheSeamsMatchSettlesCallsTest(unittest.TestCase):
     """Both real seams carry every method `settle` calls."""
+
+    def test_the_scan_reads_no_other_paths_calls(self):
+        # `open_card`'s `stamp_card` is no settle call, and every function
+        # the scan names still exists — a rename would read as no calls.
+        import inspect
+
+        self.assertNotIn("stamp_card", _settle_ops_calls())
+        for name in _SETTLE_PATH:
+            with self.subTest(name=name):
+                self.assertTrue(inspect.isfunction(getattr(repair_card, name)))
 
     def test_settle_calls_the_three_new_seams(self):
         self.assertLessEqual(
@@ -1032,12 +1052,7 @@ class TheSeamsMatchSettlesCallsTest(unittest.TestCase):
     def test_the_sweep_seam_carries_every_method_settle_calls(self):
         import reconcile
 
-        settle_only = _settle_ops_calls() - {
-            # `open_card`'s Linear seam, not settle's. `find_open` and
-            # `create_card` were excluded here too until DRE-6870 had settle
-            # file a flaky test's fix card through them.
-            "stamp_card"}
-        for name in sorted(settle_only):
+        for name in sorted(_settle_ops_calls()):
             with self.subTest(name=name):
                 self.assertTrue(
                     callable(getattr(reconcile._RepairSettleOps, name, None)),
@@ -1566,9 +1581,12 @@ class TheEarlierCardsReadTest(unittest.TestCase):
             got = linear_ops.repo_cards_by_title_prefix(
                 repair_card.TITLE_ANCHOR, repo_slug="bureau-pipeline",
                 since=since)
+        # `title` and `completedAt` are read too (DRE-8635): the failure
+        # tally keeps exact title matches only, and names a Done card's date.
         self.assertEqual(
-            [{"identifier": FIRST["card"], "description": "d",
-              "state": "Canceled", "createdAt": "2026-10-09T15:00:00.000Z"}],
+            [{"identifier": FIRST["card"], "title": "", "description": "d",
+              "state": "Canceled", "createdAt": "2026-10-09T15:00:00.000Z",
+              "completedAt": ""}],
             got)
         query, variables = asked[0]
         self.assertEqual(repair_card.TITLE_ANCHOR, variables["prefix"])
@@ -1608,9 +1626,10 @@ class TheEarlierCardsReadTest(unittest.TestCase):
                 repair_card.TITLE_ANCHOR, repo_slug="bureau-pipeline",
                 since=NOW - timedelta(days=14))
         self.assertEqual(101, len(got))
-        self.assertEqual({"identifier": "DRE-100", "description": "d",
+        self.assertEqual({"identifier": "DRE-100", "title": "", "description": "d",
                           "state": "Canceled",
-                          "createdAt": "2026-10-09T15:00:00.000Z"}, got[-1])
+                          "createdAt": "2026-10-09T15:00:00.000Z",
+                          "completedAt": ""}, got[-1])
         self.assertEqual([None, "c1"], [v["after"] for _, v in asked])
         self.assertIn("pageInfo { hasNextPage endCursor }", asked[0][0])
 

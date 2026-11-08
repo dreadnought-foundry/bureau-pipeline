@@ -68,15 +68,14 @@ project `agent-bureau-demo`, and only for a press a criterion names, opening
 `Sandbox press:` (the rule and its one list live in `standards/card-quality.md`,
 under `The sandbox presses, the one list (DRE-7772):`). List every id you make
 in the record as you make it. At the end, close what the console lets you
-close: a task you made is marked done with `markTaskDone`, and the record says
-so beside the task's id. The console has no delete for a task, a Desk message
-or a card filed from a task, so the record lists those ids as left on the
+close: a loop you recorded is closed with an ending (`closeLoop`), and the
+record says so beside the loop's id. The proof-reader has no delete for a loop,
+a Desk message or a card, so the record lists those ids as left on the
 sandbox, and you make each one with a title or text opening
-`SANDBOX FIXTURE (proof DRE-<n>)`. A card you file this way stays in the
-sandbox's Intake and is listed as left: the console files it at no priority and
-refuses one without the fixture title, and the groomer leaves a
-`SANDBOX FIXTURE (proof DRE-` card labeled `repo:agent-bureau-demo` where it is
-(DRE-7776 and DRE-7783), so nothing routes it. Never tidy the project, and
+`SANDBOX FIXTURE (proof DRE-<n>)`. A card a press makes on the sandbox is
+listed as left: the groomer leaves a `SANDBOX FIXTURE (proof DRE-` card labeled
+`repo:agent-bureau-demo` where it is (DRE-7776 and DRE-7783), so nothing
+routes it. Never tidy the project, and
 never touch an id you did not make in this run. A shadow run makes no sandbox
 press: its `Sandbox press:` rows read
 `Not observed. cause: out-of-reach — a shadow run makes no sandbox press`.
@@ -569,8 +568,8 @@ sandbox project) and DRE-6663 (Not doing pressed on one groom card).
 **Every other press.** A `Sandbox press:` row is pressed by the run, as the
 console proof-reader (Identities, above), and reads `Met.` with the ids made
 and what was closed or left on the sandbox. DRE-7711's six sandbox tasks
-(`createTask`), which waited on a person from 2026-10-19, are a press the run
-now makes. Which presses are the run's is the list in
+(`createTask`), which waited on a person from 2026-10-19, were a press the run
+made until Tasks retired under Loops (DRE-8704). Which presses are the run's is the list in
 `standards/card-quality.md`, under
 `The sandbox presses, the one list (DRE-7772):`, read there and never
 restated here.
@@ -720,7 +719,10 @@ wording-only row its critic can accept — gets its pull request opened, or
 reopened. Any other record keeps none: the open one is closed, the branch is
 kept. **While the proof waits, the record stays on its branch and the card's
 hold says what it waits on** — the one `🔬 proof-waiting` hold that step posts,
-or the CEO-press park's. **A run never opens, closes or reopens a pull request
+or the CEO-press park's. That step posts no hold over an operator's or the
+CEO's, and retires the holds the record supersedes — a time-only hold, the
+record's own, the cause park's — with one `🔬 proof-observed` note before its
+new hold, so the card carries one. **A run never opens, closes or reopens a pull request
 itself**: you never run `gh pr create`, `gh pr reopen` or `gh pr close`.
 
 - **Branch `agent/DRE-<n>-proof-record`.** The `agent/` prefix is what

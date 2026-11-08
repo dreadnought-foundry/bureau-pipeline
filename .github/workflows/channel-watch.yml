@@ -31,7 +31,12 @@
 #      Promote Channel would never wake. On 10-27 a re-run asked for by
 #      `agent-bureau-bot[bot]` woke Promote Channel run 40554972524, which
 #      moved `stable`. The hold check writes nothing on GitHub, so it reads
-#      with `github.token`.
+#      with `github.token`. Its notice is raised as this workflow, and the
+#      console's notice door must admit Channel Watch to take it: on
+#      2026-11-03 the door refused it (`http-403 WORKFLOW_REFUSED`). Until
+#      the console admits Channel Watch, the hold notice is filed as the
+#      fallback card instead, labeled `agent:ops` and `no-code` so it goes to
+#      the operator and never to a build (DRE-9162).
 #   Q2 secrets — a scheduled run in this repository gets the repository's own
 #      secrets: the App pair and LINEAR_API_KEY (the notice's fallback card).
 #      The notice door's OIDC token needs `id-token: write` on `hold`.
@@ -74,7 +79,7 @@ jobs:
       # it: its re-run is the one that wakes Promote Channel (Q1).
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -86,6 +91,10 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app.outputs.token }}
           APPLY: ${{ vars.HUNG_JOB_WATCH != 'off' }}
+          # The `ci` column's effective value (DRE-8817), the expression GitHub
+          # evaluates for the re-run: every job in tests.yml reads it. A hung
+          # job is never re-run while it still names the service it hung on.
+          CI_RUNS_ON: ${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
         run: |
           if [ "$APPLY" = "true" ]; then
             python3 scripts/hung_job.py watch --repo "$GITHUB_REPOSITORY" --apply

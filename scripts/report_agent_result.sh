@@ -384,7 +384,7 @@ elif [ "$DEATH_CLASS" != "turn_exhaustion" ] && [ -f "$NOTES_DIR"/agent-handback
     echo "Run: $RUN_URL"
   } > "${RUNNER_TEMP:-/tmp}/handback-comment.md"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat "${RUNNER_TEMP:-/tmp}/handback-comment.md")"
+    --body-file="${RUNNER_TEMP:-/tmp}/handback-comment.md"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Planning" "$START_LANES" || true
 elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalation.txt ]; then
   # Escalation to Green Light, checked before the blocker (DRE-1655, DRE-2776).
@@ -398,7 +398,7 @@ elif [ -f "$NOTES_DIR"/agent-escalation.txt ] && [ -s "$NOTES_DIR"/agent-escalat
   } > "${RUNNER_TEMP:-/tmp}/escalation-comment.md"
   EXIT_TAKEN="escalation"
   python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"
+    --body-file="${RUNNER_TEMP:-/tmp}/escalation-comment.md"
   python3 .bureau-pipeline/scripts/linear_ops.py advance "$CARD" "Green Light" "$START_LANES" || \
     python3 .bureau-pipeline/scripts/linear_ops.py state "$CARD" "Green Light" || true
 elif [ -f "$NOTES_DIR"/agent-blocker.txt ]; then

@@ -1,0 +1,119 @@
+# The duplicate-parts check on a repo's pull requests (DRE-8842).
+#
+# A repo's thin `Parts Check` stub calls this on every pull request; the stub's
+# shape is docs/parts-check-stub.md. The one job checks out the pull request's
+# head, checks out bureau-pipeline at `pipeline_ref` beside it, writes the pull
+# request's diff to a file and runs `scripts/parts_check.py check` over it
+# (DRE-8841, docs/parts-check.md). The check's exit code is the job's: a copy
+# of a shared part the diff adds, or a new UI file that imports no shared
+# part, exits 1 and turns `call / Parts check` red. The merge gate holds any
+# pull request with a check run that is not green (`evaluate_checks`,
+# `GREEN_CONCLUSIONS` in scripts/merge_gate.py), so a red one holds it with no
+# branch-protection change. The log carries the check's own `parts-check:`
+# lines unchanged.
+#
+# NO `paths:` FILTER, on purpose: a filtered-out pull request gets no check
+# run at all (standards/engineering.md, CI rule 1). The check passes a diff
+# that changes no UI file, and a repo with no design system, by itself.
+#
+# THE VENDOR PREMORTEM (standards/vendor-boundaries.md):
+#   Q1 actor — a `pull_request` run from any author, `dependabot[bot]` and the
+#      pool bots included; nothing here gates on the actor.
+#   Q2 secrets — none read. The seven canonical secrets are declared, each
+#      optional, only so a caller whose guard maps them one by one
+#      (`explicit`) can call this (DRE-8999); no step reads any of them. A
+#      `secrets: inherit` caller and a stub passing nothing run the same.
+#      bureau-pipeline is public, so its checkout needs no token, and
+#      Dependabot's empty secrets store gives empty optional values nothing
+#      reads, so it and the read-only token change nothing.
+#   Q3 retry/rebase — every run recomputes from the head's files. There is no
+#      receipt or marker to go stale.
+#   Q4 command limits — none.
+#   Q5 crash — a crash is a red check that holds the pull request (fail
+#      closed) and says why in its log; a diff that cannot be read is the
+#      check's own `UNKNOWN`, which exits 1. Removing the stub is the one-line
+#      rollback.
+#
+# tests/test_parts_check_workflow.py pins this file.
+name: Parts Check (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      pipeline_ref:
+        description: >-
+          bureau-pipeline ref for the INTERNAL checkout (the check script the
+          job runs). REQUIRED since DRE-2689: a caller must pass the same ref
+          it pins in `uses:`, or it runs channel workflow YAML over another
+          ref's scripts.
+        type: string
+        required: true
+    # The seven canonical secrets, accepted and never read (DRE-8999). A
+    # caller whose channel guard declares `secrets_style: explicit` must map
+    # each one, and GitHub refuses a call passing a secret the called
+    # workflow does not declare, so they are declared here only so that
+    # caller's guard passes. Each is optional and no step reads one: the job
+    # has no `env:` naming a secret.
+    secrets:
+      ANTHROPIC_API_KEY:
+        required: false
+      CLAUDE_CODE_OAUTH_TOKEN:
+        required: false
+      LINEAR_API_KEY:
+        required: false
+      BUREAU_APP_ID:
+        required: false
+      BUREAU_APP_PRIVATE_KEY:
+        required: false
+      BUREAU_QA_APP_ID:
+        required: false
+      BUREAU_QA_APP_PRIVATE_KEY:
+        required: false
+
+# Read only, and no OIDC token: the job reads two checkouts and writes
+# nothing (the documented exception in tests/test_reusable_id_token.py).
+permissions:
+  contents: read
+
+jobs:
+  parts-check:
+    name: Parts check
+    runs-on: ${{ fromJSON(vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 10
+    steps:
+      - name: Not a pull request
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "parts-check: does not apply — not a pull request"
+
+      # Full history, so the base sha the diff starts from is in the clone.
+      # First, because this checkout cleans the workspace.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      # bureau-pipeline is public, so no token. `.bureau-pipeline` is a path
+      # segment the check never reads.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: github.event_name == 'pull_request'
+        with:
+          repository: dreadnought-foundry/bureau-pipeline
+          ref: ${{ inputs.pipeline_ref || 'main' }}
+          path: .bureau-pipeline
+          persist-credentials: false
+
+      # Through env, never interpolated into the shell line. The three-dot
+      # diff is the pull request's own change from where it left the base.
+      # The check's exit code is the step's: nothing here swallows it.
+      - name: Check the diff for copies of shared parts
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          DIFF="$RUNNER_TEMP/parts-check.diff"
+          git diff --no-color --no-ext-diff "$BASE_SHA...$HEAD_SHA" > "$DIFF"
+          python3 .bureau-pipeline/scripts/parts_check.py check --diff "$DIFF" --repo-root "$GITHUB_WORKSPACE"

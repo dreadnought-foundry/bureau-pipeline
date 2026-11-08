@@ -1,0 +1,10 @@
+diff --git a/scripts/report.py b/scripts/report.py
+index 0afd763..443fbd7 100644
+--- a/scripts/report.py
++++ b/scripts/report.py
+@@ -2,4 +2,4 @@
+ 
+ 
+ def total(rows):
+-    return sum(row["count"] for row in rows)
++    return sum(row.get("count", 0) for row in rows)

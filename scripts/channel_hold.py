@@ -7,8 +7,8 @@ and nothing says why or what it needs. On 10-27 the answer was "a re-run of one
 canceled test job", and it stood for five hours.
 
 This module answers both, once a pass. It reads whether the channel is held
-and since when, writes a diagnosis that names the failing job and what is
-needed next — `NEXT_STEPS`, a re-run, a fix or a person — and raises it as one
+and since when, writes a diagnosis that names the failing (or stuck) job and what is
+needed next — `NEXT_STEPS`, a re-run, a fix, a person or a wait — and raises it as one
 console alert through the notice door (`pipeline_notice.py`) at 2 hours and
 before the 06:30 PT briefing. It resolves the alert on the pass that finds no
 hold. The workflow that runs it every 10 minutes is its own card, and so is the
@@ -45,19 +45,30 @@ Four reads, made only for a held channel:
 The failing job is the earliest-completing job that concluded `failure`,
 `cancelled` or `timed_out`, in the newest commit's runs that have one. A
 roll-up job that only sums other jobs (`ROLLUP_JOBS`) is passed over when one
-of its parts failed before it, or with it. A run still in progress past 2
-hours of hold names its running job.
+of its parts failed before it, or with it. With none failed, a job still
+running, or not yet started, is named only once the job itself has run 2
+hours — from its own start, or from its attempt's start when it has not
+started — never from the hold's age: a merge train keeps the hold old while
+each new run is young (DRE-8778). It is named as a stuck job, never a failing
+one.
 
 What is needed next is exactly one of `NEXT_STEPS`:
 
-  * a re-run — the failing job was canceled, timed out, lost its runner (it
-    failed with no step failed), or is still running, on attempt 1;
+  * a re-run — the failing job was canceled, timed out, or lost its runner
+    (it failed with no step failed), or the stuck job's run needs canceling
+    and re-running, on attempt 1; or the decision is `harness-inconclusive`
+    and the failing job, if any, is the harness's own — GitHub refused it for
+    a rate limit, which no fix clears (DRE-9068);
   * a fix — a job failed at a step (a test or a harness scenario), or the
     decision is `mirror-tests-failed`;
   * a person — the run is already on attempt 2 or later, the decision is
     `channel-held` (paused by hand, the `CHANNEL_HOLD` text quoted),
     `mirror-check-blocked` or a by-hand refusal, or a diagnosis read failed
-    (named).
+    (named);
+  * a wait — no job has failed or gone 2 hours, and the decision is
+    `unit-suite-not-finished`: the commit's own unit suite is still running,
+    and `stable` moves by itself once it finishes green, so nobody needs to
+    act yet (DRE-8863). A waiting hold is still raised on the same schedule.
 
 With no failing job, the decision's own step answers (`OUTCOME_NEXT`). Every
 `OUTCOME_*` of `promote_channel` maps to one step there, or is declared
@@ -86,10 +97,14 @@ read from the environment. Exit 0 on every pass, `unknown` included, and 1
 only when the notice client reports `lost`. The notice key is `NOTICE_KEY`
 (console kind `pipeline_notice:channel_hold:stable`), at WARN, with a fallback
 card titled `FALLBACK_TITLE` — one title, so the fallback finds its own open
-card and never files a second. One line per pass on stdout, under `TAG`:
+card and never files a second. The fallback card wears `agent:ops` and
+`no-code` beside `repo:bureau-pipeline`, and goes to the operator, not to a
+build: a held channel needs a re-run, a fix, a person or a wait, which is an
+operator's act, and those two labels route the card `OPERATOR` before any
+model or critic reads it (DRE-9162). One line per pass on stdout, under `TAG`:
 
     channel-hold: none — stable carries main <sha7>
-    channel-hold: held since <h:mm AM/PM PT> age=<m>m next=<re-run|fix|person> job="<name>" run=<url> — <raise|morning-raise|quiet>
+    channel-hold: held since <h:mm AM/PM PT> age=<m>m next=<re-run|fix|person|wait> job="<name>" run=<url> — <raise|morning-raise|quiet>
     channel-hold: unknown <what could not be read>
 
 With `--apply` the client's `pipeline-notice:` line follows. Without it, or
@@ -129,8 +144,8 @@ NOTICE_KEY = "channel_hold:stable"
 SEVERITY = "WARN"
 
 #: What a held channel needs next — exactly one, every time.
-NEXT_STEPS = ("a re-run", "a fix", "a person")
-RERUN, FIX, PERSON = NEXT_STEPS
+NEXT_STEPS = ("a re-run", "a fix", "a person", "a wait")
+RERUN, FIX, PERSON, WAIT = NEXT_STEPS
 
 #: When it raises: see WHEN IT RAISES above. Pacific time, daylight saving
 #: included.
@@ -141,15 +156,20 @@ MORNING_FLOOR_MINUTES = 45
 PACIFIC = ZoneInfo("America/Los_Angeles")
 
 #: The card the alert is filed as when the door cannot take it. One title, so
-#: `linear_ops.find_open` finds the card it filed and comments there.
+#: `linear_ops.find_open` finds the card it filed and comments there. Labeled
+#: for the operator (DRE-9162): `agent:ops` and `no-code` route it OPERATOR at
+#: precedence 1 (`config/routing-verdicts.json`), so it never reaches a build.
 FALLBACK_TITLE = "bureau-pipeline: the stable channel is held"
 FALLBACK = pipeline_notice.Fallback(
     title=FALLBACK_TITLE, lane=pipeline_notice.DEFAULT_LANE,
-    labels=("repo:bureau-pipeline",))
+    labels=("repo:bureau-pipeline", "agent:ops", "no-code"))
 
 #: The workflows it reads, by file, and the names they carry.
 UNIT_SUITE_FILE = "tests.yml"          # pc.UNIT_SUITE, "Pipeline Tests"
 HARNESS_FILE = "harness.yml"           # "Integration Harness"
+#: That workflow's one job, as GitHub names it: its id, since it has no
+#: `name:` of its own.
+HARNESS_JOB = "harness"
 PROMOTE_FILE = "promote-channel.yml"   # "Promote Channel"
 #: (file, the event its runs on main are read for — None for any).
 PROVING = ((UNIT_SUITE_FILE, "push"), (HARNESS_FILE, None))
@@ -177,6 +197,8 @@ OUTCOME_NEXT = {
     pc.OUTCOME_HELD: PERSON,
     pc.OUTCOME_BLOCKED: RERUN,
     pc.OUTCOME_QUEUE_STALL: RERUN,
+    # GitHub's meter refused the harness (DRE-9068): nothing to fix.
+    pc.OUTCOME_INCONCLUSIVE: RERUN,
     pc.OUTCOME_UNPROVEN: RERUN,
     pc.OUTCOME_FORCE_NEEDS_REASON: PERSON,
     pc.OUTCOME_FORCE_NOT_OPERATOR: PERSON,
@@ -184,7 +206,9 @@ OUTCOME_NEXT = {
     pc.OUTCOME_MIRROR_FAILED: FIX,
     pc.OUTCOME_MIRROR_BLOCKED: PERSON,
     pc.OUTCOME_UNIT_RED: FIX,
-    pc.OUTCOME_UNIT_NOT_FINISHED: RERUN,
+    # "a red suite is a break to repair, an unfinished one is a wait" — a
+    # job stuck 2 hours is named by `running_job` before this is read.
+    pc.OUTCOME_UNIT_NOT_FINISHED: WAIT,
     pc.OUTCOME_UNIT_UNPROVEN: RERUN,
 }
 #: The decisions that are a person's whatever the jobs say.
@@ -234,6 +258,7 @@ class Job:
     started: datetime | None
     completed: datetime | None
     failed_step: str | None
+    began: datetime | None = None   # its attempt's start, for a job not yet started
 
 
 @dataclass(frozen=True)
@@ -521,7 +546,9 @@ def commit_jobs(reader, repo: str, sha: str, at: datetime | None) -> list:
             created = _when(run.get("created_at"))
             if at is not None and (created is None or created > at):
                 continue
-            n, _record = _attempt_as_of(reader, repo, run, at)
+            n, record = _attempt_as_of(reader, repo, run, at)
+            # A re-run keeps the run's `created_at`; its attempt's start moves.
+            began = _when(record.get("run_started_at")) or created
             url = str(run.get("html_url") or "")
             if n != run.get("run_attempt"):
                 url = f"{url}/attempts/{n}"
@@ -531,7 +558,7 @@ def commit_jobs(reader, repo: str, sha: str, at: datetime | None) -> list:
                              if s.get("conclusion") == FAILURE), None)
                 found.append(Job(str(job.get("name") or ""), url, n, state,
                                  _when(job.get("started_at")), completed,
-                                 step if state == FAILURE else None))
+                                 step if state == FAILURE else None, began))
     return found
 
 
@@ -549,13 +576,21 @@ def failing_job(jobs: list) -> Job | None:
     return min(pool, key=lambda j: j.completed) if pool else None
 
 
-def running_job(jobs: list) -> Job | None:
-    """The earliest-started job still running, else one not yet started."""
+def going_since(job: Job) -> datetime | None:
+    """When a running job started, or a not-started one's attempt began."""
+    if job.state == RUNNING and job.started is not None:
+        return job.started
+    return job.began
+
+
+def running_job(jobs: list, now: datetime) -> Job | None:
+    """The longest-going job still running, else one not yet started — only
+    once it has gone `ALERT_AFTER_MINUTES` by its own clock."""
     for state in (RUNNING, QUEUED):
-        going = [j for j in jobs if j.state == state]
-        if going:
-            return min(going, key=lambda j: j.started or datetime.max.replace(
-                tzinfo=timezone.utc))
+        stuck = [j for j in jobs if j.state == state and going_since(j) is not None
+                 and (now - going_since(j)).total_seconds() >= ALERT_AFTER_MINUTES * 60]
+        if stuck:
+            return min(stuck, key=going_since)
     return None
 
 
@@ -608,7 +643,8 @@ def read_hold(reader, repo: str, *, now: datetime,
     return reading
 
 
-def diagnose(reader, repo: str, reading: Reading, *, at: datetime | None) -> Reading:
+def diagnose(reader, repo: str, reading: Reading, *, at: datetime | None,
+             now: datetime) -> Reading:
     """The diagnosis reads. A failure here is named, never raised: the hold
     is known, and what could not be read is a person's to look at."""
     unread = []
@@ -628,8 +664,8 @@ def diagnose(reader, repo: str, reading: Reading, *, at: datetime | None) -> Rea
         if found:
             reading.failing = found
             break
-        running = running or running_job(jobs)
-    if reading.failing is None and reading.age >= ALERT_AFTER_MINUTES and running:
+        running = running or running_job(jobs, now)
+    if reading.failing is None and running:
         reading.failing = running
     reading.unread = tuple(unread)
     return reading
@@ -665,27 +701,49 @@ def next_step(reading: Reading, hold_text: str = "") -> tuple[str, str]:
                         "empty — the next Promote Channel run moves it.")
     if outcome in PERSON_OUTCOMES:
         return PERSON, (f"Promote Channel refused with {outcome}, which a re-run "
-                        f"does not clear: {_one_line(decision.reason)[:300]}")
+                        f"does not clear: {_one_line(decision.reason)}")
     if job and job.attempt >= 2:
         return PERSON, (f"the run is already on attempt {job.attempt} and the job "
                         f"{_doing(job)}, so a re-run has not cleared it.")
     if reading.unread:
         return PERSON, ("the diagnosis could not read "
-                        + "; ".join(reading.unread)[:400] + ".")
+                        + "; ".join(reading.unread) + ".")
     if outcome == pc.OUTCOME_MIRROR_FAILED:
         return FIX, ("agent-bureau's mirror tests fail on this commit "
                      "(mirror-tests-failed), so agent-bureau's mirror needs a fix.")
+    if outcome == pc.OUTCOME_INCONCLUSIVE and (job is None or job.name == HARNESS_JOB):
+        # The harness job DID fail at a step — on GitHub's rate limit, which
+        # the decision read off its stamp (DRE-9068). Another job failing
+        # beside it is still that job's fix, below.
+        return RERUN, (f"GitHub refused the harness for a rate limit, so the "
+                       f"run is {pc.OUTCOME_INCONCLUSIVE} and nothing needs a "
+                       f"fix: re-run the harness once the limit resets. "
+                       f"{_one_line(decision.reason)}")
     if job:
         if job.state == FAILURE and job.failed_step:
             return FIX, (f"the job failed at step \"{job.failed_step}\" on attempt "
                          f"{job.attempt}, so the code needs a fix before "
                          f"{pc.CHANNEL} can move.")
+        if job.state not in FAILING:
+            since = ("it started" if job.state == RUNNING else "its attempt began")
+            return RERUN, (f"the job {_doing(job)} on attempt {job.attempt}, "
+                           f"{ALERT_AFTER_MINUTES // 60} hours or more after "
+                           f"{since}, so it is stuck: cancel the run and "
+                           "re-run it.")
         return RERUN, (f"the job {_doing(job)} on attempt {job.attempt}, so "
                        "re-running its failed jobs is the next step.")
+    if OUTCOME_NEXT.get(outcome) == WAIT:
+        reason = _one_line(decision.reason)
+        return WAIT, (f"no job has failed or been running "
+                      f"{ALERT_AFTER_MINUTES // 60} hours, and Promote Channel's "
+                      f"newest decision is {outcome}: {reason}"
+                      f"{'' if reason.endswith('.') else '.'} {pc.CHANNEL} moves "
+                      "on its own once that suite finishes green, so nobody "
+                      "needs to act yet.")
     if outcome in OUTCOME_NEXT:
         return OUTCOME_NEXT[outcome], (
             f"no job has failed, and Promote Channel's newest decision is "
-            f"{outcome}: {_one_line(decision.reason)[:300]}")
+            f"{outcome}: {_one_line(decision.reason)}")
     return PERSON, ("no job has failed and no Promote Channel decision names "
                     "why the channel is held.")
 
@@ -715,6 +773,15 @@ def job_label(reading: Reading) -> tuple[str, str]:
     return "no failing job found", "none"
 
 
+def job_word(reading: Reading) -> str:
+    """`Stuck job` for a job named because it is still going, else
+    `Failing job`."""
+    decision, job = reading.decision, reading.failing
+    if decision and decision.outcome == pc.OUTCOME_HELD:
+        return "Failing job"
+    return "Stuck job" if job and job.state not in FAILING else "Failing job"
+
+
 def title(reading: Reading, step: str, label: str) -> str:
     return f"stable held since {pt_clock(reading.since)} PT — needs {step}: {label}"
 
@@ -722,7 +789,7 @@ def title(reading: Reading, step: str, label: str) -> str:
 def body(reading: Reading, step: str, why: str, label: str, url: str) -> str:
     oldest = reading.chain[-1].sha
     return "\n".join([
-        f"Failing job: {label} ({url})",
+        f"{job_word(reading)}: {label} ({url})",
         f"Needs: {step} — {why}",
         f"Held since: {iso(reading.since)} ({pt_clock(reading.since)} PT)",
         f"Waiting on stable: {len(reading.chain)} commit(s), oldest {_sha7(oldest)}",
@@ -754,7 +821,7 @@ def watch(reader, repo: str, *, interval: int, at: datetime | None = None,
     if not reading.held:
         return Pass(f"{TAG} none — {pc.CHANNEL} carries {pc.TRUNK} "
                     f"{_sha7(reading.carried)}", "resolve")
-    reading = diagnose(reader, repo, reading, at=at)
+    reading = diagnose(reader, repo, reading, at=at, now=now)
     step, why = next_step(reading, hold_text)
     label, url = job_label(reading)
     action = raise_window(reading.age, now, interval) or "quiet"

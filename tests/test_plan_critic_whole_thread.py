@@ -18,7 +18,7 @@ comments, which is `comment_records`' default window. Every reader in
 `plan_critic` that plan.yml feeds from it is written against the whole thread:
 `pre_passed` reads across attempts on purpose, and `current_cycle`,
 `opens_fresh_attempt` and `post_release` all look back to a boundary. Busy
-epics (planner-slot receipts, operator holds) push the records out of the
+epics (the planner's own receipts, operator holds) push the records out of the
 window:
 
   * On DRE-3698 the window at the decision began at 07:57 PT, so the 23:52 PT

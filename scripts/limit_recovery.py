@@ -85,6 +85,9 @@ is not red on every pass for a card nobody was told about.
     shipped contract that is a card in the lane the start lane names (DRE-3062
     died at `Card → In Progress` and never left it); once the flip sets
     `build_start.lane` to In Progress, it is every card that died building.
+    A card carrying `no-code` is never re-entered (DRE-9154): a person builds
+    it, so it gets one hand-off receipt closing the marker and one
+    `no-code-in-build-lane:` line (`NO_CODE_TAG`), and keeps its lane.
   * `fix` / `review` / `sync` — the ORIGINAL GitHub run the marker names is
     re-run, failed jobs only. Never a workflow_dispatch: the rerun keeps the
     run's own event, PR and head, which is what the fix loop, the critic and
@@ -222,6 +225,14 @@ LIMIT_DEATH_CLOCK_MINUTES = dead_run.LIMIT_DEATH_CLOCK_MINUTES
 # The clock's hand-off reason and its red-run line both open on this phrase,
 # and the sweep routes the line to its standing-defect ledger by it.
 STOOD_PHRASE = "the limit-death marker has stood"
+# DRE-9154: a `no-code` card is a person's to build, and the relay refuses
+# to dispatch one. Both sweep paths that start a build — this pass's build
+# re-entry and reconcile's not-started re-dispatch — hold it back with one
+# line opening on this tag, spelled here once and declared in
+# config/proof-reach.json `log_lines` so the epic's proof run may read it.
+NO_CODE_TAG = "no-code-in-build-lane:"
+# Moving the card there is a person's act — the console's Answer or a board move.
+HAND_WORK_LANE = "Hand-work"
 _COUNT_WORDS = ("no", "one", "two", "three", "four", "five", "six", "seven",
                 "eight", "nine")
 
@@ -401,6 +412,22 @@ def _lane(card: dict) -> str:
     return (card.get("state") or {}).get("name") or ""
 
 
+def no_code(card: dict) -> bool:
+    """Does the card carry `no-code` (DRE-9154)? Compared lower-cased, the
+    way the sweep's `counts_against_wip` reads it."""
+    return any(
+        (lbl.get("name") or "").lower() == linear_ops.NO_CODE_LABEL
+        for lbl in (card.get("labels") or {}).get("nodes", [])
+    )
+
+
+def no_code_line(ident: str, lane: str, path: str) -> str:
+    """The one line a path that held back a `no-code` card prints (DRE-9154).
+    `path` names it: `reconcile` or `limit-recovery`."""
+    return (f"{NO_CODE_TAG} {ident} in {lane} — carries {linear_ops.NO_CODE_LABEL}, "
+            f"so {path} dispatched nothing; a person moves it to {HAND_WORK_LANE}")
+
+
 def _needs_rerun(card: dict, marker: dict) -> bool:
     """Whether re-entry means re-running the original run: every PR stage,
     and a planning stage whose card is already past Planning exit."""
@@ -486,6 +513,12 @@ def handoff_receipt(marker: dict, reason: str) -> str:
     )
 
 
+def _hand_off(lops, ident: str, marker: dict, reason: str) -> None:
+    """Post the hand-off receipt — the one site for every reason, the clock's,
+    the no-trigger kind and a `no-code` card's (DRE-9154)."""
+    lops.cmd_comment(ident, handoff_receipt(marker, reason))
+
+
 def _reenter(card: dict, marker: dict, *, rerun, move, dispatch) -> str:
     """Re-enter the stage the marker names; return what was done, for the
     receipt. Raises RecoveryFailed when the write did not go through."""
@@ -556,6 +589,17 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         marker = waiting(_bodies(card))
         if marker is None:
             continue
+        if marker.get("stage") == "build" and no_code(card):
+            # DRE-9154: a person builds a `no-code` card, so its build is
+            # never re-entered — no write, no WIP room. Told once, before any
+            # trigger or clock: the hand-off closes the marker, so it never
+            # stands to the six-hour clock. The card keeps its lane.
+            _hand_off(lops, ident, marker, (
+                f"the card carries `{linear_ops.NO_CODE_LABEL}`, so no agent "
+                f"builds it and a person builds it. Moving it to "
+                f"{HAND_WORK_LANE} is a person's act"))
+            lines.append(no_code_line(ident, _lane(card), RECOVERY_TAG))
+            continue
         # DRE-4208: the clock, read off the marker's own comment node. An
         # unknown age is never stale.
         age = marker_age_minutes(marker_node(card), now)
@@ -595,7 +639,7 @@ def recover(lops, now: datetime, active_account: str | None, wip_room: int, *,
         if reason is not None:
             # Told once, and the receipt closes the marker — no WIP spent, and
             # the card is the sweep's again next pass.
-            lops.cmd_comment(ident, handoff_receipt(marker, reason))
+            _hand_off(lops, ident, marker, reason)
             lines.append(f"{RECOVERY_TAG}: {ident} handed to a human — {reason.split('. ')[0].rstrip('.')}")
             if alarm:
                 lines.append(alarm)

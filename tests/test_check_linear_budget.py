@@ -116,16 +116,20 @@ def test_render_table_prints_unknown_for_an_unreadable_repo_and_a_grand_total():
 
 
 def test_the_reader_only_lists_and_views_runs():
-    """READ-ONLY, pinned: the only `gh` verbs in the script are `run list` and
-    `run view`. A write verb added later fails here before it fails live."""
+    """READ-ONLY, pinned: the only `gh` calls in the script are `run view` and
+    an `api` call that is a GET (DRE-9165) — no `--method`/`-X`, no field and
+    no `--input`. A write added later fails here before it fails live."""
     with open(clb.__file__, encoding="utf-8") as f:
         tree = ast.parse(f.read())
     verbs = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "_gh":
             args = [a.value for a in node.args if isinstance(a, ast.Constant)]
-            verbs.add(tuple(args[:2]))
-    assert verbs == {("run", "list"), ("run", "view")}
+            verbs.add(("api",) if args[:1] == ["api"] else tuple(args[:2]))
+            if args[:1] == ["api"]:
+                assert not {"--method", "-X", "-f", "-F", "--field", "--raw-field",
+                            "--input"} & set(args), args
+    assert verbs == {("api",), ("run", "view")}
 
 
 # ── DRE-5201: a run's own spend, and only the lines the run printed ─────────
@@ -520,7 +524,6 @@ def test_a_split_process_covers_its_one_budget_line(monkeypatch):
 
 import json as _json  # noqa: E402
 import subprocess  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
 
 import pytest  # noqa: E402
 
@@ -538,9 +541,10 @@ def _no_sleep(monkeypatch):
 
 
 class _FakeGh:
-    """Stands in for `_gh`. `run list` answers each repo's runs, created now;
-    `run view <id> --log` answers the next of that run's scripted replies,
-    each `(rc, stdout, stderr)`, repeating the last one."""
+    """Stands in for `_gh`. The `api --paginate --slurp` listing answers each
+    repo's runs as the one page GitHub prints, created in the window's last
+    second (DRE-9165); `run view <id> --log` answers the next of that run's
+    scripted replies, each `(rc, stdout, stderr)`, repeating the last one."""
 
     def __init__(self, runs: dict[str, list[tuple[int, str]]],
                  replies: dict[int, list[tuple[int, str, str]]]):
@@ -548,12 +552,14 @@ class _FakeGh:
         self.views: dict[int, int] = {}
 
     def __call__(self, *args: str) -> subprocess.CompletedProcess:
-        if args[:2] == ("run", "list"):
-            repo = args[args.index("-R") + 1]
-            now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-            out = [{"databaseId": rid, "workflowName": wf, "createdAt": now}
+        if args[0] == "api":
+            url = args[-1]
+            repo = url.split("/actions/")[0].removeprefix("repos/")
+            last = url.split("created=")[1].split("&")[0].split("..")[1]
+            out = [{"id": rid, "name": wf, "created_at": last, "status": "completed"}
                    for rid, wf in self.runs.get(repo, [])]
-            return subprocess.CompletedProcess(args, 0, _json.dumps(out), "")
+            page = {"total_count": len(out), "workflow_runs": out}
+            return subprocess.CompletedProcess(args, 0, _json.dumps([page]), "")
         assert args[:2] == ("run", "view") and "--log" in args, args
         rid = int(args[2])
         n = self.views[rid] = self.views.get(rid, 0) + 1
@@ -571,6 +577,12 @@ def _drive(monkeypatch, capsys, fake: _FakeGh,
     return got.out, got.err
 
 
+def _total_line(out: str) -> str:
+    """The spend table's last line. The fallback table (DRE-8795) prints
+    after it, so it is no longer the output's last line."""
+    return next(line for line in out.splitlines() if line.startswith("TOTAL"))
+
+
 _SPENT_20 = "linear-budget: 900 → 880 (spent 20 this run; window resets 16:00 PT; budget: fleet)"
 
 
@@ -586,7 +598,7 @@ def test_a_run_still_in_progress_is_read_again_and_counted(monkeypatch, capsys, 
     assert fake.views[rid] == 3
     row = next(line for line in out.splitlines() if line.startswith("atlas"))
     assert row.split()[2:4] == ["1", "20"]
-    assert out.splitlines()[-1].split()[:3] == ["TOTAL", "1", "20"]
+    assert _total_line(out).split()[:3] == ["TOTAL", "1", "20"]
     assert "skipped" not in out and "empty log" not in out
     assert len(_no_sleep) == 2 and 0 < sum(_no_sleep) < 30
 
@@ -604,7 +616,7 @@ def test_a_run_never_readable_is_named_after_three_attempts(monkeypatch, capsys,
     out, err = _drive(monkeypatch, capsys, fake,
                       {"atlas": "o/atlas", "portico": "o/portico"})
     assert fake.views == {fine: 1, gone: 3}
-    tail = out.splitlines()[-1]
+    tail = _total_line(out)
     assert tail.split()[:3] == ["TOTAL", "1", "20"]
     assert ("(1 run(s) skipped: log not available after 3 attempts — "
             "portico 34310170001)") in tail
@@ -623,11 +635,13 @@ def test_an_empty_log_is_read_once_and_noted_on_its_own(monkeypatch, capsys, _no
     out, err = _drive(monkeypatch, capsys, fake, {"atlas": "o/atlas"})
     assert fake.views == {rid: 1}
     assert _no_sleep == []
-    tail = out.splitlines()[-1]
+    tail = _total_line(out)
     assert tail.split()[:3] == ["TOTAL", "0", "0"]
     assert "skipped" not in out
     assert "(1 run(s) empty log: no job ran)" in tail
-    assert err == ""
+    # DRE-9165: the one line a repo prints when it is done is all stderr holds.
+    assert [ln.split(" in ")[0] for ln in err.splitlines()] == [
+        "budget-check: atlas 1 run log(s) read"]
 
 
 def test_the_docstring_no_longer_says_an_unreadable_run_is_skipped():

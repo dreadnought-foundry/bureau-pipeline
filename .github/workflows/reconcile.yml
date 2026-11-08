@@ -215,7 +215,7 @@ jobs:
       # pool probe; the reads move to the selected pool app below.
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -242,7 +242,7 @@ jobs:
         id: probe_2
         if: env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -250,7 +250,7 @@ jobs:
         id: probe_3
         if: env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -258,7 +258,7 @@ jobs:
         id: probe_4
         if: env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -295,7 +295,7 @@ jobs:
       # not selected, so the chain always falls through to the original pair.
       - name: Mint read token (selected pool app)
         id: reader
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -384,6 +384,16 @@ jobs:
           # pass.
           SWEEP_REASON: ${{ inputs.sweep_reason }}
           SWEEP_CARD: ${{ inputs.sweep_card }}
+          # The three runner columns' effective values (DRE-8817), the very
+          # expressions GitHub evaluates for a re-run in this repository — a
+          # reusable's `vars` are its caller's. The canceled-check sweep holds
+          # a re-run while the column its job reads still names the runner
+          # service the job just hung, was killed or lost its runner on
+          # (scripts/runner_service.py). Read when this job starts, so a
+          # console move in the minutes since is not seen.
+          CI_RUNS_ON: ${{ vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
+          SHORT_RUNS_ON: ${{ vars.BUREAU_SHORT_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
+          LONG_RUNS_ON: ${{ vars.BUREAU_RUNS_ON || '["ubuntu-latest"]' }}
         run: |
           # Cards carry `**Repo:** <slug>` — reconcile.py compares against the
           # lowercase repo basename.
@@ -461,6 +471,19 @@ jobs:
       # The step summary lifts the switch, the tally, the `would:` lines and
       # the `proof-release:` lines — the release reading of the card a pass
       # dispatches, the line its proof record quotes (DRE-6516).
+      #
+      # BOUNDED AT 80 s, INSIDE THE STEP (DRE-9101). The phase runs through
+      # `proof_step_limit.py run --limit 80 --alarm`. In the step-time table on
+      # DRE-9101 (83 agent-bureau sweeps, 2026-11-02/03) this step took 31 s at
+      # most with no wait and 238 to 491 s with one, and the job ran out its
+      # 10 minutes in a proof step 13 times. A pass past 80 s is stopped, prints
+      # a `proof-step-limit: cut` line and ends the step green — a cut that
+      # failed the step would send the medic a re-run of a third of all sweeps
+      # — and the next full sweep runs it again. A failure of the phase itself
+      # stays red. `--alarm` raises one console notice when this pass and the
+      # three before it were all cut. No `timeout-minutes` of its own: the
+      # job's is the backstop, and the arithmetic is
+      # tests/test_proof_step_limit.py's.
       - name: Dispatch proof runs
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
@@ -481,6 +504,10 @@ jobs:
           # DRE-7287: the model a proof shadow runs on, beside each confirmed
           # real dispatch — unset or empty starts no shadow.
           PROOF_SHADOW_MODEL: ${{ vars.PROOF_SHADOW_MODEL }}
+          # DRE-9238: behind `| tee` Python buffers stdout, so a line reached
+          # the log only at the next flushed `read-door:` line, and a cut pass
+          # lost what was still buffered. Each line is written when printed.
+          PYTHONUNBUFFERED: "1"
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG
@@ -493,9 +520,9 @@ jobs:
           # summary, and the phase's own status carried past the summary.
           set -o pipefail
           STATUS=0
-          python3 .bureau-pipeline/scripts/proof_dispatch.py 2>&1 | tee proof-dispatch.log || STATUS=$?
+          python3 .bureau-pipeline/scripts/proof_step_limit.py run --step "Dispatch proof runs" --limit 80 --alarm -- python3 .bureau-pipeline/scripts/proof_dispatch.py 2>&1 | tee proof-dispatch.log || STATUS=$?
           BUDGET=$(grep '^linear-budget:' proof-dispatch.log || true)
-          SUMMARY=$(grep -E '^(proof-dispatch: (PROOF_DISPATCH_LIVE|eligible)|proof-release:|would:)' proof-dispatch.log || true)
+          SUMMARY=$(grep -E '^(proof-dispatch: (PROOF_DISPATCH_LIVE|eligible)|proof-release:|would:|proof-step-limit:)' proof-dispatch.log || true)
           {
             echo "### Proof-run dispatch — spend"
             echo
@@ -514,6 +541,11 @@ jobs:
       # record cannot, keeping its branch, with the hold on its card. Under
       # the proof dispatcher's gate, stub check and switch: dry (`would:`
       # lines, nothing written) until PROOF_DISPATCH_LIVE is `true`.
+      #
+      # BOUNDED AT 30 s, INSIDE THE STEP (DRE-9101): 12 s at most in the
+      # step-time table on DRE-9101. Cut there, it ends green with a
+      # `proof-step-limit: cut` line, as `Dispatch proof runs` does, and has no
+      # `timeout-minutes` of its own.
       - name: Close proof records that cannot merge
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
@@ -530,6 +562,8 @@ jobs:
           REPO: ${{ github.repository }}
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
           PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+          # DRE-9238: each line written when printed, as `Dispatch proof runs`.
+          PYTHONUNBUFFERED: "1"
         run: |
           if [ ! -f .github/workflows/self-proof-task.yml ] && [ ! -f .github/workflows/proof-task.yml ]; then
             echo "proof-record-sweep: no proof-run stub in this repository — nothing read, nothing closed"
@@ -537,8 +571,8 @@ jobs:
           fi
           set -o pipefail
           STATUS=0
-          python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO" 2>&1 | tee proof-record-sweep.log || STATUS=$?
-          SUMMARY=$(grep -E '^(proof-record-sweep:|would:)' proof-record-sweep.log || true)
+          python3 .bureau-pipeline/scripts/proof_step_limit.py run --step "Close proof records that cannot merge" --limit 30 -- python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO" 2>&1 | tee proof-record-sweep.log || STATUS=$?
+          SUMMARY=$(grep -E '^(proof-record-sweep:|would:|proof-step-limit:)' proof-record-sweep.log || true)
           {
             echo "### Proof record sweep"
             echo
@@ -559,6 +593,14 @@ jobs:
       # check and switch: dry (`would:` lines, nothing written) until
       # PROOF_DISPATCH_LIVE is `true`. Each command's status is kept, so one
       # failing does not skip the other, and the step fails at the end.
+      #
+      # ONE 120 s BUDGET FOR BOTH COMMANDS, INSIDE THE STEP (DRE-9101). In the
+      # step-time table on DRE-9101 a full pass with no wait took 80 to 89 s,
+      # and 20 passes took 168 to 424 s. `UNTIL` is set once, and each command
+      # runs through `proof_step_limit.py run --until "$UNTIL"`, so the act runs
+      # in what the sweep left and is not started when nothing is left. A cut
+      # ends green with a `proof-step-limit: cut` line, as `Dispatch proof
+      # runs` does, and the step has no `timeout-minutes` of its own.
       - name: Proof overdue
         if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
         env:
@@ -575,6 +617,8 @@ jobs:
           REPO: ${{ github.repository }}
           PROOF_DISPATCH_LIVE: ${{ vars.PROOF_DISPATCH_LIVE }}
           PROOF_DISPATCH_LIVE_OFF_UNTIL: ${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}
+          # DRE-9238: each line written when printed, as `Dispatch proof runs`.
+          PYTHONUNBUFFERED: "1"
         run: |
           REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
           export REPO_SLUG
@@ -583,15 +627,16 @@ jobs:
             exit 0
           fi
           set -o pipefail
+          UNTIL=$(( $(date +%s) + 120 ))
           STATUS=0
-          python3 .bureau-pipeline/scripts/proof_overdue_sweep.py --repo "$REPO_SLUG" 2>&1 | tee proof-overdue.log || STATUS=$?
+          python3 .bureau-pipeline/scripts/proof_step_limit.py run --step "Proof overdue / sweep" --until "$UNTIL" -- python3 .bureau-pipeline/scripts/proof_overdue_sweep.py --repo "$REPO_SLUG" 2>&1 | tee proof-overdue.log || STATUS=$?
           ACT_STATUS=0
           if [ -f .bureau-pipeline/scripts/proof_overdue_act.py ]; then
-            python3 .bureau-pipeline/scripts/proof_overdue_act.py 2>&1 | tee -a proof-overdue.log || ACT_STATUS=$?
+            python3 .bureau-pipeline/scripts/proof_step_limit.py run --step "Proof overdue / act" --until "$UNTIL" -- python3 .bureau-pipeline/scripts/proof_overdue_act.py 2>&1 | tee -a proof-overdue.log || ACT_STATUS=$?
           else
             echo "proof-overdue: action step not shipped yet" | tee -a proof-overdue.log
           fi
-          SUMMARY=$(grep -E '^(proof-overdue: (note|action step)|would:)' proof-overdue.log || true)
+          SUMMARY=$(grep -E '^(proof-overdue: (note|action step)|would:|proof-step-limit:)' proof-overdue.log || true)
           {
             echo "### Proof overdue"
             echo
@@ -675,6 +720,12 @@ jobs:
           HYGIENE_LIVE_OFF_UNTIL: ${{ vars.HYGIENE_LIVE_OFF_UNTIL }}
           TRIAGE_REPAIR_LIVE: ${{ vars.TRIAGE_REPAIR_LIVE }}
           TRIAGE_REPAIR_LIVE_OFF_UNTIL: ${{ vars.TRIAGE_REPAIR_LIVE_OFF_UNTIL }}
+          ALARM_REPAIR_LIVE: ${{ vars.ALARM_REPAIR_LIVE }}
+          ALARM_REPAIR_LIVE_OFF_UNTIL: ${{ vars.ALARM_REPAIR_LIVE_OFF_UNTIL }}
+          OPERATOR_AGENT_LIVE: ${{ vars.OPERATOR_AGENT_LIVE }}
+          OPERATOR_AGENT_LIVE_OFF_UNTIL: ${{ vars.OPERATOR_AGENT_LIVE_OFF_UNTIL }}
+          OPERATOR_AGENT_DO_LIVE: ${{ vars.OPERATOR_AGENT_DO_LIVE }}
+          OPERATOR_AGENT_DO_LIVE_OFF_UNTIL: ${{ vars.OPERATOR_AGENT_DO_LIVE_OFF_UNTIL }}
           NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
           NAME_GUARD_LIVE_OFF_UNTIL: ${{ vars.NAME_GUARD_LIVE_OFF_UNTIL }}
         run: |

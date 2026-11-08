@@ -1,9 +1,10 @@
 """No step hands `actions/create-github-app-token` an input its pin lacks (DRE-7230).
 
-v3.2.0 declares no input for repository variables, yet 26 model-home mints
-asked for `permission-variables`. The action logged that the input is not
-valid, still forwarded it as `variables: read` (or `write`), and GitHub
-refused the mint: every selecting run read the home as unreadable and ran on
+v3.2.0 declares no input for repository variables, and neither does v3.3.0
+after it (DRE-8857), yet 26 model-home mints asked for `permission-variables`.
+The action logged that the input is not valid, still forwarded it as
+`variables: read` (or `write`), and GitHub refused the mint: every selecting
+run read the home as unreadable and ran on
 the defaults in the code. A warning in a step marked `continue-on-error` is
 easy to miss, so this test reads every step's `with:` keys against the inputs
 its pinned release declares.
@@ -101,9 +102,13 @@ def test_the_copy_records_each_pin_with_its_version_and_source():
         assert {"private-key", "owner", "repositories"} <= set(inputs)
 
 
-def test_v3_2_0_declares_no_variables_input():
+@pytest.mark.parametrize("sha", [
+    "bcd2ba49218906704ab6c1aa796996da409d3eb1",  # v3.2.0
+    "64ab729a6294000f5aa4a4bc0b73d1f32bc45510",  # v3.3.0 (DRE-8857)
+])
+def test_the_release_declares_no_variables_input(sha):
     """Why the model-home mints ask for no permission subset at all."""
-    inputs = recorded()["pins"]["bcd2ba49218906704ab6c1aa796996da409d3eb1"]["inputs"]
+    inputs = recorded()["pins"][sha]["inputs"]
     assert "permission-contents" in inputs
     assert not [i for i in inputs if "variable" in i]
 

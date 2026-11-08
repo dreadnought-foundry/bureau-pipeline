@@ -351,7 +351,7 @@ beside `release-live` as a terminal progress act in `tests/test_act_cadence.py`.
 It ships console-first like every other row. The console's `ACTS` has to carry
 `roll-up-split` before this row can merge.
 
-## The hygiene agent's fourteen rows — `🧹 hyg-*` (DRE-5368)
+## The hygiene agent's fifteen rows — `🧹 hyg-*` (DRE-5368)
 
 | Act name | Tag | Kind | Next actor |
 | -- | -- | -- | -- |
@@ -363,27 +363,31 @@ It ships console-first like every other row. The console's `ACTS` has to carry
 | `hygiene-resend-to-planning` | `hyg-resent-to-planning` | recovery | `plan.yml` |
 | `hygiene-card-close` | `hyg-card-closed` | recovery | `operator` |
 | `hygiene-proof-close` | `hyg-proof-closed` | recovery | `operator` |
-| `hygiene-triage-return` | `hyg-triage-returned` | recovery | `reconcile.py` |
+| `hygiene-triage-return` | `hyg-triage-returned` | recovery | `plan.yml` |
 | `hygiene-review-move` | `hyg-moved-to-review` | recovery | `reconcile.py` |
 | `hygiene-card-cancel` | `hyg-card-canceled` | recovery | `operator` |
 | `hygiene-cause-name` | `hyg-cause-named` | hold | `operator` |
 | `hygiene-hold-clear` | `hyg-hold-cleared` | recovery | `reconcile.py` |
 | `hygiene-triage-alarm` | `hyg-triage-aged` | hold | `operator` |
+| `hygiene-blocker-owner-notice` | `hyg-blocker-owner` | hold | `operator` |
+| `hygiene-hand-step-class` | `hyg-hand-step` | hold | `operator` |
 
 The hourly hygiene pass (`scripts/hygiene.py`) clears the mechanical rows a
 person clears by hand today. Every row is emitted from that one file, whose
 table of tags is each row's anchor, and every receipt opens
 `🧹 hygiene: <tag> — <cause> · <HH:MM PT>`, names its evidence, and ends in the
-trailer. **Which** act a pass takes is decided by a lane module
+trailer. A notice that lists what it found — the blocker-owner lane's
+(DRE-8648) — carries those lines behind one blank line after the evidence,
+and they are composed by the same `hygiene.receipt`. **Which** act a pass takes is decided by a lane module
 (`scripts/hygiene_<lane>.py`, a sibling card each); the core composes and posts
-all fourteen through one seam, which is why `tests/test_check_act_receipts.py`
+all sixteen through one seam, which is why `tests/test_check_act_receipts.py`
 counts a site composing a computed act name as composing the acts its own file
 declares.
 
 Every row declares a `null` cadence and none is `dispatched`: what follows a
 gate re-dispatch is the gate's own run, timed by its own acts, and every other
 row hands the work to a person, the planner or the sweep. The kinds are copied
-from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — three holds and
+from the console's `ACTS` (agent-bureau PR #3023, DRE-5367) — five holds and
 eleven recoveries — so they agree tag by tag. The idempotency key is the pair (tag,
 cause), applied by the core's write seam and never restated by a lane.
 
@@ -394,6 +398,29 @@ reaches `HYGIENE_TRIAGE_REPAIRED_ALARM_HOURS` (default 0, the first hourly pass
 that sees it), held or not: it parked again after the repair, or the repair did
 not finish, or it started two hours ago and recorded no outcome (DRE-7183). A
 repair still running never alarms.
+
+`hygiene-blocker-owner-notice` (`scripts/hygiene_blockers.py`, DRE-8648) is
+said once on a card that has sat more than 48 hours in `Intake` or `Hand-work`
+while a `blocks` relation names an open card. It names the card's owner as
+plain text — the assignee, or the creator when nobody is assigned — lists every
+open card it holds up, directly and through chains of relations, and says the
+two ways on. An owner who is not a person reads `no owner to tell`, and the
+card is a left row in the summary too. The cause is `<card> in <lane> since
+<YYYY-MM-DD>`, so a card is told once per stay. The board read covers `Intake`
+for it, and the guard still never writes a card into that lane.
+
+`hygiene-hand-step-class` (`scripts/hygiene_hand_step.py`, DRE-8650) marks
+an operator step in `Hand-work` as one a machine could do or one a person
+must: the label `hand-step:machine` or `hand-step:person`, and a receipt whose
+cause is `<class>, kind <kind>` and whose evidence is the phrase of the card
+that decided it, or `no machine kind matched`. The class is
+`scripts/operator_step_kind.py` over the card's title and description, by the
+phrases in `config/operator-step-kinds.json`. The description is read whole,
+one read per card the lane classes, because the board read's copy is cut at
+500 characters; a card whose read fails waits for the next pass and is never
+classed from the cut text. It is said once per card — the
+lane skips a card that already wears a class label — and it moves nothing and
+dispatches nothing: the operator still does every step.
 
 The hourly **summary** the pass posts to its standing card is not one of these:
 it is a report about the pass, declared `not-an-act` in the `unconverted`
@@ -631,7 +658,7 @@ writes nothing.
 | kind · state · next actor | `hold` · `unchanged` · `operator` |
 | discharges | nothing |
 | cadence | null — the hold ends with a person, and nothing bounds how long one takes |
-| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready` |
+| emitted by | `scripts/reconcile.py`, at the `promotion_stall.notice(` call in `promote_ready`, and for an epic at the `promotion_stall.epic_notice(` call in `clock_planning_epics` (DRE-8815) |
 
 DRE-4198 found five Backlog cards refused promotion for the same reason across
 thirty hours, and found them only by reading a sweep log: the refusal was
@@ -648,15 +675,32 @@ stood `PROMOTION_STALL_MINUTES` (120), the card gets the receipt ONCE:
 
 and a `promotion-stalled <card>: …` entry joins the red-run ledger on every
 sweep it still stands, so the run stays red until a person acts. A PARKED card,
-an epic, a card with an unresolved `blockedBy`, a card sent to Planning and any
-card waiting on the WIP budget are never clocked: each already says what it
-waits for, and that thing is scheduled.
+a card waiting on its epic's approval, a card with an unresolved `blockedBy`, a
+card sent to Planning and any card waiting on the WIP budget are never clocked:
+each already says what it waits for, and that thing is scheduled. The one
+exception is the epic itself when it stands in Planning with its plan run dead
+or never found — clocked once, as the epic's own record, below.
 
 The epic cap's hold, `epic-cap-undecided`, is clocked too (DRE-6618), and its
 receipt and ledger entry add `for its epic <epic>` after the tag, because that
 refusal is lifted on the epic, not the card. The full sweep asks the cap
 itself for an approved epic a blocker epic has released with no decision on
 record; the hold it does not settle that way is the one the clock reports.
+
+An epic in Planning that Queued cards wait on (`epic-not-active`) is clocked as
+ONE record for the epic, never one per child (DRE-8815), and only when its
+newest plan run is dead or none of the plan stub's newest 50 runs names it.
+The record is dated by the later of the children's oldest `🧾 promotion-wait:
+epic-not-active —` receipt and that run's end, and the receipt goes on the
+EPIC, once per newest run, from `clock_planning_epics` on the full sweep:
+
+    🚨 promotion-stalled: <epic> [run <id>|no-run] has stood in Planning with its plan run dead — <n> children wait on it in Queued.
+
+Its `promotion-stalled <epic>: …` ledger entry is what
+`standing_defect_alert.settle` raises one console alert for. Green Light,
+Triage and every other lane are never clocked, nor is an epic carrying
+`needs-human` or `hand-built`, one inside a limit-death wait, or one whose
+`repo:` label names another repo.
 
 The holds (`HELD_TAGS` — the hold label, an open agent-blocker, a stale
 verdict, a refused live re-check) are never clocked per card, but they count
@@ -752,6 +796,152 @@ reads a lift line as one of its receipts.
 The console must learn this act before this row merges. The `act registry
 consumers` job refuses a row the console does not carry, and it knows an act
 by its tag or its name.
+
+## The row that records an Alarm Repair — `🔩 alarm-repair` (DRE-8633)
+
+| Field | Value |
+| -- | -- |
+| tag | `alarm-repair-receipt` |
+| act name | `alarm-repair` |
+| kind · state · next actor | `recovery` · `unchanged` · `reconcile.py` |
+| discharges | nothing |
+| cadence | `null` — the receipt leaves the card's state unchanged with `reconcile.py` next, and the sweep reads the card again on its own schedule, so nothing is expected to speak on it and the console reads it as parked, not overdue |
+| emitted by | `scripts/alarm_repair.py`, at the `pipeline_act.receipt("alarm-repair", …)` call in `_post` |
+
+An open console alert that names a card, at `WARN` or `CRITICAL` and open for
+at least two hours, gets one automatic repair attempt per raise (epic
+DRE-8606). `alarm_repair.py select` reads `bureau_read.open_alerts()` and the
+card's whole thread; `claim` posts the first receipt before the repair agent
+runs; `apply` posts the last, after every other write of its outcome:
+
+    🔩 alarm-repair: started · alert=<kind> · raised=<raised_at>
+    🔩 alarm-repair: repaired · alert=<kind> · raised=<raised_at> · move=pipeline
+    🔩 alarm-repair: diagnosed · alert=<kind> · raised=<raised_at> · move=operator|ceo
+    🔩 alarm-repair: unfinished · alert=<kind> · raised=<raised_at> · move=operator
+
+`repaired` is a relation the card's own prose declares, added through
+`linear_ops._add_blocked_by`, or a hold lift its own rule says is due,
+`🔓 hold lifted: … by=scripts/alarm_repair.py`. The description, title, labels
+and lane are never written. **The receipt key is live**: a pipeline-authored
+comment whose first line is one of these, naming the alert's kind and
+`raised_at`, is that raise's one attempt, so `select` answers `spent` and
+`claim` exits 3. An alert raised again has a new `raised_at` and gets a new
+attempt. A comment of that shape from any other author counts for nothing.
+The tag is `alarm-repair-receipt`, never the bare act name, so a `tag in body`
+count never reads the lift line as one of its receipts.
+
+The console must learn this act before this row merges, as for every row.
+
+## The row that counts a failure already filed — `🔢 failure-tally` (DRE-8635)
+
+| Field | Value |
+| -- | -- |
+| tag | `failure-tally-receipt` |
+| act name | `failure-tally` |
+| kind · state · next actor | `refusal` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | `null` — the card stays exactly where it was, with whoever holds it or the person who closed it, and nothing is expected to speak after a count |
+| emitted by | `scripts/failure_tally.py`, at the `pipeline_act.receipt("failure-tally", …)` call in `_post` |
+
+A failure the pipeline has already filed as a card adds a count to that card
+instead of filing another (epic DRE-8606). `failure_tally.file_or_tally`
+reads the repo's cards whose title equals the failure's title, filed in the
+last 30 days, in any state. With none it files the card, its body ending
+`Occurrence: <occurrence>`. When the newest is open, Canceled or Duplicate and
+does not yet name the occurrence, it posts:
+
+    🔢 failure-tally: <n> · <occurrence>
+
+where `<n>` counts every occurrence, the first filing included. When the
+newest is Done it files a new card naming the Done one, because a count on a
+closed card is seen by nobody. A search that never answered files nothing.
+**The receipt key is live**: an occurrence already on the card's description
+or on one of these receipts writes nothing, and the receipts the pipeline
+wrote are what `<n>` counts; a comment of that shape from any other author
+counts for nothing. A card filed before the tally has no `Occurrence:` line,
+so on it a `<key>@<id>` occurrence is already named when its description holds
+the key and the id each as a whole token: the stranded-fix card lists the
+branch and each commit's sha8 apart, and the first sweep over commits it
+already lists is not a second occurrence. The stranded-fix class files through it at both of its
+writers, with `<branch>@<sha8 of the newest stranded commit>` as the
+occurrence. The tag is `failure-tally-receipt`, never the bare act name, so a
+`tag in body` count never reads the `failure-tally:` log line as a receipt.
+
+The console must learn this act before this row merges, as for every row.
+
+## The row that records an Operator Agent pass — `🛠️ operator-agent` (DRE-8746)
+
+| Field | Value |
+| -- | -- |
+| tag | `operator-agent` |
+| act name | `operator-agent` |
+| kind · state · next actor | `recovery` · `unchanged` · `operator` |
+| discharges | nothing |
+| cadence | `null` — the receipt is followed in the same Operator Agent run by its apply, and after it the card is a person's: the CEO's in Green Light, the studio host's go-live for a blocked card, or a person's for a closed one. A pass that died between the receipt and its apply is finished by the next hourly pass, which reads the card back as `apply-only` |
+| emitted by | `scripts/operator_agent_apply.py`, at the `pipeline_act.receipt("operator-agent", …)` call in `_post` |
+
+The operator agent decides a card waiting on a person (epic DRE-8738), and a
+card it decides `studio`, `ceo` or `done-already` spends its pass under one
+receipt. `operator_agent_apply.py claim` posts it, written by
+`operator_decide.receipt_text`; `apply` acts only under it, re-reads the card
+live and makes the one write the outcome names:
+
+    🛠️ operator-agent: <outcome> — <reason> · <HH:MM> PT
+    fingerprint: <12 hex>
+    step: <step>
+
+then, for `studio`, one `as built, the studio host cannot: "<quote>"` line per
+quote and `waits on: DRE-8582` (`waits on: DRE-8582, DRE-8487` for a deploy
+step), and the apply adds a `blockedBy` relation to DRE-8582 — never to
+DRE-8486, to DRE-8487 or to any epic, and never on DRE-8582 itself; for `ceo`,
+`act: <act id>` and, for a business choice, `choices: <one line of JSON>`,
+and the apply asks the CEO one question in Green Light through
+`planning_escalation.escalate`, a business choice screened again first; for
+`done-already`, one `evidence: "<quote>"` line per quote and `close: done`,
+and the apply moves the card to Done from the lane it read.
+
+**The receipt key is live**: a pipeline-authored receipt carrying the card's
+fingerprint is its spent pass, so `claim` exits 3, and a pass that died before
+its write reads the card back as `apply-only` and tries the write again under
+the same receipt. A write that did not land posts nothing and prints
+`operator-agent: <CARD> write refused — <outcome> · <what did not land>`. No
+line opens `Outcome:` or `Released as`: a close the relay's lane guard returns
+(`🚧 lane-guard-returned`, DRE-7327) is never made a second time, and waits
+for a person. The tag is the bare act name, because this act lifts no hold
+and no lift line carries its name.
+
+**A `do` card (DRE-8925).** The same act covers a `do` card's three comments,
+written by DRE-8923's composers in `operator_decide.py` and posted by the same
+`_post`: `do-claim` posts the claim, `🛠️ operator-agent: do-claim — …` with
+one `will run:` line per checked command, before the step's first command
+runs; `do-post` posts the receipt, `🛠️ operator-agent: do — …`, after it,
+ending `close: <rule>`, `close: none named`, `failed:` or `continues:`; and
+`do-close` makes the close the receipt names — a `no-code` card through the
+console's outcome door (`scripts/console_outcome.py`), whose own `Outcome:`
+record is what the lane guard reads, any other card by the move to Done — or,
+when that close can never land (the door's 400 or 409, a pull request closed
+unmerged or open past `pr_wait_days`), posts the one close-failure line,
+`🛠️ operator-agent: do-close — …`. Each is the card's spent pass: `select`
+reads the newest back, so a step never runs twice and a close that can never
+land is not retried. Every reader of these comments sets the act's trailer
+line aside.
+
+**A Green Light row (DRE-9049).** The same act covers the three outcomes of
+a row in Green Light. `repair`, a stopped run, and `answer`, a question the
+facts answer, return a row that was never a decision to Planning: the
+receipt names the cause, quotes the facts and says
+`moved: Green Light → Planning`, a move the lane contract admits
+`operator_agent_apply.py` to make beside the hygiene agent's and the Triage
+Repair's, so the state stays `unchanged`. `keep` leaves a genuine decision
+where it is, under a receipt that says `stays: Green Light`, and moves
+nothing; the agent never approves. The sweep's `hand-work-overdue` alarm is
+also a trigger for the agent's next pass on the card. The receipt key has one
+exception here, the re-keep (DRE-9051): a `keep` that a comment came after
+(`operator_decide.keep_stands` is False) no longer spends the pass, so `claim`
+posts the next Green Light decision's receipt over the same fingerprint and
+the row is re-read once per comment it gets, never every pass.
+
+The console must learn this act before this row merges, as for every row.
 
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)
 

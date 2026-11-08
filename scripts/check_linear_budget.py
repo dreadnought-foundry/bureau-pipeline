@@ -51,10 +51,10 @@ three times; matched anywhere, that added three "unknown/rolled" lines to
 every reconcile run.
 
 A repo the token cannot read prints UNKNOWN, never 0: a zero that means
-"could not look" would hide exactly the repo that is spending. A run whose
-log `gh` cannot return (still in progress, or expired) is read again, up to
-3 attempts with a short back-off between them (DRE-3242): a run that has only
-just finished usually reads on the second look. One still unreadable after
+"could not look" would hide exactly the repo that is spending. A completed
+run whose log `gh` cannot yet return (or one that has expired) is read
+again, up to 3 attempts with a short back-off between them (DRE-3242): a run
+that has only just finished usually reads on the second look. One still unreadable after
 the last attempt is named in the footer as `<slug> <run id>`, and the last
 thing `gh` said about it goes to stderr. An empty log — `gh` answers rc 0
 with no output for a completed run whose every job was skipped — is not
@@ -63,10 +63,136 @@ is counted in its own `empty log` note. A line that says `window rolled` or
 `unknown` is a run seen with a spend that cannot be known; it counts as a
 run, not as 0 spent.
 
-Never writes anything: `gh run list` and `gh run view --log` are its only
-calls. Usage:
+A second table follows the first (DRE-8795): the Linear reads that fell back
+from the read door, per pipeline reader. The client prints one line per
+fallback,
 
-    python3 scripts/check_linear_budget.py [--hours N]
+    read-fallback: reader="<workflow> / <job> / <script>" read=<read> reason=<reason>
+
+and this script counts them out of the same run logs, one row per (repo,
+reader, read, reason), sorted by count, then by name. It is reads only:
+Linear writes and the console's own Linear sync never print the line. A run
+whose processes printed `read-door: mode off` (or `shadow`) and never `mode
+on` never asked the door, so it adds nothing to the rows; its repo is named
+on a `door off` line with its run count instead, because its silence must
+never read as zero fallbacks. With no line in the window the table says so
+in words, with the number of runs read in mode `on`, and a repo the token
+cannot read prints UNKNOWN there too. The line is read only where it opens a
+line, exactly as the markers above are.
+
+A third table follows (DRE-8897): the reads each process sent Linear
+directly, per reader and the place in its code that asked. Every process that
+sent Linear a read through `linear_ops.py` prints, at exit, one line per
+(site, caller, bucket):
+
+    linear-read: reader="<workflow> / <job> / <script>" site=<module>.<function> count=<n> budget=<bucket> process=<token> caller=<module>.<function>
+
+`site` is the place in the calling code that asked for the read and `caller`
+the function that sent the query; a write is never on the line. The table,
+`direct Linear reads, last <N>h — per reader and site`, has one row per
+(repo, reader, site, bucket) with the count summed over callers, sorted by
+count, then by name, and then one TOTAL row per (repo, reader). `--by-caller`
+prints it with one more key column instead, under `direct Linear reads, last
+<N>h — per reader, site and caller`: one row per (repo, reader, site, caller,
+bucket), the same TOTAL rows under it.
+
+A fourth follows that, in both forms (DRE-8897): the door's answers, on the
+key they were made under. Every process whose read-door mode was `on` prints
+one line at exit:
+
+    linear-door: reader="<workflow> / <job> / <script>" served=<n> fallbacks=<read>/<reason>:<n>[,...] budget=<bucket> process=<token>
+
+and `door answers, last <N>h — per reader and bucket` has one row per (repo,
+reader, bucket) with `served` summed and one `<read>/<reason>` column per
+fallback seen, summed, sorted by served, then by name.
+
+Both lines are read only where they open a line, as every marker above is,
+and a line repeated with the same `process=` is counted once. A run with
+neither adds nothing to those tables, and changes nothing in the first two:
+a log from before them reads exactly as it did. With no line in the window
+each table says so in words, and a repo the token cannot read prints UNKNOWN
+there too.
+
+Three optional flags make it read less (DRE-9163). Walking every repo and
+every run, it can outlast a proof run's tool ceiling and be killed having
+printed nothing, since the tables come only after the last log is read.
+`--repo <slug>`, repeatable, lists and reads only the named slugs of
+config/repo-map.json; a slug the map does not hold exits 2 before any `gh`
+call, and stderr names it and the valid ones. `--workflow <name>`,
+repeatable, fetches the log of only the runs whose `workflowName` is one of
+the names; the others are never fetched. `--deadline <seconds>` reads the
+time since the script started before each repo's listing and each `gh run
+view`; once it reaches the deadline nothing more is read, and the four
+tables print from the runs that were. The spend table's footer then carries
+one more note, `stopped at the deadline (<seconds>s)`, naming per slug how
+many of its listed runs — of the named workflows, with `--workflow` — were
+not read, and the slugs never reached. A slug never reached prints the
+UNKNOWN rows an unreadable repo prints, never 0. With none of the three,
+the tables are exactly what they were.
+
+It reads the window whole (DRE-9165). It used to list a repo's newest 100
+runs and keep the ones created in the window, so a busy hour was cut short
+without a word: on 2026-11-03, for the hour ending 12:16 PT, GitHub listed
+183 runs in bureau-pipeline and the check read at most 100 — its fallback
+table showed 3 fallbacks where the run logs held 16, and the switch-off is
+gated on that table reading zero. A repo's runs are now listed with the
+window as GitHub's own filter, every page read, as one JSON document:
+
+    gh api --paginate --slurp "repos/<owner>/<repo>/actions/runs?created=<start>..<end − 1 s>&per_page=100"
+
+GitHub's `created=<a>..<b>` includes both ends and a run's `created_at` is
+whole seconds, so `<start>..<end − 1 s>` matches exactly the runs with
+`start <= created_at < end`, the window kept here, and GitHub's
+`total_count` for that range counts the same runs. A run that slides across
+a page boundary while the pages are read is kept once, by `id`, and a
+listing that fails on any page makes the repo UNKNOWN, never a partial list.
+GitHub answers at most 1,000 runs for a run list filtered by `created`, and
+every page says how many it matched: with `total_count` above 1,000 the repo
+is UNKNOWN, the cap named on stderr, never the first 1,000. One hour fits
+well under it — bureau-pipeline's measured hour, 11:16 to 12:16 PT on
+2026-11-03, matched 183 — so at that rate only a window of about five hours
+or more reaches the cap, and a wider `--hours` can read UNKNOWN for the
+busiest repo.
+
+And it finishes when a proof run calls it (DRE-9165). On 2026-11-03 the
+sibling sweep proof ran it with `--hours 1 --by-caller` under `timeout 580`
+from 11:28 PT, and it was stopped at 11:37 PT with rc 124 and nothing on
+stdout (architecture/audits/sweep-reads-door-proof-2026-11.md). So:
+
+- `--end <time>` names the window's end, as ISO-8601 with `Z` or an offset
+  (`2026-11-04T19:00:00Z`, `2026-11-04T11:00:00-08:00`). The window is
+  `--hours` long and ends there, so a proof can read a past hour after it
+  has closed, whenever it starts; without `--end` it ends now. An `--end`
+  that does not parse, names no offset, or is in the future exits 2.
+- A run whose `status` is not `completed` is never asked for its log — no
+  read, no retry, no back-off. That covers the calling proof's own run.
+- Logs are read `LOG_WORKERS` at a time, from a thread pool, and the rows
+  are added up in run-id order, so the tables are byte for byte what reading
+  them one at a time prints. `--deadline` is read before each read starts:
+  once it is reached no new read starts, a read already started finishes and
+  counts, and the runs never started are the ones the footer names.
+- When a repo's runs have all been read, one line goes to stderr,
+  `budget-check: <slug> <n> run log(s) read in <s>s`, so a run stopped by a
+  ceiling shows the repo it stopped in. Stdout is still printed once, at
+  the end.
+
+Two lines follow the spend table's TOTAL line on every run:
+
+    runs listed, <N>h to <end>: <slug> <count>, <slug> <count>, …
+    runs in progress, not read: <slug> <run id>, <slug> <run id>, …
+
+`<end>` is the window's end in UTC. `<count>` is every run in the window,
+the ones in progress included and before `--workflow` narrows which logs
+are read; a repo whose listing failed, passed the cap or that `--deadline`
+never reached reads `<slug> UNKNOWN`. The second line reads `none` when no
+run listed is in progress.
+
+Never writes anything: its only calls are the `gh api` listing above — a
+GET, with no `--method`, no field and no `--input` — and `gh run view
+--log`. Usage:
+
+    python3 scripts/check_linear_budget.py [--hours N] [--by-caller] [--repo SLUG ...] [--workflow NAME ...] [--deadline SECONDS]
+        [--end TIME]
 """
 
 from __future__ import annotations
@@ -76,7 +202,9 @@ import json
 import re
 import subprocess  # nosec B404 — fixed-arg calls to the gh CLI only
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -113,6 +241,23 @@ _CALLS_BUCKET_RE = re.compile(r"[(;]\s*budget:\s*([A-Za-z0-9_-]+)\)\s*$")
 # none of them covers it (item 28, K4): reported, never dropped, and never
 # folded into an exact count it is not part of.
 UNDECLARED = "undeclared"
+# The client's line, one per read that fell back from the read door
+# (DRE-8795), and the mode line bureau_read.mode() prints once per process.
+# The reader is one double-quoted value and may hold spaces.
+_FALLBACK_RE = re.compile(
+    _LINE_START + r'read-fallback: reader="([^"\n]*)" read=(\S+) reason=(\S+)'
+)
+_DOOR_MODE_RE = re.compile(_LINE_START + r"read-door: mode (off|shadow|on)\b")
+# The lines linear_ops prints at exit (DRE-8897): one per (site, caller,
+# bucket) a process read on, and one for the door's answers in mode `on`.
+_READ_RE = re.compile(
+    _LINE_START + r'linear-read: reader="([^"\n]*)" site=(\S+) count=(\d+) '
+    r"budget=(\S+) process=(\S+) caller=(\S+)"
+)
+_DOOR_RE = re.compile(
+    _LINE_START + r'linear-door: reader="([^"\n]*)" served=(\d+) fallbacks=(\S+) '
+    r"budget=(\S+) process=(\S+)"
+)
 
 UNKNOWN = "UNKNOWN"
 
@@ -123,6 +268,25 @@ UNKNOWN = "UNKNOWN"
 LOG_ATTEMPTS = 3
 LOG_BACKOFF_SECONDS = 5.0
 _sleep = time.sleep
+# The clock `--deadline` is read off (DRE-9163) — the one seam, as `_sleep`
+# is the back-off's, so a test moves it and never waits.
+_monotonic = time.monotonic
+
+# How many `gh run view --log` reads run at once (DRE-9165).
+LOG_WORKERS = 8
+# The most runs GitHub answers for a run list filtered by `created`; a
+# `total_count` above it is UNKNOWN, never the first 1,000 (DRE-9165).
+LISTING_CAP = 1000
+
+
+def _now() -> datetime:
+    """The seam "now" is read through — the window's end without `--end` and
+    the line an `--end` may not pass (DRE-9165) — so a test can fix it."""
+    return datetime.now(timezone.utc)
+
+
+class _DeadlineReached(Exception):
+    """`--deadline` passed before a `gh` call: read nothing more."""
 
 
 def load_repo_map() -> dict[str, str]:
@@ -265,11 +429,14 @@ def aggregate(observations) -> list[dict]:
 
 def render_table(rows: list[dict], unknown_repos: list[str], *,
                  hours: float = 1, skipped: list[tuple[str, int]] = (),
-                 empty: int = 0) -> str:
+                 empty: int = 0,
+                 stopped: tuple[float, dict[str, int], list[str]] | None = None) -> str:
     """The table, as text: one row per (repo, workflow), UNKNOWN rows for the
     repos the token could not read, a grand total last. `skipped` is each run
     whose log was still unreadable after every attempt, as `(slug, run id)`,
-    and is named in the footer; `empty` counts the runs whose log was empty."""
+    and is named in the footer; `empty` counts the runs whose log was empty.
+    `stopped`, when the deadline cut the reading short, is `(seconds, slug →
+    listed runs not read, slugs never reached)`, and is named in the footer."""
     header = f"{'repo':<20} {'workflow':<32} {'runs':>5} {'spent':>7} {'max/run':>8}"
     lines = [f"linear budget, last {hours:g}h", header, "-" * len(header)]
     for r in rows:
@@ -295,7 +462,250 @@ def render_table(rows: list[dict], unknown_repos: list[str], *,
                  f"{LOG_ATTEMPTS} attempts — {named})")
     if empty:
         tail += f"   ({empty} run(s) empty log: no job ran)"
+    if stopped is not None:
+        seconds, unread, unreached = stopped
+        parts = [f"{slug} {n} run(s) not read" for slug, n in sorted(unread.items())]
+        if unreached:
+            parts.append("not reached: " + ", ".join(unreached))
+        named = ": " + "; ".join(parts) if parts else ""
+        tail += f"   (stopped at the deadline ({seconds:g}s){named})"
     lines.append(tail)
+    return "\n".join(lines)
+
+
+def fallbacks_from_log(log_text: str) -> list[tuple[str, str, str]]:
+    """One `(reader, read, reason)` per `read-fallback:` line that opens its
+    line — an echoed script that merely names the tag is not one (DRE-5201)."""
+    out: list[tuple[str, str, str]] = []
+    for line in (log_text or "").splitlines():
+        m = _FALLBACK_RE.match(line.rstrip())
+        if m:
+            out.append((m.group(1), m.group(2), m.group(3)))
+    return out
+
+
+def door_modes(log_text: str) -> set[str]:
+    """The read-door modes a run's processes printed: none, when no process
+    asked whether the door was on."""
+    return {m.group(1) for m in map(_DOOR_MODE_RE.match, (log_text or "").splitlines())
+            if m}
+
+
+def aggregate_fallbacks(observations) -> dict:
+    """The fallback table from the same `(repo, workflow, log_text)` triples
+    the spend table reads (DRE-8795).
+
+    - `rows`: one per (repo, reader, read, reason) with the count of
+      `read-fallback:` lines, sorted by count, descending, then by name.
+    - `on_runs`: the runs that printed `read-door: mode on`.
+    - `door_off`: repo → runs that printed `mode off` or `mode shadow` and
+      never `mode on`. Such a run never asked the door, so it adds nothing
+      to the rows — its silence is not zero fallbacks.
+    """
+    counts: dict[tuple[str, str, str, str], int] = {}
+    on_runs = 0
+    door_off: dict[str, int] = {}
+    for repo, _workflow, log_text in observations:
+        modes = door_modes(log_text)
+        if modes and "on" not in modes:
+            door_off[repo] = door_off.get(repo, 0) + 1
+            continue
+        if "on" in modes:
+            on_runs += 1
+        for reader, read, reason in fallbacks_from_log(log_text):
+            key = (repo, reader, read, reason)
+            counts[key] = counts.get(key, 0) + 1
+    rows = [{"repo": repo, "reader": reader, "read": read, "reason": reason,
+             "count": n} for (repo, reader, read, reason), n in counts.items()]
+    rows.sort(key=lambda r: (-r["count"], r["repo"], r["reader"], r["read"],
+                             r["reason"]))
+    return {"rows": rows, "on_runs": on_runs, "door_off": door_off}
+
+
+def render_fallbacks(summary: dict, unknown_repos: list[str], *,
+                     hours: float = 1) -> str:
+    """The fallback table, as text: one row per (repo, reader, read, reason),
+    UNKNOWN rows for the repos the token could not read, then a line in words
+    when no fallback line was found, and the `door off` line last. Never an
+    empty table: with nothing to list there is no header at all."""
+    rows = summary["rows"]
+    lines = [f"read fallbacks, last {hours:g}h — reads only: Linear writes and "
+             "the console's own Linear sync never print the line"]
+    if rows or unknown_repos:
+        width = max([len("reader"), len(UNKNOWN)] + [len(r["reader"]) for r in rows])
+        header = (f"{'repo':<20} {'reader':<{width}} {'read':<16} "
+                  f"{'reason':<14} {'count':>6}")
+        lines += [header, "-" * len(header)]
+        for r in rows:
+            lines.append(f"{r['repo']:<20} {r['reader']:<{width}} {r['read']:<16} "
+                         f"{r['reason']:<14} {r['count']:>6}")
+        for repo in sorted(unknown_repos):
+            lines.append(f"{repo:<20} {UNKNOWN:<{width}} {UNKNOWN:<16} "
+                         f"{UNKNOWN:<14} {UNKNOWN:>6}")
+        lines.append("-" * len(header))
+    on_runs = summary["on_runs"]
+    if rows:
+        lines.append(f"{'TOTAL':<20} {sum(r['count'] for r in rows)} fallback(s) "
+                     f"in {on_runs} run(s) read in mode on")
+    else:
+        lines.append(f"no read-fallback line in the window: {on_runs} run(s) "
+                     "read in mode on")
+    if summary["door_off"]:
+        named = ", ".join(f"{repo} {n} run(s)"
+                          for repo, n in sorted(summary["door_off"].items()))
+        lines.append(f"door off: {named} — mode off or shadow: those runs never "
+                     "asked the door, so their silence is not zero fallbacks")
+    return "\n".join(lines)
+
+
+def reads_from_log(log_text: str) -> list[dict]:
+    """One entry per `linear-read:` line that opens its line, a line repeated
+    with the same process counted once (DRE-8897): `reader`, `site`,
+    `caller`, `budget`, `count`."""
+    out: list[dict] = []
+    seen: set[tuple[str, ...]] = set()
+    for line in (log_text or "").splitlines():
+        m = _READ_RE.match(line.rstrip())
+        if not m:
+            continue
+        reader, site, count, budget, process, caller = m.groups()
+        key = (process, reader, site, caller, budget)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"reader": reader, "site": site, "caller": caller,
+                    "budget": budget, "count": int(count)})
+    return out
+
+
+def aggregate_reads(observations, *, by_caller: bool = False) -> dict:
+    """The direct-read table from the same `(repo, workflow, log_text)`
+    triples the spend table reads (DRE-8897).
+
+    - `rows`: one per (repo, reader, site, bucket) with the count summed over
+      callers — with `by_caller`, one per (repo, reader, site, caller,
+      bucket) — sorted by count, descending, then by name.
+    - `totals`: one per (repo, reader), sorted the same way.
+    """
+    counts: dict[tuple[str, ...], int] = {}
+    totals: dict[tuple[str, str], int] = {}
+    for repo, _workflow, log_text in observations:
+        for r in reads_from_log(log_text):
+            key = ((repo, r["reader"], r["site"], r["caller"], r["budget"]) if by_caller
+                   else (repo, r["reader"], r["site"], r["budget"]))
+            counts[key] = counts.get(key, 0) + r["count"]
+            totals[(repo, r["reader"])] = totals.get((repo, r["reader"]), 0) + r["count"]
+    names = (("repo", "reader", "site", "caller", "budget") if by_caller
+             else ("repo", "reader", "site", "budget"))
+    rows = [dict(zip(names, key), count=n) for key, n in counts.items()]
+    rows.sort(key=lambda r: (-r["count"], *(r[name] for name in names)))
+    total_rows = [{"repo": repo, "reader": reader, "count": n}
+                  for (repo, reader), n in totals.items()]
+    total_rows.sort(key=lambda r: (-r["count"], r["repo"], r["reader"]))
+    return {"rows": rows, "totals": total_rows, "by_caller": by_caller}
+
+
+def render_reads(summary: dict, unknown_repos: list[str], *, hours: float = 1) -> str:
+    """The direct-read table, as text: its rows, UNKNOWN rows for the repos
+    the token could not read, then one TOTAL row per (repo, reader); with
+    nothing to list, a line in words instead of a header."""
+    rows, by_caller = summary["rows"], summary["by_caller"]
+    keys = "reader, site and caller" if by_caller else "reader and site"
+    lines = [f"direct Linear reads, last {hours:g}h — per {keys}"]
+    if not rows and not unknown_repos:
+        lines.append("no linear-read line in the window")
+        return "\n".join(lines)
+    columns = ["reader", "site"] + (["caller"] if by_caller else []) + ["budget"]
+    widths = {c: max([len(c), len(UNKNOWN), len("TOTAL")] + [len(r[c]) for r in rows])
+              for c in columns}
+
+    def row(repo: str, cells: dict, count) -> str:
+        middle = " ".join(f"{cells.get(c, ''):<{widths[c]}}" for c in columns)
+        return f"{repo:<20} {middle} {count:>6}"
+
+    header = row("repo", {c: c for c in columns}, "count")
+    lines += [header, "-" * len(header)]
+    lines += [row(r["repo"], r, r["count"]) for r in rows]
+    lines += [row(repo, {c: UNKNOWN for c in columns}, UNKNOWN)
+              for repo in sorted(unknown_repos)]
+    lines.append("-" * len(header))
+    lines += [row(t["repo"], {"reader": t["reader"], "site": "TOTAL"}, t["count"])
+              for t in summary["totals"]]
+    if not rows:
+        lines.append("no linear-read line in the window")
+    return "\n".join(lines)
+
+
+def doors_from_log(log_text: str) -> list[dict]:
+    """One entry per `linear-door:` line that opens its line, a line repeated
+    with the same process counted once (DRE-8897): `reader`, `served`,
+    `fallbacks` (`<read>/<reason>` → count) and `budget`."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for line in (log_text or "").splitlines():
+        m = _DOOR_RE.match(line.rstrip())
+        if not m:
+            continue
+        reader, served, fallbacks, budget, process = m.groups()
+        if process in seen:
+            continue
+        seen.add(process)
+        counted: dict[str, int] = {}
+        for part in ([] if fallbacks == "-" else fallbacks.split(",")):
+            name, _, n = part.rpartition(":")
+            if name and n.isdigit():
+                counted[name] = counted.get(name, 0) + int(n)
+        out.append({"reader": reader, "served": int(served), "fallbacks": counted,
+                    "budget": budget})
+    return out
+
+
+def aggregate_doors(observations) -> dict:
+    """The door table (DRE-8897): `rows`, one per (repo, reader, bucket) with
+    `served` and each fallback summed, sorted by served, descending, then by
+    name; `fallbacks`, every `<read>/<reason>` seen, sorted — one column each."""
+    rows: dict[tuple[str, str, str], dict] = {}
+    seen: set[str] = set()
+    for repo, _workflow, log_text in observations:
+        for d in doors_from_log(log_text):
+            row = rows.setdefault((repo, d["reader"], d["budget"]), {
+                "repo": repo, "reader": d["reader"], "budget": d["budget"],
+                "served": 0, "fallbacks": {}})
+            row["served"] += d["served"]
+            for name, n in d["fallbacks"].items():
+                row["fallbacks"][name] = row["fallbacks"].get(name, 0) + n
+                seen.add(name)
+    out = sorted(rows.values(),
+                 key=lambda r: (-r["served"], r["repo"], r["reader"], r["budget"]))
+    return {"rows": out, "fallbacks": sorted(seen, key=lambda f: tuple(f.split("/", 1)))}
+
+
+def render_doors(summary: dict, unknown_repos: list[str], *, hours: float = 1) -> str:
+    """The door table, as text: one row per (repo, reader, bucket) and one
+    column per fallback, UNKNOWN rows for the repos the token could not read;
+    with nothing to list, a line in words instead of a header."""
+    rows, fallbacks = summary["rows"], summary["fallbacks"]
+    lines = [f"door answers, last {hours:g}h — per reader and bucket"]
+    if not rows and not unknown_repos:
+        lines.append("no linear-door line in the window")
+        return "\n".join(lines)
+    rw = max([len("reader"), len(UNKNOWN)] + [len(r["reader"]) for r in rows])
+    bw = max([len("budget"), len(UNKNOWN)] + [len(r["budget"]) for r in rows])
+    fw = {f: max(len(f), len(UNKNOWN)) for f in fallbacks}
+
+    def row(repo, reader, budget, served, counts) -> str:
+        tail = "".join(f" {counts(f):>{fw[f]}}" for f in fallbacks)
+        return f"{repo:<20} {reader:<{rw}} {budget:<{bw}} {served:>7}{tail}"
+
+    header = row("repo", "reader", "budget", "served", lambda f: f)
+    lines += [header, "-" * len(header)]
+    lines += [row(r["repo"], r["reader"], r["budget"], r["served"],
+                  lambda f, r=r: r["fallbacks"].get(f, 0)) for r in rows]
+    lines += [row(repo, UNKNOWN, UNKNOWN, UNKNOWN, lambda f: UNKNOWN)
+              for repo in sorted(unknown_repos)]
+    lines.append("-" * len(header))
+    if not rows:
+        lines.append("no linear-door line in the window")
     return "\n".join(lines)
 
 
@@ -306,28 +716,50 @@ def _gh(*args: str) -> subprocess.CompletedProcess:
     )
 
 
-def _runs_since(repo: str, since: datetime) -> list[dict] | None:
-    """The repo's runs created at or after `since`, or None when the repo
-    cannot be read (that is UNKNOWN, never an empty list)."""
-    p = _gh("run", "list", "-R", repo, "--limit", "100",
-            "--json", "databaseId,workflowName,createdAt")
+def _iso(t: datetime) -> str:
+    """`t` as ISO-8601 UTC to the second, the way GitHub writes `created_at`."""
+    return t.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _runs_in(repo: str, start: datetime, end: datetime) -> list[dict] | None:
+    """The repo's runs created in `start <= created_at < end`, kept once by
+    `id` and sorted by it, each as `databaseId`, `workflowName`, `createdAt`
+    and `status` — or None when the repo cannot be read: a listing that
+    failed on any page, or one past GitHub's cap (that is UNKNOWN, never an
+    empty or a partial list).
+
+    One paged GET of the window (DRE-9165). GitHub's `created=<a>..<b>`
+    includes both ends, so the upper bound is the window's last second."""
+    window = f"{_iso(start)}..{_iso(end - timedelta(seconds=1))}"
+    p = _gh("api", "--paginate", "--slurp",
+            f"repos/{repo}/actions/runs?created={window}&per_page=100")
     if p.returncode != 0:
-        print(f"{repo}: gh run list failed rc={p.returncode}: "
+        print(f"{repo}: gh api listing failed rc={p.returncode}: "
               f"{p.stderr.strip()[:200]}", file=sys.stderr)
         return None
+    runs: dict[int, dict] = {}
     try:
-        runs = json.loads(p.stdout or "[]")
-    except json.JSONDecodeError:
+        for page in json.loads(p.stdout or "[]"):
+            if page["total_count"] > LISTING_CAP:
+                print(f"{repo}: GitHub matched {page['total_count']} runs in "
+                      f"created={window}, past its {LISTING_CAP:,}-run cap on a "
+                      "filtered run list — UNKNOWN, never the first "
+                      f"{LISTING_CAP:,}", file=sys.stderr)
+                return None
+            for run in page["workflow_runs"]:
+                created = datetime.fromisoformat(run["created_at"].replace("Z", "+00:00"))
+                if start <= created < end:
+                    runs.setdefault(run["id"], {
+                        "databaseId": run["id"], "workflowName": run["name"],
+                        "createdAt": run["created_at"], "status": run["status"]})
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+        print(f"{repo}: gh api listing unreadable: {e!r}"[:300], file=sys.stderr)
         return None
-    out = []
-    for run in runs:
-        created = datetime.fromisoformat(run["createdAt"].replace("Z", "+00:00"))
-        if created >= since:
-            out.append(run)
-    return out
+    return [runs[rid] for rid in sorted(runs)]
 
 
-def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
+def _run_log(repo: str, run_id: int,
+             expired=lambda: False) -> tuple[str | None, str]:
     """The run's full log and "", or None and why there is none to read.
 
     A nonzero rc — `run <id> is still in progress`, or `log not found` for an
@@ -335,35 +767,155 @@ def _run_log(repo: str, run_id: int) -> tuple[str | None, str]:
     between them; still nonzero after the last, the reason is the last thing
     `gh` said. An EMPTY log — rc 0 with no output, a completed run whose
     every job was skipped — is not asked again, since there was never
-    anything to read: it is None and "", and the caller counts it apart."""
+    anything to read: it is None and "", and the caller counts it apart.
+    `expired` is asked before every read, and raises _DeadlineReached when it
+    answers True."""
     p = None
     for attempt in range(LOG_ATTEMPTS):
         if attempt:
             _sleep(LOG_BACKOFF_SECONDS)
+        if expired():
+            raise _DeadlineReached
         p = _gh("run", "view", str(run_id), "-R", repo, "--log")
         if p.returncode == 0:
             return (p.stdout, "") if p.stdout.strip() else (None, "")
     return None, (p.stderr.strip() or p.stdout.strip() or f"rc={p.returncode}")
 
 
+def _read_logs(repo: str, runs: list[dict],
+               expired) -> tuple[dict[int, tuple[str | None, str]], int]:
+    """`_run_log` for each run, LOG_WORKERS at a time (DRE-9165): run id →
+    what `_run_log` answered, for every run read, and how many were not.
+
+    Reads start in the order of `runs`, and `expired` is asked before each
+    one starts: once it answers True no new read starts, the reads already
+    started finish and count, and the runs never started — or whose retry
+    the deadline cut, as one at a time — are the ones not read."""
+    results: dict[int, tuple[str | None, str]] = {}
+    started = {}
+    unread = 0
+    slots = threading.Semaphore(LOG_WORKERS)
+    with ThreadPoolExecutor(max_workers=LOG_WORKERS) as pool:
+        for k, run in enumerate(runs):
+            slots.acquire()
+            if expired():
+                slots.release()
+                unread = len(runs) - k
+                break
+            future = pool.submit(_run_log, repo, run["databaseId"], expired)
+            future.add_done_callback(lambda _f: slots.release())
+            started[run["databaseId"]] = future
+    for run_id, future in started.items():
+        try:
+            results[run_id] = future.result()
+        except _DeadlineReached:
+            unread += 1
+    return results, unread
+
+
+def render_listed(listed: dict[str, int | None], in_progress: list[tuple[str, int]],
+                  *, hours: float, end: datetime) -> str:
+    """The two lines after the spend table's TOTAL line (DRE-9165): the runs
+    listed per slug asked for, in the order read — UNKNOWN for a slug whose
+    listing failed, passed the cap or was never reached — and each run listed
+    that is still in progress, as `<slug> <run id>`."""
+    counts = ", ".join(f"{slug} {UNKNOWN if n is None else n}"
+                       for slug, n in listed.items())
+    busy = ", ".join(f"{slug} {run_id}" for slug, run_id in in_progress)
+    return (f"runs listed, {hours:g}h to {_iso(end)}: {counts or 'none'}\n"
+            f"runs in progress, not read: {busy or 'none'}")
+
+
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    started = _monotonic()
+    ap = argparse.ArgumentParser(
+        description=__doc__.splitlines()[0],
+        epilog="Prints four tables: the spend per (repo, workflow), the reads that "
+               "fell back from the read door, the reads sent to Linear directly per "
+               "reader and site (`linear-read:` lines), and the door's answers per "
+               "reader and bucket (`linear-door:` lines).")
     ap.add_argument("--hours", type=float, default=1.0,
                     help="how far back to read runs (default 1)")
+    ap.add_argument("--by-caller", action="store_true",
+                    help="split the direct-read table by the function that sent "
+                         "each read, one more key column (`caller`)")
+    ap.add_argument("--repo", action="append", metavar="SLUG",
+                    help="read only this slug of config/repo-map.json (repeatable)")
+    ap.add_argument("--workflow", action="append", metavar="NAME",
+                    help="fetch the log of only this workflow's runs (repeatable)")
+    ap.add_argument("--deadline", type=float, metavar="SECONDS",
+                    help="read nothing more once this many seconds have passed, "
+                         "and print the tables from what was read")
+    ap.add_argument("--end", metavar="TIME",
+                    help="the window's end, as ISO-8601 with Z or an offset "
+                         "(e.g. 2026-11-04T19:00:00Z); default now")
     args = ap.parse_args(argv)
-    since = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+
+    now = _now()
+    end = now
+    if args.end is not None:
+        try:
+            end = datetime.fromisoformat(args.end)
+        except ValueError:
+            end = None
+        if end is None or end.tzinfo is None:
+            print(f"--end: not an ISO-8601 time with Z or an offset: {args.end}",
+                  file=sys.stderr)
+            return 2
+        if end > now:
+            print(f"--end: in the future: {args.end} (now {_iso(now)})", file=sys.stderr)
+            return 2
+    # Whole seconds, as GitHub's `created_at` is: the window is `start <=
+    # created_at < end`, and the listing asks for `<start>..<end − 1 s>`.
+    end = end.astimezone(timezone.utc).replace(microsecond=0)
+    start = end - timedelta(hours=args.hours)
+    if start.microsecond:
+        start = start.replace(microsecond=0) + timedelta(seconds=1)
+
+    repo_map = load_repo_map()
+    wanted = set(args.repo or ())
+    missing = sorted(wanted - repo_map.keys())
+    if missing:
+        print(f"--repo: not a slug of config/repo-map.json: {', '.join(missing)} "
+              f"(valid: {', '.join(sorted(repo_map))})", file=sys.stderr)
+        return 2
+    slugs = sorted(slug for slug in repo_map if not wanted or slug in wanted)
+    workflows = set(args.workflow or ())
+
+    def expired() -> bool:
+        return (args.deadline is not None
+                and _monotonic() - started >= args.deadline)
 
     observations: list[tuple[str, str, str]] = []
     unknown_repos: list[str] = []
     skipped: list[tuple[str, int]] = []
     empty = 0
-    for slug, repo in sorted(load_repo_map().items()):
-        runs = _runs_since(repo, since)
+    unread: dict[str, int] = {}
+    unreached: list[str] = []
+    # slug → runs listed in the window (None: UNKNOWN), and the runs listed
+    # that are still in progress, never read (DRE-9165).
+    listed: dict[str, int | None] = {slug: None for slug in slugs}
+    in_progress: list[tuple[str, int]] = []
+    for i, slug in enumerate(slugs):
+        repo = repo_map[slug]
+        if expired():
+            unreached = slugs[i:]
+            break
+        began = _monotonic()
+        runs = _runs_in(repo, start, end)
         if runs is None:
             unknown_repos.append(slug)
             continue
+        listed[slug] = len(runs)
+        in_progress += [(slug, run["databaseId"]) for run in runs
+                        if run["status"] != "completed"]
+        runs = [run for run in runs if run["status"] == "completed"
+                and (not workflows or run["workflowName"] in workflows)]
+        results, not_read = _read_logs(repo, runs, expired)
         for run in runs:
-            log, why = _run_log(repo, run["databaseId"])
+            if run["databaseId"] not in results:
+                continue
+            log, why = results[run["databaseId"]]
             if log is None and why:
                 print(f"{repo}: gh run view {run['databaseId']} failed after "
                       f"{LOG_ATTEMPTS} attempts: {why[:200]}", file=sys.stderr)
@@ -373,9 +925,28 @@ def main(argv: list[str] | None = None) -> int:
                 empty += 1
                 continue
             observations.append((slug, run["workflowName"], log))
+        if not_read:
+            unread[slug] = not_read
+            unreached = slugs[i + 1:]
+            break
+        print(f"budget-check: {slug} {len(results)} run log(s) read in "
+              f"{_monotonic() - began:.1f}s", file=sys.stderr)
 
+    stopped = (args.deadline, unread, unreached) if unread or unreached else None
+    # A slug never reached was never looked at: UNKNOWN, as an unreadable one.
+    unknown_repos += unreached
     print(render_table(aggregate(observations), unknown_repos,
-                       hours=args.hours, skipped=skipped, empty=empty))
+                       hours=args.hours, skipped=skipped, empty=empty,
+                       stopped=stopped))
+    print(render_listed(listed, in_progress, hours=args.hours, end=end))
+    print()
+    print(render_fallbacks(aggregate_fallbacks(observations), unknown_repos,
+                           hours=args.hours))
+    print()
+    print(render_reads(aggregate_reads(observations, by_caller=args.by_caller),
+                       unknown_repos, hours=args.hours))
+    print()
+    print(render_doors(aggregate_doors(observations), unknown_repos, hours=args.hours))
     return 0
 
 

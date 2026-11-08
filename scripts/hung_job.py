@@ -54,6 +54,16 @@ WHAT `watch` DOES, in one pass:
     it, and a pass that died between its cancel and its re-run.
   * A run a person canceled while its jobs were still printing is left alone.
 
+NEVER BACK ONTO THE SERVICE IT HUNG ON (DRE-8817). Before a re-run of a run
+on attempt 1, `runner_service.gate` is asked with the jobs judged hung,
+column `ci` — every job in tests.yml reads it — and the `CI_RUNS_ON` value
+channel-watch.yml hands this module. While that column still names the
+service a hung job ran on, or either is unknown, nothing is re-run and a
+`held` line says so, naming the job, its runner, its service, the column and
+its value. A running hung run is still canceled: a cancel is not a re-run. A
+later pass inside `RECENT_HOURS` of the run's finish asks again and re-runs it
+once the column has moved; after that the run leaves the watch as before.
+
 "Once" is read off the run's own `run_attempt`, as `canceled_check` and
 `runner_lost` read it: `rerun-failed-jobs` moves the run to attempt 2, and
 attempt 2 is never re-run. No receipt is stored anywhere. Two passes never
@@ -96,6 +106,7 @@ from zoneinfo import ZoneInfo
 
 import canceled_check
 import merge_gate
+import runner_service
 from red_main_repair import failure_reason
 
 #: Every line this module prints opens with this.
@@ -510,6 +521,13 @@ def _rerun_line(verb: str, run: dict, job: dict, usual: Usual, verdict: Verdict,
             f"attempt 2 {requested}")
 
 
+def _held(hung, ci_runs_on: str) -> runner_service.Gate:
+    """Whether the re-run of `hung`'s run would go back onto the service a
+    hung job ran on (DRE-8817): column `ci`, every hung job a hang."""
+    return runner_service.gate([(job, runner_service.HANG) for job, _u, _v in hung],
+                               "ci", {"ci": ci_runs_on})
+
+
 def _attempt(run: dict) -> int:
     try:
         return int(run.get("run_attempt") or 1)
@@ -532,7 +550,8 @@ def _wait(gh: GitHub, run_id, seconds: int) -> bool | None:
     return False
 
 
-def _tend_running(gh: GitHub, run: dict, now: datetime, apply: bool, say) -> bool:
+def _tend_running(gh: GitHub, run: dict, now: datetime, apply: bool, say,
+                  ci_runs_on: str = "") -> bool:
     """One running run. Returns True when an act was refused."""
     run_id, attempt = run.get("id"), _attempt(run)
     running = [j for j in gh.jobs(run_id, attempt)
@@ -554,8 +573,12 @@ def _tend_running(gh: GitHub, run: dict, now: datetime, apply: bool, say) -> boo
     if not hung:
         return False
     spent = "— no re-run: already re-run once"
+    held = _held(hung, ci_runs_on) if attempt <= 1 else None
+    holding = (f"— no re-run: held, {held.why}; a later pass re-runs it once the "
+               "`ci` column names another service") if held and not held.allow else ""
     if not apply:
-        tail = spent if attempt > 1 else "— would request a re-run"
+        tail = spent if attempt > 1 else (
+            f"— would hold the re-run: {held.why}" if holding else "— would request a re-run")
         for job, usual, verdict in hung:
             say(_canceled_line("would-cancel", run, job, usual, verdict, tail))
         return False
@@ -577,6 +600,8 @@ def _tend_running(gh: GitHub, run: dict, now: datetime, apply: bool, say) -> boo
         done = _wait(gh, run_id, FORCE_WAIT_SECONDS)
     if attempt > 1:
         tail = spent
+    elif holding:
+        tail = holding
     elif done is None:
         tail = ("— no re-run yet: whether the run finished could not be read; "
                 "the next pass re-runs it")
@@ -615,7 +640,8 @@ def _judge_canceled(gh: GitHub, run: dict, jobs) -> list:
     return judged
 
 
-def _tend_finished(gh: GitHub, run: dict, apply: bool, say) -> bool:
+def _tend_finished(gh: GitHub, run: dict, apply: bool, say,
+                   ci_runs_on: str = "") -> bool:
     """One attempt-1 run that finished `cancelled`. True when refused."""
     run_id = run.get("id")
     judged = _judge_canceled(gh, run, gh.jobs(run_id, 1))
@@ -628,6 +654,14 @@ def _tend_finished(gh: GitHub, run: dict, apply: bool, say) -> bool:
         else:
             say(f"{TAG} left-alone run={run_id} {_job(job)} — {verdict.why}")
     if not hung:
+        return False
+    held = _held(hung, ci_runs_on)
+    if not held.allow:
+        verb = "held" if apply else "would-hold"
+        for job, usual, verdict in hung:
+            say(_rerun_line(verb, run, job, usual, verdict,
+                            f"not requested — {held.why}; a later pass re-runs it "
+                            "once the `ci` column names another service"))
         return False
     if not apply:
         for job, usual, verdict in hung:
@@ -644,8 +678,12 @@ def _tend_finished(gh: GitHub, run: dict, apply: bool, say) -> bool:
     return False
 
 
-def watch(gh: GitHub, now: datetime, apply: bool, say) -> int:
-    """One pass over the watched runs. 0, or 1 when an act was refused."""
+def watch(gh: GitHub, now: datetime, apply: bool, say, ci_runs_on: str | None = None) -> int:
+    """One pass over the watched runs. 0, or 1 when an act was refused.
+    `ci_runs_on` is the `ci` column's value, read from `CI_RUNS_ON` when not
+    given (DRE-8817)."""
+    if ci_runs_on is None:
+        ci_runs_on = os.environ.get(runner_service.ENV["ci"], "")
     try:
         runs = gh.watched()
     except Unread as e:
@@ -655,9 +693,9 @@ def watch(gh: GitHub, now: datetime, apply: bool, say) -> int:
     for run in runs:
         try:
             if run.get("status") != "completed":
-                refused |= _tend_running(gh, run, now, apply, say)
+                refused |= _tend_running(gh, run, now, apply, say, ci_runs_on)
             elif _recently_cancelled(run, now):
-                refused |= _tend_finished(gh, run, apply, say)
+                refused |= _tend_finished(gh, run, apply, say, ci_runs_on)
         except Unread as e:
             say(f"{TAG} unknown run={run.get('id')} {e} — nothing acted on in this run")
     return 1 if refused else 0

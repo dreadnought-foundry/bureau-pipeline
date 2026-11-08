@@ -52,9 +52,12 @@ SUMMARY_CARD = "DRE-900"
 #: a test that reads the writer's own constant proves the writer agrees with
 #: itself. Todo left with its contract entry (DRE-7660).
 FOUR = ["Green Light", "Triage", "In Progress", "In Review"]
-# What the board read covers once Hand-work is live (DRE-5320): the four, plus
+#: The lanes `LANES` names: the four, and Intake, which the blocker-owner lane
+#: reads (DRE-8648) and the guard still refuses to write.
+READ_LANES = FOUR + ["Intake"]
+# What the board read covers once Hand-work is live (DRE-5320): those, plus
 # the lane `board_lanes()` adds when the contract declares it.
-FIVE = FOUR + ["Hand-work"]
+LIVE_LANES = READ_LANES + ["Hand-work"]
 
 #: The twelve act names and their tags, exactly as the card writes them.
 ACTS = {
@@ -72,6 +75,8 @@ ACTS = {
     "hygiene-cause-name": "hyg-cause-named",
     "hygiene-hold-clear": "hyg-hold-cleared",
     "hygiene-triage-alarm": "hyg-triage-aged",
+    "hygiene-blocker-owner-notice": "hyg-blocker-owner",
+    "hygiene-hand-step-class": "hyg-hand-step",
 }
 
 
@@ -294,8 +299,8 @@ class TestRead:
         assert code == 0
         assert len(paged.calls) == 1
         query, variables = paged.calls[0]
-        assert sorted(variables["states"]) == sorted(FIVE)
-        assert len(variables["states"]) == 5
+        assert sorted(variables["states"]) == sorted(LIVE_LANES)
+        assert len(variables["states"]) == len(LIVE_LANES)
         assert no_gql == []
 
     def test_the_read_is_the_board_snapshot_query(self, tmp_path, monkeypatch, no_gql):
@@ -312,19 +317,19 @@ class TestRead:
         assert doc["taken_at"].endswith("Z")
         assert [c["identifier"] for c in doc["lanes"]["In Progress"]] == ["DRE-1"]
         assert [c["identifier"] for c in doc["lanes"]["Triage"]] == ["DRE-2"]
-        assert set(doc["lanes"]) == set(FIVE)
+        assert set(doc["lanes"]) == set(LIVE_LANES)
 
     def test_hand_work_is_read_once_the_contract_declares_it_live(self):
         # DRE-5315 declared it `arriving`, and no live reader reads an arriving
         # lane. DRE-5320 flipped it to live, and the read took it with nothing
         # here edited; an arriving Hand-work is still left out.
         assert "Hand-work" in lane_contract.lane_names()
-        assert sorted(hygiene.board_lanes()) == sorted(FIVE)
+        assert sorted(hygiene.board_lanes()) == sorted(LIVE_LANES)
         contract = json.loads((ROOT / "config" / "lane-contract.json").read_text())
         hand_work = next(entry for entry in contract["lanes"] if entry["name"] == "Hand-work")
         assert hand_work["status"] == "live"
         hand_work["status"] = "arriving"
-        assert sorted(hygiene.board_lanes(contract)) == sorted(FOUR)
+        assert sorted(hygiene.board_lanes(contract)) == sorted(READ_LANES)
 
     def test_below_the_floor_it_stands_down_and_asks_nothing_more(
         self, tmp_path, monkeypatch, capsys, no_gql
@@ -821,8 +826,8 @@ class TestTheStartLanes:
 
     def test_the_board_read_covers_every_start_lane(self):
         assert hygiene.LANES == ("Green Light", *lane_contract.START_LANES, "Triage",
-                                 "In Review")
-        assert sorted(hygiene.LANES) == sorted(FOUR)
+                                 "In Review", "Intake")
+        assert sorted(hygiene.LANES) == sorted(READ_LANES)
 
     def test_the_guard_names_every_start_lane_it_refuses(self):
         assert hygiene.REFUSED_LANES == (*lane_contract.START_LANES, "Green Light",
@@ -1595,17 +1600,34 @@ class TestTheActRegistry:
             "hygiene-branch-refresh": "merge-gate.yml",
             "hygiene-check-rerun": "merge-gate.yml",
             "hygiene-resend-to-planning": "plan.yml",
-            "hygiene-triage-return": "reconcile.py",
+            "hygiene-triage-return": "plan.yml",
             "hygiene-review-move": "reconcile.py",
             "hygiene-hold-clear": "reconcile.py",
         })
         assert {n: r["next_actor"] for n, r in rows.items()} == expected
 
+    def test_the_triage_return_names_both_lanes_it_sends_to(self):
+        # DRE-8862: Planning when the verdict is stale, Queued only when a
+        # verdict was written after the card's last trip through Triage.
+        row = next(r for r in acts_doc()["acts"] if r["name"] == "hygiene-triage-return")
+        for field in ("means", "why", "cadence_why"):
+            assert "Planning" in row[field], field
+            assert "Queued" in row[field], field
+        assert "DRE-8862" in row["why"]
+
+    def test_the_page_names_the_next_actor_the_registry_declares(self):
+        rows = {r["name"]: r for r in acts_doc()["acts"] if r["name"] in ACTS}
+        page = (ROOT / "docs" / "pipeline-acts.md").read_text(encoding="utf-8")
+        for name, row in rows.items():
+            assert (f"| `{name}` | `{row['tag']}` | {row['kind']} | "
+                    f"`{row['next_actor']}` |") in page, name
+
     def test_three_holds_and_the_rest_recoveries(self):
         rows = {r["name"]: r for r in acts_doc()["acts"] if r["name"] in ACTS}
         holds = {n for n, r in rows.items() if r["kind"] == "hold"}
         assert holds == {"hygiene-decision-needed", "hygiene-cause-name",
-                         "hygiene-triage-alarm"}
+                         "hygiene-triage-alarm", "hygiene-blocker-owner-notice",
+                         "hygiene-hand-step-class"}
         assert {r["kind"] for n, r in rows.items() if n not in holds} == {"recovery"}
 
     def test_the_summary_is_declared_not_an_act(self):

@@ -27,10 +27,12 @@ under the web/SPA tree), ALSO read `briefs/frontend.md` and follow it as the web
 supplement to this brief — it adds to these conventions, it does not replace them.
 
 ## Discipline (each rule exists because its violation shipped a bug)
-- **Spec first**: if the card declares `**Spec:** openspec/changes/<id>/`,
-  read that directory (at minimum `specs/*/spec.md` and any `design.md`)
-  BEFORE coding, and conform to its declared interfaces and names. Divergence
-  requires explicit justification in the PR description.
+- **Spec first**: the rule fires on any `**Spec:**` line, read BEFORE coding.
+  A spec is one file, `**Spec:** docs/specs/<slug>.md`: if the line names a
+  file, read that file. If it names a directory (cards filed before
+  2026-11-02, `openspec/changes/<id>/`), read at minimum its `specs/*/spec.md`
+  and any `design.md`. Either way, conform to its declared interfaces and
+  names. Divergence requires explicit justification in the PR description.
 - **Design first**: if the card declares a `**Design:**` ref (one or more
   design artifacts, e.g. `console/design/images/screens/desktop/board.png`),
   Read that image — and any spec it references — BEFORE implementing, and build
@@ -88,6 +90,24 @@ supplement to this brief — it adds to these conventions, it does not replace t
   empty commit on the same branch (`git commit --allow-empty`), never a change
   to the diff. `standards/whats-new.md` says why the empty commit is needed:
   the critic reviews only a new head.
+
+## The parts catalog — pick from it first
+
+When the repo's design system exists, your context carries a `PARTS CATALOG:`
+block after what people said on the card. It lists every shared part — its
+atoms, molecules, organisms and templates — and the file each one ships at,
+read from the repo's files when this run started (DRE-8708, rule 7). In a repo
+with no design system it reads `PARTS CATALOG: none — <reason>`.
+
+- **Pick from the catalog first.** Before you write UI, find the part that
+  does the job and import it from the path it ships at. Use a variant of a
+  catalog part — a prop, a tone — before you write anything new.
+- **Build a new part only when nothing in the catalog, and no variant of a
+  part in it, fits.** A new part goes in the declared folder for its layer,
+  built from tokens, never as a local function inside a page.
+- The critic sends back any copy of a shared part, under
+  `standards/design-system.md` § "UI code in a repo whose design system
+  exists", which is in your context.
 
 ## Push before the credential expires (DRE-3043)
 

@@ -263,17 +263,29 @@ jobs:
       # this. A run CANCELLED at the cap still stamps no verdict and now leaves
       # this pending standing — the honest record of a run that proved nothing,
       # with the job's own cancelled check run red beside it.
+      #
+      # Three tries, like the verdict stamp below (DRE-9233): one bad answer
+      # from GitHub is no reason to fail a run before it has proved anything.
       - name: Open the harness stamp for this attempt
         env:
           GH_TOKEN: ${{ github.token }}
           TESTED_SHA: ${{ steps.tested.outputs.sha }}
           ATTEMPT: ${{ github.run_attempt }}
         run: |
-          gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
-            -f state="pending" \
-            -f context="integration-harness" \
-            -f description="integration harness: running (attempt ${ATTEMPT})" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for try in 1 2 3; do
+            if gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
+              -f state="pending" \
+              -f context="integration-harness" \
+              -f description="integration harness: running (attempt ${ATTEMPT})" \
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; then
+              exit 0
+            fi
+            if [ "$try" -lt 3 ]; then
+              sleep $(( try * 10 ))
+            fi
+          done
+          echo "::error::the pending integration-harness status did not land after 3 tries"
+          exit 1
 
       # Is this checkout allowed at the SHARED sandbox at all?
       #
@@ -370,7 +382,7 @@ jobs:
 
       - name: Mint worker-bot token (sandbox-scoped)
         id: worker
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -379,7 +391,7 @@ jobs:
 
       - name: Mint qa-bot token (identity probe — merger-login source)
         id: qa
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_QA_APP_ID }}
           private-key: ${{ secrets.BUREAU_QA_APP_PRIVATE_KEY }}
@@ -408,7 +420,7 @@ jobs:
         id: probe_2
         if: env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -418,7 +430,7 @@ jobs:
         id: probe_3
         if: env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -428,7 +440,7 @@ jobs:
         id: probe_4
         if: env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -491,7 +503,7 @@ jobs:
       # reader's re-mint credentials.
       - name: Mint pool reader token (sandbox-scoped)
         id: reader
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -515,7 +527,7 @@ jobs:
       - name: Mint console token (lane-contract parity — best effort)
         id: console
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -534,7 +546,7 @@ jobs:
       - name: Mint the model-home read token
         id: model_home
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -730,6 +742,23 @@ jobs:
       # sandbox, not proven yet" instead of "harness failed", which would send
       # someone looking at a diff that was never judged. The stamp stays RED:
       # unproven is not proven, and the channel must not move on it.
+      #
+      # DRE-9068 rides the same output. When GitHub refused the run for a
+      # rate limit that outlasted the client's wait, the driver exits 4 and
+      # writes `blocked_reason` opening `harness blocked: GitHub rate limit`
+      # (promote_channel.RATE_LIMIT_MARKER), and the decision reads it as
+      # `harness-inconclusive` / rate-limited — re-run the harness — never
+      # `harness-failed`.
+      #
+      # DRE-9233: the write is tried three times, 10s then 20s apart. On
+      # 2026-11-05 run 42065210067 proved 6af0f8c5 (all six scenarios PASS),
+      # then this POST got an empty body back — `unexpected end of JSON input`
+      # — and under `bash -e` the one try was the job. The success status
+      # never landed, main read red, and Red-Main Repair fired on a commit a
+      # re-run then passed untouched. Re-posting the same state is harmless
+      # (GitHub keeps the latest status per context). A write that fails all
+      # three times still fails the step, because a verdict that never landed
+      # must not read as green.
       - name: Stamp tested sha with the harness verdict
         if: success() || failure()
         env:
@@ -742,8 +771,17 @@ jobs:
           if [ -n "$BLOCKED_REASON" ]; then
             DESCRIPTION="$BLOCKED_REASON"
           fi
-          gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
-            -f state="$STATE" \
-            -f context="integration-harness" \
-            -f description="$DESCRIPTION" \
-            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          for try in 1 2 3; do
+            if gh api "repos/${GITHUB_REPOSITORY}/statuses/${TESTED_SHA}" \
+              -f state="$STATE" \
+              -f context="integration-harness" \
+              -f description="$DESCRIPTION" \
+              -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"; then
+              exit 0
+            fi
+            if [ "$try" -lt 3 ]; then
+              sleep $(( try * 10 ))
+            fi
+          done
+          echo "::error::the integration-harness verdict status did not land after 3 tries"
+          exit 1

@@ -271,8 +271,8 @@ class TestTheRepositoryPasses:
                                  BLOCKER_ASK, RELEASED_EPIC, DEFERRAL}
         # The cause park writes no lane since DRE-6837, so it has no record.
         # The Triage repair's question is the eighth caller of the escalation
-        # (DRE-7178).
-        counts = {ESCALATE: 8, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
+        # (DRE-7178), and the operator agent's apply the ninth (DRE-8746).
+        counts = {ESCALATE: 9, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
                   BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
@@ -614,7 +614,7 @@ class TestTheAgentEscalationGate:
         root = _copy_repo(tmp_path)
         _edit(root / self.REPORT_SCRIPT,
               'python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \\\n'
-              '    "$(cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md")"',
+              '    --body-file="${RUNNER_TEMP:-/tmp}/escalation-comment.md"',
               'cat "${RUNNER_TEMP:-/tmp}/escalation-comment.md"')
         found = grl.problems(str(root))
         assert _named(found, "agent-task.yml#Report result to Linear",
@@ -849,7 +849,7 @@ class TestTheMedicPark:
     UNIT = "medic.yml#Ask a person about the diagnosis"
     RECEIPT = "🙋 The medic diagnosed a failure only a person can settle"
     POST = ('python3 .bureau-pipeline/scripts/linear_ops.py comment "$TARGET" '
-            '"$(cat "$RUNNER_TEMP/medic-ask-comment.md")"')
+            '--body-file="$RUNNER_TEMP/medic-ask-comment.md"')
 
     def test_the_park_is_discovered_and_declared(self):
         assert self.UNIT in {unit for _, unit in grl.green_light_writes()}

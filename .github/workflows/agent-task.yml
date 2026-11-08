@@ -124,8 +124,20 @@ jobs:
     # reads (portico and agent-bureau both name `bureau-heavy`), so the
     # console's pool fail-back — which deletes exactly the three BUREAU_*_RUNS_ON
     # variables when no runner is online — already covers this lane. A repo that
-    # sets neither variable renders exactly what it rendered before.
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # sets neither variable renders exactly what it rendered before. It asks
+    # RunsOn for a machine AWS cannot take back (DRE-8890): this is among the
+    # longest jobs in the fleet, so a Spot reclaim costs the most here, and the
+    # variable stays on Spot for the repo's CI — a RunsOn label gains
+    # `spot=false` as agent-bureau's `ci.yml` adds it on `push` (DRE-6879),
+    # one that already says `spot=` is used as it stands, and any other value
+    # renders as before. `tests/test_build_runs_on_lane.py` pins it.
+    runs-on: >-
+      ${{ fromJSON(startsWith(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0], 'runs-on')
+      && !contains(join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), ','), 'spot=')
+      && (fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[1]
+      && format('["{0}","spot=false"]', join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), '","'))
+      || format('["{0}/spot=false"]', fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0]))
+      || vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap. 45 murdered legitimately long builds mid-work
     # (DRE-2074: DRE-2070's profiling runs were killed at the 45-minute mark
     # 4× while in_progress with fresh ⏳ receipts, and the Report step then
@@ -181,13 +193,35 @@ jobs:
       BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+      # The read door for every card read in the job (DRE-8900): reconcile.yml's
+      # four variables, and the max-age that opts `linear_ops`' card and thread
+      # reads in (DRE-8898) — 60 seconds, because a build is dispatched at the
+      # card. The floor is the job's start, which the first step writes to
+      # `$GITHUB_ENV` as `BUREAU_READ_CARD_SEEN_AFTER`; no `env:` block in this
+      # job names that variable, or the step carrying it would lose the floor.
+      # A door older than the floor, or than this job's own last write to the
+      # card, is read from Linear (`reason=older-than-needed`), so the report's
+      # cap counts and ⏳ receipts are never read short. The stub grants
+      # `id-token: write`; without it, or with `BUREAU_READ` off, every read
+      # goes to Linear as before. `tests/test_agent_runs_read_door.py`.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "60"
     steps:
+      # The floor every card read in this job is held to (DRE-8900): the job's
+      # start, to the second, in UTC. An earlier run's receipt was posted
+      # before it; a receipt this job posts is in the own-write record.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       # Boot token: the ORIGINAL app (pool slot 1). Used for the checkouts
       # below (a handful of requests) and as slot 1's pool probe;
       # everything quota-heavy after pool selection uses the worker token.
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -240,7 +274,7 @@ jobs:
         id: probe_2
         if: ${{ env.BUREAU_APP_ID_2 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -248,7 +282,7 @@ jobs:
         id: probe_3
         if: ${{ env.BUREAU_APP_ID_3 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -256,7 +290,7 @@ jobs:
         id: probe_4
         if: ${{ env.BUREAU_APP_ID_4 != '' }}
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -283,7 +317,7 @@ jobs:
       # empty — so the chain always falls through to the original app pair.
       - name: Mint worker token (selected pool app)
         id: worker
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -400,7 +434,9 @@ jobs:
       # ran twenty minutes after its own PR #700 merged and rebuilt the card
       # onto the merged branch). Fail-open: unreadable answers proceed.
       # EVERY step below honors the skip — the Report step especially, or a
-      # skipped dup would read as a dead run and requeue.
+      # skipped dup would read as a dead run and requeue. The one exception
+      # is the design answer's hand-back right after it, which runs only on
+      # the open-PR skip (DRE-8720).
       - name: Duplicate-dispatch guard
         id: dedupe
         if: steps.gate.outputs.bounced != 'true'
@@ -414,6 +450,34 @@ jobs:
         run: |
           python3 .bureau-pipeline/scripts/dedupe_dispatch.py gate \
             "${{ github.event.client_payload.identifier }}"
+
+      # The one step that runs BECAUSE the guard skipped (DRE-8720, DRE-8708
+      # rule 4c). When the CEO answers the critic's design question, the card
+      # returns to In Progress, that move dispatches this workflow, and the
+      # guard skips the build because the card's pull request is open. Only
+      # that skip is his answer coming back: the merged, live-run and
+      # past-building skips run nothing here, and the answer stays `answered`
+      # on the card for the next open-PR dispatch or the fix loop's `answered`
+      # branch (DRE-8735). `handback` (DRE-8722) dispatches one re-review when
+      # a verified answer follows the question and writes nothing otherwise,
+      # so a skip on a card the CEO did not answer is unchanged. The dispatch
+      # rides the workflow's own token — the App token holds no Actions
+      # permission (DRE-1254) — and a failure here never fails the job.
+      - name: Hand an answered design question back to the critic
+        id: handback
+        # Quoted whole: unquoted, YAML reads ` #` as the start of a comment.
+        if: "steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip == 'true' && startsWith(steps.dedupe.outputs.reason, 'open agent PR #')"
+        continue-on-error: true
+        env:
+          CARD: ${{ github.event.client_payload.identifier }}
+          LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
+          LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          # Stage 2 #10 (DRE-8900): the thread off the card snapshot, not a re-read.
+          BUREAU_CARD_SNAPSHOT: ${{ runner.temp }}/card-snapshot.json
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 .bureau-pipeline/scripts/design_answer.py handback "$CARD" --repo "$REPO"
 
       # Model selection: the shared WORKHORSE ladder with runtime availability
       # detection (DRE-1490). Build roles are classified `workhorse` in
@@ -512,7 +576,7 @@ jobs:
         id: model_home
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -535,7 +599,7 @@ jobs:
         id: reader
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -617,6 +681,13 @@ jobs:
       # behind it. The renderer always exits 0 (an unreadable thread renders
       # `SPOKEN STATUS: UNKNOWN`); the card and the key come through env, so
       # the line adds nothing to the compiled expression (DRE-3484).
+      #
+      # Then, for the two UI-building roles, the repo's parts catalog
+      # (DRE-8720, DRE-8708 rule 7): every shared part and the file it ships
+      # at, read from the checkout at run time by design_parts.py, so the
+      # builder picks from it first. The script always exits 0 and prints its
+      # one `design-parts:` line to this step's log; the fallback is for a
+      # checkout with no catalog script, so the step never fails on it.
       - name: Assemble agent context
         id: ctx
         if: steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
@@ -632,6 +703,13 @@ jobs:
             > .bureau-pipeline/agent-context.md
           python3 .bureau-pipeline/scripts/spoken_thread.py people "$CARD" >> .bureau-pipeline/agent-context.md
           grep -E '^SPOKEN STATUS:' .bureau-pipeline/agent-context.md || echo "no SPOKEN STATUS: line in the assembled context"
+          case "$ROLE" in
+            engineer|frontend)
+              python3 .bureau-pipeline/scripts/design_parts.py catalog >> .bureau-pipeline/agent-context.md \
+                || echo "PARTS CATALOG: UNKNOWN — design_parts.py catalog could not run, so the repo's parts were not listed" >> .bureau-pipeline/agent-context.md
+              grep -E '^PARTS CATALOG:' .bureau-pipeline/agent-context.md || echo "no PARTS CATALOG: line in the assembled context"
+              ;;
+          esac
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of context for role: $ROLE"
 
       # DRE-1996: make the DRE-1989 sentinel fence mechanical. Card title and
@@ -1842,7 +1920,7 @@ jobs:
         id: pushtoken
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -1865,7 +1943,7 @@ jobs:
         id: pushtoken2
         if: always() && steps.gate.outputs.bounced != 'true' && steps.dedupe.outputs.skip != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2

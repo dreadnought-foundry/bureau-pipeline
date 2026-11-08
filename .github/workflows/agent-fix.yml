@@ -160,8 +160,20 @@ jobs:
     # 2, agent-bureau run 36093192182). `BUREAU_CI_RUNS_ON` is the variable the
     # repo's own `ci.yml` already reads, so the console's pool fail-back covers
     # this lane, and a repo that sets neither variable renders what it rendered
-    # before. `tests/test_build_runs_on_lane.py` pins it.
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # before. It asks RunsOn for a machine AWS cannot take back (DRE-8890):
+    # this is among the longest jobs in the fleet, so a Spot reclaim costs the
+    # most here, and the variable stays on Spot for the repo's CI — a RunsOn
+    # label gains `spot=false` as agent-bureau's `ci.yml` adds it on `push`
+    # (DRE-6879), one that already says `spot=` is used as it stands, and any
+    # other value renders as before. `tests/test_build_runs_on_lane.py` pins
+    # it.
+    runs-on: >-
+      ${{ fromJSON(startsWith(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0], 'runs-on')
+      && !contains(join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), ','), 'spot=')
+      && (fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[1]
+      && format('["{0}","spot=false"]', join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), '","'))
+      || format('["{0}/spot=false"]', fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0]))
+      || vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # The total-runtime cap, raised with the turn budget below (DRE-2533). A
     # job dies at whichever cap it reaches first, so the turn budget behind a
     # 45-minute wall is a raise on paper only: the long repair this card
@@ -220,7 +232,30 @@ jobs:
       BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+      # The read door for every card read in the job (DRE-8900): reconcile.yml's
+      # four variables, and the max-age that opts `linear_ops`' card and thread
+      # reads in (DRE-8898) — 300 seconds, the bound the epic's survey set for
+      # the fix loop. The floor is the job's start, which the first step writes
+      # to `$GITHUB_ENV` as `BUREAU_READ_CARD_SEEN_AFTER`; no `env:` block in
+      # this job names that variable, or the step carrying it would lose the
+      # floor. Fix runs on one pull request are serialized by the stub's
+      # concurrency group, so the card note an earlier fix run posted for the
+      # same commit was posted before this job began, and the unfixable hold's
+      # `count-comments` sees it. A door older than the floor, or than this
+      # job's own last write to the card, is read from Linear
+      # (`reason=older-than-needed`). `tests/test_agent_runs_read_door.py`.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: "300"
     steps:
+      # The floor every card read in this job is held to (DRE-8900): the job's
+      # start, to the second, in UTC. An earlier run's receipt was posted
+      # before it; a receipt this job posts is in the own-write record.
+      - name: Note the job's start for the read door
+        run: echo "BUREAU_READ_CARD_SEEN_AFTER=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+
       # Boot token: the ORIGINAL app (pool slot 1). It stays the identity
       # this loop WRITES as — the branch checkout the agent pushes through,
       # the attempt markers and receipts fix_budget.py counts by this App's
@@ -228,7 +263,7 @@ jobs:
       # probe. The reads move to the selected pool app below (DRE-4282).
       - name: Mint bot token
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -278,7 +313,7 @@ jobs:
         id: probe_2
         if: env.BUREAU_APP_ID_2 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_2 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_2 }}
@@ -286,7 +321,7 @@ jobs:
         id: probe_3
         if: env.BUREAU_APP_ID_3 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_3 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_3 }}
@@ -294,7 +329,7 @@ jobs:
         id: probe_4
         if: env.BUREAU_APP_ID_4 != ''
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID_4 }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY_4 }}
@@ -321,7 +356,7 @@ jobs:
       # not selected, so the chain always falls through to the original pair.
       - name: Mint read token (selected pool app)
         id: reader
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -380,7 +415,7 @@ jobs:
       # model-running workflows at once.
       - name: Mint worker token (selected pool app)
         id: worker
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -750,7 +785,7 @@ jobs:
               printf '%s\n\n%s\n' "$(cat /tmp/unfixable-card.md)" "$HOLD_KEY" \
                 > /tmp/unfixable-card-final.md
               python3 .bureau-pipeline/scripts/linear_ops.py comment "$CARD" \
-                "$(cat /tmp/unfixable-card-final.md)" || true
+                --body-file=/tmp/unfixable-card-final.md || true
             else
               echo "card note already posted for $SHA8 — not repeating it"
             fi
@@ -976,8 +1011,8 @@ jobs:
           GH_TOKEN: ${{ steps.app.outputs.token }}
         run: |
           BODY="🔓 fix-restart-on-operator-decision: your decision started the fix agent directly (DRE-3451) — no hand dispatch and no waiting for the sweep. One restart per answer; a further decision comment re-arms it."
-          python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-loop-restarted \
-            --body "$BODY" --out /tmp/act-fix-restart.md \
+          printf '%s' "$BODY" | python3 .bureau-pipeline/scripts/pipeline_act.py receipt fix-loop-restarted \
+            --body-file=- --out /tmp/act-fix-restart.md \
             || printf '%s' "$BODY" > /tmp/act-fix-restart.md
           gh pr comment "${{ steps.pr.outputs.number }}" \
             --repo ${{ github.repository }} --body-file /tmp/act-fix-restart.md
@@ -1045,6 +1080,21 @@ jobs:
           python3 .bureau-pipeline/scripts/assemble_context.py assemble fix \
             > .bureau-pipeline/agent-context.md
           echo "assembled $(wc -l < .bureau-pipeline/agent-context.md) lines of fix context"
+          # The parts catalog (DRE-8735, rule 7 of DRE-8708), read at the root
+          # of the pull request's own checkout, on every fix run whatever the
+          # card's role: a fix for one finding can write UI code on any card.
+          # design_parts.py (DRE-8717) always exits 0 and logs its one
+          # `design-parts:` line on stderr; a missing script is said, never a
+          # failed step.
+          CATALOG=$(mktemp)
+          if [ -f .bureau-pipeline/scripts/design_parts.py ]; then
+            python3 .bureau-pipeline/scripts/design_parts.py catalog > "$CATALOG" || true
+          fi
+          if ! grep -qE '^PARTS CATALOG:' "$CATALOG"; then
+            echo "PARTS CATALOG: UNKNOWN — .bureau-pipeline/scripts/design_parts.py is missing from this pipeline checkout or printed no catalog" > "$CATALOG"
+          fi
+          { echo; cat "$CATALOG"; } >> .bureau-pipeline/agent-context.md
+          grep -E '^PARTS CATALOG:' "$CATALOG" | head -1 || true
 
       # The model home (DRE-6939) is a variable on
       # dreadnought-foundry/bureau-pipeline, which a run's boot token in another
@@ -1059,7 +1109,7 @@ jobs:
         id: model_home
         if: steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1632,6 +1682,10 @@ jobs:
                judgement only a person can make, do NOT push anything: write
                your reasoning to ${{ steps.handoff.outputs.blocker }} instead. That file asks
                a HUMAN, and the card is parked until one answers.
+               A finding that carries the `🎨 design-question:` block is the
+               CEO's to answer, not yours: push nothing, and write the
+               blocker file with the block's four lines in it word for word
+               — the pipeline asks him on the card, once per part.
                The blocker file is for work you did not commit, so commit
                nothing when you write it; a push GitHub refused is step 5's
                case, not this one, and a commit you made beyond the head you
@@ -1785,7 +1839,7 @@ jobs:
         id: callsbot
         if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1794,7 +1848,7 @@ jobs:
         id: callsworker
         if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: >-
             ${{ steps.pool.outputs.n == '2' && secrets.BUREAU_APP_ID_2
@@ -1920,7 +1974,7 @@ jobs:
         id: pushtoken
         if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -1929,7 +1983,7 @@ jobs:
         id: pushtoken2
         if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -2034,7 +2088,7 @@ jobs:
         id: reporttoken
         if: always() && steps.pr.outputs.go == 'true' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}

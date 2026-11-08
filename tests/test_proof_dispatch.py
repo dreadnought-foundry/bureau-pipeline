@@ -26,7 +26,8 @@ Pinned here, over a fixture board:
   * the dry run, which writes nothing;
   * the read bound: five candidates cost at most eight Linear requests;
   * the step in `reconcile.yml`: gated on a full pass, the stub tested before
-    any Python runs.
+    any Python runs, the phase run through `proof_step_limit.py` at 80 s with
+    its alarm (DRE-9101) — a pass past it is cut and the step stays green.
 """
 
 from __future__ import annotations
@@ -54,6 +55,7 @@ import pipeline_act  # noqa: E402
 import plan_run  # noqa: E402
 import proof_dispatch  # noqa: E402
 import proof_record  # noqa: E402
+import proof_record_pr  # noqa: E402
 import proof_release  # noqa: E402
 import proof_run_state  # noqa: E402
 import spoken_thread  # noqa: E402
@@ -1683,14 +1685,33 @@ def test_the_stub_is_tested_before_any_python():
     assert proof_dispatch.NO_STUB in run[:python]
 
 
-def _run_step(tmp_path, stubs=()):
+#: The step's limit (DRE-9101), and the shortened one the cut test runs it at.
+LIMIT = "--limit 80"
+SHORT = "--limit 1"
+
+
+def _run_step(tmp_path, stubs=(), *, sleep=0, exit_code=0, short=False):
+    """The step's script in bash, with `python3` faked on PATH: the limit
+    script itself runs on the real interpreter, from this checkout, and the
+    phase it runs is the fake — it prints, then sleeps `sleep` seconds and
+    exits `exit_code`. `gh` is faked too, failing, so the alarm's look-back
+    never reaches GitHub."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     marker = tmp_path / "python-ran"
     fake = bin_dir / "python3"
-    fake.write_text(f"#!/bin/sh\ntouch {marker}\necho 'linear-budget: fixture'\n"
-                    "echo 'proof-dispatch: eligible 0, dispatched 0'\n")
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = .bureau-pipeline/scripts/proof_step_limit.py ]; then\n'
+        f'  shift; exec {sys.executable} {ROOT / "scripts" / "proof_step_limit.py"} "$@"\n'
+        "fi\n"
+        f"touch {marker}\necho 'linear-budget: fixture'\n"
+        "echo 'proof-dispatch: eligible 0, dispatched 0'\n"
+        f"sleep {sleep}\nexit {exit_code}\n")
     fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    gh = bin_dir / "gh"
+    gh.write_text("#!/bin/sh\necho 'gh: not in this test' >&2\nexit 1\n")
+    gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
     work = tmp_path / "work"
     (work / ".github" / "workflows").mkdir(parents=True)
     for stub in stubs:
@@ -1699,8 +1720,16 @@ def _run_step(tmp_path, stubs=()):
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}",
            "GITHUB_REPOSITORY": "dreadnought-foundry/portico",
            "GITHUB_STEP_SUMMARY": str(summary)}
-    done = subprocess.run(["bash", "-e", "-c", _step()["run"]], cwd=work, env=env,
-                          capture_output=True, text=True)
+    # The alarm's notice client finds no door, so it sends nothing anywhere.
+    for name in ("BUREAU_READ_URL", "ACTIONS_ID_TOKEN_REQUEST_URL",
+                 "ACTIONS_ID_TOKEN_REQUEST_TOKEN"):
+        env.pop(name, None)
+    run = _step()["run"]
+    if short:
+        assert LIMIT in run
+        run = run.replace(LIMIT, SHORT)
+    done = subprocess.run(["bash", "-e", "-c", run], cwd=work, env=env,
+                          capture_output=True, text=True, timeout=60)
     return done, marker.exists(), summary
 
 
@@ -1721,6 +1750,35 @@ def test_a_stub_runs_the_phase_and_lifts_its_spend(tmp_path, stub):
     text = summary.read_text(encoding="utf-8")
     assert "linear-budget: fixture" in text
     assert "proof-dispatch: eligible 0" in text
+
+
+def test_the_phase_runs_through_its_limit_with_the_alarm():
+    assert ('python3 .bureau-pipeline/scripts/proof_step_limit.py run '
+            f'--step "{STEP}" {LIMIT} --alarm -- '
+            'python3 .bureau-pipeline/scripts/proof_dispatch.py') in _step()["run"]
+
+
+def test_a_phase_past_its_limit_is_cut_and_the_step_stays_green(tmp_path):
+    done, ran, summary = _run_step(tmp_path, stubs=(proof_dispatch.STUBS[0],),
+                                   sleep=30, short=True)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert ran
+    assert "::warning title=Proof step cut at its limit::" in done.stdout
+    text = summary.read_text(encoding="utf-8")
+    assert f'proof-step-limit: cut step="{STEP}" limit=1s' in text
+    # The look-back could not read, so the alarm said UNKNOWN and raised nothing.
+    assert "proof-step-limit: alarm UNKNOWN (" in text
+    assert "proof-dispatch: eligible 0" in text
+
+
+def test_a_phase_that_fails_inside_its_limit_stays_red(tmp_path):
+    done, ran, summary = _run_step(tmp_path, stubs=(proof_dispatch.STUBS[0],),
+                                   exit_code=1, short=True)
+    assert done.returncode == 1
+    assert ran
+    text = summary.read_text(encoding="utf-8")
+    assert "proof-step-limit: cut" not in text
+    assert "linear-budget: fixture" in text
 
 
 def test_the_stub_names_are_the_fix_workflow_family():
@@ -3959,6 +4017,29 @@ def test_rearm_the_pipelines_own_notes_re_arm_nothing(monkeypatch, capsys, user)
     assert h.fired == [] and h.posted == []
     assert h.holds == [("DRE-5930", *GATE_FILED)]
     assert any(NEVER_ANOTHER in line for line in lines), lines
+
+
+def test_rearm_the_records_retire_note_re_arms_nothing(monkeypatch, capsys):
+    # The record's hold writer retires superseded holds with a note posted
+    # after the receipt that spent the budget (DRE-8680): it is the
+    # pipeline's own, so it is no re-arm event.
+    retired = observed_note(
+        300, proof_record_pr.RETIRED_NOTE.format(sha7="abc1234", n=2), user=VIEWER)
+    thread = _sent_back(*SPENT, retired)
+    h, tally = _rearm_pass(monkeypatch, thread=thread,
+                           text=record_md(MET_ROW, NOT_MET_ROW))
+    lines = _about(_lines(capsys), "DRE-5930")
+    assert h.fired == [] and h.posted == []
+    assert h.holds == [("DRE-5930", *GATE_FILED)]
+    assert any(NEVER_ANOTHER in line for line in lines), lines
+    receipts = [(proof_dispatch._when(c["createdAt"]), proof_run_state.receipt(c["body"]))
+                for c in thread if proof_run_state.receipt(c["body"]) is not None]
+    voices = [spoken_thread.Voice(kind=spoken_thread.PIPELINE, label="x",
+                                  created_at=c["createdAt"], body=c["body"])
+              for c in thread]
+    assert sum(1 for _, r in receipts
+               if r.count.startswith("re-run")) == proof_dispatch.RERUN_BUDGET
+    assert proof_dispatch._Pass._new_note(None, voices, receipts) is None
 
 
 def test_rearm_an_unread_record_the_critic_sent_back_is_re_armed_only_by_a_note(

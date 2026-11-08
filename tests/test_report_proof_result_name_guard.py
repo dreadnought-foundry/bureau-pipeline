@@ -54,6 +54,7 @@ open(path, "w", encoding="utf-8").write(text.replace("FORM-ALPHA", "[a person]")
 
 LINEAR_OPS_STUB = r'''#!/usr/bin/env python3
 import json, os, sys
+sys.argv = [open(a[12:]).read().rstrip(chr(10)) if a.startswith("--body-file=") and os.path.isfile(a[12:]) else a for a in sys.argv]  # a body file is read as its body (DRE-8758)
 with open(os.environ["STUB_LOG"], "a", encoding="utf-8") as fh:
     fh.write(json.dumps(["linear_ops", *sys.argv[1:]]) + "\n")
 if sys.argv[1] == "advance":

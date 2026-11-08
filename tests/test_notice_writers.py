@@ -18,8 +18,9 @@ What this file proves:
 
 * the repository itself passes `check` — this test is the CI gate that turns a
   future undeclared card-filing writer in bureau-pipeline red;
-* the declared list carries the 19 writers the card names, with their
-  dispositions, reasons and notice keys;
+* the declared list carries the 18 writers the card named, with their
+  dispositions, reasons and notice keys — 19 until DRE-8619 removed the
+  groom stall with the groom queue;
 * the discovery rules on THROWAWAY CHECKOUTS (a copy of the script, a fixture
   config and fixture files), so each rule is watched naming a file — and the
   whole-name rule watched NOT naming `cmd_create_label(`;
@@ -119,9 +120,10 @@ def test_the_repository_report_reads_every_notice_row_and_exits_zero():
 
 # --- the declared list -------------------------------------------------------
 
-#: The 19 writers the card names: id → (repo, file, disposition, notice key
-#: or the reason's category).
-NINETEEN = {
+#: The 18 writers: id → (repo, file, disposition, notice key or the reason's
+#: category). The card named 19; the groom stall went with the groom queue
+#: (DRE-8619).
+EIGHTEEN = {
     "medic": ("bureau-pipeline", ".github/workflows/medic.yml",
               "notice", "medic:<repo>:<workflow file>"),
     "red-main-budget": ("bureau-pipeline", ".github/workflows/red-main-repair.yml",
@@ -134,8 +136,6 @@ NINETEEN = {
                     "notice", "model_trial:<candidate>"),
     "switch-alarm": ("bureau-pipeline", "scripts/switch_reason.py",
                      "notice", "switch_off:<repo>:<SWITCH_NAME>"),
-    "groom-stall": ("bureau-pipeline", "scripts/reconcile.py",
-                    "notice", "groom_stall"),
     "reviewer-outage": ("bureau-pipeline", "scripts/reconcile.py",
                         "notice", "reviewer_outage:fleet"),
     "standards-sync": ("agent-bureau", ".github/workflows/standards-sync.yml",
@@ -168,9 +168,9 @@ def declared() -> dict[str, dict]:
     return {r["id"]: r for r in json.loads(CONFIG.read_text())["writers"]}
 
 
-@pytest.mark.parametrize("wid", sorted(NINETEEN))
-def test_the_nineteen_writers_are_declared(wid):
-    repo, file, disposition, key_or_reason = NINETEEN[wid]
+@pytest.mark.parametrize("wid", sorted(EIGHTEEN))
+def test_the_eighteen_writers_are_declared(wid):
+    repo, file, disposition, key_or_reason = EIGHTEEN[wid]
     r = declared()[wid]
     assert (r["repo"], r["file"], r["disposition"]) == (repo, file, disposition)
     titles = r["title"] if isinstance(r["title"], list) else [r["title"]]
@@ -180,6 +180,14 @@ def test_the_nineteen_writers_are_declared(wid):
             assert r["notice_key"] == key_or_reason
     else:
         assert r["reason"].split(":")[0] == key_or_reason
+
+
+def test_the_groom_stall_is_no_longer_declared():
+    """Its writer, `_report_groom_stall`, went with the groom queue
+    (DRE-8619), and a row for a writer that is gone declares nothing."""
+    assert "groom-stall" not in declared()
+    assert not any(r.get("notice_key") == "groom_stall"
+                   for r in declared().values())
 
 
 def test_the_nightly_watch_row_carries_both_of_its_keys():

@@ -242,7 +242,12 @@ def door_card(merged: str) -> dict | None:
     `reconcile.merged_card_scope` both read it. Its lines go to stderr — this
     module's stdout is the flags.
     """
-    if bureau_read.mode() == "off" or not bureau_read.enabled():
+    if bureau_read.mode() == "off":
+        return None
+    if not bureau_read.enabled():
+        # A stopped door is never asked, so the client cannot name this
+        # Linear read: it is named here (DRE-8796).
+        bureau_read.note_fallback("cards", bureau_read.disabled_reason() or "unavailable")
         return None
     try:
         card = bureau_read.cards([merged], max_age=bureau_read.BOARD_MAX_AGE,

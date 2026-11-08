@@ -113,8 +113,9 @@
   "precedence": [
     "An explicit role label — read first, no judgement.",
     "The title convention — anchored at the start of the title, never a substring search.",
+    "A declared line in the body — `**Operator step:** <what the person does>`, opening its own line outside fenced code, with text after the colon.",
     "The acceptance-criteria rule: can an unattended agent SATISFY the stated exit condition?",
-    "Only what survives all three reaches a judgement call, and only then is a model asked."
+    "Only what survives all four reaches a judgement call, and only then is a model asked."
   ],
 
   "labels": {
@@ -153,9 +154,44 @@
     }
   ],
 
+  "declared_lines": {
+    "_readme": [
+      "Precedence 3 (DRE-9224). A line in the card's BODY that declares where it",
+      "goes, read after the role label and the title and before the criteria.",
+      "The planner's one-off revision can only rewrite the description: on",
+      "2026-11-04 it rewrote DRE-9222 as an operator step and said so, the",
+      "labels and the title it could not touch were what the router read, and",
+      "the exit stamped FLEET. A build run then parked the card to ask whether",
+      "it could be re-routed OPERATOR.",
+      "",
+      "Read the way an `Observe after:` or `**Blocked by:**` line is read: it",
+      "OPENS its own line (a list marker and bold markup may precede it),",
+      "case-insensitively, outside fenced code, and it carries text after the",
+      "colon. A sentence that merely mentions the words is prose. Every pattern",
+      "is anchored, matches its own example and ships adversarial lines, and",
+      "config_problems() refuses one that does not — the checks a title",
+      "convention gets. An adversarial entry may be several lines, so a fenced",
+      "declaration is one of them."
+    ],
+    "lines": [
+      {
+        "verdict": "OPERATOR",
+        "pattern": "^[\\s>*_`~+#-]*(?:\\d+[.)][\\s>*_`~+#-]*)?operator\\s+step[\\s*_`]*:[\\s*_`]*[^\\s*_`]",
+        "means": "The card is an operator step, not code — a deploy, a migration run, a secret, a workflow re-run — and the line says what the person does. The planner writes it when a revision concludes that, because the revision cannot change the card's labels or title.",
+        "example": "**Operator step:** run `make deploy-console`, then re-run `onboard.yml` for the repo",
+        "adversarial": [
+          "No operator step: this is code",
+          "The operator step: is below",
+          "**Operator step:**",
+          "```\n**Operator step:** run `make deploy-console`\n```"
+        ]
+      }
+    ]
+  },
+
   "criteria_signals": {
     "_readme": [
-      "Precedence 3, and the whole mechanical rule: route on whether an",
+      "Precedence 4 since DRE-9224, and the whole mechanical rule: route on whether an",
       "unattended agent can SATISFY the acceptance criteria, not on whether it",
       "could write the code. That reads the card's own stated exit condition",
       "instead of guessing from the title.",

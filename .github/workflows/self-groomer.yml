@@ -39,7 +39,8 @@
 #   * `repository_dispatch` `groom-drain` — the CEO's Approve; `drain` only
 #     (`drain`).
 #   * `schedule` — the clock; `propose` only, and only when the gate says go
-#     (`gate` → `schedule`).
+#     (`gate` → `schedule`), then the sandbox's own `propose` after it
+#     (`sandbox`, DRE-8782).
 #
 # tests/test_groomer_wiring.py fails the build if the trigger set widens, if a
 # third cron line appears, if the scheduled job's `mode` is anything but the
@@ -235,6 +236,7 @@ jobs:
     outputs:
       go: ${{ steps.gate.outputs.go }}
       why: ${{ steps.gate.outputs.why }}
+      sandbox_card: ${{ steps.sandbox.outputs.card }}
     steps:
       # This repo IS the pipeline, so it is checked out at `.bureau-pipeline`
       # exactly where a product repo's stub would place it, and the command
@@ -248,6 +250,17 @@ jobs:
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
         run: python3 .bureau-pipeline/scripts/groom_schedule_gate.py --card "${{ vars.GROOM_PROPOSAL_CARD }}"
+
+      # The sandbox groom card (DRE-8782), read from committed config —
+      # `config/groom-sandbox.json` — and never a repo variable, because a
+      # proof run cannot read one (`config/proof-reach.json`). After the
+      # gate, and `continue-on-error`: a config that names no card leaves
+      # the output empty and the `sandbox` job skipped, and never turns the
+      # real proposal's gate red.
+      - name: The sandbox groom card, from committed config
+        id: sandbox
+        continue-on-error: true
+        run: python3 .bureau-pipeline/scripts/groom_sandbox.py card
 
   # The scheduled propose (DRE-4677). Keyed on the gate's `go` and nothing
   # else. Every input is a LITERAL or a repository variable, so nothing a
@@ -279,5 +292,42 @@ jobs:
       # (DRE-3035/DRE-3285). Only the drain reads the hold today and a propose
       # moves nothing, so it changes nothing here; it is passed so every job
       # that calls the reusable reads the pen the same way.
+      intake_hold: ${{ vars.INTAKE_HOLD }}
+    secrets: inherit
+
+  # THE SANDBOX GROOM PROPOSAL (DRE-8782). The groomer's memory proofs
+  # (DRE-8331, DRE-8333, DRE-8335, DRE-8357) press on sandbox cards, never on
+  # real ones, so the morning makes a second `propose` that grooms only the
+  # sandbox's cards — `repo:agent-bureau-demo`, its proof fixtures included
+  # — and posts it on the sandbox groom card the gate read from committed
+  # config. Never drained: `sandbox` set, the reusable refuses a drain
+  # before any write, and `groomer.py drain` refuses that card outright.
+  #
+  #   * AFTER the real proposal: it needs `schedule`, and `!cancelled()`
+  #     runs it whatever that job concluded — a failed real run never holds
+  #     the sandbox's, and a skipped one (the off-hour cron) leaves `go`
+  #     false, so this is skipped too.
+  #   * IN THE GROOMING HOUR: keyed on the same gate's `go`, the one that
+  #     reads the 06:00-06:59 PT clock.
+  #   * ITS FAILURE FAILS NOTHING OF THE REAL ONE'S: no job needs this one,
+  #     so the `schedule` job's own conclusion is never touched by it.
+  #
+  # Every input a literal, the gate's reading of the config, or the pen's
+  # repository variable — `mode` above all the literal `propose`.
+  sandbox:
+    needs: [gate, schedule]
+    if: ${{ !cancelled() && needs.gate.outputs.go == 'true' && needs.gate.outputs.sandbox_card != '' }}
+    uses: dreadnought-foundry/bureau-pipeline/.github/workflows/groomer.yml@main
+    with:
+      pipeline_ref: main
+      mode: propose
+      # QUOTED: the reusable compares against the string `true`.
+      sandbox: "true"
+      judgement: "on"
+      capacity: "20"
+      card: ${{ needs.gate.outputs.sandbox_card }}
+      # The pen's switch, read the same way by every job that calls the
+      # reusable (DRE-3035/DRE-3285). A propose moves nothing, so it changes
+      # nothing here.
       intake_hold: ${{ vars.INTAKE_HOLD }}
     secrets: inherit

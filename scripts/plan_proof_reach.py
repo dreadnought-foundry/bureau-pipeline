@@ -147,21 +147,24 @@ SANDBOX_NAMES = ("agent-bureau-demo", "Agent Bureau Sandbox", "the sandbox proje
 #: The sandbox presses, the copy of `standards/card-quality.md`'s one list
 #: (DRE-7772), in its order: each console operation, and the press in plain
 #: words. The epic's PROOF holds both equal to agent-bureau's
-#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the last twenty, the Initiatives
-#: page's writes.
+#: `SANDBOX_PRESS_MUTATIONS`. DRE-8305 added the twenty after the first two
+#: (then six), the Initiatives page's writes; DRE-8727 the eight after those,
+#: the Loops 1 epic's (DRE-8698) loop presses; DRE-8937 the eight after those,
+#: the Loops 2 epic's (DRE-8699) KPI presses; DRE-9034 the three after those,
+#: the Loops 3 epic's (DRE-8700) follow-up and asks; DRE-9044 the one after
+#: those, the Loops 4 epic's (DRE-8701) saved thought; DRE-9077 the last one,
+#: the KPI page epic's (DRE-8702) ask why. DRE-9201 took the four task presses
+#: off the front when Tasks retired under Loops (DRE-8704). DRE-9221 put
+#: DRE-8032's `stopDeskTurn`, the Desk speed script's Stop, after the two Desk
+#: presses, so the Initiatives twenty now follow the first three.
 _A = r"(?:a|an|one|the)\s+(?:[\w-]+\s+)?"
 _S = r"['’]s"
 SANDBOX_PRESSES = (
-    ("createTask", rf"\b(?:make|makes|made|making|create|creates|created|creating)"
-                   rf"\s+{_A}task\b(?!['’]s|\s+card)"),
-    ("snoozeTask", rf"\bsnooz(?:e|es|ed|ing)\s+{_A}task\b"),
-    ("markTaskDone", rf"\bmark(?:s|ed|ing)?\s+{_A}task\s+(?:as\s+)?done\b"),
-    ("makeTaskCard", rf"\b(?:file|files|filed|filing|make|makes|made|making)"
-                     rf"\s+{_A}task(?:['’]s)?\s+card\b"),
     ("sendProjectAgentMessage", rf"\b(?:send|sends|sent|sending)\s+{_A}desk\s+message\b"
                                 rf"|\bopen(?:s|ed|ing)?\s+{_A}conversation\b"),
     ("answerDeskPermission", rf"\banswer(?:s|ed|ing)?\s+{_A}desk\s+"
                              rf"(?:allow|deny|permission)\b"),
+    ("stopDeskTurn", rf"\bstop(?:s|ped|ping)?\s+{_A}desk\s+turn\b"),
     ("startInitiativeDraft", rf"\bstart(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
     ("saveInitiativeDraft", rf"\bsav(?:e|es|ed|ing)\s+{_A}initiative\s+draft\b"),
     ("discardInitiativeDraft", rf"\bdiscard(?:s|ed|ing)?\s+{_A}initiative\s+draft\b"),
@@ -182,6 +185,27 @@ SANDBOX_PRESSES = (
     ("addInitiativeFile", rf"\badd(?:s|ed|ing)?\s+{_A}file\s+to\s+{_A}initiative\b"),
     ("updateInitiativeFile", rf"\bupdat(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
     ("deleteInitiativeFile", rf"\bdelet(?:e|es|ed|ing)\s+{_A}initiative{_S}\s+file\b"),
+    ("recordLoop", rf"\brecord(?:s|ed|ing)?\s+{_A}loop\b"),
+    ("answerLoop", rf"\banswer(?:s|ed|ing)?\s+{_A}loop\b"),
+    ("trackThis", rf"\btrack(?:s|ed|ing)?\s+{_A}ask\s+as\s+{_A}loop\b"),
+    ("moveLoop", rf"\bmov(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("snoozeLoop", rf"\bsnooz(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("nudgeLoop", rf"\bnudg(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("closeLoop", rf"\bclos(?:e|es|ed|ing)\s+{_A}loop\b"),
+    ("markNotALoop", rf"\bmark(?:s|ed|ing)?\s+{_A}loop\s+(?:as\s+)?not\s+a\s+loop\b"),
+    ("reviseKpi", rf"\brevis(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("closeKpi", rf"\bclos(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("retireKpi", rf"\bretir(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("moveKpi", rf"\bmov(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("linkKpiLoop", rf"\blink(?:s|ed|ing)?\s+{_A}kpi\s+(?:and|to|with)\s+{_A}loop\b"),
+    ("unlinkKpiLoop", rf"\bunlink(?:s|ed|ing)?\s+{_A}kpi\s+(?:and|from)\s+{_A}loop\b"),
+    ("proposeKpi", rf"\bpropos(?:e|es|ed|ing)\s+{_A}kpi\b"),
+    ("confirmKpi", rf"\bconfirm(?:s|ed|ing)?\s+{_A}kpi\b"),
+    ("followUpLoop", rf"\b(?:send|sends|sent|sending)\s+{_A}follow[-\s]?up\s+on\s+{_A}loop\b"),
+    ("askLoopStatus", rf"\bask(?:s|ed|ing)?\s+{_A}loop\s+for\s+{_A}status\b"),
+    ("askLoopAgain", rf"\bask(?:s|ed|ing)?\s+{_A}loop\s+again\b"),
+    ("saveThought", rf"\bsav(?:e|es|ed|ing)\s+{_A}thought\s+for\s+later\b"),
+    ("askKpiWhy", rf"\bask(?:s|ed|ing)?\s+why\s+{_A}kpi\s+(?:has\s+)?mov(?:ed|es)\b"),
 )
 
 #: The rows that send a press to a person.

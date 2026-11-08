@@ -68,6 +68,14 @@ OWN_LONG_JOBS = {
     # DRE-7179: one planner run per card under a 100-minute ceiling — the
     # agent lane, as red-main-repair.yml's agent job reads it.
     "triage-repair.yml": {"repair"},
+    # DRE-8634: one repair agent run per alert under a 60-minute ceiling,
+    # Triage Repair's leg in its shape.
+    "alarm-repair.yml": {"repair"},
+    # DRE-8747: one model run over up to 20 cards under an 80-turn ceiling,
+    # the agent lane. Its `apply` legs are scripts and stay on the short chain.
+    # DRE-8928: its `do` legs run a model per card, the agent lane too; the
+    # `close` and `credentials` jobs are scripts on the short chain.
+    "operator-agent.yml": {"decide", "do"},
 }
 # Jobs pinned to `ubuntu-latest` with a reason on the line. None today; a pin
 # is named here AND carries its `# github-hosted:` comment.

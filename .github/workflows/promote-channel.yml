@@ -155,6 +155,34 @@
 #      answers `unit-suite-unproven`: nothing moves, and the run fails in its
 #      last step so the hold is seen, as a blocked mirror check does.
 #
+# THE LOOK-BACK (DRE-9069). Each run judged one commit, the one whose own run
+# started it, and nothing looked at an older proven commit again. The
+# `promote-channel` group below keeps ONE pending run and GitHub cancels it
+# when a newer one queues (runs 41583518423 and 41560513828 on 2026-11-02),
+# so the run that would have promoted a proven commit A can vanish before it
+# starts — and if every newer commit then fails, `stable` stays behind A until
+# a person promotes it. So a run on main that refuses its own commit at the
+# HARNESS proof (`promote_channel.LOOK_BACK_OUTCOMES`) walks main's
+# first-parent chain from main's head, at most 20 commits, stopping at
+# `stable`, and the newest proven commit becomes the candidate for every step
+# below — its status, its ancestry, its unit suite, the hold and the mirror
+# check, all read for it. The hold, a unit-suite or mirror refusal and every
+# dispatch never look back, and force stays a person's dispatch alone.
+#
+#   Q1 WHO INITIATES. The same `workflow_run` as today; nothing new starts
+#      this workflow, and the step does not run on a dispatch.
+#   Q2 WHICH SECRETS STORE. None is read: the chain is a `git fetch` over the
+#      checkout's own `github.token`, and each stamp a `gh api` read with it.
+#   Q3 RETRY / RE-RUN. A re-run walks again and finds the same commit, which
+#      now compares `identical` — a named no-op, as a re-run always was.
+#   Q4 COMMAND LIMITS. The checkout is shallow; `--depth=20` holds a
+#      first-parent chain of 20, and `rev-list --first-parent` never lists a
+#      merged branch's own commits. A status read is one commit's, so the walk
+#      stops reading at the first proven one.
+#   Q5 CRASH MID-FLOW. The step writes nothing outside the runner and is
+#      `continue-on-error`: a crash leaves no candidate, and the run judges
+#      its own commit exactly as before.
+#
 # The decision lives in scripts/promote_channel.py (unit-tested red and green
 # in tests/test_promote_channel.py and tests/test_promote_channel_by_hand.py)
 # and the check in scripts/mirror_check.py (tests/test_mirror_check.py); this
@@ -263,6 +291,51 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # LOOK BACK FOR THE NEWEST PROVEN COMMIT (DRE-9069) — before anything
+      # reads a record, because whichever commit it settles on is the one
+      # every step below reads for. It judges the run's own commit first, on
+      # the records the proof below is handed: its own status only where the
+      # steps below would read it, so a failed or canceled harness run is
+      # `harness-failed` or `harness-cancelled-by-newer-push` here as there.
+      # Only a refusal at the harness proof walks the chain, so a passing
+      # commit, a held channel and every unit-suite or mirror refusal read
+      # nothing more. A walk that finds a proven commit writes
+      # `candidate=<sha>` and `look_back.json`, which both decisions read,
+      # and `proving_run=<url>` — the run behind that commit's own stamp,
+      # which the decision record and the summary name in place of the
+      # starting run; one that finds nothing writes the record alone, so the
+      # line says so.
+      # Run as a module, so the steps that name `promote_channel.py` stay the
+      # two decisions — the by-hand wiring test finds the decision that way.
+      - name: Look back for a proven commit
+        id: lookback
+        if: >-
+          github.event_name == 'workflow_run' &&
+          github.event.workflow_run.head_branch == 'main'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OWN: ${{ github.event.workflow_run.head_sha }}
+          HOLD: ${{ vars.CHANNEL_HOLD }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          WOKEN_BY: ${{ github.event.workflow_run.name }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          READ_OWN: ${{ github.event.workflow_run.conclusion == 'success' || github.event.workflow_run.name == 'Pipeline Tests' }}
+          PYTHONPATH: scripts
+        run: |
+          echo '{}' > own_status.json
+          if [ "$READ_OWN" = "true" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/commits/${OWN}/status" \
+              > own_status.json || echo '{}' > own_status.json
+          fi
+          python3 -m promote_channel look-back \
+            --sha "$OWN" --statuses-file own_status.json \
+            --hold "$HOLD" --conclusion "$CONCLUSION" \
+            --branch "$BRANCH" --woken-by "$WOKEN_BY" \
+            --repo "$GITHUB_REPOSITORY" --default-branch "$DEFAULT_BRANCH" \
+            --out look_back.json
+
       # WHICH COMMIT THIS RUN IS ABOUT (DRE-4111). One answer for both
       # triggers, so every step below reads one output instead of branching on
       # the event five times.
@@ -274,10 +347,16 @@ jobs:
       # a typo. The input travels through `env`, never interpolated into the
       # shell line (the tests.yml `BASE_REF` rule): a dispatch needs repo write,
       # but the value is still somebody's typing.
+      #
+      # On a run that looked back (DRE-9069) the answer is the commit the
+      # look-back found, and every step below reads its records, not the
+      # starting run's — so each of them runs for it whatever that run
+      # concluded.
       - name: Which commit is this run about?
         id: resolve
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.lookback.outputs.candidate != '' ||
           (github.event.workflow_run.head_branch == 'main' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.name == 'Pipeline Tests'))
@@ -285,11 +364,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           EVENT: ${{ github.event_name }}
           RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          LOOK_BACK: ${{ steps.lookback.outputs.candidate }}
           INPUT_SHA: ${{ github.event.inputs.sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           if [ "$EVENT" != "workflow_dispatch" ]; then
-            echo "candidate=${RUN_SHA}" >> "$GITHUB_OUTPUT"
+            echo "candidate=${LOOK_BACK:-$RUN_SHA}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           WANTED="$(printf '%s' "$INPUT_SHA" | tr -d '[:space:]')"
@@ -308,10 +388,11 @@ jobs:
         id: app
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.lookback.outputs.candidate != '' ||
           (github.event.workflow_run.head_branch == 'main' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.name == 'Pipeline Tests'))
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -331,15 +412,29 @@ jobs:
       # status, so it carries the stamp of whichever harness run proved the
       # sha — not only the newest one. That is the entire by-hand case: the
       # proof passed an hour ago and the channel is still behind.
+      #
+      # A FAILED harness run on main reads it too (DRE-9068): its stamp's
+      # description is where the run says WHY it is red, and a rate-limited
+      # run's `harness blocked: GitHub rate limit` marker must reach the
+      # decision to be read as `harness-inconclusive` rather than a red trunk.
+      # Without this read the decision saw only `conclusion=failure`, and on
+      # 2026-11-02 a busy quota held `stable` as a red trunk. The stamp is the
+      # failed run's own — harness.yml writes it as the job's last step — and
+      # a failed run never promotes, whatever the stamp says. Read-only on the
+      # workflow token: the bot token stays on the routes that can promote,
+      # and `steps.resolve` stays on them too, so the run's own head names
+      # the commit here.
       - name: Fetch the candidate's combined commit status
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.lookback.outputs.candidate != '' ||
           (github.event.workflow_run.head_branch == 'main' &&
            (github.event.workflow_run.conclusion == 'success' ||
+            github.event.workflow_run.conclusion == 'failure' ||
             github.event.workflow_run.name == 'Pipeline Tests'))
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE: ${{ steps.resolve.outputs.candidate }}
+          CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
         run: |
           gh api "repos/${GITHUB_REPOSITORY}/commits/${CANDIDATE}/status" \
             > combined_status.json || echo '{}' > combined_status.json
@@ -356,6 +451,7 @@ jobs:
         id: ancestry
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.lookback.outputs.candidate != '' ||
           (github.event.workflow_run.head_branch == 'main' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.name == 'Pipeline Tests'))
@@ -412,6 +508,7 @@ jobs:
         id: unit
         if: >-
           github.event_name == 'workflow_dispatch' ||
+          steps.lookback.outputs.candidate != '' ||
           (github.event.workflow_run.head_branch == 'main' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.name == 'Pipeline Tests'))
@@ -495,6 +592,7 @@ jobs:
             --branch "$BRANCH" \
             --unit-suite unit_suite.json \
             --woken-by "$WOKEN_BY" \
+            --look-back look_back.json \
             "${ARGS[@]}")
           printf '%s\0' "${ARGS[@]}" > "$RUNNER_TEMP/decide-args"
           python3 scripts/promote_channel.py "${ARGS[@]}"
@@ -515,7 +613,7 @@ jobs:
           (github.event_name == 'workflow_dispatch' ||
            github.event.workflow_run.head_branch == 'main')
         continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.BUREAU_APP_ID }}
           private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
@@ -733,9 +831,11 @@ jobs:
           TO_SHA: ${{ steps.resolve.outputs.candidate }}
           # The starting run is the harness run only when the harness started
           # it (DRE-6993). A `Pipeline Tests` start passes neither, and the
-          # proving run is read off the commit's own status, as on a dispatch.
-          HARNESS_RUN: ${{ github.event.workflow_run.name == 'Integration Harness' && github.event.workflow_run.html_url || '' }}
-          HARNESS_AT: ${{ github.event.workflow_run.name == 'Integration Harness' && github.event.workflow_run.updated_at || '' }}
+          # proving run is read off the commit's own status, as on a dispatch
+          # — and so does a look-back promotion (DRE-9069): the starting run
+          # was about the refused commit, never the one promoted.
+          HARNESS_RUN: ${{ github.event.workflow_run.name == 'Integration Harness' && steps.lookback.outputs.candidate == '' && github.event.workflow_run.html_url || '' }}
+          HARNESS_AT: ${{ github.event.workflow_run.name == 'Integration Harness' && steps.lookback.outputs.candidate == '' && github.event.workflow_run.updated_at || '' }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           STABLE_NOW="$(gh api \
@@ -807,7 +907,9 @@ jobs:
           ANCESTRY: ${{ steps.ancestry.outputs.status }}
           CANDIDATE: ${{ steps.resolve.outputs.candidate || github.event.workflow_run.head_sha }}
           FROM_SHA: ${{ steps.ancestry.outputs.head }}
-          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          # On a look-back (DRE-9069) the starting run was about the refused
+          # commit, so the gating run is the one behind the candidate's stamp.
+          HARNESS_RUN: ${{ steps.lookback.outputs.candidate == '' && github.event.workflow_run.html_url || steps.lookback.outputs.proving_run }}
           SCENARIOS: ${{ steps.channel.outputs.scenarios }}
         run: |
           python3 scripts/channel_record.py --repo "$GITHUB_REPOSITORY" \
@@ -870,7 +972,10 @@ jobs:
           OUTCOME: ${{ steps.decide.outputs.outcome }}
           REASON: ${{ steps.decide.outputs.reason }}
           PROMOTED: ${{ steps.decide.outputs.promote }}
-          HARNESS_RUN: ${{ github.event.workflow_run.html_url }}
+          # The run behind the candidate's own stamp on a look-back (DRE-9069),
+          # never the starting run, which was about the refused commit.
+          HARNESS_RUN: ${{ steps.lookback.outputs.candidate == '' && github.event.workflow_run.html_url || steps.lookback.outputs.proving_run }}
+          LOOK_BACK: ${{ steps.lookback.outputs.candidate }}
           # The starting run's workflow (DRE-6993): a `Pipeline Tests` run is
           # named under "Woken by", never as the harness run.
           WOKEN_BY: ${{ github.event.workflow_run.name }}
@@ -893,6 +998,10 @@ jobs:
           if [ "$OUTCOME" = "mirror-tests-failed" ] && [ -z "$MIRROR_CARD" ]; then
             MIRROR_CARD="card owed"
           fi
+          NO_RUN="none — this was a by-hand dispatch"
+          if [ -n "$LOOK_BACK" ]; then
+            NO_RUN="none on record for ${LOOK_BACK:0:7}"
+          fi
           if [ "$PROMOTED" = "true" ]; then
             HEADLINE="moved stable to ${CANDIDATE:0:7}"
           else
@@ -906,10 +1015,12 @@ jobs:
             echo ""
             echo "${REASON}"
             echo ""
-            if [ -n "$HARNESS_RUN" ] && [ "$WOKEN_BY" != "Integration Harness" ]; then
+            if [ -n "$LOOK_BACK" ]; then
+              echo "Harness run: ${HARNESS_RUN:-$NO_RUN} — the run that proved ${LOOK_BACK:0:7}, found by looking back"
+            elif [ -n "$HARNESS_RUN" ] && [ "$WOKEN_BY" != "Integration Harness" ]; then
               echo "Woken by: ${WOKEN_BY} run ${HARNESS_RUN}"
             else
-              echo "Harness run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
+              echo "Harness run: ${HARNESS_RUN:-$NO_RUN}"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$PROMOTED" = "true" ]; then
@@ -939,7 +1050,7 @@ jobs:
               echo "- candidate: \`${CANDIDATE}\`"
               echo "- outcome: \`${OUTCOME}\`"
               echo "- stable is still at: \`${CHANNEL_HEAD:-unknown}\`"
-              echo "- gating run: ${HARNESS_RUN:-none — this was a by-hand dispatch}"
+              echo "- gating run: ${HARNESS_RUN:-$NO_RUN}"
               echo "- failing scenarios: ${SCENARIOS:-none}"
               echo "- mirror check: ${MIRROR:-not run}"
               if [ -n "$MIRROR" ]; then
