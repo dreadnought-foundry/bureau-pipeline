@@ -212,8 +212,20 @@ jobs:
     # boundedness that killed the four build and fix runs on 2026-09-24.
     # `BUREAU_CI_RUNS_ON` is the variable the repo's own `ci.yml` already reads,
     # so the console's pool fail-back covers this lane and a repo that sets
-    # neither variable renders what it rendered before.
-    runs-on: ${{ fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
+    # neither variable renders what it rendered before. It asks RunsOn for a
+    # machine AWS cannot take back (DRE-8890): this is among the longest jobs
+    # in the fleet, so a Spot reclaim costs the most here, and the variable
+    # stays on Spot for the repo's CI — a RunsOn label gains `spot=false` as
+    # agent-bureau's `ci.yml` adds it on `push` (DRE-6879), one that already
+    # says `spot=` is used as it stands, and any other value renders as
+    # before. `tests/test_build_runs_on_lane.py` pins it.
+    runs-on: >-
+      ${{ fromJSON(startsWith(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0], 'runs-on')
+      && !contains(join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), ','), 'spot=')
+      && (fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[1]
+      && format('["{0}","spot=false"]', join(fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]'), '","'))
+      || format('["{0}/spot=false"]', fromJSON(vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]')[0]))
+      || vars.BUREAU_CI_RUNS_ON || vars.BUREAU_RUNS_ON || '["ubuntu-latest"]') }}
     # 65, raised from 25 with the file-list strategy (DRE-2466). A large
     # review deliberately takes more, smaller steps, and the budget has to
     # hold the WHOLE cycle this job can run — not just the first attempt:
@@ -915,7 +927,7 @@ jobs:
       # give the whole answer, else ONE Linear read of the description and the
       # same comment window the old thread read took.
       #
-      # A pull_request RUN GETS ONE READ FROM THE DOOR: its own card, the one
+      # A pull_request RUN READS ITS CARD FROM THE DOOR: its own card, the one
       # its `agent/` or `repair/DRE-<n>-…` head branch names (agent-bureau
       # DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review is
       # such a run, so this read is served by the door like a workflow_dispatch
@@ -1057,6 +1069,16 @@ jobs:
       # Both land before the durable copy, so both critic attempts read them.
       # tests/test_parts_review_wiring.py executes the block against
       # DRE-8719's fixture trees.
+      #
+      # THE READ DOOR (DRE-8899). The CEO's answer is read off the card's
+      # thread, and this run's own card is a read the door serves a
+      # pull_request run (agent-bureau DRE-8807). The four door variables are
+      # reconcile.yml's, and BUREAU_READ_CARD_MAX_AGE is the review card's
+      # bound (`bureau_read.REVIEW_CARD_MAX_AGE`, 120 seconds): the thread
+      # read asks the door first (`linear_ops.card_via_door`) and Linear when
+      # it cannot answer. The viewer the thread's authorship is judged against
+      # is still Linear's, this process's own key. The same five variables sit
+      # on Post verdict and Card → In Review below, for their card reads.
       - name: Assemble critic context
         id: ctx
         if: steps.decide.outputs.review == 'true'
@@ -1069,6 +1091,11 @@ jobs:
           SHADOW: ${{ inputs.shadow }}
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           python3 "$PIPELINE_DIR"/scripts/assemble_context.py assemble critic \
             --root "$PIPELINE_DIR" \
@@ -1846,8 +1873,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2250,8 +2278,9 @@ jobs:
             Check, in order of severity:
             1. Does the diff actually satisfy the acceptance criteria the
                CARD CONTEXT block above defines — for a card PR the card's
-               criteria (its description and any **Spec:** directory it
-               references), for a cardless PR the policy the block states?
+               criteria (its description and the spec its **Spec:** line
+               names, a file or a directory), for a cardless PR the policy
+               the block states?
                If the card has a
                `**Design:**` ref, Read the referenced design image(s) and
                compare the diff against it — flag as findings any missing or
@@ -2850,6 +2879,14 @@ jobs:
           # reads is the owner's.
           NAME_GUARD_LIVE: ${{ vars.NAME_GUARD_LIVE }}
           OWNER: ${{ github.repository_owner }}
+          # The read door (DRE-8899), as Assemble critic context has it: the
+          # Linear copy's pre-read of the card asks the door first. The
+          # comment itself is Linear's write either way.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: bash "$PIPELINE_DIR/scripts/post_verdict.sh"
 
       # ── The card's lane, written from the PR side (DRE-4179) ──────────────
@@ -2901,6 +2938,17 @@ jobs:
           LINEAR_API_KEY: ${{ vars.LINEAR_AGENT_BUCKET == 'planner' && secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          # The read door (DRE-8899), as Assemble critic context has it. The
+          # In Review state's id asks the door first: `/workflow-states` is a
+          # read the door serves a pull_request run whose head branch names
+          # its own card (agent-bureau DRE-9166, DRE-9170), and this step only
+          # moves that card. `get_issue` and the DRE-2316 re-read stay on
+          # Linear, because they are the write path's own.
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_CARD_MAX_AGE: 120
         run: |
           # ANCHORED, and that is the point. The Resolve PR step's card grep is
           # `DRE-[0-9]+` anywhere in the ref — right for LOGGING which card a

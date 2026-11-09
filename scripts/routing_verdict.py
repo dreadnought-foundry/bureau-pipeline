@@ -39,8 +39,12 @@ already says:
 
   1. an explicit role label (`agent:ops`, `no-code`) — no model is asked;
   2. the title convention, ANCHORED at the start — never a substring search;
-  3. the acceptance-criteria rule;
-  4. only what survives all three reaches a judgement call.
+  3. a declared line in the body, `**Operator step:** …`, ANCHORED at the start
+     of its own line and read outside fenced code (DRE-9224) — the one place a
+     planner's revision, which can only rewrite the description, says where
+     the card goes;
+  4. the acceptance-criteria rule;
+  5. only what survives all four reaches a judgement call.
 
 ## Not a second substring matcher
 
@@ -53,7 +57,7 @@ every consumer instead of copied into each (DRE-2922). Do not build a second
 one. Three things here descend from that:
 
   * every title pattern must be ANCHORED, and `config_problems()` refuses one
-    that is not;
+    that is not — and so must every declared line (DRE-9224);
   * every title convention ships an ADVERSARIAL fixture — a title that mentions
     the token without declaring it — and `config_problems()` refuses a
     convention without one, so the mutation test cannot be forgotten;
@@ -507,6 +511,10 @@ def title_conventions(doc: dict | None = None) -> tuple:
     return tuple((doc or load())["title_conventions"])
 
 
+def declared_lines(doc: dict | None = None) -> tuple:
+    return tuple(((doc or load()).get("declared_lines") or {}).get("lines") or ())
+
+
 def label_map(doc: dict | None = None) -> dict:
     return dict((doc or load())["labels"]["map"])
 
@@ -677,6 +685,40 @@ def config_problems(doc: dict | None = None) -> list:
                 problems.append(
                     f"the adversarial title {hostile!r} matches the {pattern!r} "
                     "convention — it only mentions the token, it does not declare it"
+                )
+
+    # The same three checks for a line declared in the body (DRE-9224): a
+    # declaration read anywhere in a description is the substring search the
+    # title anchor exists to stop, one field over.
+    for declared in declared_lines(doc):
+        pattern = declared.get("pattern") or ""
+        who = declared.get("verdict")
+        if who not in names:
+            problems.append(f"the declared line {pattern!r} maps to unknown {who!r}")
+        if not pattern.startswith("^"):
+            problems.append(
+                f"the declared line {pattern!r} is not anchored at the start of "
+                "the line — an unanchored declaration is a substring search over "
+                "the card's prose"
+            )
+            continue
+        if not declared.get("adversarial"):
+            problems.append(
+                f"the declared line {pattern!r} ships no adversarial fixture — "
+                "every declared line owes a mutation test whose fixture mentions "
+                "the words without declaring them"
+            )
+        if declared_verdict(declared.get("example") or "", doc) != who:
+            problems.append(
+                f"the declared line {pattern!r} does not match its own example "
+                f"{declared.get('example')!r}"
+            )
+        for hostile in declared.get("adversarial") or ():
+            if declared_verdict(hostile, doc) is not None:
+                problems.append(
+                    f"the adversarial line {hostile!r} matches the declared line "
+                    f"{pattern!r} — it only mentions the words, it does not "
+                    "declare them"
                 )
 
     for key, signal in _signals(doc):
@@ -1362,7 +1404,7 @@ class Decision:
     """
 
     verdict: str | None
-    source: str  # "label" | "title" | "criteria" | "judgement" | "epic"
+    source: str  # "label" | "title" | "declared" | "criteria" | "judgement" | "epic"
     reason: str
     needs_model: bool = False
     plan_questions: tuple = field(default_factory=tuple)
@@ -1474,6 +1516,36 @@ def title_verdict(title: str, doc: dict | None = None) -> str | None:
     return None
 
 
+def declared_verdict(description: str, doc: dict | None = None) -> str | None:
+    """Precedence 3 (DRE-9224). A line in the body that declares where the
+    card goes — `**Operator step:** …` — read outside fenced code,
+    case-insensitively, anchored at the start of its line.
+
+    A fence closes only on the marker that opened it, the way
+    `proof_and_demo.observe_after` reads one, so a `~~~` inside a ``` block
+    does not end it.
+    """
+    patterns = [(re.compile(d["pattern"], re.IGNORECASE), d["verdict"])
+                for d in declared_lines(doc)]
+    if not patterns:
+        return None
+    fence = None
+    for line in (description or "").splitlines():
+        marker = _FENCE.match(line)
+        if marker:
+            if fence is None:
+                fence = marker.group(1)
+            elif marker.group(1) == fence:
+                fence = None
+            continue
+        if fence is not None:
+            continue
+        for pattern, verdict in patterns:
+            if pattern.match(line):
+                return verdict
+    return None
+
+
 def _showable(text: str) -> bool:
     """Is this text fit to put in front of the CEO?
 
@@ -1529,7 +1601,7 @@ def _acceptance_evidence(description: str) -> str:
 
 
 def criteria_verdict(description: str, doc: dict | None = None) -> tuple:
-    """Precedence 3, as `(verdict, reason)`.
+    """Precedence 4 (3 until DRE-9224), as `(verdict, reason)`.
 
     `(None, reason)` means the criteria exist and name neither signal — a
     judgement call, and the only place a model is worth asking.
@@ -1631,6 +1703,17 @@ def route(title, description, labels=(), has_children: bool = False,
             reason="the title declares a convention, anchored at its start",
         )
 
+    hit = declared_verdict(description, doc)
+    if hit:
+        return Decision(
+            verdict=hit,
+            source="declared",
+            reason=(
+                "the card's body declares an operator step on a line of its own "
+                "— no judgement, and no model asked"
+            ),
+        )
+
     verdict, reason = criteria_verdict(description, doc)
     return Decision(
         verdict=verdict,
@@ -1643,6 +1726,12 @@ def route(title, description, labels=(), has_children: bool = False,
 # --------------------------------------------------------------------------- #
 # the rendered document                                                        #
 # --------------------------------------------------------------------------- #
+
+
+def _code_span(text: str) -> str:
+    """`text` as inline code, which a single backtick cannot hold when the
+    text carries one — a declared line's pattern and example both do."""
+    return f"`` {text} ``" if "`" in text else f"`{text}`"
 
 
 def render_markdown(doc: dict | None = None) -> str:
@@ -1738,6 +1827,38 @@ def render_markdown(doc: dict | None = None) -> str:
     for convention in title_conventions(doc):
         w(f"- `{convention['pattern']}` — {convention['means']}")
     w("")
+
+    w("## Lines declared in the body")
+    w("")
+    w(
+        "Read after the role label and the title, and before the acceptance "
+        "criteria (DRE-9224). A planner's revision can only rewrite a card's "
+        "description, so a line there is where it says the card goes. The line "
+        "opens its own line — a list marker and bold markup may precede it — "
+        "is matched case-insensitively, sits outside fenced code and carries "
+        "text after the colon. `config_problems()` refuses a pattern that is "
+        "not anchored, ships no adversarial line, or does not match its own "
+        "example."
+    )
+    w("")
+    for declared in declared_lines(doc):
+        w(f"### {declared['verdict']} — {_code_span(declared['pattern'])}")
+        w("")
+        w(declared["means"])
+        w("")
+        w(f"Matches: {_code_span(declared['example'])}")
+        w("")
+        w("Must NOT match:")
+        w("")
+        for hostile in declared["adversarial"]:
+            if "\n" in hostile:
+                w("- inside fenced code:")
+                w("")
+                for line in hostile.splitlines():
+                    w(f"  {line}")
+            else:
+                w(f"- {_code_span(hostile)}")
+        w("")
 
     w("## Labels read first")
     w("")

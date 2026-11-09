@@ -292,7 +292,7 @@ EXCLUDE_UNREAD = "board context unread: {why}"
 #: The sixth (DRE-7783): a card a proof run filed on the sandbox (DRE-7772).
 #: Both marks or neither — the opener is agent-bureau's
 #: `proof_reader_presses.SANDBOX_FIXTURE_TITLE_OPENER` (DRE-7776), the label
-#: the one the console's `makeTaskCard` puts on a sandbox card.
+#: the sandbox's own `repo:agent-bureau-demo`, the one a sandbox card carries.
 EXCLUDE_SANDBOX_FIXTURE = "sandbox fixture filed by a proof run"
 SANDBOX_FIXTURE_TITLE_OPENER = "SANDBOX FIXTURE (proof DRE-"
 SANDBOX_FIXTURE_REPO_LABEL = "repo:agent-bureau-demo"

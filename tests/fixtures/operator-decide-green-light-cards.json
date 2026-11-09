@@ -1,0 +1,627 @@
+{
+ "gl-stopped-run": {
+  "serves": "repair",
+  "source": "DRE-2498",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-13T15:45:46.817Z",
+  "added": [
+   "the lane: Green Light, the lane the card waited in after the cut",
+   "updatedAt: the time of the last comment kept"
+  ],
+  "removed": [
+   "every comment after the cut",
+   "the newest comment's escalation-choices block",
+   "the description's Decisions from the CEO section and everything after it, written after the cut",
+   "the history after the move to Green Light that followed the cut"
+  ],
+  "withheld": [
+   "a person's name",
+   "a Linear user id"
+  ],
+  "card": {
+   "id": "e227f094-e3df-4c45-8cb5-2485da4a84d5",
+   "identifier": "DRE-2498",
+   "title": "The share panel tells the truth about documents Portico cannot gate",
+   "description": "> **Branch:** `agent/DRE-2498-<slug>`**.** Not `ui/*`, not `feat/*`, and **not the** `sid/dre-2498-…` **name Linear suggests** — `linear-sync.yml` reads the card id out of the merged branch, so any other prefix means this card does not close itself. One card, one branch, one PR. **The epic this card came from has already lost one card to that mistake** — [DRE-2495](https://linear.app/dreadnoughtfoundry/issue/DRE-2495/the-external-document-screen-open-in-a-new-tab-and-say-who-controls) merged as `ui/forms-spec` and had to be closed by hand.\n\n> **NARROWED 2026-10-13 (planner, after the pre-approval critic's review): this card is the SERVER half only.** The share sheets cannot say anything about externally kept documents today, because `GET /access` (the one read both sheets are drawn from) does not say which documents in a folder are external. That is a server change and a screen change with a data shape between them, so it is two pull requests. This card adds the data, end to end through the client's typed contract, and draws nothing. The screen half is written out in full under **Cut from this card** below so a person can file it as its own card, blocked by this one. The title names the whole outcome; this card delivers its first half.\n\n**Blocked by:** [DRE-2494](https://linear.app/dreadnoughtfoundry/issue/DRE-2494/add-a-document-by-link-without-fetching-it-the-row-the-route-and-a)\n\nThe disclosure half of the accepted risk from epic DRE-2492 (\"two access systems, disclosed rather than hidden\"), at the place where a moderator forms a belief about who can read what.\n\n## Words this card uses\n\n* **External document** — a library document row with `artifactKind: \"external\"`. It is created by `POST /library/docs/external` (DRE-2494) or by copying one (`copy_lib.ts`). Portico stores only its address and never fetches it. The card was filed calling these \"link-out documents\"; the viewer calls the same thing a document \"kept elsewhere\" (`ExternalPane`). Google Docs is the motivating case, but the route accepts any allowed host (SharePoint too), so nothing in this card may say \"Google\" as a fact about every external document. It uses the stored address's host instead.\n* **Form** — a document row with `artifactKind: \"form\"` (DRE-2632, `items_lib.formOf`). Portico gates it fully.\n* **Hosted** — every other document kind (file, frame, prose, PDF). Portico gates it fully.\n\n## The specific false belief to prevent\n\nA moderator opens the share panel, sees the grant list, and reasonably concludes *these are the people who can read these documents.* For an external document that is **not true**. Sharing on the site where it is kept decides, and Portico cannot see that.\n\nThe sharper case is revocation. Remove a partner and the panel shows them gone. Their Portico documents really are gone. **The Google link in their history still works, and nothing on this screen says so.**\n\n## What this card builds — `GET /access` says which external documents its scope holds\n\n`GET /access` gains two fields. Both are computed from the partition read the route already makes (`snapshot(project)` in `infra/lambda/routes/access.ts`), so there is **no new DynamoDB Query** and no change to ADR-0003's throughput trigger.\n\n1. `externalDocs` — every external document in the item's scope, as `{ id, title, host }`, ordered by title and then by id. Always present (an empty array when there are none).\n2. `docKind` — only when the item is a document: `\"external\"`, `\"form\"` or `\"hosted\"`. Absent for a folder and for the root. The screen half needs this to fork the document sheet's copy by kind without a second server change.\n\n**The scope is exactly the set** `subtreeCounts` **already counts as** `subtreeDocs` (the \"reaches N documents\" number the grant preview shows), so the two numbers cannot disagree:\n\n* **A folder:** every document below it at any depth — sub-folders included — plus, for every alias row inside that subtree, what the alias shows: a document alias adds its target document, and a folder alias adds that folder's home subtree. Aliases are followed one level deep, like the resolver. A document reached twice (home and alias, or two aliases) is listed once.\n* **The root:** the same walk from the top of the library — every document in the portal.\n* **A document:** the document itself. `externalDocs` is `[that document]` when it is external, and `[]` otherwise.\n* **Shelf templates** are already removed from a non-moderator's view by `readView` before any walk runs, and that does not change.\n\nEvery caller who passes the route's existing read gate may see the list. Grants are additive with no deny, so everything in a readable item's scope is readable to that caller. The list carries no address beyond the host, and no field about who the external site lets in.\n\n**How to keep the two numbers from drifting:** refactor `subtreeCounts` so the walk returns the document id set, and have both `subtreeDocs` (its size) and `externalDocs` (its members filtered to external rows) read that one set. Build the external rows' `{ title, host }` map inside `snapshot()`, while the stored rows are still in hand — the way `appDataDocs` and `templateIds` are built there today, and for the same reason: `AccessTreeItem` drops `artifactKind`. `host` is the hostname of the stored `url`, or `null` if it does not parse.\n\n**The client's typed contract moves in the same PR**, so the screen half only reads it: `AccessPayload` in `client/app/src/features/share/queries/access.ts` gains `externalDocs?: ExternalDocRef[]` and `docKind?: \"external\" | \"form\" | \"hosted\"`. Both are optional on the client type, because the SPA can run against a backend that predates this card. An absent field means \"this deployment does not say\" and must never be read as zero.\n\n**Files:** `infra/lambda/routes/access.ts`, `infra/test/access_external_docs.test.ts` (new), `infra/test/api_shapes.test.ts`, `infra/test/fixtures/api-shapes/access.json`, `client/app/src/features/share/queries/access.ts`, `client/app/src/lib/api/apiShapes.contract.test.ts`\n\n## Test fixture — one library, every scope rule\n\n`infra/test/access_external_docs.test.ts` builds this library. It drives the handler through `GET /access` with a DynamoDB double, borrowing the pattern from `access_route.test.ts`, whose double lives in that file:\n\n* **Partners** (folder) holds, directly, **Q3 plan** (external, `docs.google.com`), **Pricing** (external, `docs.google.com`) and **Overview** (hosted). It also holds an alias of **Roadmap**, and the folder **Archive**.\n  * **Archive** (folder) holds **Old deck** (external, `sharepoint.com`) and a second alias of **Roadmap**.\n* **Internal** (folder) holds **Roadmap** (external, `docs.google.com`) and **Intake** (form).\n* **Plain** (folder) holds **Notes** (hosted) only.\n\n| `itemId` | `externalDocs` titles, in order | `docKind` |\n| -- | -- | -- |\n| Partners | Old deck, Pricing, Q3 plan, Roadmap (4: a sub-folder's, an alias target's, and Roadmap counted once though two aliases reach it) | absent |\n| Archive | Old deck, Roadmap | absent |\n| Internal | Roadmap | absent |\n| Plain | none — `[]` | absent |\n| root | Old deck, Pricing, Q3 plan, Roadmap | absent |\n| Q3 plan | Q3 plan | `\"external\"` |\n| Overview | none | `\"hosted\"` |\n| Intake | none | `\"form\"` |\n\nPlus: for every folder row above, `externalDocs.length` is no larger than the `subtreeDocs` that `GET /access/preview-grant` answers for the same folder. And one `GET /access` makes the same number of DynamoDB Query calls as before this card.\n\n## Deliberately NOT in scope\n\n**Do not check, read, or reconcile Google's permissions** — or any external host's. That needs the Google credential the epic refuses. This card discloses; it does not enforce. An \"are these in sync?\" indicator would be a lie without an API call. No outbound request of any kind is added. Nothing on screen changes in this card.\n\n## Acceptance criteria\n\n- [ ] `GET /access` answers `externalDocs` for a folder, the root and a document, exactly as the fixture table above says — sub-folders at any depth, alias targets one level deep, a document reached twice listed once\n- [ ] The list names which documents they are (`id`, `title`, `host`), so the screen half can show them and not just count them\n- [ ] A folder with no external documents in scope answers `externalDocs: []` (the fixture's **Plain**), which the screen half reads as \"draw no new copy\"\n- [ ] `docKind` is answered for a document (`external`, `form`, `hosted`) and absent for a folder and the root\n- [ ] The external set and `subtreeDocs` come from one walk, and a test fails if they disagree\n- [ ] No field claims or implies Portico knows the external sharing state — the entry carries id, title and host only\n- [ ] No Google API call or other outbound request added, and no new DynamoDB Query on `GET /access`\n- [ ] `AccessPayload` on the client declares both fields as optional, the committed `access.json` fixture carries them, and the client contract test parses them\n- [ ] `npm test` and `npm run typecheck` in `infra/` pass, and the client suite passes\n\n## Cut from this card — the screen half, to be filed as its own card, blocked by this one\n\nKept here so nothing the card asked for is lost. These are the card's original screen criteria, with the questions the critic raised answered:\n\n**Where each sentence goes.**\n\n* **The folder and root sheet** (`ShareFolderSheet`, which also draws the whole drive): when `externalDocs` is not empty, one `Notice` under the grant lists says *\"N documents here are kept elsewhere. These grants don't decide who can open them — the site each is kept on does.\"* It has a \"Show which\" control listing each title, its host, and a link to `/l/d/<id>`. When `externalDocs` is empty **or absent**, nothing new is drawn.\n* **The document sheet** (`ShareDocSheet`), forked by `docKind`. External: *\"Who can open this is decided on <host>, not by Portico.\"* Form: *\"The people granted on this folder can open this form.\"* Hosted, or `docKind` absent: nothing new, as today. The document sheet never shows the folder notice.\n\n**What counts as removing access.** Only the ✕ on a direct row of the folder or root sheet (`useFolderShare.remove`) — a person, a whole domain, or a group at the root. A role change is not removal: viewer is the floor, so lowering a role never takes reading away. Adding is not removal. The document sheet has no remove action (access leaves a document by moving it), so it shows no caveat.\n\n**What the caveat is.** A notice shown **after** the removal succeeds, not a confirmation step before it: *\"<principal> can no longer open this folder in Portico. N documents here are kept elsewhere — if they had access there, remove it where each is kept.\"* It carries the same \"Show which\" list. It shows only when that sheet's `externalDocs` is not empty. A later removal replaces it, and it goes when the sheet closes, so it is never a standing banner.\n\n**Its criteria** (the card's originals):\n\n- [ ] The share panel discloses when its scope contains documents Portico does not gate, with a count\n- [ ] Removing access surfaces the external-file caveat at the moment of removal, when any external document is in scope\n- [ ] A moderator can see which documents these are\n- [ ] Nothing claims or implies Portico knows the external sharing state\n- [ ] A folder with no external documents shows no new copy at all — this must not become noise on every share\n- [ ] The document sheet's copy forks by kind: external, form, hosted\n- [ ] No Google API call added\n\n**Its files:** `client/app/src/features/share/sourcelist/ShareFolderSheet.tsx`, `client/app/src/features/share/sourcelist/ShareDocSheet.tsx`, `client/app/src/features/share/sourcelist/ShareFolderSheet.test.tsx`, `client/app/src/features/share/sourcelist/ShareDocSheet.test.tsx`. **Its tests** reuse the fixture above as payloads: Partners shows \"4 documents\" and lists four titles; Plain and a payload with the field absent show no new copy; removing a person on Partners shows the caveat once, and on Plain shows nothing; a role change on Partners shows nothing; the Q3 plan, Intake and Overview document sheets show the external line, the form line and nothing. It composes existing atoms and molecules (`Notice`, `Button`); a new atom needs a design the CEO approved.",
+   "createdAt": "2026-08-18T02:55:48.020Z",
+   "updatedAt": "2026-10-13T15:45:46.817Z",
+   "state": {
+    "name": "Green Light"
+   },
+   "labels": {
+    "nodes": [
+     {
+      "name": "repo:portico"
+     },
+     {
+      "name": "agent:frontend"
+     },
+     {
+      "name": "size:S"
+     },
+     {
+      "name": "ux"
+     },
+     {
+      "name": "initiative:foundry"
+     }
+    ]
+   },
+   "parent": null,
+   "children": {
+    "nodes": []
+   },
+   "comments": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "body": "🙋 planning-escalation: DRE-2498 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n🔎 Finding: the critic produced no result\n❓ Question: Re-run the review, or settle the card yourself?\n💡 Recommendation: re-run the review — the critic returned no result, and a no-result is a crash, not a rejection\n\nThere is no earlier signed answer from you on this card.\n\n**Why it needs you:** This card was about to go to the build queue, and the reader that checks work of this size did not say an agent could finish it unattended.\n\nWhat happened: the reader did not answer at all, so nothing has checked this card. We treat that as a stop rather than a yes, because after this point the work is simply built.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+      "createdAt": "2026-10-13T15:45:46.817Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-critic: stage=one-off round=2 result=NO_RESULT collisions=0",
+      "createdAt": "2026-10-13T15:45:44.680Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "⚠️ **Pre-approval critic — before this is built** — the critic produced no result, and on this route that is not a pass — nothing else reads this card before it is built, so it goes to a person\n\nThis card is not going to the build queue — it is with a person, in the decision queue, with the reason above.",
+      "createdAt": "2026-10-13T15:45:43.027Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-2498 · run 38424453807 · repo dreadnought-foundry/portico · trigger planning · at 2026-10-13T15:44:30Z",
+      "createdAt": "2026-10-13T15:44:31.228Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: released · card DRE-2498 · run 38423645494 · repo dreadnought-foundry/portico · trigger - · at 2026-10-13T15:43:05Z · because finished",
+      "createdAt": "2026-10-13T15:43:06.289Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔁 The critic reads the revised card again on the next planning run, which has been started — nothing here is for the CEO. If the revision still does not satisfy it, the card parks in Triage for the operator with every finding named.",
+      "createdAt": "2026-10-13T15:43:05.703Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔁 The planner revised this card in place to answer the critic. What it changed, finding by finding:\n\nPlanner revision, round 1. One line per finding, in the critic's order.\n\n1. **The server change is named, and it is now the card.** `GET /access` gains `externalDocs` (`{ id, title, host }`) and `docKind`. Both are computed inside the existing `snapshot()` read in `infra/lambda/routes/access.ts`, the way `appDataDocs` and `templateIds` are built there, so there is no new Query. The card says where the work stops: data plus the client's typed contract, and nothing drawn.\n2. **Narrowed to the first of the two pull requests: the server half.** The screen half is cut and written out in full under \"Cut from this card\", with its own criteria, files and tests, so a person can file it as a separate card blocked by this one. The client `AccessPayload` type and the contract fixture move in this PR, so the shared shape is owned in one place and the screen card only reads it. The title still names the whole outcome. The card's opening note says this card delivers the first half, and a person may want to retitle it.\n3. **Scope is defined, and tied to code that already exists.** It is exactly the document set `subtreeCounts` counts as `subtreeDocs`: every depth of sub-folder, alias targets one level deep (a document alias adds its document, a folder alias adds that folder's home subtree), a document reached twice listed once, the whole library at the root, the document itself for a document, and shelf templates still removed by `readView`. One walk feeds both numbers, and a criterion fails if they disagree.\n4. **Each sentence now has a place.** The folder and root sheet gets the external notice only when `externalDocs` is not empty. The document sheet forks by `docKind` — the external sentence, the form sentence, and nothing for hosted. The cut section has a criterion for the fork. This card supplies `docKind`, so the fork needs no second server change.\n5. **The words are reconciled, and the stale line is gone.** A new \"Words this card uses\" section says \"link-out\" = `artifactKind: \"external\"` = \"kept elsewhere\" in the viewer. It also says the route accepts any allowed host (SharePoint too), so the copy uses the stored host and never says \"Google\" as a fact about every external document. The \"hand-built — built locally and looked at\" sentence is removed: this half has no screen, and its tests are its proof. Any `hand-built` or `needs-human` label already on the card is a person's, and this revision does not touch labels.\n6. **\"Removing access\" is defined for the screen half.** It is only the ✕ on a direct row of the folder or root sheet — a person, a domain, or a group at the root. A role change is not removal (the roles are viewer and editor, and lowering one never takes reading away), and adding is not removal. The document sheet has no remove action. The caveat is a notice shown after a successful removal, not a confirmation: a later removal replaces it, and it goes when the sheet closes.\n7. **Files and the fixture are stated.** The card lists six files and specifies a one-library fixture: Partners holds two external documents and one hosted document directly, plus a sub-folder and two aliases of one external document. Plain has no external documents, and Internal holds a form. A table gives the expected list for every folder, the root and three document kinds. There are also checks that the list never exceeds `subtreeDocs` and that the Query count is unchanged. The cut screen half names its four files and the tests it runs against the same fixture.",
+      "createdAt": "2026-10-13T15:43:04.051Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-critic: stage=one-off round=1 result=SEND_BACK collisions=0 — The share panel does not know which documents are linked-out, so the count and list need a server change the card never mentions, and a build agent cannot tell where the work stops.",
+      "createdAt": "2026-10-13T15:39:09.601Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🔁 **Pre-approval critic — before this is built** — sent back — round 1 of 2. Every finding here is a defect in the card an agent can fix, so the planner revises the card in place and the critic reads it again.\n\nReason: The share panel does not know which documents are linked-out, so the count and list need a server change the card never mentions, and a build agent cannot tell where the work stops.\n\nEvery finding this round (7), ranked — the revision answers all of them, and the next round checks those fixes rather than finding these again:\n\n1. The share panel does not know which documents are linked-out, so the count and list need a server change the card never mentions, and a build agent cannot tell where the work stops.\n2. Two pieces of work, not one: the server's answer to the share panel carries only people counts and domains, so a count of linked-out documents (with their names) has to be added there and then read by the panel. That is a server change plus a screen change with a shared data shape between them, whi…\n3. \"In scope\" is never defined. A grant on a folder reaches everything below it, and since aliases arrived a document can also be reached through a second place. The card doesn't say whether the count covers sub-folders, documents shown only through an alias, or the root. Two reasonable builders would…\n4. The 2026-08-22 amendment adds the form and Google Doc wording, but no acceptance criterion covers it. Nothing says where the form sentence or the Google Doc sentence shows up (a single document's share sheet? the folder panel?), and the folder panel is only supposed to show new copy when a linked-o…\n5. The card is stale in places. It calls the Google link kind a \"link-out document,\" but the code and screens call it an \"external\" or \"linked\" document, so the builder has to guess they're the same thing. It also says \"hand-built, built locally and looked at before committing,\" which an unattended ag…\n6. \"At the moment of removal\" is not tied to a particular screen action. The share sheet has several ways to take access away: a single person, a whole domain, a group, and changing a role. The card doesn't say which count as \"removing access.\" It also doesn't say whether the caveat is a confirmation …\n7. The card lists no files and no test expectations. A \"no new copy for folders with no linked-out documents\" test and a \"count matches\" test need a stated fixture, such as a folder with two external documents and one ordinary document.\n\nThis card is not going to the build queue yet, and nothing here is for the CEO — it stays in Planning while the planner rewrites it to answer every finding above, and the critic reads it again.",
+      "createdAt": "2026-10-13T15:39:09.151Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧠 model-attempt: claude-opus-5-5 (asked) / claude-opus-5-5 (answered) · cost $0.3097 — planning classifier read the card.",
+      "createdAt": "2026-10-13T15:38:21.802Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧩 planning-shape: **one-off** — One card, one pull request. It owes no plan artifact and stops for no green light.\n\n**Why:** One frontend surface (the share panel) gains kind-forked disclosure copy, a count with a list of link-out documents, and a one-time caveat on removing access — a single tier, no piece reading what another writes, and the card itself says one branch, one PR. Doubt: the 2026-08-22 amendment widens the copy to three item kinds and the count may need the scope's link-out documents from data the panel does not already hold, which would touch the backend; taking the smaller shape because under-sizing is handed back within one run. — size tests checked: 1 contracts between the pieces, 2 two languages or two tiers, 3 a criterion counting something never enumerated, 4 an unbounded quantifier, 5 specific is not small, 6 cut on file footprint, not only on concern\n\n**Stamped by:** `planner` · **model:** `claude-opus-5-5`\n\n**Where it goes:** Queued. **Who handles it there:** reconcile.py.",
+      "createdAt": "2026-10-13T15:38:21.340Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-2498 · run 38423645494 · repo dreadnought-foundry/portico · trigger planning · at 2026-10-13T15:38:01Z",
+      "createdAt": "2026-10-13T15:38:01.866Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧺 groom-moved: 3381b8d562a8 — position 9 of 12 on the approved Planning list · Intake → Planning · by the sweep's queue release, place 6 · record on DRE-4541\n",
+      "createdAt": "2026-10-13T15:37:15.644Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "Moved out of its epic to stand on its own (CEO yes, 10-04 close-out list): still worth doing, not needed for the epic's goal, so the epic can close. Waits in Intake for the Backlog review (Phase 2).",
+      "createdAt": "2026-10-04T20:34:55.634Z",
+      "user": {
+       "id": "user-person"
+      }
+     },
+     {
+      "body": "🔧 Structural repair: added initiative:foundry, inherited from DRE-2492.",
+      "createdAt": "2026-08-29T01:57:21.498Z",
+      "user": {
+       "id": "user-person"
+      }
+     },
+     {
+      "body": "Added `needs-human` as a promotion hold. This is a stopgap, not a change of plan for the card.\n\n**Why the existing label was not enough.** `hand-built` does not prevent auto-promotion. `promote_ready()` in bureau-pipeline's `scripts/reconcile.py` (≈1449-1453) consults exactly two labels — `agent:planner` and `HOLD_LABEL` — and `HOLD_LABEL` is `needs-human` (`scripts/dead_run.py:50`). `hand-built` is read elsewhere in the sweep, but never by the promotion gate. So a `hand-built` card under an active epic is promotable and dispatchable.\n\n**Why it has not happened yet.** This card's epic DRE-2492 is In Progress, but its children are deadlocked by phantom blockers the sweep parses out of the epic's own description — DRE-2670, Urgent. That deadlock is the only thing holding these cards today, and it clears the moment anyone edits that description for any reason. This label is belt-and-braces against that.\n\n**To release it:** remove `needs-human`. Nothing else about the card changes.",
+      "createdAt": "2026-08-23T14:38:43.928Z",
+      "user": {
+       "id": "user-person"
+      }
+     }
+    ]
+   },
+   "relations": {
+    "pageInfo": {
+     "hasNextPage": false
+    },
+    "nodes": [
+     {
+      "type": "blocks",
+      "issue": {
+       "identifier": "DRE-2498"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-7268"
+      }
+     },
+     {
+      "type": "blocks",
+      "issue": {
+       "identifier": "DRE-2498"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-2650"
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-2498"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-2628"
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-2498"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-2495"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "pageInfo": {
+     "hasNextPage": false
+    },
+    "nodes": [
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-7491",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-6617",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-5298",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-4628",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-4627",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-2651",
+       "state": {
+        "name": "Canceled"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-2649",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "blocks",
+      "issue": {
+       "identifier": "DRE-2632",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-2311",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "blocks",
+      "issue": {
+       "identifier": "DRE-2494",
+       "state": {
+        "name": "Done"
+       }
+      }
+     }
+    ]
+   },
+   "history": {
+    "nodes": [
+     {
+      "createdAt": "2026-08-18T02:55:48.020Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-18T02:55:48.020Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-18T02:55:48.490Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-18T02:56:29.994Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-22T22:22:43.558Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-22T22:22:43.697Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-22T22:22:58.623Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-22T23:56:52.941Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-23T00:16:27.017Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-23T14:38:00.118Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-23T14:38:44.027Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-23T17:13:23.168Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-29T01:57:21.119Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-08-31T15:08:31.114Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-09-28T21:31:59.856Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-09-28T21:32:00.815Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-09-30T15:53:29.654Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-04T20:34:54.746Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-04T20:34:55.788Z",
+      "toState": {
+       "name": "Intake"
+      }
+     },
+     {
+      "createdAt": "2026-10-05T07:07:42.289Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-10T11:36:20.189Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-13T14:49:40.252Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-13T15:04:40.692Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-13T15:37:16.687Z",
+      "toState": {
+       "name": "Planning"
+      }
+     },
+     {
+      "createdAt": "2026-10-13T15:37:17.339Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-13T15:43:02.990Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-13T15:45:48.179Z",
+      "toState": {
+       "name": "Green Light"
+      }
+     }
+    ]
+   }
+  }
+ },
+ "gl-answerable": {
+  "serves": "answer",
+  "source": "DRE-6589",
+  "copied": "2026-11-03",
+  "cut_after": "2026-10-10T09:58:16.475Z",
+  "added": [
+   "the lane: Green Light, the lane the card waited in after the cut",
+   "updatedAt: the time of the last comment kept"
+  ],
+  "removed": [
+   "every comment after the cut",
+   "the newest comment's escalation-choices block",
+   "the description's Decisions from the CEO section and everything after it, written after the cut",
+   "the history after the move to Green Light that followed the cut",
+   "the children created after the cut"
+  ],
+  "withheld": [
+   "a pronoun for the CEO",
+   "a Linear user id"
+  ],
+  "card": {
+   "id": "42bbd163-4b96-4ae4-93cd-d99d142c0b05",
+   "identifier": "DRE-6589",
+   "title": "[EPIC] backend-memory-fix: the growth the diagnostic reading names is bounded, the stall after a kill is explained, and the two-instance answer is acted on",
+   "description": "This child is the second half of DRE-6585: the fix, written against the sites the operator's diagnostic reading names, and the stall after a kill explained. It is planned in detail only when DRE-6587 is Done, because the thing it bounds does not have a name yet — the boot report shows module-level containers holding 1.6 MB while the process sits at 83 to 95% of 4 GB, so whatever grows is not a dict or list anyone can point at today, and a plan written now would be written twice. With the fix released, four console pages held open for two hours leave backend memory under 75% of its limit and the service log holds no container kill for that window. If the CEO answered yes to two instances at DRE-6587's green light, the stack change is an operator card here.\n\n**What this epic holds, for its own planner.** The sites to bound are the ones DRE-6587's recorded reading names, with their sizes at start and at plateau; read that record on DRE-6585 before writing a card. The second thing not determined on the parent is the stall: a fresh instance served normally for two minutes after each of two kills, then answered 3 to 46 page requests a minute against a normal 155 to 210 for about ten minutes with the database nearly idle, and App Runner took about ten minutes to replace it although its health check should fail in under a minute. If DRE-6587's reading explains the stall, it is covered by the fix; if not, it is its own card here, planned off the minute-by-minute lines DRE-6587 will have put on the next one. The per-minute memory line and the two alerts from DRE-6587 are what prove this epic: the proof quotes them over the two-hour hold.\n\n**Blocked by:** DRE-6587\n\n**Files:** the sites the diagnostic reading names (unknown until DRE-6587 is Done), console/backend/memory_probe.py if the probe gains a bound, console/backend/tests/, and infra/lib/backend-stack.ts only if the CEO chose two instances.\n\n## Acceptance criteria\n\n- [ ] The fix bounds the sites DRE-6587's recorded reading names, and each card names the site and the size it was at plateau in that reading.\n- [ ] With the fix released, four console pages held open for two hours leave backend memory under 75% of its limit, and the service log holds no `Container exit code: 137` for that window; both readings are quoted on DRE-6585.\n- [ ] The stall after a kill is either explained by the diagnostic reading, with the explanation recorded on DRE-6585, or carried by its own card here with the reading that settles it.\n- [ ] If the CEO chose two instances, the stack change is an operator card in this epic and the service runs two instances after it; if the CEO chose one, that is recorded and no stack card is filed.\n- [ ] The epic ends with a PROOF card whose record quotes the two-hour hold's memory lines and the kill-free service log window.",
+   "createdAt": "2026-10-10T09:47:51.963Z",
+   "updatedAt": "2026-10-10T09:58:16.475Z",
+   "state": {
+    "name": "Green Light"
+   },
+   "labels": {
+    "nodes": [
+     {
+      "name": "repo:agent-bureau"
+     },
+     {
+      "name": "initiative:bureau"
+     },
+     {
+      "name": "agent:planner"
+     }
+    ]
+   },
+   "parent": {
+    "identifier": "DRE-6585",
+    "state": {
+     "name": "Done"
+    }
+   },
+   "children": {
+    "nodes": []
+   },
+   "comments": {
+    "pageInfo": {
+     "hasNextPage": false,
+     "endCursor": null
+    },
+    "nodes": [
+     {
+      "body": "🙋 planning-escalation: DRE-6589 needs a decision from you before it can be planned — the reasoning itself is the deliverable here, and that part is not work an agent can do.\n\n🔎 Finding: This epic bounds whatever is growing in the console's backend, explains the stall after a kill, and carries the two-instance stack change if you choose it. All three are written against a measurement the first memory epic produces, and that epic is still being planned. Nothing here can be named until that reading exists, so the plan would be written twice.\n❓ Question: Should this memory-fix epic wait for the first epic's diagnostic reading, or be planned now against today's evidence?\n💡 Recommendation: Wait for the reading — The plan has to name the sites that grow and their sizes at plateau, and only the first epic's recorded reading can supply them.\n\nThere is no earlier signed answer from you on this card.\n\n**Why it needs you:** This epic has reached planning before the thing it depends on exists, so I am not writing its cards today. I recommend holding it until the first memory epic, DRE-6587, is done, and then planning it against the reading that epic records.\n\nWhat this epic is for: the fix that stops the console's backend filling its 4 GB and being killed, an explanation of why a fresh instance stalls for ten minutes after a kill, and the stack change if you choose two instances. Every one of those is written against a measurement the first epic produces: the operator's diagnostic reading of what grows between a start and the plateau. That reading does not exist yet. The first epic is still being planned right now and has not reached you for approval, and the two-instance question comes to you with that epic's green light, so your answer to it does not exist yet either.\n\nWhy a plan written now would be wrong: the boot report shows the obvious places hold almost nothing, about 1.6 MB, while the process sits at 83 to 95% of its 4 GB. Whatever grows is not something anyone can point at today. Cards written now would name guesses, and this epic's own acceptance test is that each card names the site and the size it reached in the reading. We would write the plan twice, and the critic would send the first one back.\n\nWhy it reached planning early: when the parent card was split into three epics on 2026-10-10 at 02:48 PT, the pipeline sent all three to planning at once, including this one, which is marked as waiting on the first. The standard says a blocked epic waits in the backlog and is brought back for planning the day its blocker is done. I have filed a separate pipeline card for that gap, DRE-6591, so it does not happen again. It needs nothing from you.\n\nWhat getting this wrong costs: planning now spends a planner run, two critic readings and your time on a plan built on guesses that is rewritten within days. Waiting costs nothing: the first epic ends with the reading, and once this card is back in the backlog the pipeline brings it to planning on its own when the first epic is done.\n\nMy recommendation: wait. Leave this card here, or have it moved back to the backlog, until the first epic is done. There is no button to press today. If you press the wait choice now, the planner comes back with this same question until the reading exists. If you would rather have a plan now, written against today's evidence and rewritten later, choose to plan it now anyway.\n\nThis card is parked in **Green Light** — your decision queue, the same place a plan waits for you. It is not broken and it has not failed anything; it is correct and waiting on judgement.\n\nAnswer it here and move the card back to be picked up, or park it if we should not do this at all.",
+      "createdAt": "2026-10-10T09:58:16.475Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧠 model-attempt: claude-fable-5-1 — planner agent starting. model-policy: claude-fable-5-1 chosen for planner (judgement kind) — top of the ladder, nothing above it was skipped",
+      "createdAt": "2026-10-10T09:49:46.742Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "plan-cycle: start epic=DRE-6589",
+      "createdAt": "2026-10-10T09:49:46.194Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "📋 A fresh planning attempt on DRE-6589 starts here. Both critics count their rounds from this point, so a re-planned epic gets its own revision round rather than inheriting a budget the last attempt already spent.",
+      "createdAt": "2026-10-10T09:49:45.607Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧠 model-attempt: claude-fable-5-1 (asked) / claude-fable-5-1 (answered) — planning classifier read the card.",
+      "createdAt": "2026-10-10T09:49:42.267Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🧩 planning-shape: **epic** — A set of cards that ship separately under one parent, with a plan the CEO approves before any of them run.\n\n**Why:** Several cards that ship separately under one parent — one per site the diagnostic reading names, a possible stall card, a conditional operator stack card in a different tier, and a closing PROOF card — none of which is one pull request, and nothing here waits on an observation inside this epic itself (its only gate, DRE-6587, is outside it). — size tests checked: 1 contracts between the pieces, 2 two languages or two tiers, 3 a criterion counting something never enumerated, 6 cut on file footprint, not only on concern\n\n**Stamped by:** `planner` · **model:** `claude-fable-5-1`\n\n**Where it goes:** Green Light. **Who handles it there:** operator.\n**Marked:** `agent:planner`.\nThe sweep does not promote a card of this shape — it is moved by whoever approves it.",
+      "createdAt": "2026-10-10T09:49:41.305Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     },
+     {
+      "body": "🎟️ planner-slot: claimed · card DRE-6589 · run 38042688582 · repo dreadnought-foundry/agent-bureau · trigger planning · at 2026-10-10T09:49:16Z",
+      "createdAt": "2026-10-10T09:49:16.717Z",
+      "user": {
+       "id": "user-pipeline"
+      }
+     }
+    ]
+   },
+   "relations": {
+    "pageInfo": {
+     "hasNextPage": false
+    },
+    "nodes": [
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-6589"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-6632"
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-6589"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-6951"
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-6589"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-6950"
+      }
+     },
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-6589"
+      },
+      "relatedIssue": {
+       "identifier": "DRE-6952"
+      }
+     }
+    ]
+   },
+   "inverseRelations": {
+    "pageInfo": {
+     "hasNextPage": false
+    },
+    "nodes": [
+     {
+      "type": "related",
+      "issue": {
+       "identifier": "DRE-6791",
+       "state": {
+        "name": "Done"
+       }
+      }
+     },
+     {
+      "type": "blocks",
+      "issue": {
+       "identifier": "DRE-6587",
+       "state": {
+        "name": "Done"
+       }
+      }
+     }
+    ]
+   },
+   "history": {
+    "nodes": [
+     {
+      "createdAt": "2026-10-10T09:47:52.435Z",
+      "toState": null
+     },
+     {
+      "createdAt": "2026-10-10T09:58:17.305Z",
+      "toState": {
+       "name": "Green Light"
+      }
+     }
+    ]
+   }
+  }
+ }
+}

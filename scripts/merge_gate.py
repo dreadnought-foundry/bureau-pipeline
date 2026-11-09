@@ -500,6 +500,19 @@ from unfixable_checks import _check_runs  # noqa: E402
 CRITIC_MARKER = "QA Critic"
 VERIFIER_MARKER = "QA Verifier"
 
+# Every note the gate posts names itself with this on its first line —
+# `⏸️ Merge gate: declined @…`, `♻️ Merge gate: refreshed onto …` — and every
+# note a branch write of its own leaves opens with the second: the two
+# refreshes (DRE-4912, DRE-6871) and the out-of-date update (DRE-6195). That
+# opener is the gate's ask to be evaluated again once the new head's checks
+# finish (DRE-9123): its next look hangs on a CI-completion wake that the
+# refreshed heads of agent-bureau #4639 and #4641 never raised, so the
+# reconcile sweep keeps the ask (`reconcile.refresh_pending`). Written by
+# scripts/evaluate_and_merge.sh, whose three notes
+# tests/test_regate_green_unmerged.py holds to this spelling.
+GATE_NOTE_MARK = "Merge gate: "
+REFRESH_NOTE_OPENER = "♻️ " + GATE_NOTE_MARK
+
 # Workflow FILES whose runs are the review stage — their check runs are
 # excluded from condition 1 by verified origin (DRE-1994). Paths as GitHub
 # records them on the workflow RUN, not names a PR can choose.

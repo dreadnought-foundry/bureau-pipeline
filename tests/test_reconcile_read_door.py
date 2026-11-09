@@ -1221,8 +1221,10 @@ def test_off_and_shadow_make_no_thread_read_and_spend_what_they_spent(monkeypatc
 
 
 def test_an_epic_thread_already_whole_in_the_pass_is_not_asked_again(monkeypatch, capsys):
-    """An epic under fifty comments came whole with the work-lane board read:
-    the door is asked only for the one past the window."""
+    """An epic under fifty comments came whole with the work-lane board read,
+    and the one past the window came whole with that read's busy-thread read
+    (DRE-8907): the door is asked once, for the one past the window, and the
+    epic-thread read has nothing left to ask."""
     kids, _epics, threads = _epic_world()
     small = _epic(_EPIC_A, 12)
     threads[_EPIC_A] = _epic_thread_nodes(_EPIC_A, 12)
@@ -1234,8 +1236,10 @@ def test_an_epic_thread_already_whole_in_the_pass_is_not_asked_again(monkeypatch
         assert reconcile.promote_ready(active_count=0) == 2
     assert [r["ids"] for r in _all_reads(door)] == [_EPIC_B]
     assert linear.thread_reads() == ["query { viewer { id } }"]
-    assert ("promotion: epic threads — 1 from the door in one read, 0 read from Linear "
-            "(none)") in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "read-door: read decision=busy-threads verdict=FRESH" in out
+    assert "decision=epic-threads" not in out
+    assert "promotion: epic threads" not in out
 
 
 def test_when_every_thread_is_incomplete_the_door_is_asked_once(monkeypatch, capsys):

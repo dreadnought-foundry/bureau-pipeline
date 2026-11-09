@@ -21,7 +21,7 @@ step reads that file.
   (`linear_ops.COMMENT_WINDOW_GQL`, the one literal). That is the two reads
   this replaces, in one request.
 * A `pull_request` run asks the door for its own card — the one its head
-  branch names, the one read the door serves such a run (agent-bureau
+  branch names, a read the door serves such a run (agent-bureau
   DRE-8807, `bureau_read.own_card`, DRE-8812). Nearly every review and verify
   is one. A `pull_request_target` run, and a `pull_request` run whose branch
   names no card or another card, never asks: the door refuses those tokens

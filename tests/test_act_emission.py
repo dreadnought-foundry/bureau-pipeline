@@ -1041,7 +1041,7 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
 
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(linear_ops, "gql", fake_gql)
-            mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
+            mp.setattr(linear_ops, "_comment_target", lambda _i: "uuid")
             linear_ops.cmd_comment("DRE-1", "a body", "--act=fix-attempt-landed")
         assert sent["body"] == (
             "a body\n\n" + pipeline_act.trailer("fix-attempt-landed")
@@ -1056,6 +1056,6 @@ class TestEveryWorkflowSiteEmitsItsTrailer:
         with pytest.MonkeyPatch.context() as mp:
             mp.setattr(linear_ops, "gql", lambda q, v=None, **_kw: sent.update(
                 body=v["input"]["body"]) or {"commentCreate": {"success": True}})
-            mp.setattr(linear_ops, "get_issue", lambda _i: {"id": "uuid"})
+            mp.setattr(linear_ops, "_comment_target", lambda _i: "uuid")
             linear_ops.cmd_comment("DRE-1", "a body")
         assert sent["body"] == "a body"

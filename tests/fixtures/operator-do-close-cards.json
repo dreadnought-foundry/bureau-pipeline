@@ -1,0 +1,42 @@
+{
+  "_readme": "Four live cards from part 1's list (tests/fixtures/operator-agent-board-2026-11-01.json, read 2026-11-01), for tests/test_operator_do_close.py (DRE-8925). Each keeps only its identifier, lane, title, labels and at most three short sentences quoted from its description. DRE-7328 names the console's Record the outcome in its own title. DRE-8637 and DRE-7978 name no close of their own, so the test adds one sentence to each, word for word as tests/test_operator_do_ops.py adds it: `card-done` to DRE-8637, the merge of its own pull request to DRE-7978. DRE-8623 names no close and is left so. The card-done case on a card without `no-code` is DRE-8637 with that one label taken off in the test.",
+  "cards": [
+    {
+      "card": "DRE-7328",
+      "lane": "Hand-work",
+      "title": "OPERATOR: set NO_RECORD_RETURN_MODE=enforce on the live relay, then close this card through the console's Record the outcome",
+      "labels": ["repo:agent-bureau", "initiative:bureau", "no-code", "agent:devops", "operator-step", "hand-step:machine"],
+      "quotes": [
+        "Turn the relay's no-record return on, live."
+      ]
+    },
+    {
+      "card": "DRE-8637",
+      "lane": "Queued",
+      "title": "bureau-pipeline: turn on the Alarm Repair — set the repository variable ALARM_REPAIR_LIVE to true",
+      "labels": ["repo:bureau-pipeline", "agent:devops", "no-code", "operator-step", "hand-step:machine"],
+      "quotes": [
+        "In bureau-pipeline's repository settings, under Actions variables, set `ALARM_REPAIR_LIVE` to `true`, in the operator's name.",
+        "`ALARM_REPAIR_LIVE` reads `true` in bureau-pipeline's repository variables."
+      ]
+    },
+    {
+      "card": "DRE-7978",
+      "lane": "Hand-work",
+      "title": "bureau-pipeline: the operator opens one throwaway pull request that breaks the verify step, sees the replay gate hold it, and closes it unmerged",
+      "labels": ["repo:bureau-pipeline", "initiative:bureau", "agent:devops", "no-code", "operator-step"],
+      "quotes": [
+        "The negative control for the replay gate: the operator makes one change that breaks the verify step, watches the gate hold it, and closes it."
+      ]
+    },
+    {
+      "card": "DRE-8623",
+      "lane": "Queued",
+      "title": "bureau-pipeline: delete the PLANNER_MAX_RUNNING repo variable from agent-bureau, bureau-pipeline, portico and agent-bureau-demo, and release any card the groom queue left in Intake (operator)",
+      "labels": ["repo:bureau-pipeline", "initiative:bureau", "agent:devops", "no-code", "operator-step", "hand-step:machine"],
+      "quotes": [
+        "Deleting a repo variable needs a person holding admin on each repo, so the operator deletes it, one repo at a time, once nothing that is running reads or writes it any more."
+      ]
+    }
+  ]
+}

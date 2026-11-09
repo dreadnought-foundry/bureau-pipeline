@@ -13,7 +13,9 @@ check run that is not green (`merge_gate.evaluate_checks`).
 What this file holds shut:
 
   * the workflow's shape — the one trigger and its one required input, the
-    one job and its name, `contents: read`, no secret and no `paths:` filter;
+    one job and its name, `contents: read`, the seven canonical secrets
+    accepted as optional and read by no step (DRE-8999), and no `paths:`
+    filter;
   * every third-party action pinned by a 40-character commit sha;
   * the two checkouts, and the check step's diff, command and exit code —
     the step's own script is run as written against a throwaway repository:
@@ -57,6 +59,10 @@ BASE_SHA = "${{ github.event.pull_request.base.sha }}"
 HEAD_SHA = "${{ github.event.pull_request.head.sha }}"
 CHECK_COMMAND = "python3 .bureau-pipeline/scripts/parts_check.py check"
 PR_TYPES = ["opened", "reopened", "synchronize", "ready_for_review"]
+# The seven `linear-sync.yml` declares, in its order (DRE-8999).
+CANONICAL_SECRETS = ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "LINEAR_API_KEY",
+                     "BUREAU_APP_ID", "BUREAU_APP_PRIVATE_KEY", "BUREAU_QA_APP_ID",
+                     "BUREAU_QA_APP_PRIVATE_KEY"]
 SHA = re.compile(r"[0-9a-f]{40}")
 
 
@@ -144,9 +150,15 @@ def test_pipeline_ref_is_its_one_required_string_input():
     assert "default" not in spec
 
 
-def test_it_asks_for_no_secret():
+def test_it_accepts_the_seven_canonical_secrets_as_optional_and_reads_none():
+    """DRE-8999: an `explicit`-style caller's guard maps the seven one by one,
+    and GitHub refuses a call passing a secret the callee does not declare —
+    so each is declared, none is required, and no step reads one."""
     call = _on(_load())["workflow_call"]
-    assert "secrets" not in (call or {})
+    secrets = call["secrets"]
+    assert list(secrets) == CANONICAL_SECRETS
+    for name in CANONICAL_SECRETS:
+        assert secrets[name] == {"required": False}, name
     assert "secrets." not in WORKFLOW.read_text(encoding="utf-8")
 
 
@@ -430,3 +442,41 @@ def test_the_doc_says_a_caller_names_it_in_the_merge_gate_and_medic_lists():
     assert f"`{STUB_NAME}`" in text
     assert "DRE-2028" in text
     assert "never re-evaluates" in text
+
+
+def test_the_page_says_the_stubs_secrets_follow_the_callers_channel_guard():
+    """DRE-8949: a caller whose guard declares `secrets_style: inherit`
+    needs `secrets: inherit`, so the page no longer says the stub passes
+    none; the yaml block itself still carries no `secrets`."""
+    text = " ".join(_doc().split())
+    for name in ("`secrets_style`", "`secrets: inherit`", "`explicit`",
+                 "`.github/bureau/pipeline-guard.json`"):
+        assert name in text, name
+    assert "passes no `secrets:`" not in text
+    assert "secrets" not in _stub()["jobs"]["call"]
+
+
+EXPLICIT_MAPS = ("an `explicit` caller maps the seven canonical secrets one per "
+                 "line, as the guard asks")
+EXPLICIT_READS_NONE = "The reusable declares each one optional and reads none"
+
+
+def test_the_page_says_an_explicit_caller_maps_the_seven_and_none_is_read():
+    """DRE-8999: the reusable now declares the seven optional, so an
+    `explicit` caller's call is accepted; the page says so and no longer
+    says GitHub refuses it."""
+    text = " ".join(_doc().split())
+    assert EXPLICIT_MAPS in text
+    assert EXPLICIT_READS_NONE in text
+    for name in CANONICAL_SECRETS:
+        assert f"`{name}`" in text, name
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    refused = [s for s in sentences if "refuse" in s.lower()]
+    assert not refused, refused
+
+
+def test_the_pages_failure_sentence_names_the_narrowed_rule():
+    text = " ".join(_doc().split())
+    assert ("a UI file the diff adds or declares a component in that imports no "
+            "shared part, exits 1") in text
+    assert "a new UI file that imports no shared part" not in text

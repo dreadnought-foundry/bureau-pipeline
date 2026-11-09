@@ -11,7 +11,10 @@ every full pass, and the standard's two sentences that say so:
     same proof-run stub check, and carries the same tokens, key and switch;
   * its script, run against a fake `proof_record_pr.py`, calls nothing where
     the repo has no proof-run stub, and otherwise calls `sweep --repo <repo>`
-    and copies its `proof-record-sweep:` line to the step summary;
+    through `proof_step_limit.py run` (DRE-9101) and copies its
+    `proof-record-sweep:` line to the step summary; a sweep past its limit is
+    cut and the step stays green, with the `proof-step-limit:` line in the
+    summary;
   * `standards/card-quality.md` says the sweep closes such a pull request,
     keeping its branch, and where the sweep runs.
 
@@ -23,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -43,15 +47,21 @@ SHARED_ENV = ("GH_TOKEN", "GH_READ_TOKEN", "LINEAR_API_KEY", "REPO",
               "PROOF_DISPATCH_LIVE", "PROOF_DISPATCH_LIVE_OFF_UNTIL")
 
 #: `proof_record_pr.py`, stubbed: it records its argv and prints what the
-#: real `sweep` prints, or exits with `FAKE_EXIT` — a refused read or write.
+#: real `sweep` prints, or exits with `FAKE_EXIT` — a refused read or write —
+#: or first sleeps `FAKE_SLEEP` seconds: a read that never answers.
 _FAKE = """\
-import json, os, sys
+import json, os, sys, time
 open(os.environ["CALLS"], "a").write(json.dumps(sys.argv[1:]) + "\\n")
-print("would: close #985")
+print("would: close #985", flush=True)
+time.sleep(float(os.environ.get("FAKE_SLEEP") or 0))
 print("proof-record-sweep: read 3 open record pull request(s); would close 1: #985; "
       "kept 1; unread 1")
 sys.exit(int(os.environ.get("FAKE_EXIT") or 0))
 """
+
+#: The step's limit (DRE-9101), and the shortened one the cut test runs it at.
+LIMIT = "--limit 30"
+SHORT = "--limit 1"
 
 
 def _flat(text: str) -> str:
@@ -111,8 +121,10 @@ class StepShapeTest(unittest.TestCase):
         self.assertEqual("${{ vars.PROOF_DISPATCH_LIVE_OFF_UNTIL }}",
                          env["PROOF_DISPATCH_LIVE_OFF_UNTIL"])
 
-    def test_it_runs_the_sweep_command(self):
-        self.assertIn('python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO"',
+    def test_it_runs_the_sweep_command_through_its_limit(self):
+        self.assertIn('python3 .bureau-pipeline/scripts/proof_step_limit.py run '
+                      f'--step "{STEP}" {LIMIT} -- '
+                      'python3 .bureau-pipeline/scripts/proof_record_pr.py sweep --repo "$REPO"',
                       _step(STEP)["run"])
 
 
@@ -129,6 +141,7 @@ class StepRunTest(unittest.TestCase):
         scripts = self.tmp / ".bureau-pipeline" / "scripts"
         scripts.mkdir(parents=True)
         (scripts / "proof_record_pr.py").write_text(_FAKE, encoding="utf-8")
+        shutil.copy(ROOT / "scripts" / "proof_step_limit.py", scripts / "proof_step_limit.py")
         (self.tmp / ".github" / "workflows").mkdir(parents=True)
         self.calls = self.tmp / "calls.jsonl"
         self.summary = self.tmp / "summary.md"
@@ -136,7 +149,12 @@ class StepRunTest(unittest.TestCase):
     def tearDown(self):
         self._dir.cleanup()
 
-    def _run(self, *, stub: str | None, exit_code: int = 0) -> subprocess.CompletedProcess:
+    def _run(self, *, stub: str | None, exit_code: int = 0, sleep: float = 0,
+             short: bool = False) -> subprocess.CompletedProcess:
+        run = _step(STEP)["run"]
+        if short:
+            self.assertIn(LIMIT, run)
+            run = run.replace(LIMIT, SHORT)
         if stub:
             (self.tmp / stub).write_text("name: proof\n", encoding="utf-8")
         env = {
@@ -147,9 +165,10 @@ class StepRunTest(unittest.TestCase):
             "GITHUB_REPOSITORY": "acme/Widgets",
             "REPO": "acme/Widgets",
             "FAKE_EXIT": str(exit_code),
+            "FAKE_SLEEP": str(sleep),
         }
-        return subprocess.run(["bash", "-e", "-c", _step(STEP)["run"]], cwd=self.tmp,
-                              env=env, capture_output=True, text=True)
+        return subprocess.run(["bash", "-e", "-c", run], cwd=self.tmp,
+                              env=env, capture_output=True, text=True, timeout=60)
 
     def _called(self) -> list[list[str]]:
         if not self.calls.exists():
@@ -186,6 +205,20 @@ class StepRunTest(unittest.TestCase):
         done = self._run(stub=STUBS[0], exit_code=1)
         self.assertEqual(1, done.returncode)
         self.assertIn("proof-record-sweep: read 3", self.summary.read_text(encoding="utf-8"))
+
+    def test_a_sweep_past_its_limit_is_cut_and_the_step_stays_green(self):
+        done = self._run(stub=STUBS[0], sleep=30, short=True)
+        self.assertEqual(0, done.returncode, done.stdout + done.stderr)
+        self.assertIn("::warning title=Proof step cut at its limit::", done.stdout)
+        text = self.summary.read_text(encoding="utf-8")
+        self.assertIn(f'proof-step-limit: cut step="{STEP}" limit=1s', text)
+        self.assertIn("would: close #985", text)
+        self.assertNotIn("proof-record-sweep: read 3", text)
+
+    def test_a_refused_sweep_inside_its_limit_stays_red(self):
+        done = self._run(stub=STUBS[0], exit_code=1, short=True)
+        self.assertEqual(1, done.returncode)
+        self.assertNotIn("proof-step-limit: cut", self.summary.read_text(encoding="utf-8"))
 
 
 # --------------------------------------------------------------------------- #

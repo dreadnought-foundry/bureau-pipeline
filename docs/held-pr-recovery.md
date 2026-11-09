@@ -194,6 +194,41 @@ verdict on an OLDER commit, which is a different fault.
 | -- | -- |
 | 🛑 `fix-agent-absent` on a pull request | This repo has no fix agent. Nothing is retrying. The pull request needs you. |
 
+## …and the approved pull request the gate never merged (DRE-9123)
+
+Not a fix-loop route: nothing is wrong with the work. On 2026-11-03 the merge
+gate refreshed agent-bureau #4639 and #4641 from `main` for new tests. Both
+new heads were green by about 8:04 AM PT, approved and CLEAN, and no gate run
+looked at either again — its next look hangs on a wake from the last check's
+completion, and none reached it. The review lane's own gate nudge waits for
+the card to sit two hours, so a person merged both at 9:19.
+
+`regate_green_unmerged` sends such a pull request back to the gate. It must be
+an `agent/` branch, not a draft, CLEAN, with the critic's APPROVE bound to the
+head (by sha, or carried by content as the gate carries it), no Verifier
+verdict other than PASS or SKIP, and every check finished green by the gate's
+own rule. Then:
+
+* **A head the gate refreshed** goes back as soon as those hold. Every note a
+  branch write of the gate's leaves opens `♻️ Merge gate:` — the two refreshes
+  and the out-of-date update — and while that is the gate's newest note on the
+  thread it is the gate's ask to be evaluated again.
+* **Any other head** goes back once its last check finished more than
+  `REGATE_MINUTES` (15) ago.
+
+Once per head: the dispatch posts one `🔁 regate @<head>:` line on the pull
+request naming why, and that head is not sent back again while the gate run
+is in flight. After it, one exception (DRE-9205). On 2026-11-04 the regate's
+own comment on agent-bureau #4725 woke an Agent Fix run, the gate it
+dispatched answered `wait` on that run, and the run finished `skipped`
+minutes later with no commit — nothing woke the gate again, and #4725 waited
+24 minutes for a hand dispatch. So when the first dispatch's gate run waited
+on an Agent Fix run that has since finished, and the head has not moved, the
+next sweep sends the head back once more with one `🔁 regate @<head> again:`
+line naming the fix run. Never while that fix run is still queued or
+running, and never a third time. Every sweep prints
+`regate: <n> candidate(s), <m> dispatched`.
+
 ## Quick reference
 
 | You see | Do |
@@ -204,6 +239,8 @@ verdict on an OLDER commit, which is a different fault.
 | 🔓 restart receipt | Nothing. The fix loop is running again. |
 | ⚠️ `operator-decision-near-miss` notice | Your comment did not parse — re-post it in the format above |
 | 🔁 re-dispatch receipt on a blocking verdict | Nothing. The sweep started the fix run the verdict never got. |
+| 🔁 `regate @<head>` line on an approved pull request | Nothing. It was green and unmerged, so the sweep sent it back to the merge gate once for that commit. If it is still open afterwards, the gate's own note says why. |
+| 🔁 `regate @<head> again` line | Nothing. The gate's first look waited on a fix run that then finished without a commit, so the sweep sent it back the second and last time. |
 | `fix-run-committed-not-pushed` comment | Nothing. The saved fix is being delivered; if the branch has not moved in 30 minutes the sweep restarts the fix loop once. |
 | ⚡ `fix-run-runner-lost` comment | Nothing. The fix run's machine was taken away before the agent finished, which is not a failed fix; the pipeline retries once on that commit. A second lost machine on the same commit holds for you with a 🛑 line instead. |
 | 🔄 `head-desync` notice | GitHub left the pull request on an older commit than its branch holds (DRE-6217, bp #780), so every check, the review and the merge gate were reading a commit the branch had already left. The sweep closed and reopened it once for that branch commit, which makes GitHub move the head. Nothing to do. If it is still behind on the next sweep, the sweep posts `head-desync-unresolved` once and stops: close and reopen it by hand, or push a new commit. |

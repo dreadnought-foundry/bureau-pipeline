@@ -39,13 +39,41 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
   next `scope=repo` read, which stops the door for the run as before.
 * No OIDC token: the stub did not grant `id-token: write`. That is a fallback,
   never a red run.
+
+  A model session (claude-code-action) is not handed the runner's
+  `ACTIONS_ID_TOKEN_REQUEST_URL` and `ACTIONS_ID_TOKEN_REQUEST_TOKEN` even
+  when the stub grants `id-token: write`, and it is never given them: with
+  them it could mint a token for any audience, an AWS role's included, and
+  it reads card text the pipeline treats as untrusted. The token broker,
+  `scripts/read_token_broker.py` (DRE-9168), is the one way a session with no
+  OIDC variables reaches the door. The job starts it before the model step,
+  on 127.0.0.1, holding the variables itself, and it mints only door tokens
+  — this module's audience, one fresh token per request, so the door's
+  one-claim-per-`jti` rule still holds. `_mint` asks it only when
+  `ACTIONS_ID_TOKEN_REQUEST_URL` is absent, and only when
+  `BUREAU_READ_TOKEN_BROKER` (an `http://127.0.0.1:<port>/…` URL; any other
+  host is refused) and `BUREAU_READ_TOKEN_BROKER_SECRET` are both set. Any
+  broker failure is `no-token`, the detail naming the broker.
+
+`BUREAU_READ_LINES_FILE=<path>` copies every line this module prints, and
+every exit line `linear_ops` prints, to `<path>` as well, verbatim, one per
+line — the tags are `LINES_FILE_TAGS`. A session's stderr lands in its
+transcript, not the job log, so this file is how its read lines reach the
+log: the job prints it after the model step, and only ever through
+`read_token_broker.py print-lines`, which drops any line the session could
+have forged. A failure to write the file never fails or slows the process.
 * A `pull_request` or `pull_request_target` run (`GITHUB_EVENT_NAME`): the door
   refuses those tokens by design (its check 7, review S7), so the client never
-  mints one or asks (BP-8) — with ONE exception (DRE-8812). A `pull_request`
-  run whose head branch (`GITHUB_HEAD_REF`) names a card asks `/cards` for
-  exactly that card, which the door serves it (agent-bureau DRE-8807): QA
-  Review's and Verify's card read. Every other read on those runs, Linear
-  Sync's included, reads Linear exactly as before.
+  mints one or asks (BP-8) — with three exceptions. A `pull_request` run whose
+  head branch (`GITHUB_HEAD_REF`) names a card sends the door the three reads
+  it serves such a run: `/cards` for exactly that card (DRE-8812, agent-bureau
+  DRE-8807) — QA Review's and Verify's card snapshot, and since DRE-8899 the
+  `linear_ops` card reads of Linear Sync, QA Review and Verify steps that name
+  a `BUREAU_READ_CARD_MAX_AGE` — and, since DRE-9170 (agent-bureau DRE-9166),
+  `/workflow-states` and `/cards/<id>/dependents` for that same card: Linear
+  Sync `card-done`'s lane lookup and `merge_sweep_gate`'s dependents. Every
+  other read on those runs — another card's dependents included — reads
+  Linear exactly as before.
 
 Every read that falls back to Linear in mode `on` is named by the client
 itself, once, on stderr (DRE-8794):
@@ -206,17 +234,20 @@ RELATIONS_MAX_AGE = 1200
 #: long before the pull request it is reviewing.
 REVIEW_CARD_MAX_AGE = 120
 
-#: The events whose runs the door serves one read at most (its check 7, review
-#: S7): a private repo that sends write tokens to fork pull requests would
-#: otherwise hand a fork a door token. A `pull_request_target` run is served
-#: nothing. A `pull_request` run is served exactly one read since agent-bureau
-#: DRE-8807: `/cards` for the ONE card its head branch names (`own_card()`,
-#: by `CARD_BRANCH`), at repo scope — QA Review's and Verify's card read,
-#: `card_snapshot._door`. The client sends that read like any other and asks
-#: nothing else on these events: every other read is refused here, before a
-#: token is minted, because asking buys nothing but a refusal the door counts
-#: toward its refused-and-never-served alarm (M2), and the run reads Linear as
-#: it always did (DRE-8812).
+#: The events whose runs the door serves three reads at most (its check 7,
+#: review S7): a private repo that sends write tokens to fork pull requests
+#: would otherwise hand a fork a door token. A `pull_request_target` run is
+#: served nothing. A `pull_request` run whose head branch names ONE card
+#: (`own_card()`, by `CARD_BRANCH`) is served exactly three reads: `/cards` for
+#: that card, at repo scope, since agent-bureau DRE-8807 — QA Review's and
+#: Verify's card read, `card_snapshot._door` (DRE-8812) — and, since
+#: agent-bureau DRE-9166, `/workflow-states` and `/cards/<id>/dependents` for
+#: that same card — Linear Sync `card-done`'s two other reads (DRE-9170). The
+#: client sends those three like any other read and asks nothing else on these
+#: events: every other read is refused here, before a token is minted, because
+#: asking buys nothing but a refusal the door counts toward its
+#: refused-and-never-served alarm (M2), and the run reads Linear as it always
+#: did.
 EVENT_ENV = "GITHUB_EVENT_NAME"
 HEAD_REF_ENV = "GITHUB_HEAD_REF"
 PULL_REQUEST_EVENT = "pull_request"
@@ -239,6 +270,21 @@ FALLBACK_TAG = "read-fallback:"
 #: A `pull_request` run's refusal, as the line spells it.
 EVENT_REFUSED = "event-refused"
 PULL_REQUEST_REASON = "pull-request"
+
+#: The token broker a model session mints through (DRE-9168): its URL, the
+#: secret it checks, and the one host it may be on.
+BROKER_ENV = "BUREAU_READ_TOKEN_BROKER"
+BROKER_SECRET_ENV = "BUREAU_READ_TOKEN_BROKER_SECRET"
+BROKER_SECRET_HEADER = "X-Bureau-Broker-Secret"
+BROKER_HOST = "127.0.0.1"
+
+#: The file every read line is copied to as well (DRE-9168), and the tags of
+#: the lines copied: this module's two, and `linear_ops`'s four exit lines.
+#: The one list both the writer here and `read_token_broker.py print-lines`
+#: read.
+LINES_FILE_ENV = "BUREAU_READ_LINES_FILE"
+LINES_FILE_TAGS = ("read-fallback:", "read-door:", "linear-budget:", "linear-calls:",
+                   "linear-read:", "linear-door:")
 
 # ── The node shape (design §3, byte-compatible with Linear's GraphQL) ───────
 # A nested dict of the field PATHS a node must carry: `None` is a leaf, a dict
@@ -346,6 +392,26 @@ def _say(line: str) -> None:
     """Telemetry goes to stderr, the way `linear-budget:` does: some workflows
     read a script's stdout through `$(...)`, and the sweep's step tees both."""
     print(line, file=sys.stderr, flush=True)
+    copy_to_lines_file(line)
+
+
+def copy_to_lines_file(line: str) -> None:
+    """Append `line` to `BUREAU_READ_LINES_FILE` when it is set and the line
+    opens with one of `LINES_FILE_TAGS`. Never raises and never waits: the
+    file is opened non-blocking, so a FIFO with no reader is a failure, not a
+    hang, and every failure is swallowed — the copy is telemetry."""
+    path = os.environ.get(LINES_FILE_ENV)
+    if not path or not line.startswith(LINES_FILE_TAGS):
+        return
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | getattr(os, "O_NONBLOCK", 0), 0o600)
+        try:
+            os.write(fd, (line + "\n").encode("utf-8", "replace"))
+        finally:
+            os.close(fd)
+    except Exception:  # noqa: BLE001 — a lines file must never fail the process
+        pass
 
 
 def mode() -> str:
@@ -408,6 +474,12 @@ def note_fallback(read: str, reason: str) -> None:
 def fallbacks() -> list[tuple[str, str, str]]:
     """Every `(reader, read, reason)` this process noted, in order."""
     return list(_state["fallbacks"])
+
+
+def served() -> int:
+    """The reads the door served this process — the number the
+    `read-door: served` exit line prints (DRE-8897)."""
+    return _state["served"]
 
 
 def _falls_back(read: str):
@@ -523,13 +595,84 @@ def pipeline_ref_problem(claims: dict, pipeline_ref: str | None) -> str | None:
     return None
 
 
+def _broker_url(raw: str) -> str:
+    """The broker URL, or `no-token`: plain http to 127.0.0.1 only. The
+    secret is sent in clear text, so it never leaves this machine, and a
+    `localhost` that resolves elsewhere is not this machine."""
+    try:
+        parts = urllib.parse.urlsplit(raw)
+        host, _port = parts.hostname, parts.port
+    except ValueError as e:
+        raise ReadUnknown("no-token", f"the token broker {BROKER_ENV}={raw!r} is not a "
+                          f"URL: {e}", unavailable=True) from e
+    if parts.scheme != "http" or host != BROKER_HOST or parts.username is not None \
+            or parts.password is not None:
+        raise ReadUnknown("no-token", f"the token broker {BROKER_ENV}={raw!r} is refused: "
+                          f"it must be http://{BROKER_HOST}:<port>/…", unavailable=True)
+    return raw
+
+
+def _mint_from_broker(raw: str, secret: str) -> str:
+    """One fresh door token from the job's token broker (DRE-9168). The
+    broker mints for the door's audience only, so no audience is sent."""
+    url = _broker_url(raw)
+    parts = urllib.parse.urlsplit(url)
+    target = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
+    # http.client, not urlopen: a proxy in the environment must never be
+    # handed the broker's secret.
+    conn = http.client.HTTPConnection(parts.hostname, parts.port or 80,
+                                      timeout=TOTAL_TIMEOUT)
+    try:
+        conn.request("GET", target, headers={BROKER_SECRET_HEADER: secret,
+                                             "Accept": "application/json"})
+        resp = conn.getresponse()
+        status, body = resp.status, resp.read()
+    except Exception as e:  # noqa: BLE001 — a dead broker is a fallback
+        raise ReadUnknown("no-token", f"the token broker at {url} could not be asked: "
+                          f"{type(e).__name__}: {e}", unavailable=True) from e
+    finally:
+        conn.close()
+    if status != 200:
+        text = body.decode("utf-8", "replace").strip()[:200]
+        raise ReadUnknown("no-token", f"the token broker at {url} answered {status}: "
+                          f"{text or 'no body'}", unavailable=True)
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except ValueError as e:
+        raise ReadUnknown("no-token", f"the token broker at {url} answered no JSON",
+                          unavailable=True) from e
+    value = payload.get("value") if isinstance(payload, dict) else None
+    if not isinstance(value, str) or not value:
+        raise ReadUnknown("no-token", f"the token broker at {url} returned no token value",
+                          unavailable=True)
+    return value
+
+
 def _mint() -> str:
     url = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_URL")
     request_token = os.environ.get("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+    if not url:
+        broker = os.environ.get(BROKER_ENV)
+        secret = os.environ.get(BROKER_SECRET_ENV)
+        if broker and secret:
+            return _mint_from_broker(broker, secret)
     if not url or not request_token:
         raise ReadUnknown("no-token", "no ACTIONS_ID_TOKEN_REQUEST_URL — the calling "
-                          "stub does not grant id-token: write", unavailable=True)
-    audience = os.environ.get(AUDIENCE_ENV) or DEFAULT_AUDIENCE
+                          "stub does not grant id-token: write, and no token broker "
+                          f"({BROKER_ENV}) is set", unavailable=True)
+    return mint_from_runner(url, request_token, door_audience())
+
+
+def door_audience() -> str:
+    """The audience a door token is minted for: `BUREAU_READ_AUDIENCE`, or
+    `DEFAULT_AUDIENCE`. The token broker mints for this and nothing else."""
+    return os.environ.get(AUDIENCE_ENV) or DEFAULT_AUDIENCE
+
+
+def mint_from_runner(url: str, request_token: str, audience: str) -> str:
+    """One token from the runner's OIDC endpoint, or `no-token`. Shared with
+    `read_token_broker.py`, which holds the request variables for a model
+    session that is never given them."""
     joined = "&" if "?" in url else "?"
     req = urllib.request.Request(
         f"{url}{joined}audience={urllib.parse.quote(audience, safe='')}",
@@ -642,13 +785,18 @@ def own_card() -> str | None:
 
 
 def _reads_own_card(endpoint: str, query: dict) -> bool:
-    """Is this the one read the door serves a `pull_request` run (DRE-8807)?
+    """Is this one of the three reads the door serves a `pull_request` run?
     `/cards` with `ids` exactly the run's own card and `scope` absent or
-    `repo`. Only those two are checked: `comments`, `relations` and the
+    `repo` (DRE-8807), `/workflow-states`, or `/cards/<own card>/dependents`
+    (DRE-9166) — and only on a run whose branch names a card. Only the path,
+    `ids` and `scope` are checked: `lanes`, `comments`, `relations` and the
     max-age headers go out as on every other read."""
     card = own_card()
-    return (card is not None and endpoint == "/cards" and query.get("ids") == card
-            and query.get("scope", "repo") == "repo")
+    if card is None:
+        return False
+    if endpoint == "/cards":
+        return query.get("ids") == card and query.get("scope", "repo") == "repo"
+    return endpoint in ("/workflow-states", f"/cards/{card}/dependents")
 
 
 def _get(endpoint: str, query: dict, *, max_age: int,

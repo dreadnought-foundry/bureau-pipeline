@@ -593,10 +593,12 @@ def test_split_history_needs_a_since(monkeypatch):
 
 
 # ── a pull-request run's own card (DRE-8812) ────────────────────────────────
-# The door serves a `pull_request` token exactly one read (agent-bureau
-# DRE-8807): `/cards` for the card its head branch names, at repo scope. The
-# client sends that one read like any other and refuses every other read on a
-# pull-request run before a token is minted, as it always has.
+# The door serves a `pull_request` token one read for the card its head branch
+# names (agent-bureau DRE-8807): `/cards` for it, at repo scope. The client
+# sends that read like any other and refuses every other read on a
+# pull-request run before a token is minted, as it always has — except the
+# workflow states and that card's dependents, which the door serves such a run
+# too (DRE-9166) and `tests/test_bureau_read_pull_request_more_reads.py` pins.
 
 OWN = "DRE-123"
 OWN_WORLD = {
@@ -658,9 +660,8 @@ _OFF_GATE_READS = {
     "the same card twice": lambda: bureau_read.cards([OWN, OWN], max_age=60),
     "board": lambda: bureau_read.board(["In Review"], max_age=120),
     "fleet board": lambda: bureau_read.board(["In Review"], scope="fleet", max_age=120),
-    "dependents": lambda: bureau_read.dependents(OWN, max_age=120),
+    "another card's dependents": lambda: bureau_read.dependents("DRE-124", max_age=120),
     "search": lambda: bureau_read.search(OWN),
-    "workflow states": lambda: bureau_read.workflow_states(max_age=3600),
     "split history": lambda: bureau_read.split_history(SINCE),
     "planning order": bureau_read.planning_order,
 }

@@ -46,7 +46,7 @@ the one it gets:
   * `press` — a press on the sandbox list (`plan_proof_reach.sandbox_presses`,
     the copy of `standards/card-quality.md`'s one list), on the sandbox, on a
     PROOF labeled `repo:agent-bureau` (`SANDBOX_REPO`). `waits_on` is the
-    mutation, such as `createTask`.
+    mutation, such as `recordLoop`.
   * `deploy` — a row's event or a hold's needs half naming a deploy: a
     deployment record, a deploy run, a service rollout. `waits_on` is the
     deploy named — its backticked command, or the clause that names it.
@@ -84,6 +84,9 @@ record pull request that MODIFIES its one record file under `docs/` or
 the cards the holds and rows name are read in one request, and the card's
 `blocks` relations ride on the card's own read.
 
+In `BUREAU_READ=on` those reads ask the read door first, at a 15-minute
+max-age (`DoorReads`, DRE-8909); `docs/proof-overdue.md` says which.
+
 `diagnose` is the judgment, over facts already read. `reading` reads them —
 `gather` assembles the saved card — and `from_saved` judges a saved card, so
 a card copied off the board replays after the board has moved.
@@ -115,6 +118,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import bureau_read  # noqa: E402 — the read door (DRE-8909)
 import card_pr  # noqa: E402 — the record pull request, found as the dispatcher finds it
 import linear_ops  # noqa: E402
 import plan_footprint  # noqa: E402 — a branch record named on the card's **Files:** line
@@ -177,6 +181,13 @@ def _dispatch():
     import proof_dispatch  # noqa: PLC0415
 
     return proof_dispatch
+
+
+def _reconcile():
+    """`reconcile`, imported on first use, for the reason `_dispatch` says."""
+    import reconcile  # noqa: PLC0415
+
+    return reconcile
 
 
 @dataclass(frozen=True)
@@ -533,6 +544,203 @@ class LinearReads:
         return got
 
 
+#: The read door's max-age, in seconds, for every read the Proof overdue step
+#: asks it for (DRE-8909): a proof is overdue after seven days and told once a
+#: PT day, so a 15-minute-old answer changes nothing either step decides.
+OVERDUE_MAX_AGE = 900
+#: The once-a-day check's re-read (`DoorReads.told_thread`): a comment is
+#: never posted on a thread older than a minute.
+TOLD_MAX_AGE = 60
+#: The open lanes no pipeline reader asks the door for at `scope=repo` — and
+#: whether the door holds them there is agent-bureau's to say — so a PROOF
+#: card in one is read from Linear, and never named to the door. The door is
+#: asked for the rest: `reconcile.DOOR_WORK_LANES` and `reconcile.QUEUE_LANES`,
+#: the lanes `reconcile.sweep_idle` reads there.
+PROOF_LINEAR_LANES = ("Intake", "Planning", "Green Light", "Triage")
+#: What a PROOF card's title opens with, as `PROOFS_QUERY` filters it.
+PROOF_TITLE = "PROOF:"
+#: `PROOFS_QUERY`, in `PROOF_LINEAR_LANES` only.
+PROOF_LANES_QUERY = """query($label: String!, $states: [String!], $after: String) {
+             issues(first: 100, after: $after,
+             filter: {team: {key: {eq: "DRE"}}, title: {startsWith: "PROOF:"},
+             labels: {name: {eqIgnoreCase: $label}}, state: {name: {in: $states}}}) {
+             pageInfo { hasNextPage endCursor } nodes { identifier } } }"""
+#: The two fields of `CARD_QUERY` the door does not serve, each read alone.
+LANE_ENTRY_QUERY = """query($id: String!) { issue(id: $id) {
+             history(first: 100) { nodes { createdAt toState { name } } } } }"""
+EPIC_CHILDREN_QUERY = """query($id: String!) { issue(id: $id) {
+             parent { identifier children(first: 100) { nodes {
+               identifier title state { name } labels { nodes { name } } } } } } }"""
+#: The one batch UNKNOWN that is asked again card by card.
+THREAD_INCOMPLETE = "thread-incomplete"
+
+
+class DoorReads(LinearReads):
+    """`LinearReads`, asked of the read door first in `BUREAU_READ=on`
+    (DRE-8909). In `off` and `shadow` every read is `LinearReads`' own.
+
+    `proofs` is ONE `scope=repo` board read (`proof-overdue-board`) and ONE
+    Linear query, `_linear_lane_proofs`. A DOOR CARD — one that FRESH board
+    read returned — has its card and thread served off ONE `comments=all`
+    cards read for every door card (`proof-overdue-cards`), held for the
+    process. When that read is `thread-incomplete`, and only then, each card
+    is asked again on its own the first time it is read (`proof-overdue-card`).
+    Every other card, and every card a read could not serve, reads through
+    `LinearReads` and is never named to the door: how the door answers an id
+    it does not hold is not known, and an answer missing an id stops the door
+    for the run. The door does not serve the lane history or the epic's
+    children; `_lane_entry` and `_epic_children` read each from Linear, only
+    where the decision needs it (`gather`, `with_children`). Every door request
+    sends `OVERDUE_MAX_AGE` (the once-a-day re-read `TOLD_MAX_AGE`) and prints
+    one `reconcile.door_read_line`."""
+
+    def __init__(self):
+        self.door_cards: list | None = None
+        self._batch: dict | None = None
+        self._batch_reason: str | None = None
+        self._nodes: dict = {}
+        self._held: dict = {}
+        self._viewer: str | None = None
+
+    @staticmethod
+    def _on() -> bool:
+        return bureau_read.mode() == "on"
+
+    @staticmethod
+    def _asked(decision: str, read, *args, max_age: int = OVERDUE_MAX_AGE, **kwargs):
+        """One door request and its `read-door: read decision=…` line, printed
+        when it was sent — a door already stopped for the run sends nothing,
+        and the client's `read-fallback:` line names that. Re-raises UNKNOWN."""
+        sent = bureau_read.enabled()
+        try:
+            answer = read(*args, max_age=max_age, **kwargs)
+        except bureau_read.ReadUnknown as error:
+            if sent:
+                _reconcile().door_read_line(decision, max_age, error=error)
+            raise
+        if sent:
+            _reconcile().door_read_line(decision, max_age, read=answer)
+        return answer
+
+    def _viewer_id(self) -> str | None:
+        """Who this process's Linear key is, read once: the door's viewer is
+        the console's key, and is never used for authorship."""
+        if self._viewer is None:
+            self._viewer = linear_ops.viewer_id()
+        return self._viewer
+
+    def proofs(self, slug: str) -> list:
+        if not self._on():
+            return super().proofs(slug)
+        reconcile = _reconcile()
+        try:
+            read = self._asked("proof-overdue-board", bureau_read.board,
+                               reconcile.DOOR_WORK_LANES + reconcile.QUEUE_LANES, scope="repo")
+        except bureau_read.ReadUnknown:
+            return super().proofs(slug)
+        label = f"repo:{slug}".lower()
+        door = [n["identifier"] for n in read.nodes if n.get("identifier")
+                and (n.get("title") or "").startswith(PROOF_TITLE)
+                and label in (name.lower() for name in _labels(n))]
+        self.door_cards = list(dict.fromkeys(door))
+        return list(dict.fromkeys(self.door_cards + self._linear_lane_proofs(slug)))
+
+    def _linear_lane_proofs(self, slug: str) -> list:
+        nodes = linear_ops.gql_paged(PROOF_LANES_QUERY, {"label": f"repo:{slug}",
+                                                         "states": list(PROOF_LINEAR_LANES)})
+        return [n["identifier"] for n in nodes if n.get("identifier")]
+
+    def _door_node(self, identifier: str) -> dict | None:
+        """The door's node for a door card, or None — then it reads through
+        `LinearReads`. At most one batch read and one read per card."""
+        if not self._on() or identifier not in (self.door_cards or ()):
+            return None
+        if identifier in self._nodes:
+            return self._nodes[identifier]
+        if self._batch is None:
+            self._batch = {}
+            try:
+                read = self._asked("proof-overdue-cards", bureau_read.cards,
+                                   sorted(self.door_cards), comments="all", relations=True)
+            except bureau_read.ReadUnknown as error:
+                self._batch_reason = error.reason
+            else:
+                self._batch = {n.get("identifier"): n for n in read.nodes}
+        node = self._batch.get(identifier)
+        if node is None and self._batch_reason == THREAD_INCOMPLETE:
+            try:
+                read = self._asked("proof-overdue-card", bureau_read.cards, [identifier],
+                                   comments="all", relations=True)
+            except bureau_read.ReadUnknown:
+                pass
+            else:
+                node = read.nodes[0] if read.nodes else None
+        self._nodes[identifier] = node
+        return node
+
+    def card(self, identifier: str) -> dict:
+        node = self._door_node(identifier)
+        if node is None:
+            return super().card(identifier)
+        return {key: value for key, value in node.items() if key != "comments"}
+
+    def thread(self, identifier: str):
+        node = self._door_node(identifier)
+        if node is None:
+            got = super().thread(identifier)
+        else:
+            got = linear_ops.window_nodes(node.get("comments")), self._viewer_id()
+        if self._on():
+            self._held[identifier] = got
+        return got
+
+    def states(self, identifiers: list) -> dict:
+        if not self._on() or not identifiers:
+            return super().states(identifiers)
+        try:
+            read = self._asked("proof-overdue-states", bureau_read.cards, list(identifiers),
+                               relations=False)
+        except bureau_read.ReadUnknown:
+            return super().states(identifiers)
+        return {n.get("identifier"): (n.get("state") or {}).get("name") for n in read.nodes}
+
+    def _lane_entry(self, identifier: str) -> dict:
+        """The card's `history`, when it entered its lane — read only for a
+        card the clock is read off its lane entry for (`gather`)."""
+        issue = (linear_ops.gql(LANE_ENTRY_QUERY, {"id": identifier}) or {}).get("issue")
+        if not issue:
+            raise LookupError(f"Linear answered no card for {identifier}")
+        return issue.get("history") or {"nodes": []}
+
+    def _epic_children(self, identifier: str) -> dict | None:
+        """The card's `parent`, with its children — read only where the
+        release reading needs them (`with_children`)."""
+        issue = (linear_ops.gql(EPIC_CHILDREN_QUERY, {"id": identifier}) or {}).get("issue")
+        if not issue:
+            raise LookupError(f"Linear answered no card for {identifier}")
+        return issue.get("parent")
+
+    def held(self, identifier: str):
+        """The `(nodes, viewer)` this process served for the card's thread in
+        mode `on`, or None."""
+        return self._held.get(identifier)
+
+    def told_thread(self, identifier: str):
+        """`(nodes, viewer)` off a `TOLD_MAX_AGE` door read
+        (`proof-overdue-told`) of a card the door served, or None: in `off`
+        and `shadow`, for any other card, and on UNKNOWN."""
+        if not self._on() or self._nodes.get(identifier) is None:
+            return None
+        try:
+            read = self._asked("proof-overdue-told", bureau_read.cards, [identifier],
+                               comments="all", relations=False, max_age=TOLD_MAX_AGE)
+        except bureau_read.ReadUnknown:
+            return None
+        if not read.nodes:
+            return None
+        return linear_ops.window_nodes(read.nodes[0].get("comments")), self._viewer_id()
+
+
 def record_path(files) -> str | None:
     """The record a pull request carries, for diagnosis: the one `.md` file
     it ADDS under `proof_record.RECORD_DIRS` (`proof_record.find_record`), or
@@ -623,14 +831,29 @@ def _release(issue: dict, identifier: str, slug: str, full: str, gh) -> dict | N
     return {"state": got.state, "lines": list(got.lines)}
 
 
+def with_children(issue: dict, linear) -> dict:
+    """The issue with its epic's children, for the release reading: as read,
+    or — on a card whose read did not carry them (the door's) — read through
+    `linear._epic_children`. A card in no epic reads nothing."""
+    parent = issue.get("parent")
+    if not parent or "children" in parent:
+        return issue
+    read = getattr(linear, "_epic_children", None)
+    return {**issue, "parent": read(issue.get("identifier"))} if read else issue
+
+
 def gather(card: str, *, now: datetime, gh=None, linear=None) -> dict:
     """The card as it stands, saved in the shape `from_saved` judges: its
     issue, thread and viewer, its record, the states of the cards its holds
     and rows name, and its release reading when it never ran and is overdue
     at `now` — the reading walks every release tag, and a card under the age
-    has no class to read. Read-only."""
+    has no class to read. Read-only.
+
+    A card read without its `history` (the door's) has it read through
+    `linear._lane_entry` only when the clock falls back to the lane entry:
+    no `🔬 proof-run` receipt and no open record pull request."""
     gh = gh or proof_record._gh
-    linear = linear or LinearReads()
+    linear = linear or DoorReads()
     issue = linear.card(card)
     slug = _slug(issue)
     full = _full(slug)
@@ -638,6 +861,12 @@ def gather(card: str, *, now: datetime, gh=None, linear=None) -> dict:
     saved = {"saved_at": _utc(now), "repo": slug, "card": issue, "thread": nodes,
              "viewer": viewer, "record": _record(card, full, issue.get("description"), gh),
              "states": {}, "release": None}
+    if "history" not in issue:
+        known = facts(saved)
+        if known["first_run"] is None and known["record_opened"] is None:
+            lane_entry = getattr(linear, "_lane_entry", None)
+            if lane_entry:
+                issue = saved["card"] = {**issue, "history": lane_entry(card)}
     named = [i for line in proof_record.open_holds(_voices(saved)) for i in _IDS.findall(line)]
     named += [i for _, result in _unmet(_rows(saved)) for i in _IDS.findall(result)]
     named = [i for i in dict.fromkeys(i.upper() for i in named) if i != card]
@@ -646,7 +875,7 @@ def gather(card: str, *, now: datetime, gh=None, linear=None) -> dict:
     clock = _clock(known)
     overdue = clock is not None and (now - clock).total_seconds() / 86400 > AGE_DAYS
     if overdue and known["first_run"] is None and not record["pr"] and not record["text"]:
-        saved["release"] = _release(issue, card, slug, full, gh)
+        saved["release"] = _release(with_children(issue, linear), card, slug, full, gh)
     return saved
 
 
@@ -712,7 +941,7 @@ def main(argv=None, *, linear=None, gh=None, now: datetime | None = None) -> int
     args = parser.parse_args(argv)
     if args.fixture:
         return _replay_fixture(args.fixture, now)
-    return _replay_repo(args.repo, linear=linear or LinearReads(), gh=gh or proof_record._gh,
+    return _replay_repo(args.repo, linear=linear or DoorReads(), gh=gh or proof_record._gh,
                         now=now or datetime.now(timezone.utc))
 
 

@@ -174,6 +174,8 @@ class SmallLinear:
             return "look"
         if "issue(id: $id) { id identifier title team" in q:
             return "get-issue"
+        if "issue(id: $id) { id }" in q:
+            return "comment-target"
         if "issue(id: $id) { labels" in q:
             return "issue-labels"
         if "viewer" in q:
@@ -206,6 +208,9 @@ class SmallLinear:
                 "labels": {"nodes": [{"name": n} for n in c["labels"]]},
                 "children": {"nodes": []},
             }}
+        if op == "comment-target":
+            c = self.card(v["id"])
+            return {"issue": {"id": c["id"]} if c else None}
         if op == "issue-labels":
             c = self.card(v["id"])
             return {"issue": {"labels": {"nodes": [{"name": n} for n in c["labels"]]}}}

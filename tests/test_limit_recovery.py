@@ -384,6 +384,85 @@ def test_a_rerun_with_no_run_id_is_handed_to_a_human_once_not_errored_every_pass
 
 
 # --------------------------------------------------------------------------
+# a `no-code` card's build is never re-entered (DRE-9154)
+# --------------------------------------------------------------------------
+NO_CODE = ("repo:agent-bureau", "no-code")
+
+
+@pytest.mark.parametrize("lane", [START_LANE, lane_contract.QUEUE_LANE])
+def test_a_no_code_build_death_is_never_reentered_and_closes_once(lane):
+    """DRE-7083, 2026-11-03: limit-recovery re-entered the build of a card a
+    person builds. It is held back with one tagged line, no write but the
+    hand-off receipt, and that receipt closes the marker."""
+    c = card(ident="DRE-7083", lane=lane, labels=NO_CODE, bodies=[marker()])
+    s = Seams()
+    lines = s.recover([c], wip_room=1)
+    assert s.reruns == [] and s.moves == [] and s.dispatched == []
+    assert lines == [
+        f"no-code-in-build-lane: DRE-7083 in {lane} — carries no-code, so "
+        "limit-recovery dispatched nothing; a person moves it to Hand-work"
+    ]
+    assert len(s.comments) == 1
+    ident, body = s.comments[0]
+    assert ident == "DRE-7083"
+    assert body.startswith(limit_recovery.HANDOFF_MARK)
+    assert "no-code" in body and "a person builds it" in body
+    assert limit_recovery.is_receipt(body), "the hand-off must close the marker"
+    # Closed once: the next pass reads no marker, and writes nothing.
+    again = Seams()
+    c = card(ident="DRE-7083", lane=lane, labels=NO_CODE, bodies=[marker(), body])
+    assert again.recover([c], wip_room=1) == []
+    assert again.comments == [] and again.moves == [] and again.dispatched == []
+
+
+def test_a_no_code_card_leaves_the_wip_room_unspent():
+    held_back = card(ident="DRE-7083", lane=START_LANE, labels=NO_CODE, bodies=[marker()])
+    other = card(ident="DRE-7084", bodies=[marker()])
+    s = Seams()
+    s.recover([held_back, other], wip_room=1)
+    assert s.moves == [("DRE-7084", START_LANE)], "the one slot went to the other card"
+    assert s.dispatched == []
+
+
+def test_a_no_code_card_held_back_before_the_reset_too():
+    """A marker that never re-enters must never stand to the six-hour clock,
+    so it is closed on the first pass that reads it."""
+    s = Seams()
+    lines = s.recover([card(ident="DRE-7083", lane=START_LANE, labels=NO_CODE,
+                            bodies=[marker()])], now=BEFORE)
+    assert len(lines) == 1 and lines[0].startswith("no-code-in-build-lane: DRE-7083 ")
+    assert len(s.comments) == 1 and s.dispatched == [] and s.moves == []
+
+
+@pytest.mark.parametrize("stage", ["review", "sync"])
+def test_a_no_code_card_s_review_and_sync_reentries_are_unchanged(stage):
+    s = Seams()
+    s.recover([card(ident="DRE-7083", lane="In Review", labels=NO_CODE,
+                    bodies=[marker(stage=stage)])])
+    assert s.reruns == [RUN]
+    assert s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+
+
+def test_the_same_card_without_no_code_reenters_the_build_as_today():
+    s = Seams()
+    lines = s.recover([card(ident="DRE-7083", lane=START_LANE, bodies=[marker()])])
+    assert s.dispatched == ["DRE-7083"]
+    assert s.comments[0][1].startswith(limit_recovery.RECOVERY_MARK)
+    assert not any(line.startswith("no-code-in-build-lane:") for line in lines)
+
+
+def test_the_tag_is_spelled_once():
+    """One constant both paths print with: the sweep reads it off this module
+    and spells no copy of its own."""
+    assert limit_recovery.NO_CODE_TAG == "no-code-in-build-lane:"
+    tree = ast.parse((Path(reconcile.__file__)).read_text(encoding="utf-8"))
+    copies = [n.lineno for n in ast.walk(tree)
+              if isinstance(n, ast.Constant) and isinstance(n.value, str)
+              and "no-code-in-build-lane" in n.value]
+    assert copies == []
+
+
+# --------------------------------------------------------------------------
 # bounds and skips
 # --------------------------------------------------------------------------
 def test_wip_room_bounds_a_pass():

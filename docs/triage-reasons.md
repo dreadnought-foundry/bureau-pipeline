@@ -49,9 +49,9 @@ moved.
 So a change that adds a Triage write cannot go green until it posts a reason
 and names it, or says in the registry why it does not.
 
-## Every unit, on 2026-11-01
+## Every unit, on 2026-11-02
 
-The discovery finds 22 writes in 18 units. Every one already posts a reason,
+The discovery finds 23 writes in 19 units. Every one already posts a reason,
 so `unreasoned` is empty.
 
 | Unit | Reason written at | Anchor | What the reason tells a reader |
@@ -62,10 +62,12 @@ so `unreasoned` is empty.
 | `reconcile.py#escalate_out_of_planning` | the unit | `stall_park_note(ident, reason)` | A park note says why Planning produced nothing — a stall or a hold nobody was asked about — and the way back. |
 | `reconcile.py#_route_to_defect_lane` | `reconcile.py#promote_ready` | `prose_blockers.card_refusal(` | The refusal names the description line that claims a dependency the board does not hold, and both fixes: set the relation or reword the line. |
 | `reconcile.py#flag_stranded` | the unit | `isn't on the dispatch` | The watchdog's receipt says the card's repo is not on the dispatch rail and how to fix it, beside a no-route hold stamp naming the slug. |
+| `reconcile.py#_triage_held_twice` | the unit | `held_verdict.triage_line(number, sha, holds)` | One line names the pull request, the two runs whose critic verdicts the evidence gate held on the same head, and the held finding, and says the way back: answer the finding, then push a new commit or re-run the review by hand (DRE-9230). |
 | `planning_route.py#_refuse_no_repo` | the unit | `no_repo_note(identifier, unknown)` | The planning exit's refusal says the card carries no `repo:` label, or one naming no repo in `config/repo-map.json`, that it was not routed, and the fix, beside a no-route hold stamp (DRE-8145). |
 | `rereview_watch.py#_fire` | the unit | `epic-rereview-twice` | A hold stamp says the epic was sent back for a second re-review, and the hold's reason names the way back. |
 | `agent-fix.yml#Escalate checks the loop structurally cannot fix` | the unit | `--reason unfixable-check` | A card note names the red checks the fix loop cannot clear, beside an unfixable-check hold stamp at the head it read. |
 | `agent-fix.yml#Report` | the unit | `--reason fix-dispute` | A fix-dispute hold stamp at the head says the fix loop's budget was spent on it and a pushed fix is the way back. |
+| `medic.yml#Hold the card on an inherited red main` | the unit | `--reason inherited-red-main` | An inherited-red-main hold stamp at the failed run's head says every failing check on the pull request failed on the merge base too, and the medic's receipt after it names the repo, the checks and the merge base, and says the sweep returns the card once main is green on them (DRE-8849). |
 | `medic.yml#Ask a person about the diagnosis` | the unit | `medic_next_step.py housekeeping-note` | A park note says the medic's question is housekeeping, not a decision for the CEO, names the screen's rule it broke, and carries the diagnosis's three lines and the failed run (DRE-8592). |
 | `plan.yml#One-off critic — park in Triage` | the unit | `--reason plan-critic-bound` | A plan-critic-bound hold stamp says the one-off critic's bound was reached, beside the critic's park note when it wrote one. |
 | `plan.yml#First critic — the bound parks in Triage` | the unit | `the plan goes on to neither the second critic nor Green Light` | A park comment gives the first critic's finding this round and how to re-approve the plan once a person settles it. |

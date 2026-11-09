@@ -75,12 +75,25 @@ def _empty_epic_queue(monkeypatch) -> None:
             monkeypatch.setattr(epic_cap, name, lambda: [])
 
 
+def _no_inherited_red_main_holds(monkeypatch) -> None:
+    """The sweep's return of cards the medic held on a red `main` (DRE-8849)
+    reads this repo's held Triage cards straight from Linear, as the epic
+    queue does above, in every full sweep. For the suites that run a whole
+    `reconcile.main()` and are not about it, no card is held, at no request.
+    `tests/test_inherited_red_main.py` puts back the real read."""
+    inherited_red_main = sys.modules.get("inherited_red_main")
+    if getattr(inherited_red_main, "held_cards", None) is not None:
+        monkeypatch.setattr(inherited_red_main, "held_cards", lambda *a, **k: [])
+
+
 def _no_ambient_event(monkeypatch) -> None:
     """The read door's client refuses to ask from a `pull_request` run (the
-    door refuses those tokens by design, S7) except for the one card its head
-    branch names (DRE-8812) — and the CI that runs this suite IS a
-    `pull_request` run, on an `agent/DRE-<n>-…` branch. A test that is about
-    the event or the branch sets it itself; no test inherits the runner's."""
+    door refuses those tokens by design, S7) except for the three reads of the
+    one card its head branch names: `/cards` for it (DRE-8812), and
+    `/workflow-states` and its `/dependents` (DRE-9170) — and the CI that runs
+    this suite IS a `pull_request` run, on an `agent/DRE-<n>-…` branch. A test
+    that is about the event or the branch sets it itself; no test inherits the
+    runner's."""
     monkeypatch.delenv("GITHUB_EVENT_NAME", raising=False)
     monkeypatch.delenv("GITHUB_HEAD_REF", raising=False)
 
@@ -164,6 +177,7 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _own_runner_temp(monkeypatch, tmp_path_factory)
     _own_agent_notes(monkeypatch, tmp_path_factory)
     _empty_epic_queue(monkeypatch)
+    _no_inherited_red_main_holds(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
     _reset_workflow_states()

@@ -93,6 +93,7 @@ import ast
 import json
 import os
 import sys
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 
@@ -146,6 +147,15 @@ def _undeclared(vocabulary, known, what: str) -> str:
 
 _TIMEOUT = 15
 
+#: How many times one read is asked before it counts as unread, and the waits
+#: between the asks (DRE-9193). The nightly at 8527c1db read the console and
+#: passed, then every request of the very next read failed 0.6s later with the
+#: same token — a blip, and the re-run of the same commit was green. A console
+#: that stays unreadable through every ask is still unread, and still red.
+_TRIES = 3
+_RETRY_WAITS = (2, 5)
+_sleep = time.sleep
+
 
 def load(path: str | None = None) -> dict:
     with open(path or CONFIG_PATH, encoding="utf-8") as fh:
@@ -160,6 +170,15 @@ def console_spec(doc: dict | None = None) -> dict:
 
 # ── reading the console ─────────────────────────────────────────────────────
 def _get(url: str, token: str, accept: str) -> str | None:
+    """The body at `url`, or None once `_TRIES` asks have all failed.
+
+    A 404 is an answer, not a blip — the path moved, and the tree lookup in
+    `read_console_source` is what finds it — so it is never asked again. Nor
+    is a timeout: a read that already waited `_TIMEOUT` is no sub-second blip,
+    and asking it again would push the job's five minutes past their end
+    before the skip could say why.
+    """
+    import urllib.error
     import urllib.request
 
     req = urllib.request.Request(
@@ -170,11 +189,23 @@ def _get(url: str, token: str, accept: str) -> str | None:
             "user-agent": "bureau-act-consumers",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-            return resp.read().decode("utf-8", "replace")
-    except Exception:
-        return None
+    for attempt in range(_TRIES):
+        if attempt:
+            _sleep(_RETRY_WAITS[min(attempt, len(_RETRY_WAITS)) - 1])
+        try:
+            with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+                return resp.read().decode("utf-8", "replace")
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+        except TimeoutError:
+            return None
+        except urllib.error.URLError as e:
+            if isinstance(e.reason, TimeoutError):
+                return None
+        except Exception:
+            pass
+    return None
 
 
 def read_console_source(spec: dict, env=None) -> tuple[str | None, str]:

@@ -252,6 +252,21 @@ jobs:
       BUREAU_APP_ID_2: ${{ secrets.BUREAU_APP_ID_2 }}
       BUREAU_APP_ID_3: ${{ secrets.BUREAU_APP_ID_3 }}
       BUREAU_APP_ID_4: ${{ secrets.BUREAU_APP_ID_4 }}
+      # The read door (DRE-8901), exactly as reconcile.yml's door steps set it,
+      # and `BUREAU_READ_CARD_MAX_AGE`, which opts this job's card reads in
+      # (DRE-8898): `spoken_thread.py people` and `answer`, and the proof
+      # agent's own `linear_ops` and `spoken_thread` thread reads and comment
+      # pre-reads, ask the door first. Five minutes, the near end of the five
+      # to fifteen the epic's survey measured for these readers. The stubs
+      # grant `id-token: write`. `state-of` stays on Linear, a deliberately
+      # live read. No start floor: nothing here reads a receipt an earlier
+      # run posted moments before, and the job's own writes set their card's
+      # floor through the own-write record.
+      BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+      BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+      BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+      BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+      BUREAU_READ_CARD_MAX_AGE: 300
     steps:
       # SHADOW REFUSES A BAD REQUEST FIRST (DRE-7286, qa-review.yml's
       # DRE-7193 step), before a token is minted or anything is checked out.

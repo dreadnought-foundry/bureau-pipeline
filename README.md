@@ -372,6 +372,7 @@ on:
       artifact: { required: false, type: string, default: "" }
       card_url: { required: false, type: string, default: "" }
 permissions:
+  id-token: write
   contents: read
   actions: read
 jobs:
@@ -406,6 +407,10 @@ whatever the caller granted — so a `deliver-rescue.yml` stub pasted without
 That one is the sharper edge of the two: the `agent-task.yml` omission degrades
 to the 403 path described below, but a delivery job that cannot read its own
 artifact is a red run and still no pull request.
+
+`id-token: write` is the third line, and the soft one (DRE-8901): it lets the
+delivery's card reads ask the console's read door. A stub without it runs
+exactly as before, its reads going to Linear.
 
 Add it to that repo's **medic** `workflow_run` list too, by that exact name —
 this is the one workflow whose failure leaves somebody's only copy of finished
@@ -704,6 +709,21 @@ variable: the console's runner-pool fail-back deletes exactly `BUREAU_RUNS_ON`,
 pool. Reading the chain the fleet's CI already reads, byte for byte, is what
 makes the fail-back cover this lane too. Widening it to a fourth job is a card.
 
+**And the build lane asks for a machine AWS cannot take back** (DRE-8890). These
+three are the longest jobs in the fleet, so a Spot reclaim costs the most on
+them, but the variable they read is the one the repo's own CI reads, and CI
+stays on Spot. So each of the three `runs-on` values wraps the chain: when the
+value's first label opens `runs-on`, it gains RunsOn's `spot=false` — one
+`/spot=false` segment on a single-string label, one `spot=false` element on the
+array form — the shape agent-bureau's `ci.yml` uses on `push` (DRE-6879). A
+value that already carries a `spot=`, as the console's order writes it during
+Spot pressure, is used as it stands, and any other value (`ubuntu-latest`, the
+Mac pool, nothing set) renders exactly what the plain chain renders. The chain
+inside it is still the exact string above, so the grep still finds the site;
+`tests/test_build_runs_on_lane.py` evaluates the whole expression. The product
+repos reach it only through `stable`, so it takes effect there once the
+channel's promotion (the `stable` section below) advances the tag past it.
+
 **Setting the variable is the consuming repo's operator step**, never this
 repo's — agent-bureau's `scripts/runners/README.md` ("The two lanes") carries
 the command, the rollback and the runner-class reasoning for the fleet.
@@ -926,6 +946,18 @@ pull request as a fix-loop blocker, and parks the card `In Review` →
 their words and the fix it pushes is that head; the holds lane then lifts the
 hold and returns the card to `In Review`, and the new commit re-arms the
 budget. `REVIEW_NUDGE_CAP=0` parks the card on the first stale sweep.
+
+Before that question goes on an approved head (DRE-9191), the sweep looks at
+what is red. When every check that is not green was stopped rather than failed
+— a canceled CI job with no failed test in any log of its run, a summary job
+red only because of one, or a Verify run that finished without posting a
+verdict — it re-runs each of those runs once (`gh run rerun <id> --failed`),
+posts one `review-nudge-cap-rerun @<head>` note naming the jobs and run ids, and
+holds, asks and parks nothing. That count is once per head and its own, apart
+from the approved-but-red sweep's canceled-check re-run. While a run it re-ran
+is still going the sweep writes nothing; once they have all finished, a check
+still not green sends the question as above, and its Finding names each job
+re-run once at the cap. A proof record at the cap is unchanged.
 
 A draft pull request spends neither budget (DRE-6423): the critic skips drafts
 by design (DRE-5801) and the merge gate never merges one, so the sweep

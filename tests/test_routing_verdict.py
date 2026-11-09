@@ -499,6 +499,175 @@ class TestTitleConventions:
 
 
 # ===========================================================================
+# DRE-9224 (precedence 3): a line in the body that declares an operator step
+# ===========================================================================
+#
+# DRE-9222's revision rewrote it as an operator step and said so on the card,
+# but a revision can only rewrite the description: the labels and the title
+# the router read were unchanged, the exit stamped FLEET, and a build agent
+# ran only to ask whether the card could be re-routed OPERATOR. The planner's
+# declaration is a line in the body, so the router reads one there.
+OPERATOR_STEP_CARD = """\
+The console deploy and the onboarding re-run are a person's work.
+
+**Operator step:** run `make deploy-console`, then re-run `onboard.yml` for the repo.
+
+## Acceptance criteria
+- [ ] `make deploy-console` has run against the live account
+- [ ] `onboard.yml` has been re-run and finished green
+"""
+
+
+def _with_line(line: str) -> str:
+    """PLAIN_CARD with `line` added to its prose."""
+    return PLAIN_CARD.replace("Widen alembic_version.\n", f"Widen alembic_version.\n\n{line}\n")
+
+
+class TestADeclaredOperatorStep:
+    def test_the_declared_line_routes_operator_with_no_model(self):
+        decision = routing_verdict.route("Deploy the console", OPERATOR_STEP_CARD,
+                                         ["repo:bureau-pipeline"])
+        assert decision.verdict == "OPERATOR"
+        assert decision.source == "declared"
+        assert decision.needs_model is False
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "**Operator step:** run the tenant backfill",
+            "Operator step: run the tenant backfill",
+            "operator step: run the tenant backfill",
+            "**OPERATOR STEP:** run the tenant backfill",
+            "- **Operator step:** run the tenant backfill",
+            "* Operator step: run the tenant backfill",
+            "1. **Operator step**: run the tenant backfill",
+            "  **Operator step:**   rotate the key",
+        ],
+    )
+    def test_the_line_is_read_with_its_optional_markup(self, line):
+        decision = routing_verdict.route("Widen alembic_version", _with_line(line), [])
+        assert (decision.verdict, decision.source) == ("OPERATOR", "declared"), line
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            "No operator step: this is code",
+            "The operator step: is below",
+            "**Operator step:**",
+            "Operator step:   ",
+            "```\n**Operator step:** run make deploy-console\n```",
+            "~~~\nOperator step: re-run onboard.yml\n~~~",
+        ],
+    )
+    def test_a_line_that_does_not_declare_routes_as_it_does_today(self, line):
+        """THE MUTATION TEST: a mention, an empty declaration and a declaration
+        inside fenced code each leave the card routed exactly as it was."""
+        before = routing_verdict.route("Widen alembic_version", PLAIN_CARD, [])
+        after = routing_verdict.route("Widen alembic_version", _with_line(line), [])
+        assert (after.verdict, after.source) == (before.verdict, before.source), line
+        assert routing_verdict.declared_verdict(_with_line(line)) is None, line
+
+    def test_the_line_beats_the_criteria_rule(self):
+        """The criteria alone would route this card FLEET."""
+        assert routing_verdict.route("Fix the board columns", VISUAL_CARD, []).verdict == "FLEET"
+        card = VISUAL_CARD.replace(
+            "## Acceptance criteria",
+            "**Operator step:** deploy the console\n\n## Acceptance criteria",
+        )
+        decision = routing_verdict.route("Fix the board columns", card, [])
+        assert (decision.verdict, decision.source) == ("OPERATOR", "declared")
+
+    def test_a_card_with_no_criteria_is_still_declared_operator(self):
+        """Read before the criteria rule, so a missing exit condition does not
+        talk over a declared step."""
+        decision = routing_verdict.route("Rotate the key", "**Operator step:** rotate the key\n", [])
+        assert (decision.verdict, decision.source) == ("OPERATOR", "declared")
+
+    def test_the_role_label_is_read_before_the_line(self):
+        decision = routing_verdict.route("Rotate the key", OPERATOR_STEP_CARD, ["agent:ops"])
+        assert decision.source == "label"
+
+    def test_the_title_convention_is_read_before_the_line(self):
+        decision = routing_verdict.route("DEMO: walk the board", OPERATOR_STEP_CARD, [])
+        assert (decision.verdict, decision.source) == ("WORKBENCH", "title")
+
+    def test_agent_engineer_does_not_outrank_the_line(self):
+        """`agent:engineer` is not in the label map, so a revised card keeps it
+        and still leaves as an operator's."""
+        assert "agent:engineer" not in routing_verdict.label_map()
+        decision = routing_verdict.route("Deploy the console", OPERATOR_STEP_CARD,
+                                         ["repo:bureau-pipeline", "agent:engineer"])
+        assert (decision.verdict, decision.source) == ("OPERATOR", "declared")
+
+
+class TestTheDeclaredLineIsData:
+    def test_the_vocabulary_ships_the_operator_step_line(self):
+        lines = routing_verdict.declared_lines()
+        assert [line["verdict"] for line in lines] == ["OPERATOR"]
+
+    @pytest.mark.parametrize("line", routing_verdict.declared_lines(),
+                             ids=lambda line: line["verdict"])
+    def test_every_pattern_is_anchored_at_the_start(self, line):
+        assert line["pattern"].startswith("^")
+
+    @pytest.mark.parametrize("line", routing_verdict.declared_lines(),
+                             ids=lambda line: line["verdict"])
+    def test_every_line_matches_its_own_example(self, line):
+        assert routing_verdict.declared_verdict(line["example"]) == line["verdict"]
+
+    @pytest.mark.parametrize("line", routing_verdict.declared_lines(),
+                             ids=lambda line: line["verdict"])
+    def test_every_line_ships_the_adversarial_lines_the_card_names(self, line):
+        hostile = line.get("adversarial") or []
+        assert "No operator step: this is code" in hostile
+        assert "The operator step: is below" in hostile
+        assert any(h.strip().strip("*").rstrip().endswith(":") for h in hostile), (
+            "no adversarial line with nothing after the colon"
+        )
+        assert any(h.lstrip().startswith(("```", "~~~")) for h in hostile), (
+            "no adversarial line inside fenced code"
+        )
+        for text in hostile:
+            assert routing_verdict.declared_verdict(text) is None, text
+
+    def _broken(self) -> dict:
+        return json.loads(json.dumps(routing_verdict.load()))
+
+    def test_the_config_check_refuses_an_unanchored_pattern(self):
+        broken = self._broken()
+        broken["declared_lines"]["lines"][0]["pattern"] = "operator step:"
+        problems = routing_verdict.config_problems(broken)
+        assert any("declared line" in p and "anchor" in p for p in problems), problems
+
+    def test_the_config_check_refuses_a_line_with_no_adversarial_fixture(self):
+        broken = self._broken()
+        broken["declared_lines"]["lines"][0].pop("adversarial", None)
+        problems = routing_verdict.config_problems(broken)
+        assert any("declared line" in p and "adversarial" in p for p in problems), problems
+
+    def test_the_config_check_refuses_a_line_that_misses_its_own_example(self):
+        broken = self._broken()
+        broken["declared_lines"]["lines"][0]["example"] = "Nothing declared here."
+        problems = routing_verdict.config_problems(broken)
+        assert any("declared line" in p and "example" in p for p in problems), problems
+
+    def test_the_config_check_refuses_an_adversarial_line_that_matches(self):
+        broken = self._broken()
+        broken["declared_lines"]["lines"][0]["adversarial"].append(
+            "**Operator step:** this one declares")
+        problems = routing_verdict.config_problems(broken)
+        assert any("adversarial" in p and "this one declares" in p for p in problems), problems
+
+    def test_the_published_order_names_the_line_third(self):
+        order = routing_verdict.precedence()
+        assert len(order) == 5
+        assert "Operator step:" in order[2]
+        assert "acceptance-criteria" in order[3]
+        rendered = routing_verdict.render_markdown()
+        assert f"3. {order[2]}" in rendered
+
+
+# ===========================================================================
 # 2 and 3 (precedence 3): read what the acceptance criteria actually require
 # ===========================================================================
 INTERACTIVE_CARD = """\

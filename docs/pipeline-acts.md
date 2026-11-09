@@ -910,6 +910,37 @@ line opens `Outcome:` or `Released as`: a close the relay's lane guard returns
 for a person. The tag is the bare act name, because this act lifts no hold
 and no lift line carries its name.
 
+**A `do` card (DRE-8925).** The same act covers a `do` card's three comments,
+written by DRE-8923's composers in `operator_decide.py` and posted by the same
+`_post`: `do-claim` posts the claim, `🛠️ operator-agent: do-claim — …` with
+one `will run:` line per checked command, before the step's first command
+runs; `do-post` posts the receipt, `🛠️ operator-agent: do — …`, after it,
+ending `close: <rule>`, `close: none named`, `failed:` or `continues:`; and
+`do-close` makes the close the receipt names — a `no-code` card through the
+console's outcome door (`scripts/console_outcome.py`), whose own `Outcome:`
+record is what the lane guard reads, any other card by the move to Done — or,
+when that close can never land (the door's 400 or 409, a pull request closed
+unmerged or open past `pr_wait_days`), posts the one close-failure line,
+`🛠️ operator-agent: do-close — …`. Each is the card's spent pass: `select`
+reads the newest back, so a step never runs twice and a close that can never
+land is not retried. Every reader of these comments sets the act's trailer
+line aside.
+
+**A Green Light row (DRE-9049).** The same act covers the three outcomes of
+a row in Green Light. `repair`, a stopped run, and `answer`, a question the
+facts answer, return a row that was never a decision to Planning: the
+receipt names the cause, quotes the facts and says
+`moved: Green Light → Planning`, a move the lane contract admits
+`operator_agent_apply.py` to make beside the hygiene agent's and the Triage
+Repair's, so the state stays `unchanged`. `keep` leaves a genuine decision
+where it is, under a receipt that says `stays: Green Light`, and moves
+nothing; the agent never approves. The sweep's `hand-work-overdue` alarm is
+also a trigger for the agent's next pass on the card. The receipt key has one
+exception here, the re-keep (DRE-9051): a `keep` that a comment came after
+(`operator_decide.keep_stands` is False) no longer spends the pass, so `claim`
+posts the next Green Light decision's receipt over the same fingerprint and
+the row is re-read once per comment it gets, never every pass.
+
 The console must learn this act before this row merges, as for every row.
 
 ## The row that tells an epic its repo is held — `⏸️ repo-held` (DRE-7754)

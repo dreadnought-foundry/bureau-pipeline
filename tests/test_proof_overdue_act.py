@@ -216,8 +216,8 @@ def test_the_contract_is_spelled_as_the_card_spells_it():
     assert act.DATE_REASON.format(at="2026-11-01 14:00 PT") == \
         "re-run after the proof-overdue date 2026-11-01 14:00 PT"
     assert act.DEPLOY_REASON.format(tag="v41") == "re-run after the proof-overdue deploy v41"
-    assert act.PRESS_REASON.format(mutation="createTask", day=DAY) == \
-        "sandbox press: createTask (proof-overdue of 2026-11-01)"
+    assert act.PRESS_REASON.format(mutation="recordLoop", day=DAY) == \
+        "sandbox press: recordLoop (proof-overdue of 2026-11-01)"
     assert act.SPLIT_REASON.format(n=2, day=DAY) == \
         "split: 2 row(s) cannot recur unattended (proof-overdue of 2026-11-01)"
     assert set(act.TAKES) == set(proof_overdue.ACTIONS.values())
@@ -327,13 +327,13 @@ def test_rerun_on_deploy_waits_for_a_release_newer_than_the_comment(monkeypatch,
 
 
 def test_sandbox_press_is_dispatched_at_once_on_an_agent_bureau_proof(monkeypatch, capsys):
-    world = World([told("press", "createTask")], repo="agent-bureau")
+    world = World([told("press", "recordLoop")], repo="agent-bureau")
     assert run(world, monkeypatch) == 0
-    _dispatched_once(world, "sandbox press: createTask (proof-overdue of 2026-11-01)")
+    _dispatched_once(world, "sandbox press: recordLoop (proof-overdue of 2026-11-01)")
     _second_pass_adds_nothing(world, monkeypatch, capsys)
 
 
-@pytest.mark.parametrize("repo, mutation", [(SLUG, "createTask"),
+@pytest.mark.parametrize("repo, mutation", [(SLUG, "recordLoop"),
                                             ("agent-bureau", "deleteEverything")])
 def test_sandbox_press_off_the_list_or_off_agent_bureau_stands_down(
         monkeypatch, capsys, repo, mutation):
@@ -357,10 +357,10 @@ def test_the_newest_comment_is_the_one_read(monkeypatch, capsys):
     thread = [told("unrepeatable", "x", 1500, day="2026-10-31"),
               overdue_receipt(1490, 1, reason="split: 1 row(s) cannot recur "
                                               "unattended (proof-overdue of 2026-10-31)"),
-              told("press", "createTask", 60)]
+              told("press", "recordLoop", 60)]
     world = World(thread, repo="agent-bureau")
     assert run(world, monkeypatch) == 0
-    _dispatched_once(world, "sandbox press: createTask (proof-overdue of 2026-11-01)", k=2)
+    _dispatched_once(world, "sandbox press: recordLoop (proof-overdue of 2026-11-01)", k=2)
 
 
 # --------------------------------------------------------------------------- #
@@ -449,7 +449,7 @@ class Recorder:
 
 def test_it_writes_only_the_fire_and_the_receipt(monkeypatch, capsys):
     for cls, waits_on, kw in (("unrepeatable", "x", {}),
-                              ("press", "createTask", {"repo": "agent-bureau"}),
+                              ("press", "recordLoop", {"repo": "agent-bureau"}),
                               ("release", "DRE-7001", {"states": {"DRE-7001": "Done"}})):
         world = World([told(cls, waits_on)], **kw)
         recorder = Recorder()
@@ -480,7 +480,7 @@ def test_a_copy_newer_than_the_pipelines_own_is_not_the_newest(monkeypatch, caps
     """A person's later copy names a press; the pipeline's comment, a date
     still to come, is the one read."""
     thread = [told("date", "2026-12-01T00:00:00+00:00", 120),
-              told("press", "createTask", 30, user=PERSON)]
+              told("press", "recordLoop", 30, user=PERSON)]
     world = World(thread, repo="agent-bureau")
     assert run(world, monkeypatch) == 0
     assert world.fired == [] and world.posted == []
@@ -504,7 +504,7 @@ def test_a_receipt_from_anyone_else_counts_for_nothing(monkeypatch, capsys):
     ("release", "stable", {}),
     ("date", "2026-11-01T10:00:00+00:00", {}),
     ("deploy", "make deploy", {"deploy": ("v41", NOW - timedelta(minutes=5))}),
-    ("press", "createTask", {"repo": "agent-bureau"}),
+    ("press", "recordLoop", {"repo": "agent-bureau"}),
     ("unrepeatable", "x", {}),
 ])
 def test_the_dry_run_is_would_lines_only(monkeypatch, capsys, cls, waits_on, kw):
@@ -582,11 +582,11 @@ def test_the_run_state_reader_reads_an_overdue_receipt_and_spends_no_first_run()
     body = pipeline_act.receipt(
         "proof-run-dispatched",
         "🔬 proof-run: dispatched a proof run at 2026-11-01 12:00 PT — "
-        "sandbox press: createTask (proof-overdue of 2026-11-01) (overdue 1 of 3)")
+        "sandbox press: recordLoop (proof-overdue of 2026-11-01) (overdue 1 of 3)")
     got = proof_run_state.receipt(body)
     assert got is not None
     assert got.count == "overdue 1 of 3"
-    assert got.reason == "sandbox press: createTask (proof-overdue of 2026-11-01)"
+    assert got.reason == "sandbox press: recordLoop (proof-overdue of 2026-11-01)"
     thread = [td.receipt(800), td.receipt(500, reason=got.reason, count=got.count)]
     reading = proof_run_state.reading(td.REPO, "DRE-5930", thread, td.VIEWER,
                                       read=lambda path: [], now=td.NOW)

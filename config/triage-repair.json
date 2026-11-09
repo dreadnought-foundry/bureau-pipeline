@@ -1,5 +1,5 @@
 {
-  "_readme": "The one repair the Triage Repair run (scripts/triage_repair.py, DRE-8647) gives a card, chosen by which writer put it in Triage. One row per unit config/triage-reasons.json declares — tests/test_triage_repair_every_arrival.py fails on a declared unit with no row here, so a Triage writer added tomorrow cannot arrive unhandled. `marker` is what the writer leaves on the card, and exactly one of: `hold`, the reason of its live `🔒 hold:` stamp; `tag`, the tag its note opens with after its mark (`🧹 planning-stall-park:`); `description`, a phrase in the description of a card it creates straight into Triage. A card is matched by its live stamp first, then by its newest pipeline-authored note carrying a tag, then by its description; a card matching no row is `rewrite`. Rows that share a marker share a repair, because the marker cannot tell them apart. `repair` is one of: `rewrite` — the planner answers the park reason and the card goes to Planning (select's `repair` action, `escalate` when a finding names a choice only the CEO can make, `replan` for a card with children); `replan` — an epic's bound rewrite, then Planning; `relabel` — the planner names one key of config/repo-map.json in repo.txt, and the card gets that repo: label, its hold lifted and a move to Planning; `none` — no planner runs, and the claim is followed at once by an `unrepairable` receipt saying `why` (`{ids}` is the claimed ids no relation holds).",
+  "_readme": "The one repair the Triage Repair run (scripts/triage_repair.py, DRE-8647) gives a card, chosen by which writer put it in Triage. One row per unit config/triage-reasons.json declares — tests/test_triage_repair_every_arrival.py fails on a declared unit with no row here, so a Triage writer added tomorrow cannot arrive unhandled. `marker` is what the writer leaves on the card, and exactly one of: `hold`, the reason of its live `🔒 hold:` stamp; `tag`, the tag its note opens with after its mark (`🧹 planning-stall-park:`); `description`, a phrase in the description of a card it creates straight into Triage. A card is matched by its live stamp first, then by its newest pipeline-authored note carrying a tag, then by its description; a card matching no row is `rewrite`. Rows that share a marker share a repair, because the marker cannot tell them apart. `repair` is one of: `rewrite` — the planner answers the park reason and the card goes to Planning (select's `repair` action, `escalate` when a finding names a choice only the CEO can make, `replan` for a card with children); `replan` — an epic's bound rewrite, then Planning; `relabel` — the planner names one key of config/repo-map.json in repo.txt, and the card gets that repo: label, its hold lifted and a move to Planning; `none` — no planner runs, and the claim is followed at once by an `unrepairable` receipt saying `why` (`{ids}` is the claimed ids no relation holds); `wait` — the card waits on something a sweep lifts, so no planner runs, nothing is claimed and nothing is written, and select prints `why` (DRE-8849).",
   "version": 1,
   "rows": [
     {
@@ -34,6 +34,12 @@
       "marker": {"hold": "no-route"}
     },
     {
+      "unit": "reconcile.py#_triage_held_twice",
+      "repair": "none",
+      "marker": {"tag": "held-verdict-twice"},
+      "why": "the critic's verdict on the open pull request was held twice by the evidence gate for a finding it gave no evidence for; only a person can answer the finding, then push a new commit or re-run the review"
+    },
+    {
       "unit": "planning_route.py#_refuse_no_repo",
       "repair": "relabel",
       "marker": {"hold": "no-route"}
@@ -54,6 +60,12 @@
       "repair": "none",
       "marker": {"hold": "fix-dispute"},
       "why": "the fix loop's budget on its pull request is spent, and rewriting the card changes neither the red check nor the budget"
+    },
+    {
+      "unit": "medic.yml#Hold the card on an inherited red main",
+      "repair": "wait",
+      "marker": {"hold": "inherited-red-main"},
+      "why": "the card waits on main's red checks, not on a person: every failing check on its pull request failed on the merge base too, and the sweep returns it to In Review once main is green on them, so rewriting it changes nothing"
     },
     {
       "unit": "medic.yml#Ask a person about the diagnosis",

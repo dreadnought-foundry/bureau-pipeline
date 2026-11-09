@@ -9,6 +9,14 @@ files are read inside the declared folders and outside them; a `.test.`,
 `.bureau-pipeline` segment, is never read. A copy's identity is (repo, part
 name, copy file).
 
+When two parts share a name, each shipping from a declared folder, they are
+counterparts — the same part built for two platforms, such as a web atom and
+its phone atom — and neither is a copy of the other (DRE-8998). A component
+declared in a UI file under a part's name is a copy only when that file is not
+the "ships at" file of any catalog part of that name; a page, a feature, or
+another part's file declaring it is still a copy, reported against the first
+part of that name in catalog order.
+
 Nothing is kept. The copies are computed from the checkout's files on every
 run — `git ls-files` when the root is a git work tree, the directory tree
 otherwise — and no baseline is written or read. Components are recognized
@@ -16,11 +24,14 @@ with the patterns the critic's parts review already uses
 (`parts_review._declarations`), and the diff is read with its parser
 (`parts_review.parse_diff`).
 
-`check --diff` judges only the pull request's diff. It fails for a copy one of
-whose two declarations — the part's or the copy's — sits on a line the diff
-adds, and for a UI file the diff adds or changes, outside every declared
-folder and not a test, spec or story, that declares a component and imports
-none of the shared parts. A file imports a shared part when an `import`
+`check --diff` judges only what the pull request's diff adds (DRE-8949). It
+fails for a copy whose own declaration sits on a line the diff adds, or for
+which the diff adds the part's file, and for a UI file the diff adds, or in
+which it adds a line declaring a component, outside every declared folder and
+not a test, spec or story, that imports none of the shared parts. A
+declaration the diff also removes from that file is a component renamed or
+edited, not a new one: only as many added declarations as the diff removes
+from the file are excused (DRE-9089). A file imports a shared part when an `import`
 statement binds a part's name (`import { Notice as N }` counts as `Notice`; a
 default import counts by its local name), or names a relative specifier that
 resolves, against the file's own folder, into a declared folder.
@@ -166,9 +177,11 @@ def count(repo_root) -> Counted:
     if not present:
         return Counted(None, f"the repo's design system does not exist ({why})", [])
     source = design_parts.load(root).source
-    parts = {}
+    parts, ships = {}, {}
     for part in design_parts.catalog(root):
         parts.setdefault(part.name, part)
+        # Every part file of a name is a counterpart, never a copy (DRE-8998).
+        ships.setdefault(part.name, set()).add(part.ships_at)
     if not parts:
         return Counted(source, f"no part ships in the folders read from {source}", [])
     part_lines = {}
@@ -184,7 +197,7 @@ def count(repo_root) -> Counted:
             continue
         for name, line in _declared(text).items():
             part = parts.get(name)
-            if part is not None and path != part.ships_at:
+            if part is not None and path not in ships[name]:
                 copies.append(Copy(name, part.layer, part.ships_at, part_lines[name],
                                    path, line))
     copies.sort(key=lambda c: (c.part, c.copy_path, c.copy_line))
@@ -290,6 +303,19 @@ def _new_side(diff) -> str:
     return "\n".join(text for kind, text in diff.lines if kind != "-") + "\n"
 
 
+def _declared_on(text: str, lines) -> int:
+    """How many components are declared in `text` on one of `lines`."""
+    return sum(1 for match in parts_review._declarations(text) if _line_of(text, match) in lines)
+
+
+def _removed_declarations(diff) -> int:
+    """How many components the lines a file's diff removes declare (DRE-9089)."""
+    old = [(kind, text) for kind, text in diff.lines if kind != "+"]
+    text = "\n".join(line for _, line in old) + "\n"
+    return sum(1 for match in parts_review._declarations(text)
+               if old[_line_of(text, match) - 1][0] == "-")
+
+
 # ---------------------------------------------------------------------------
 # The check
 # ---------------------------------------------------------------------------
@@ -325,9 +351,11 @@ def check(diff_path, repo_root) -> tuple:
     if counted.reason is not None:
         return f"{CHECK_TAG} does not apply — {counted.reason}", [], 0
     added = added_lines(path.read_bytes().decode("utf-8"))
+    # The part's side counts only for a part file the diff adds: editing an
+    # existing part's declaration does not add the untouched copy elsewhere.
+    new_files = {diff.path for diff in files if diff.added}
     copies = [c for c in counted.copies
-              if c.copy_line in added.get(c.copy_path, ())
-              or c.part_line in added.get(c.part_path, ())]
+              if c.copy_line in added.get(c.copy_path, ()) or c.part_path in new_files]
     names = {part.name for part in design_parts.catalog(root)}
     folders = _folders(root)
     lonely = []
@@ -337,10 +365,16 @@ def check(diff_path, repo_root) -> tuple:
                 or any(mark in name for mark in design_parts.NOT_PARTS)):
             continue
         text = _read(root, diff.path)
+        on = added.get(diff.path, set())
         if text is None:
             text = _new_side(diff)
-        if parts_review._declarations(text) and not imports_a_part(
-                diff.path, text, names, folders):
+            kinds = [kind for kind, _ in diff.lines if kind != "-"]
+            on = {number for number, kind in enumerate(kinds, 1) if kind == "+"}
+        # A declaration the diff also removes from the file is a component
+        # renamed, not a new one: only as many as it removes are excused.
+        removed = sum(_removed_declarations(d) for d in ui if d.path == diff.path)
+        if (_declared_on(text, on) > removed
+                and not imports_a_part(diff.path, text, names, folders)):
             lonely.append(diff.path)
     findings = ([f"{CHECK_TAG} COPY {c.part} — shared part declared at "
                  f"{c.part_path}:{c.part_line}; copy declared at {c.copy_path}:{c.copy_line}"

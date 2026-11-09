@@ -293,7 +293,8 @@ def _ask_move(moved_to: str) -> tuple:
 
 
 def receipt(step: NextStep, *, run_url: str, finding: str, moved: bool = True,
-            lane: str | None = None, moved_to: str | None = None) -> str:
+            lane: str | None = None, moved_to: str | None = None,
+            held_on_main: bool = False) -> str:
     """The one comment the medic writes for its step. Line one is the
     contract line, ending ` moved=no` when the step's move did not land;
     `fix-path` moves nothing by design and never carries it. Then one
@@ -302,13 +303,22 @@ def receipt(step: NextStep, *, run_url: str, finding: str, moved: bool = True,
     `moved_to` is the lane an `ask-person` move was for — Green Light or
     `planning_escalation.HOUSEKEEPING_LANE` (DRE-8592) — and the paragraph
     names it whether or not the move landed; `lane` is the lane a move that
-    did not land left the card in."""
+    did not land left the card in.
+
+    `held_on_main` is an `ask-person` card the medic held on an inherited red
+    main instead of asking about (DRE-8849): every failing check on its pull
+    request failed on the merge base too, so it waits in `moved_to` on main,
+    not on a person, and the step's reason says what returns it."""
     not_moved = not moved and step.step != "fix-path"
     done = _DONE.get(step.step, f"took the step {step.step}")
     meant, why = _MEANT.get(step.step, (f"take the step {step.step}",
                                         "the move was refused"))
     closing = ""
-    if step.step == "ask-person" and moved_to:
+    if step.step == "ask-person" and held_on_main:
+        meant = (f"hold the card in {moved_to or 'Triage'} until main is green "
+                 "again, because the failure came from main and not from the card")
+        done = "held" + meant[len("hold"):]
+    elif step.step == "ask-person" and moved_to:
         meant, closing = _ask_move(moved_to)
         done = "moved" + meant[len("move"):]
     first = (f"{RECEIPT_MARK} class={step.cls} step={step.step} "
@@ -617,6 +627,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--lane", default=None)
     # The lane an `ask-person` move was for (DRE-8592); empty reads as unset.
     p.add_argument("--moved-to", default=None)
+    # The `ask-person` card was held on an inherited red main, not asked
+    # about (DRE-8849): `--moved-to` names the lane it waits in.
+    p.add_argument("--held-on-main", action="store_true")
 
     p = sub.add_parser("finding", help="print the report's first sentence")
     p.add_argument("--report", required=True)
@@ -678,7 +691,8 @@ def main(argv: list[str] | None = None) -> int:
                                  finding=args.finding.strip()
                                  or finding(args.report),
                                  moved=not args.moved_no, lane=args.lane,
-                                 moved_to=(args.moved_to or "").strip() or None))
+                                 moved_to=(args.moved_to or "").strip() or None,
+                                 held_on_main=args.held_on_main))
     elif args.cmd == "finding":
         print(finding(args.report))
     elif args.cmd == "from-lanes":

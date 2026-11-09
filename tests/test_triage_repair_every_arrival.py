@@ -33,6 +33,7 @@ os.environ.setdefault("LINEAR_API_KEY", "test-key")
 
 import dedupe_dispatch  # noqa: E402
 import hold  # noqa: E402
+import held_verdict  # noqa: E402
 import hygiene  # noqa: E402
 import medic_next_step  # noqa: E402
 import pipeline_act  # noqa: E402
@@ -50,7 +51,11 @@ REPO_MAP = ROOT / "config" / "repo-map.json"
 
 #: Each table repair, and the action `select` answers for it on a card with
 #: no finding that names the CEO's choice.
-ACTION_OF = {"rewrite": "repair", "replan": "replan", "relabel": "relabel", "none": "none"}
+ACTION_OF = {"rewrite": "repair", "replan": "replan", "relabel": "relabel", "none": "none",
+             "wait": "wait"}
+#: The repair whose card select leaves alone: it waits on something the
+#: sweep lifts, so nothing is claimed and no receipt is posted (DRE-8849).
+WAITING = "wait"
 #: The repairs whose apply lifts the card's hold.
 LIFTING = ("rewrite", "replan", "relabel")
 
@@ -71,6 +76,10 @@ PROSE_DESCRIPTION = ("Fix the release note.\n\n**Blocked by:** " + NOWHERE + "\n
 #: write; the run reads this as now, so every card added is days old unless
 #: a test says otherwise.
 NOW = datetime(2026, 11, 1, 18, 0, tzinfo=UTC)
+
+#: One critic verdict the evidence gate held (DRE-9230), as
+#: `held_verdict.Hold` reads it off the pull request.
+HELD = held_verdict.Hold("", SHA, "42", "1", "- command output", FINDING)
 
 
 def _iso(when: datetime) -> str:
@@ -100,7 +109,7 @@ def _file_of(unit: str) -> str:
 
 def _stamp(unit: str, reason: str) -> str:
     at = {"no-route": "repo:retired-thing"}.get(reason)
-    if hold.CONTRACT_LIFTS[reason] == "new-head":
+    if hold.CONTRACT_LIFTS[reason] == "new-head" or reason == "inherited-red-main":
         at = SHA
     return hold.stamp_line(reason, at, _file_of(unit))
 
@@ -162,10 +171,10 @@ class TestTheTable:
         assert triage_repair.unhandled_units() == []
         assert set(units) == set(_declared_units())
 
-    def test_the_eighteen_split_twelve_one_two_three(self):
-        assert len(_rows()) == 18
+    def test_the_twenty_split_twelve_one_two_four_one(self):
+        assert len(_rows()) == 20
         assert collections.Counter(r["repair"] for r in _rows()) == {
-            "rewrite": 12, "replan": 1, "relabel": 2, "none": 3}
+            "rewrite": 12, "replan": 1, "relabel": 2, "none": 4, "wait": 1}
 
     def test_a_unit_declared_tomorrow_with_no_row_is_named(self):
         reasons = json.loads(REASONS.read_text(encoding="utf-8"))
@@ -189,7 +198,7 @@ class TestTheTable:
             assert len(row["marker"]) == 1, row["unit"]
             (kind, value), = row["marker"].items()
             assert kind in ("hold", "tag", "description") and value.strip(), row["unit"]
-            assert bool(row.get("why")) is (row["repair"] == "none"), row["unit"]
+            assert bool(row.get("why")) is (row["repair"] in ("none", WAITING)), row["unit"]
 
     def test_rows_sharing_a_marker_share_a_repair(self):
         repairs: dict = {}
@@ -222,6 +231,12 @@ class TestTheTable:
         assert tags["reconcile.py#_route_to_defect_lane"] == prose_blockers.CARD_TAG
         assert prose_blockers.card_refusal("DRE-1", {NOWHERE}).startswith(
             f"🚨 {prose_blockers.CARD_TAG}:")
+        # A critic verdict held twice on one head (DRE-9230): its Triage line
+        # opens with its tag, so the row finds the card and no planner
+        # rewrites a card whose pull request is still open.
+        assert tags["reconcile.py#_triage_held_twice"] == held_verdict.TWICE_TAG
+        assert held_verdict.triage_line(1107, SHA, [HELD, HELD]).startswith(
+            f"🚦 {held_verdict.TWICE_TAG}:")
 
     def test_the_description_marker_is_in_what_the_notice_writer_files(self):
         marker = next(r["marker"]["description"] for r in _rows()
@@ -284,7 +299,11 @@ class TestEveryRow:
     def test_select_returns_every_row_with_the_action_it_names(self, tmp_path, capsys):
         board, cards = _board_of_every_row()
         rows = _select(board, tmp_path, limit=50)
-        assert sorted(r["card"] for r in rows) == sorted(cards)
+        assert sorted(r["card"] for r in rows) == sorted(
+            c for c, row in cards.items() if row["repair"] != WAITING)
+        printed = capsys.readouterr().out
+        for card, row in cards.items():
+            assert f"triage-repair: {card} → {ACTION_OF[row['repair']]} — " in printed, card
         for row in rows:
             assert row["action"] == ACTION_OF[cards[row["card"]]["repair"]], (
                 row["card"], cards[row["card"]]["unit"])
@@ -314,7 +333,7 @@ class TestEveryRow:
 
     def test_at_most_three_a_run_oldest_arrival_first(self, tmp_path):
         board, cards = _board_of_every_row()
-        order = sorted(cards)
+        order = sorted(c for c, row in cards.items() if row["repair"] != WAITING)
         for i, card in enumerate(order):
             _arrived(board, card, NOW - timedelta(days=2, minutes=i))
         rows = _select(board, tmp_path)
@@ -431,6 +450,28 @@ class TestTheCardCreatedStraightIntoTriage:
         assert board.lane(card) == "Planning"
         assert _outcomes(board, card) == ["started", "rewritten"]
         assert not [b for b in board.bodies(card) if b.startswith(hold.LIFT_PREFIX)]
+
+
+class TestTheVerdictHeldTwice:
+    """DRE-9230: the review sweep moves a card to Triage when the evidence
+    gate holds the critic's verdict twice on one head. Only a person can
+    answer the held finding, so the repair claims it and says so."""
+
+    def _card(self, board) -> str:
+        board.add("DRE-9229", labels=["repo:agent-bureau", "agent:engineer"],
+                  description=DESCRIPTION, comments=[held_verdict.triage_line(1107, SHA, [HELD, HELD])])
+        return "DRE-9229"
+
+    def test_it_is_unrepairable_and_never_rewritten(self, tmp_path):
+        board = TriageRepairBoard()
+        card = self._card(board)
+        rows = _select(board, tmp_path)
+        assert [(r["card"], r["action"]) for r in rows] == [(card, "none")]
+        assert _claim(board, card) == 0
+        assert _apply_as_the_workflow_does(board, rows[0], tmp_path / "temp", tmp_path) == 0
+        assert _outcomes(board, card) == ["started", "unrepairable"]
+        assert board.description(card) == DESCRIPTION
+        assert board.lane(card) == "Triage"
 
 
 class TestTheRelabel:

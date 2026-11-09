@@ -522,8 +522,10 @@ There are two events, and only these two:
      `🔬 proof-run` receipt of any count — after the run that spent the
      budget and after any earlier re-arm's run, so two notes with no run
      between them are one event. A note the pipeline writes never counts, by
-     its wording and not its author: the time lift (`LIFTED_BY`) and the
-     return step's record of the CEO's answer (`CEO_ANSWERED`). The re-arm
+     its wording and not its author: the time lift (`LIFTED_BY`), the
+     return step's record of the CEO's answer (`CEO_ANSWERED`) and the
+     record's note retiring the holds it supersedes
+     (`proof_record_pr.RETIRED_BY`, DRE-8680). The re-arm
      itself posts no note, so no run re-arms the next.
 
 The budget's own hold — the one whose observed half is
@@ -699,6 +701,34 @@ with no reason given, or off for a reason that names no card. It is composed
 from the environment alone and costs no read; each named card's state is the
 `Read the switches` step's job (DRE-6436). A live pass prints nothing of it.
 
+## The reads, through the read door (DRE-8910)
+
+In `BUREAU_READ=on` the pass reads through `DoorReads`, which asks the read
+door first with `X-Bureau-Max-Age: 300` (`DISPATCH_MAX_AGE`) and prints one
+`reconcile.door_read_line` per door request, decision `proof-dispatch-<read>`.
+A dispatch is the first or a timed re-run of a proof whose release has been
+live for minutes to days, and a duplicate is refused by the run's own receipt,
+so a five-minute-old answer is safe:
+
+  * `lane` — ONE `scope=repo` board read of `reconcile.DOOR_WORK_LANES` per
+    process, filtered to the lane asked. Green Light is not one of them, and
+    is read as `LinearReads.lane` reads it, with no door request;
+  * `card` — `/cards` with relations, for the description, the inverse
+    relations and the parent. The epic's children are not in the door's node,
+    so `DoorReads._epic_children` reads them from Linear in one small query,
+    and a relation page the door says is not whole is topped up from Linear;
+  * `thread` — `/cards?comments=all`, with the viewer from
+    `linear_ops.viewer_id()`;
+  * `states` — `/cards` without relations.
+
+An UNKNOWN answer falls back to the `LinearReads` method it overrides. A
+`linear-hold` falls back to nothing, because Linear is the held bucket: the
+lane read holds the board (`reconcile.BoardHeld`, as the sweep's own read
+does), and a card, thread or states read raises, which the pass reads as
+unread. In `off` and `shadow` every read is `LinearReads`'s, unchanged.
+`blocking` and `fix_card` read fields the door's node does not carry and stay
+on Linear.
+
 ## The shadow (DRE-7287)
 
 While the repository variable `PROOF_SHADOW_MODEL` is set (unset or empty is
@@ -738,6 +768,7 @@ from typing import Callable, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import bureau_read  # noqa: E402 — the read door the pass reads through (DRE-8910)
 import canceled_check  # noqa: E402 — the workflow run a check belongs to (DRE-8177)
 import card_pr  # noqa: E402
 import epic_cap  # noqa: E402 — an epic in a fix set is built out as the sweep reads it (DRE-8250)
@@ -1109,6 +1140,17 @@ CARD_STATES_QUERY = """query($numbers: [Float!]) { issues(first: %d, filter: {
                  team: {key: {eq: "DRE"}}, number: {in: $numbers}}) { nodes {
                    identifier state { name } } } }""" % LANE_RELATIONS_CARDS
 
+#: How old a read door answer the pass can take, in seconds (DRE-8910), sent
+#: as `X-Bureau-Max-Age` on every door request `DoorReads` makes.
+DISPATCH_MAX_AGE = 300
+#: The epic's children, the one part of `CARD_QUERY` the door's node does not
+#: carry (DRE-8910): the same selection, and nothing else.
+EPIC_CHILDREN_QUERY = """query($id: String!) { issue(id: $id) {
+             parent {
+               children(first: 100) { nodes {
+                 identifier title state { name } labels { nodes { name } } } } }
+           } }"""
+
 _DEAD = re.compile(r"^dead — (run \S+ ended .+? with no record)")
 #: The gate's hold note's first line (`evaluate_and_merge.sh`):
 #: `⏸️ Merge gate: declined @<sha> — <reason>`.
@@ -1223,6 +1265,133 @@ class LinearReads:
         return {node.get("identifier"): (node.get("state") or {}).get("name")
                 for node in ((data or {}).get("issues") or {}).get("nodes") or []
                 if node.get("identifier")}
+
+
+def _door_asked(read_name: str, read, *args, **kwargs):
+    """`read(*args, max_age=DISPATCH_MAX_AGE, **kwargs)` — one door request —
+    and its `reconcile.door_read_line`, decision `proof-dispatch-<read_name>`,
+    printed after the answer and before the caller falls back to anything.
+    The ReadUnknown is re-raised for the caller. A read never sent to the
+    door prints no line: a door already stopped for the run, whose
+    `read-fallback:` line names that case."""
+    decision = f"proof-dispatch-{read_name}"
+    sent = bureau_read.mode() == "on" and bureau_read.enabled()
+    try:
+        answer = read(*args, max_age=DISPATCH_MAX_AGE, **kwargs)
+    except bureau_read.ReadUnknown as e:
+        if sent:
+            reconcile.door_read_line(decision, DISPATCH_MAX_AGE, error=e)
+        raise
+    if sent:
+        reconcile.door_read_line(decision, DISPATCH_MAX_AGE, read=answer)
+    return answer
+
+
+def _with_relation_times(cards: list) -> list:
+    """`LinearReads.lane`'s relation times, for a lane the door served: every
+    card whose window shows the budget's marked hold carries its relations
+    with their times, read for all of them in one Linear request (DRE-8156),
+    or `UNREAD_RELATIONS` when that request did not answer for it."""
+    marked = [card["identifier"] for card in cards if _marked(card)]
+    if not marked:
+        return cards
+    try:
+        data = linear_ops.gql(LANE_RELATIONS_QUERY,
+                              {"numbers": [_number(c) for c in cards
+                                           if c["identifier"] in marked]})
+        got = {node.get("identifier"): node.get("inverseRelations")
+               for node in ((data or {}).get("issues") or {}).get("nodes") or []}
+    except Exception as error:  # noqa: BLE001 — unread spares no read
+        print(f"{PREFIX} the blocks relations of {', '.join(marked)} could not "
+              f"be read — each is read as a candidate: {error}")
+        got = {}
+    return [{**card, "inverseRelations": got.get(card["identifier"])
+             or UNREAD_RELATIONS} if card["identifier"] in marked else card
+            for card in cards]
+
+
+class DoorReads(LinearReads):
+    """`LinearReads`, asking the read door first in `BUREAU_READ=on`
+    (DRE-8910) — the module docstring's "The reads, through the read door".
+    Overrides `lane`, `card`, `thread` and `states` and nothing else; each
+    returns what the method it overrides returns when the door answers
+    UNKNOWN, and is that method outright in `off` and `shadow`."""
+
+    def __init__(self):
+        #: The one work-lane board read this process: None until asked, then
+        #: its nodes — or None again with `_board_asked` set, once the door
+        #: could not answer, and every work lane is `LinearReads.lane`'s.
+        self._board: list | None = None
+        self._board_asked = False
+
+    def lane(self, state: str) -> list:
+        if state not in reconcile.DOOR_WORK_LANES or bureau_read.mode() != "on":
+            return super().lane(state)
+        if not self._board_asked:
+            self._board_asked = True
+            try:
+                self._board = list(_door_asked(
+                    "lane", bureau_read.board, reconcile.DOOR_WORK_LANES,
+                    scope="repo").nodes)
+            except bureau_read.ReadUnknown as e:
+                if e.skip:
+                    raise reconcile.BoardHeld(e.reason) from e
+        if self._board is None:
+            return super().lane(state)
+        return _with_relation_times([card for card in self._board
+                                     if (card.get("state") or {}).get("name") == state])
+
+    def card(self, identifier: str) -> dict:
+        if bureau_read.mode() != "on":
+            return super().card(identifier)
+        try:
+            read = _door_asked("card", bureau_read.cards, [identifier], relations=True)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                raise
+            return super().card(identifier)
+        issue = dict(read.nodes[0])
+        if issue.get("parent"):
+            issue["parent"] = {**issue["parent"],
+                               "children": self._epic_children(identifier)}
+        if prose_blockers.relations_unknown(issue):
+            reconcile.complete_inverse_relations([issue])
+        return issue
+
+    def _epic_children(self, identifier: str) -> dict:
+        """The children of `identifier`'s epic, with their titles, states and
+        labels — `CARD_QUERY`'s selection, in one Linear request. Raises when
+        Linear answers no card or no epic, so the card is read as unread."""
+        issue = (linear_ops.gql(EPIC_CHILDREN_QUERY, {"id": identifier}) or {}).get("issue")
+        parent = (issue or {}).get("parent")
+        if not parent:
+            raise LookupError(f"Linear answered no epic for {identifier}")
+        return parent.get("children") or {"nodes": []}
+
+    def thread(self, identifier: str):
+        if bureau_read.mode() != "on":
+            return super().thread(identifier)
+        try:
+            read = _door_asked("thread", bureau_read.cards, [identifier],
+                               comments="all", relations=False)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                raise
+            return super().thread(identifier)
+        return linear_ops.window_nodes(read.nodes[0].get("comments")), linear_ops.viewer_id()
+
+    def states(self, identifiers: list) -> dict:
+        if bureau_read.mode() != "on" or not identifiers:
+            return super().states(identifiers)
+        try:
+            read = _door_asked("states", bureau_read.cards,
+                               identifiers[:LANE_RELATIONS_CARDS], relations=False)
+        except bureau_read.ReadUnknown as e:
+            if e.skip:
+                raise
+            return super().states(identifiers)
+        return {node.get("identifier"): (node.get("state") or {}).get("name")
+                for node in read.nodes if node.get("identifier")}
 
 
 def github_read(path: str):
@@ -1877,10 +2046,13 @@ def _related_since(card: dict, at) -> bool:
 
 def _pipeline_note(body: str) -> bool:
     """Is this `🔬 proof-observed` one the pipeline writes itself — the time
-    lift (`LIFTED_BY`) or the return step's record of the CEO's answer
-    (`CEO_ANSWERED`)? Read off the wording, never the author (DRE-7740)."""
+    lift (`LIFTED_BY`), the return step's record of the CEO's answer
+    (`CEO_ANSWERED`) or the record's note retiring the holds it supersedes
+    (`proof_record_pr.RETIRED_BY`, DRE-8680)? Read off the wording, never the
+    author (DRE-7740)."""
     text = _first_line(body)[len(OBSERVED_MARK):].strip()
-    return LIFTED_BY in (body or "") or text.startswith(CEO_ANSWERED)
+    return (LIFTED_BY in (body or "") or text.startswith(CEO_ANSWERED)
+            or proof_record_pr.RETIRED_BY in (body or ""))
 
 
 #: `OPERATOR_PRESS`, a waiting row's event that names the operator's press
@@ -3530,7 +3702,7 @@ def sweep(repo: str, slug: str, *, live: bool, linear=None,
     `PROOF_SHADOW_MODEL` when not given; empty is no shadow. `open_heads` is
     the one heads read (`open_record_heads`), and `file_fix` the fix card's
     filer (`proof_gap.file_fix_card`, DRE-7953), injected in the tests."""
-    one = _Pass(repo, slug, live=live, linear=linear or LinearReads(),
+    one = _Pass(repo, slug, live=live, linear=linear or DoorReads(),
                 read=read or github_read,
                 find_pr=find_pr or (lambda ident, repo=repo: merged_pr(ident, repo)),
                 run_state=run_state or proof_run_state.reading,
