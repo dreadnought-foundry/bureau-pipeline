@@ -58,6 +58,7 @@ def load_script():
         return None
     spec = importlib.util.spec_from_file_location("hold_waits", MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
+    sys.modules["hold_waits"] = module  # its dataclasses look their module up
     spec.loader.exec_module(module)
     return module
 
