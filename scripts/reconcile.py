@@ -39,8 +39,10 @@ merged) is reported on its card after UNLANDED_MINUTES, naming the route out;
 and a hand-built card in a working lane with no branch and no PR is reported
 after HAND_IDLE_MINUTES, which is the alarm that replaces what `hand-built`
 suppresses (DRE-2524). Alert-only, and nothing here reads git authorship — it
-misleads in both directions. The full census of ways work escapes the one path
-is docs/escape-census.md.
+misleads in both directions. Each notice names what its re-test found, and a
+later pass answers it once under `unlanded-cleared` when the work it asked for
+appears (DRE-9273). The full census of ways work escapes the one path is
+docs/escape-census.md.
 
 Crashed-review recovery (DRE-2282): an open agent PR whose review CRASHED
 (FAILURE review check, no verdict at the head — the critic fails its job on
@@ -2398,6 +2400,17 @@ def active_cards(states: tuple[str, ...] = SWEEP_STATES) -> list[dict]:
     if lin:
         out += [c for c in _linear_lanes() if c["state"]["name"] in lin]
     return out
+
+
+def board_read_cards() -> list[dict] | None:
+    """The pass's board read as an earlier phase already read it, or None when
+    no phase has — never a read of its own (DRE-9273).
+
+    For a reader that only looks again at what the pass already holds: the
+    two watchdogs' lifts re-check a standing notice on a card in this read,
+    off its comment window, and leave every other card alone, so a pass adds
+    no Linear request for them."""
+    return _swept_cards
 
 
 def _door_work_cards() -> list[dict]:
@@ -10928,6 +10941,12 @@ UNLANDED_MINUTES = int(os.environ.get("UNLANDED_MINUTES", "60"))
 # on it bumps updatedAt.
 HAND_IDLE_MINUTES = int(os.environ.get("HAND_IDLE_MINUTES", "180"))
 UNLANDED_TAG = "unlanded-work-watchdog"
+#: The unlanded-work notices' lift (DRE-9273): one comment per notice key,
+#: `unlanded-cleared branch <name>:` or `unlanded-cleared no branch:`, once a
+#: later pass sees the work it asked for. `_KEY`, not `_TAG`, for
+#: STALE_VERDICT_LIFT_KEY's reason: an `unconverted` row until the console
+#: gives it one.
+UNLANDED_LIFT_KEY = "unlanded-cleared"
 #: What `_flag_one_unlanded_branch` answers for a branch it could not judge
 #: (DRE-7966): the pass's late list is then incomplete.
 UNLANDED_UNREAD = "unread"
@@ -11240,7 +11259,7 @@ def card_branches() -> list[dict] | None:
     return found
 
 
-def pr_head_refs() -> set[str] | None:
+def pr_head_refs() -> dict[str, int | None] | None:
     """Head refs of every PR in ANY state, or None when the listing is unreadable.
 
     `--state all`, not `open`, is the load-bearing part: a squash-merged
@@ -11248,11 +11267,15 @@ def pr_head_refs() -> set[str] | None:
     listing would report every merged branch that was not deleted. None
     (never an empty set) on an unreadable answer — a blip must not read as
     "nothing here has a pull request" (DRE-2034).
+
+    Keyed by ref, each with the number of its newest pull request off the
+    same listing (DRE-9273), which the unlanded lift names — so it reads as
+    the set of refs it always was, and asks GitHub nothing more.
     """
     try:
         raw = gh(
             "pr", "list", "--repo", REPO, "--state", "all",
-            "--limit", "100", "--json", "headRefName",
+            "--limit", "100", "--json", "headRefName,number",
         )
     except Exception as e:  # noqa: BLE001 — record loudly, never kill the sweep
         _write_failures.append(f"unlanded watchdog: PR listing failed: {e}")
@@ -11264,7 +11287,12 @@ def pr_head_refs() -> set[str] | None:
         prs = None
     if not isinstance(prs, list):
         return None
-    return {pr.get("headRefName") or "" for pr in prs if isinstance(pr, dict)}
+    refs: dict[str, int | None] = {}
+    for pr in prs:
+        if isinstance(pr, dict):
+            # Newest first, as gh lists them: a ref's first PR is its newest.
+            refs.setdefault(pr.get("headRefName") or "", pr.get("number"))
+    return refs
 
 
 def flag_unlanded_work() -> None:
@@ -11312,6 +11340,15 @@ def flag_unlanded_work() -> None:
     whose whole-thread read raised or whose evaluation raised. An unreadable
     or rate-limited PR or branch listing (the two returns above) and a held
     board (`BoardHeld`) call `settle` not at all.
+
+    THE RE-TEST AND THE LIFT (DRE-9273). Each half re-tests before it writes
+    — the branch half re-reads `commits/{sha}/pulls` and the compare, the
+    card half the branch and PR listings — and each notice says, in one
+    line, what that re-test found. A standing notice on a card in the pass's
+    board read is lifted once its condition clears (`_lift_unlanded_notices`),
+    off the listings and the per-branch reads this pass already made. The
+    late list is untouched: it already drops a branch the moment a pull
+    request exists.
     """
     pr_refs = pr_head_refs()
     if pr_refs is None:
@@ -11329,10 +11366,11 @@ def flag_unlanded_work() -> None:
     late: list[hold_deadline.LateHold] = []
     unread: list[str] = []
     from_linear: list[str] = []
+    seen: dict[str, dict] = {}
     for branch in branches:
         try:
             found = _flag_one_unlanded_branch(branch, pr_refs, door_lanes, from_linear,
-                                              now=now)
+                                              now=now, seen=seen)
         except Exception as e:  # noqa: BLE001 — isolate one branch, sweep the rest
             found = UNLANDED_UNREAD
             _write_failures.append(
@@ -11350,6 +11388,7 @@ def flag_unlanded_work() -> None:
         print(f"unlanded: card lanes — {len(door_lanes)} from the door in one read, "
               f"{len(from_linear)} read from Linear (the door could not answer them)")
     _flag_hand_built_idle(branches, pr_refs, late=late, unread=unread, now=now)
+    _lift_unlanded_notices(branches, pr_refs, seen)
     hold_deadline.settle(UNLANDED_TAG, REPO_SLUG, late, complete=not unread, now=now)
 
 
@@ -11395,15 +11434,19 @@ def _unlanded_door_lanes(cards: list[str]) -> dict[str, str]:
     return lanes
 
 
-def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
+def _flag_one_unlanded_branch(branch: dict, pr_refs,
                               door_lanes: dict[str, str] | None = None,
                               from_linear: list[str] | None = None, *,
-                              now: datetime | None = None
+                              now: datetime | None = None,
+                              seen: dict[str, dict] | None = None
                               ) -> hold_deadline.LateHold | str | None:
     """Evaluate ONE card branch and report it if no PR was ever opened.
 
     `door_lanes` is `_unlanded_door_lanes`'s answer; a card missing from it is
-    read from Linear and appended to `from_linear`.
+    read from Linear and appended to `from_linear`. `seen` gets what the
+    re-test read for the branch — `{"pr": <n>}` when `commits/{sha}/pulls`
+    names a pull request, `{"ahead": <n>}` off the compare — for
+    `_lift_unlanded_notices` (DRE-9273); an unread answer records nothing.
 
     Returns what it found (DRE-7966): a `hold_deadline.LateHold` waiting on
     `a pull request from <branch>` when the branch is late — its clock is the
@@ -11437,10 +11480,13 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
     if not pulls:
         return UNLANDED_UNREAD  # a 403 is not "no PR was ever opened" (DRE-2034)
     try:
-        if json.loads(pulls):
-            return None  # a PR older than the listing window — confirmed, not guessed
+        numbers = json.loads(pulls)
     except ValueError:
         return UNLANDED_UNREAD
+    if numbers:
+        if seen is not None and isinstance(numbers, list):
+            seen[name] = {"pr": numbers[0]}
+        return None  # a PR older than the listing window — confirmed, not guessed
     base = default_branch()
     raw = gh(
         "api", f"repos/{REPO}/compare/{base}...{name}",
@@ -11453,6 +11499,8 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
     if not isinstance(compared, dict):
         return UNLANDED_UNREAD  # never alarm on a fabricated empty
     ahead, last = compared.get("ahead") or 0, compared.get("last")
+    if seen is not None:
+        seen[name] = {"ahead": ahead}
     if ahead < 1 or not last:
         return None  # nothing of its own on this branch — an old or empty ref
     idle = age_minutes(last)
@@ -11496,6 +11544,9 @@ def _flag_one_unlanded_branch(branch: dict, pr_refs: set[str],
         f"merge gate and the Linear sync all key off a pull request; a branch "
         f"on its own passes through no gate at all and closes no card. Last "
         f"commit {idle:.0f} minutes ago.\n\n"
+        f"Re-tested before posting: no pull request from `{name}` in this "
+        f"pass's listing or by `commits/{sha[:8]}/pulls`, {ahead} commit(s) "
+        f"ahead of `{base}`, and {card} is in {state}.\n\n"
         f"Where it goes from here: open a pull request from `{name}` into "
         f"`{base}`. Hand-built work lands exactly the way dispatched work "
         f"does — the branch, then the pull request, then the same checks and "
@@ -11626,6 +11677,9 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str], *,
                 f"request. It is {reason}, {who} — which also means the "
                 f"stranded-card watchdog stays silent on it (DRE-2524). This "
                 f"notice is what stands in its place.\n\n"
+                f"Re-tested before posting: no card branch and no pull request "
+                f"for {ident} in this pass's branch and pull-request listings, "
+                f"and the card is in {state}.\n\n"
                 f"What is missing, in order: a branch named "
                 f"`agent/{ident}-<slug>`, then a pull request from it. "
                 f"Hand-built work meets the same checks and the same critic "
@@ -11644,6 +11698,93 @@ def _flag_hand_built_idle(branches: list[dict], pr_refs: set[str], *,
                 unread.append(ident)
             _write_failures.append(f"unlanded watchdog on {ident}: {e}")
             print(f"ERROR: unlanded watchdog on {ident}: {e}", file=sys.stderr)
+
+
+def _unlanded_cleared(ident: str, bodies: list[str], branches: list[dict], pr_refs,
+                      seen: dict[str, dict]) -> list[tuple[str, str, str]]:
+    """`(key, subject, what changed)` for each standing unlanded-work notice
+    in `bodies` whose condition has cleared on this pass (DRE-9273).
+
+    A branch notice clears when a pull request now exists from the branch —
+    by the listing or by `commits/{sha}/pulls` — when the branch is no
+    longer ahead of the default branch, or when it is gone from the branch
+    listing. A no-branch notice clears when the card now has a card branch
+    or a pull request. A notice stands while no lift for its key follows it;
+    an answer this pass could not read (`seen` holds nothing) leaves it
+    standing."""
+    numbers = pr_refs if isinstance(pr_refs, dict) else {}
+
+    def pr_named(ref: str) -> str:
+        number = numbers.get(ref)
+        return f"pull request #{number}" if number else "a pull request"
+
+    def lifted(key: str) -> bool:
+        return any(f"{UNLANDED_LIFT_KEY} {key}:" in b for b in bodies)
+
+    cleared = []
+    listed = {b["name"] for b in branches}
+    notice = re.compile(rf"🚨 {re.escape(UNLANDED_TAG)} branch ([^\s:]+):")
+    for name in dict.fromkeys(m.group(1) for b in bodies for m in notice.finditer(b)):
+        key = f"branch {name}"
+        if lifted(key):
+            continue
+        found = seen.get(name) or {}
+        if name in pr_refs:
+            what = f"{pr_named(name)} now exists from it"
+        elif name not in listed:
+            what = "it is gone from the branch listing"
+        elif found.get("pr"):
+            what = f"pull request #{found['pr']} now exists from it"
+        elif "ahead" in found and found["ahead"] < 1:
+            what = f"it is no longer ahead of `{default_branch()}`"
+        else:
+            continue  # still stands, or unread this pass
+        cleared.append((key, f"the branch `{name}`", what))
+    if f"🚨 {UNLANDED_TAG} no branch:" in "\n".join(bodies) and not lifted("no branch"):
+        own = [b["name"] for b in branches if branch_card(b["name"]) == ident]
+        prs = [ref for ref in pr_refs if branch_card(ref) == ident]
+        found = ([f"the card branch `{own[0]}`"] if own else []) + [
+            f"{pr_named(ref)} from `{ref}`" for ref in prs[:1]]
+        if found:
+            cleared.append(("no branch", f"{ident} having nothing to point at",
+                            f"it now has {' and '.join(found)}"))
+    return cleared
+
+
+def _lift_unlanded_notices(branches: list[dict], pr_refs, seen: dict[str, dict]) -> None:
+    """Answer each standing unlanded-work notice whose condition has cleared
+    (DRE-9273): ONE comment per notice key, under `unlanded-cleared branch
+    <name>:` or `unlanded-cleared no branch:`, naming what changed
+    (`_unlanded_cleared`). It moves no card and changes no label — the
+    notice set none — and it opens no pull request.
+
+    Off this pass's reads only: the branch listing, the PR listing and what
+    `_flag_one_unlanded_branch` read per branch (`seen`), and the comments of
+    this repo's cards in the pass's board read (`board_read_cards`). A card
+    whose window carries no unlanded notice is not read further, so the lift
+    adds no request. A card no longer in the board read — finished, or moved
+    off the board — is never re-checked: that move is the visible change. The
+    lift never repeats the notice's marker, so each notice's once-per-key
+    check and `hold_deadline`'s reader still count one notice."""
+    for card in board_read_cards() or ():
+        ident = card["identifier"]
+        try:
+            if card_repo(card) != REPO_SLUG:
+                continue  # that repo's own sweep holds its listings
+            if not any(UNLANDED_TAG in b for b in card_comment_bodies(card)):
+                continue
+            bodies = linear_ops.comment_bodies(ident)
+            for key, subject, what in _unlanded_cleared(ident, bodies, branches,
+                                                        pr_refs, seen):
+                linear_ops.cmd_comment(ident, (
+                    f"🧹 Reconcile: {UNLANDED_LIFT_KEY} {key}: the notice about "
+                    f"{subject} no longer holds — {what}. Nothing was moved or "
+                    "relabeled; this only answers that notice."
+                ))
+                print(f"unlanded: {ident} {key} lifted — {what}")
+        except Exception as e:  # noqa: BLE001 — isolate one card, sweep the rest
+            _write_failures.append(f"unlanded lift on {ident}: {e}")
+            print(f"ERROR: unlanded lift on {ident}: {e}", file=sys.stderr)
 
 
 # --- stranded-fix watchdog (DRE-4486) ----------------------------------------
@@ -13861,6 +14002,13 @@ CRASHED_REVIEW_RETRY_CAP = 1
 CRASHED_REVIEW_SWEEP_CAP = 3
 REVIEWER_DOWN_TAG = "reviewer-down"
 STALE_VERDICT_TAG = "stale-verdict-watchdog"
+#: The stale-verdict notice's lift (DRE-9273): one comment per notice key,
+#: `verdict-caught-up PR #<n> @<sha>:`, once a later pass sees that PR's
+#: verdict bound to its head or its head moved on. Spelled `_KEY`, not `_TAG`:
+#: pipeline_act reads every `*_TAG` literal as a declared act, and this one
+#: ships as an `unconverted` row of config/pipeline-acts.json until the
+#: console gives it a row (docs/pipeline-acts.md, console-first).
+STALE_VERDICT_LIFT_KEY = "verdict-caught-up"
 #: Review-check conclusions that mean "concluded without ever posting a
 #: verdict" — the same set fix_approved_but_red treats as failed. A green
 #: review always posts its verdict before its job completes (DRE-1994), so
@@ -14487,7 +14635,13 @@ def _report_stale_verdict(pr: dict) -> None:
     is: the merge gate rightly ignores the stale verdict (DRE-1990), no
     check is red, and nothing re-reviews on its own (#128 carried an
     APPROVE two commits behind its head through the 2026-08-07 outage).
-    ONE report per head, same marker discipline as _report_reviewer_down."""
+    ONE report per head, same marker discipline as _report_reviewer_down.
+
+    Re-tested first (DRE-9273): the In Review nudge DOES re-review a head
+    with no bound verdict, so the notice is written only when the sweep will
+    not (`_stale_verdict_retest`), and it names the re-test that failed. When
+    the sweep will, nothing is written and the pass says so in one
+    `stale-verdict:` line. Report-only either way: nothing is dispatched."""
     card = branch_card(pr["headRefName"])
     if not card:
         print(
@@ -14499,6 +14653,12 @@ def _report_stale_verdict(pr: dict) -> None:
     marker = f"{STALE_VERDICT_TAG} PR #{pr['number']} @{sha}:"
     if any(marker in b for b in linear_ops.comment_bodies(card)):
         return  # reported once for this head already — idempotent forever
+    will, found = _stale_verdict_retest(pr, card)
+    if will:
+        print(f"stale-verdict: PR #{pr['number']} @{sha[:8]} — {card} is in "
+              f"{REVIEW_LANE}, not held, {found} review re-triggers spent at "
+              f"this head; the {REVIEW_LANE} nudge re-reviews it, no notice written")
+        return
     bodies = critic_comment_bodies(pr)
     reviewed = merge_gate.verdict_sha(
         merge_gate.first_line(bodies[-1]) if bodies else ""
@@ -14510,9 +14670,112 @@ def _report_stale_verdict(pr: dict) -> None:
         f"head ({sha[:8]}), and no review is running or queued. The merge "
         "gate rightly ignores stale verdicts, so nothing will re-review or "
         "merge this PR on its own — a fresh review of the current commit "
-        "is needed. This is NOT a code rejection."
+        "is needed. This is NOT a code rejection.\n\n"
+        f"Re-tested before posting: {found}, so the sweep will not re-review "
+        "this head on its own."
     )))
-    print(f"stale-verdict: PR #{pr['number']} reported on {card}")
+    print(f"stale-verdict: PR #{pr['number']} reported on {card} — {found}")
+
+
+def _review_nudge_card(ident: str) -> dict | None:
+    """The card as this pass's nudge loop holds it — this repo's, off the
+    board read, not a dependabot card (`main`'s `mine`) — or None when the
+    loop holds no such card (DRE-9273).
+
+    An idle pass has nothing of this repo's in motion, In Review included,
+    and is never made to buy the board read it skipped. A board the door
+    held is not read either. Both answer None: the nudge loop reaches no
+    card this pass either way."""
+    if _idle_pass:
+        return None
+    try:
+        cards = active_cards()
+    except BoardNotRead:
+        return None
+    return next((c for c in cards if c["identifier"] == ident
+                 and card_repo(c) == REPO_SLUG and not automation_card(c)), None)
+
+
+def _stale_verdict_retest(pr: dict, ident: str) -> tuple[bool, str]:
+    """Will the sweep re-review this head itself? `(True, "<k>/<cap>")` when
+    it will, else `(False, <the re-test that failed, and what it found>)`
+    (DRE-9273).
+
+    It will when the card is in the review lane, not held, and its In Review
+    nudge has re-triggered the review at this head fewer than
+    REVIEW_NUDGE_CAP times (`review_nudges_spent`, off the receipts the
+    board read already holds). The nudge loop re-triggers it once the lane's
+    window passes, and at the cap holds the card and asks a person
+    (`hand_review_nudge_to_person`). Nothing here dispatches."""
+    card = _review_nudge_card(ident)
+    if card is None:
+        return False, f"{ident} is not in this pass's board read"
+    lane = card["state"]["name"]
+    if lane != REVIEW_LANE:
+        return False, f"{ident} is in {lane}, not {REVIEW_LANE}"
+    if held(card):
+        return False, f"{ident} carries `{HOLD_LABEL}`"
+    # REVIEW_NUDGE_CAP, read and never copied: three windows with the head
+    # unmoved is a stall, not a slow round (the reasoning beside the
+    # constant), so at the cap the nudge stops re-triggering and asks a
+    # person — and the notice is written. `0` fails at once: written on the
+    # first pass, as before this re-test existed.
+    spent = review_nudges_spent(card, REVIEW_NUDGE_KEY, pr["headRefOid"])
+    budget = f"{spent}/{REVIEW_NUDGE_CAP}"
+    if spent >= REVIEW_NUDGE_CAP:
+        return False, f"{budget} review re-triggers are spent at this head"
+    return True, budget
+
+
+def _lift_stale_verdicts(pr: dict, bound: bool, swept: dict[str, dict]) -> None:
+    """Answer each standing stale-verdict notice for this open PR whose
+    condition has cleared (DRE-9273): ONE comment per notice key, under
+    `verdict-caught-up PR #<n> @<sha>:`, naming what changed.
+
+    A notice for `@<sha>` stands while no lift for that key follows it. It
+    lifts when the PR's verdict now binds its head (`bound`, the
+    `verdict_bound` answer the caller already paid for) — naming the verdict
+    and the commit it was written at — or when its head is no longer `<sha>`,
+    naming the new head. It moves nothing and removes no label: the notice
+    set none.
+
+    Only cards in `swept` — this repo's cards in the pass's board read — are
+    re-checked, and one whose window carries no notice for this PR is not
+    read further, so the lift adds no request. A PR no longer open, or a card
+    no longer in the board read, is never re-checked: its merge, close or
+    lane move is the visible change. The lift never repeats the notice's
+    marker, so the once-per-head check and routing_verdict's substring reader
+    of `stale-verdict` still count one notice."""
+    ident = branch_card(pr.get("headRefName") or "")
+    card = swept.get(ident) if ident else None
+    if card is None:
+        return
+    number, head = pr["number"], pr.get("headRefOid") or ""
+    prefix = f"{STALE_VERDICT_TAG} PR #{number} @"
+    if not any(prefix in b for b in card_comment_bodies(card)):
+        return
+    bodies = linear_ops.comment_bodies(ident)
+    notice = re.compile(rf"{re.escape(prefix)}([0-9a-f]+):")
+    for sha in dict.fromkeys(m.group(1) for b in bodies for m in notice.finditer(b)):
+        if any(f"{STALE_VERDICT_LIFT_KEY} PR #{number} @{sha}:" in b for b in bodies):
+            continue  # lifted once already
+        if sha != head:
+            what = f"its head is now {head[:8]}, no longer {sha[:8]}"
+        elif bound:
+            critic = critic_comment_bodies(pr)
+            line = merge_gate.first_line(critic[-1]) if critic else ""
+            token = merge_gate.verdict_token(line, merge_gate.CRITIC_MARKER) or "a verdict"
+            at = merge_gate.verdict_sha(line) or head
+            what = (f"its newest critic verdict, {token} written at {at[:8]}, "
+                    f"now binds its head {head[:8]}")
+        else:
+            continue  # still stands
+        linear_ops.cmd_comment(ident, (
+            f"🧹 Reconcile: {STALE_VERDICT_LIFT_KEY} PR #{number} @{sha}: the "
+            f"notice about PR #{number} at {sha[:8]} no longer holds — {what}. "
+            "Nothing was moved or relabeled; this only answers that notice."
+        ))
+        print(f"stale-verdict: PR #{number} @{sha[:8]} lifted on {ident} — {what}")
 
 
 def recover_crashed_reviews() -> None:
@@ -14564,7 +14827,12 @@ def recover_crashed_reviews() -> None:
         to Triage with one line naming the pull request, both runs and the
         held finding, and nothing more is dispatched.
       * no crashed check but the newest verdict binds an older sha →
-        reported once per head (_report_stale_verdict).
+        reported once per head (_report_stale_verdict) — unless the In
+        Review nudge will re-review the head itself, which is re-tested
+        first and named in the notice when it fails (DRE-9273).
+      * a standing stale-verdict notice whose PR, in this listing, now has a
+        verdict bound to its head or a new head → lifted once per notice key
+        (_lift_stale_verdicts), on a card in the pass's board read only.
 
     Dispatches — the first re-dispatch and the released ones alike — are paced
     per sweep (CRASHED_REVIEW_SWEEP_CAP, oldest PR
@@ -14595,6 +14863,9 @@ def recover_crashed_reviews() -> None:
     reasks = {}  # PR number -> the evidence hold its re-ask answers (DRE-9230)
     capped = []  # heads that reached `_report_reviewer_down` (DRE-8690)
     unread = set()  # PRs this pass holds only part of — their alert stays open
+    # DRE-9273: the lift re-checks only what an earlier phase already read.
+    swept = {c["identifier"]: c for c in board_read_cards() or ()
+             if card_repo(c) == REPO_SLUG}
     for pr in prs:
         try:
             if not card_branch(pr.get("headRefName")) or pr.get("isDraft"):
@@ -14613,7 +14884,14 @@ def recover_crashed_reviews() -> None:
             sha = pr.get("headRefOid") or ""
             if not sha:
                 continue
-            if verdict_bound(pr):
+            bound = verdict_bound(pr)
+            try:
+                _lift_stale_verdicts(pr, bound, swept)
+            except Exception as e:  # noqa: BLE001 — a lift never costs the PR its recovery
+                _write_failures.append(f"stale-verdict lift on PR #{pr.get('number')}: {e}")
+                print(f"ERROR: stale-verdict lift on PR #{pr.get('number')}: {e}",
+                      file=sys.stderr)
+            if bound:
                 continue  # a verdict still binding this head settles the PR
             checks = _review_checks_at_head(sha)
             if checks is None:

@@ -196,6 +196,10 @@ def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
         reconcile.linear_ops, "add_label",
     ) as add_label, mock.patch.object(
         reconcile, "_swept_cards", None if board is None else list(board),
+    ), mock.patch.object(
+        # Read once per process otherwise: another file's stub must not name
+        # this sweep's default branch.
+        reconcile, "_default_branch", None,
     ):
         reconcile.flag_unlanded_work()
     return comments, gh_calls, add_label
