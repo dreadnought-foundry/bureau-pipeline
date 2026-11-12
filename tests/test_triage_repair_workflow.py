@@ -341,6 +341,76 @@ class TestSelect:
                                      "needs.select.outputs.cards": cards}) is runs
 
 
+class TestTheSelectReadToken:
+    """`select` reads whether a young card's repo is archived (hygiene's
+    `retired` rule, `hygiene_triage._Pass.is_archived`). The workflow's own
+    token reaches only bureau-pipeline, so every other repo answered 404 and
+    the card was skipped for its first two hours (DRE-9271). The read rides
+    the App's `dreadnought-foundry` installation token, hygiene.yml's per-owner
+    mint, and falls back to the workflow token when the mint fails."""
+
+    @staticmethod
+    def _mints() -> list[dict]:
+        return [s for s in _job("select")["steps"]
+                if str(s.get("uses", "")).startswith("actions/create-github-app-token@")]
+
+    def _mint(self) -> dict:
+        mints = self._mints()
+        assert len(mints) == 1, "select mints no installation token for its reads"
+        return mints[0]
+
+    def test_it_mints_the_owner_installation_token_as_hygiene_does(self):
+        mint = self._mint()
+        assert mint["with"] == {
+            "app-id": "${{ secrets.BUREAU_APP_ID }}",
+            "private-key": "${{ secrets.BUREAU_APP_PRIVATE_KEY }}",
+            "owner": "dreadnought-foundry",
+        }
+        # The whole installation, at its own permissions, as hygiene.yml's
+        # mint asks: no repository list and no permission subset.
+        assert "repositories" not in mint["with"]
+        assert not [k for k in mint["with"] if k.startswith("permission-")]
+        assert mint["continue-on-error"] is True
+        assert "if" not in mint
+
+    def test_it_is_at_the_pin_of_the_workflows_other_mints(self):
+        others = {s["uses"] for job in ("repair",) for s in _job(job)["steps"]
+                  if str(s.get("uses", "")).startswith("actions/create-github-app-token@")}
+        assert len(others) == 1
+        assert self._mint()["uses"] in others
+
+    def test_it_runs_before_the_select_step(self):
+        mint_at = _index("select", lambda s: s in self._mints())
+        select_at = _index("select", lambda s: s.get("name") == "Select the cards to repair")
+        assert mint_at < select_at
+
+    def test_the_select_step_reads_on_it_with_the_workflow_token_behind(self):
+        mint = self._mint()
+        step = _step("select", "Select the cards to repair")
+        assert step["env"]["GH_TOKEN"] == (
+            f"${{{{ steps.{mint['id']}.outputs.token || github.token }}}}")
+        assert step["env"]["GH_TOKEN"] != "${{ github.token }}"
+
+    def test_only_the_select_step_holds_the_token_and_nothing_in_select_writes(self):
+        mint_id = self._mint()["id"]
+        holders = [s.get("name") for s in _job("select")["steps"]
+                   if f"steps.{mint_id}.outputs.token" in json.dumps(s)]
+        assert holders == ["Select the cards to repair"]
+        assert f"steps.{mint_id}." not in json.dumps(
+            {k: v for k, v in _doc()["jobs"].items() if k != "select"})
+        for step in _job("select")["steps"]:
+            run = str(step.get("run") or "")
+            assert not re.search(r"(^|\s)gh\s", run), step.get("name")
+            assert "git push" not in run, step.get("name")
+        assert _job("select")["permissions"] == {"contents": "read", "id-token": "write"}
+
+    def test_the_header_names_the_token_and_its_fallback(self):
+        header = " ".join(_text().split("\nname:", 1)[0].replace("#", " ").split())
+        assert "read-only workflow token" not in header
+        assert "`dreadnought-foundry` installation token" in header
+        assert "falls back to the workflow token" in header
+
+
 # --------------------------------------------------------------------------- #
 # the repair job                                                               #
 # --------------------------------------------------------------------------- #
