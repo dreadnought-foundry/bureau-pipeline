@@ -314,7 +314,12 @@ _WATCHDOG_OWNERS = {
 #: promoted at all — a held card never is, so a repo whose only Backlog cards
 #: are held has nothing waiting and its sweep skips the board. It reads the
 #: label and moves nothing; it never reads `hand-built`.
-_HELD_ONLY_OWNERS = {"sweep_idle"}
+#: The stale-verdict re-test (DRE-9273) is the second, and it reads the label
+#: in the direction that does not suppress: it asks whether the nudge loop,
+#: which stands down for `held`, will re-review a head itself. A held card is
+#: one it will not, so the card gets its notice; only an unheld card in the
+#: review lane with budget left is spared it, and only because the sweep acts.
+_HELD_ONLY_OWNERS = {"sweep_idle", "_stale_verdict_retest"}
 
 #: THE INTAKE GATE IS NOT IN THIS SET ANY MORE (DRE-4141). It read hand-built
 #: because hand-built meant no classification was coming from the pipeline, so
