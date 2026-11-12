@@ -21,8 +21,10 @@ What this file pins:
    follow-on that closes these cards when the parent lands is a sibling card,
    and it finds them by that receipt.
 2. **The unchanged path** — with `base.ref` equal to the default branch the
-   behaviour is today's, card id and URL intact, merge-sweep gate still run.
-   A gate that also stopped ordinary merges would close nothing at all.
+   behaviour is today's, card id and URL intact. A gate that also stopped
+   ordinary merges would close nothing at all. Since DRE-9254 no merge runs
+   the merge-sweep gate or a pass here — the relay's card-done Reconcile pass
+   does — so the landed merge runs neither either.
 3. **The untrusted-text rule** — both values reach the shell through `env:`,
    never `${{ }}` inside `run:`, which is the rule the step already follows
    for `PR_BODY`.
@@ -254,13 +256,14 @@ class AMergeToTheDefaultBranchIsUnchanged(unittest.TestCase):
             done[0]["args"],
         )
 
-    def test_the_merge_sweep_gate_still_runs(self):
+    def test_a_landed_merge_runs_no_gate_and_no_pass(self):
+        """DRE-9254: the relay's card-done Reconcile pass runs the merge-sweep
+        gate and its passes for the card this step closes. The stubs still
+        stand in for both, so a call that came back would show here."""
         with tempfile.TemporaryDirectory() as td:
             scenario = self._landed(td)
-            gate = scenario.calls_to("merge_sweep_gate.py")
-            sweeps = scenario.calls_to("reconcile.py")
-        self.assertEqual([["DRE-100"]], [c["args"] for c in gate])
-        self.assertEqual([["--promote-only"]], [c["args"] for c in sweeps])
+            self.assertEqual([], scenario.calls_to("merge_sweep_gate.py"))
+            self.assertEqual([], scenario.calls_to("reconcile.py"))
 
     def test_no_stacked_receipt_is_posted(self):
         """The receipt is the stacked case's alone — posting it on an ordinary

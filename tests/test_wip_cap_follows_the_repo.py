@@ -22,6 +22,10 @@ The reusables declare no default, so a silent stub renders an empty input and
 this fallback actually runs. No product stub has to change. The promotion step
 prints the cap it applied and where it read it.
 
+Since DRE-9254 the merge handler promotes nothing: a merge's promotion runs in
+the relay's card-done Reconcile pass, at the cap that job already takes, so
+the paths are plan.yml's activate route and reconcile.yml.
+
 The caller's BUREAU_MAX_WIP Actions variable comes third (DRE-6631): after the
 input and the stub, before the built-in default. It is what the console
 writes, and until then only agent-bureau's own stubs read it. A value at any
@@ -50,7 +54,9 @@ import reconcile  # noqa: E402
 import routing_verdict  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
-PROMOTING_REUSABLES = ("plan.yml", "linear-sync.yml", "reconcile.yml")
+# linear-sync.yml left this list in DRE-9254: its merge step runs no pass, and
+# the relay's card-done Reconcile pass promotes inside reconcile.yml.
+PROMOTING_REUSABLES = ("plan.yml", "reconcile.yml")
 
 FLEET = routing_verdict.verdict_comment("FLEET", "the acceptance criteria are unit-testable")
 GREEN_LIGHT = "2026-08-01T00:00:00.000Z"
