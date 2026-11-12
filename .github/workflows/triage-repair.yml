@@ -40,18 +40,26 @@
 #      agent step's allowed_bots admits, DRE-5123). The only GitHub calls are
 #      reads on the token minted for the card's repo (`contents: read`, that
 #      one repository), plus the model-home read token: nothing is pushed,
-#      dispatched or commented on GitHub. `select` also reads, on the
-#      read-only workflow token, whether a young card's repo is archived — the
-#      hygiene rule it defers to (DRE-8647); a read that token cannot make
-#      skips that card for the pass, never the run. Every job mints the OIDC
-#      token for the console's read door (`id-token: write`, DRE-8902), which
-#      serves each card's thread first; a card it does not serve reads Linear.
+#      dispatched or commented on GitHub. `select` also reads whether a young
+#      card's repo is archived — the hygiene rule it defers to (DRE-8647) — on
+#      the App's `dreadnought-foundry` installation token, hygiene.yml's
+#      per-owner mint (DRE-9271). It asks for no permission subset, so it
+#      carries the installation's own, and it is used read-only: for reads
+#      only, by the one step that makes no write. That step falls back to the
+#      workflow token when the mint fails, which reaches only this repo; a
+#      read its token cannot make (a repo under
+#      another owner) skips that card for the pass, never the run. Every job
+#      mints the OIDC token for the console's read door (`id-token: write`,
+#      DRE-8902), which serves each card's thread first; a card it does not
+#      serve reads Linear.
 #   Q2 secrets — a schedule run in THIS repo reads this repo's secrets store:
 #      the Claude credential CLAUDE_AUTH_MODE selects, given to the agent step
 #      and to the model selection's probe; LINEAR_PLANNER_KEY falling back to
 #      LINEAR_API_KEY, given to the `select`, `claim`, `apply` and planner
 #      context steps only and never to the agent step; and BUREAU_APP_ID /
-#      BUREAU_APP_PRIVATE_KEY, for the mints. The Claude call goes through
+#      BUREAU_APP_PRIVATE_KEY, for the mints — among them `select`'s
+#      `dreadnought-foundry` installation token, which falls back to the
+#      workflow token when the mint fails. The Claude call goes through
 #      claude-code-action, never a raw Messages API call (DRE-3074). The
 #      `unrepaired` job holds the same Linear key, the BUREAU_READ_URL
 #      variable and `id-token: write`, for the console's notice door.
@@ -152,14 +160,30 @@ jobs:
           echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
           echo "triage-repair: event=$EVENT dry_run=$dry_run"
 
+      # The hygiene rules' one GitHub read — is a young card's repo archived —
+      # reaches every dreadnought-foundry repo, where the workflow's own token
+      # reaches only this one and answered 404 for the rest (DRE-9271).
+      # hygiene.yml's per-owner mint: the whole installation, no repository
+      # list and no permission subset. A refused mint leaves `select` on the
+      # workflow token, never a failed run.
+      - name: Mint the read token (dreadnought-foundry's installation)
+        id: read_app
+        continue-on-error: true
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.BUREAU_APP_ID }}
+          private-key: ${{ secrets.BUREAU_APP_PRIVATE_KEY }}
+          owner: dreadnought-foundry
+
       # Reads only. The log carries one `triage-repair: <CARD> → <action> —
       # <why>` line per card in scope.
       - name: Select the cards to repair
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_PLANNER_KEY || secrets.LINEAR_API_KEY }}
           LINEAR_API_KEY_FALLBACK: ${{ secrets.LINEAR_API_KEY }}
-          # The hygiene rules' one GitHub read, read-only (see the header).
-          GH_TOKEN: ${{ github.token }}
+          # The hygiene rules' one GitHub read, used for reads only (see the
+          # header); the workflow token when the mint produced none.
+          GH_TOKEN: ${{ steps.read_app.outputs.token || github.token }}
         run: python3 scripts/triage_repair.py select --out cards.json
 
       # A live run only. With no card worked the list is `[]` and the
