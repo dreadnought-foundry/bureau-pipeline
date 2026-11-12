@@ -157,6 +157,7 @@ class FakeLinear:
         self.forward = dict(forward or {})
         self.states = dict(states or {})
         self.blocker_reads: list[str] = []
+        self.card_reads: list[str] = []
         self.queries: list[str] = []
 
     def gql(self, query, variables=None):
@@ -175,6 +176,13 @@ class FakeLinear:
             if self.blocker_error is not None:
                 raise self.blocker_error
             return {"issue": self.blockers.get(v.get("id"))}
+        if "issue(id: $id)" in flat and "parent {" in flat:
+            # `_blocker_card`'s read of a blocker not In Progress (DRE-9284).
+            self.card_reads.append(v.get("id"))
+            found = self.blockers.get(v.get("id"))
+            return {"issue": found and {"identifier": found["identifier"],
+                                        "title": found["title"],
+                                        "state": found["state"], "parent": None}}
         if "relations(first: 20)" in flat:
             return {"issue": {"relations": {"nodes": [
                 {"type": "blocks", "issue": {"identifier": d}}
@@ -314,12 +322,14 @@ def test_a_children_page_not_read_to_the_end_holds(capsys):
 
 
 @pytest.mark.parametrize("lane", ["Backlog", "Planning", "Green Light"])
-def test_an_unapproved_blocker_holds_without_a_read(capsys, lane):
-    """A blocker that has built nothing holds, as today — and its state comes
-    off the relation, so no read is spent on it."""
+def test_an_unapproved_blocker_holds_with_one_card_read(capsys, lane):
+    """A blocker that has built nothing holds, as today. Its state comes off
+    the relation, so its children are never read; since DRE-9284 its title is,
+    once, to tell a PROOF card (`_proof_blocker`), and B is no proof."""
     fake = FakeLinear([_w_record((B, lane))], [B_BUILT_OUT])
     _assert_held(capsys, fake, f"({lane})", "not In Progress")
     assert fake.blocker_reads == []
+    assert fake.card_reads == [B]
 
 
 @pytest.mark.parametrize("lane", ["Backlog", "Planning", "Green Light"])
