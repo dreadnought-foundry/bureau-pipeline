@@ -93,7 +93,7 @@ def _card(identifier=CARD, state="In Progress", labels=("hand-built",),
 
 
 def _fake_gh(branches, pr_refs, pulls=None, compare=None, calls=None,
-             listing=None, branches_unreadable=False):
+             listing=None, branches_unreadable=False, pr_numbers=None):
     """Stub reconcile.gh / gh_read for the four reads the watchdog makes.
 
     branches: {branch name: head sha} — the `repos/:r/branches` listing.
@@ -103,9 +103,11 @@ def _fake_gh(branches, pr_refs, pulls=None, compare=None, calls=None,
     listing:  raw override for the `pr list` output (e.g. "" = unreadable).
     branches_unreadable: the branch listing raises the way gh_read does on a
               non-zero exit (403 / rate limit), rather than answering.
+    pr_numbers: {head ref: PR number} the listing also answers (DRE-9273).
     """
     pulls = pulls or {}
     compare = compare or {}
+    pr_numbers = pr_numbers or {}
 
     def gh(*args):
         if calls is not None:
@@ -113,7 +115,10 @@ def _fake_gh(branches, pr_refs, pulls=None, compare=None, calls=None,
         if args[:2] == ("pr", "list"):
             if listing is not None:
                 return listing
-            return json.dumps([{"headRefName": r} for r in pr_refs])
+            return json.dumps([
+                {"headRefName": r, **({"number": pr_numbers[r]} if r in pr_numbers else {})}
+                for r in pr_refs
+            ])
         if args[0] == "api":
             path = args[1]
             if path == f"repos/{reconcile.REPO}":
@@ -158,8 +163,12 @@ def _state_of(states):
 
 
 def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
-          cards=(), states=None, listing=None, branches_unreadable=False):
+          cards=(), states=None, listing=None, branches_unreadable=False,
+          board=None, pr_numbers=None):
     """Run flag_unlanded_work() once against a stubbed GitHub + Linear.
+
+    `board` is the pass's board read an earlier phase left behind (DRE-9273)
+    — None, as in a pass that read none, unless a test names one.
 
     Returns (comments, gh_calls, add_label mock).
     """
@@ -167,7 +176,7 @@ def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
     states = states or {}
     comments, gh_calls = [], []
     fake_gh = _fake_gh(branches, pr_refs, pulls, compare, gh_calls, listing,
-                       branches_unreadable)
+                       branches_unreadable, pr_numbers)
     with mock.patch.object(
         reconcile, "gh", side_effect=fake_gh,
     ), mock.patch.object(
@@ -185,7 +194,9 @@ def sweep(branches=None, pr_refs=(), pulls=None, compare=None, bodies=(),
         side_effect=lambda ident, body: comments.append((ident, body)),
     ), mock.patch.object(
         reconcile.linear_ops, "add_label",
-    ) as add_label:
+    ) as add_label, mock.patch.object(
+        reconcile, "_swept_cards", None if board is None else list(board),
+    ):
         reconcile.flag_unlanded_work()
     return comments, gh_calls, add_label
 
@@ -483,6 +494,174 @@ def test_only_the_working_lanes_are_swept_for_hand_built_idleness():
     ):
         reconcile.flag_unlanded_work()
     active.assert_called_once_with(reconcile.WATCHDOG_LANES)
+
+
+# --------------------------------------------------------------------------
+# DRE-9273: each notice names what its re-test found, and a standing notice
+# is lifted on a later pass once its condition has cleared
+# --------------------------------------------------------------------------
+
+BRANCH_NOTICE = (f"🚨 {reconcile.UNLANDED_TAG} branch {BRANCH}: the branch "
+                 f"`{BRANCH}` carries 3 commit(s) that are not on `main`, and no "
+                 "pull request has ever been opened for it.")
+CARD_NOTICE = (f"🚨 {reconcile.UNLANDED_TAG} no branch: this card has sat in "
+               "In Progress for 240 minutes with nothing to point at.")
+
+
+def _retest_line(body):
+    lines = [line for line in body.splitlines() if line.startswith("Re-tested before posting:")]
+    assert len(lines) == 1, body
+    return lines[0]
+
+
+def _board_card(bodies, identifier=CARD, labels=(), description="**Repo:** test",
+                state="In Progress"):
+    """A card of the pass's board read, carrying `bodies` in its comment
+    window (newest-first, as the API answers it)."""
+    card = _card(identifier=identifier, state=state, labels=labels,
+                 description=description)
+    card["comments"] = {"nodes": [{"body": b} for b in reversed(list(bodies))]}
+    return card
+
+
+def _lifts(comments):
+    return [(i, b) for i, b in comments if reconcile.UNLANDED_LIFT_KEY in b]
+
+
+def test_the_branch_notice_names_what_its_re_test_found():
+    """ACCEPTANCE: no pull request by the listing or by commits/<sha>/pulls,
+    the commits ahead of the default branch, and the card's lane."""
+    line = _retest_line(sweep(states={CARD: "In Progress"})[0][0][1])
+    assert "no pull request" in line
+    assert f"commits/{SHA[:8]}" in line and "pulls" in line
+    assert "3 commit(s) ahead of `main`" in line
+    assert "In Progress" in line
+
+
+def test_the_no_branch_notice_names_what_its_re_test_found():
+    comments, _, _ = sweep(branches={}, cards=[_card(state="Hand-work")])
+    line = _retest_line(comments[0][1])
+    assert "no card branch and no pull request" in line
+    assert "Hand-work" in line
+
+
+def test_a_branch_notice_lifts_once_a_pull_request_exists_from_the_branch():
+    """ACCEPTANCE: the later pass sees the PR in its own listing, writes one
+    comment under the lift key naming the PR, and nothing else."""
+    comments, calls, add_label = sweep(
+        pr_refs=[BRANCH], pr_numbers={BRANCH: 412}, bodies=[BRANCH_NOTICE],
+        board=[_board_card([BRANCH_NOTICE])],
+    )
+    assert len(comments) == 1, comments
+    ident, body = comments[0]
+    assert ident == CARD
+    assert f"{reconcile.UNLANDED_LIFT_KEY} branch {BRANCH}:" in body
+    assert "#412" in body
+    assert reconcile.UNLANDED_TAG not in body, "a lift never repeats the notice's marker"
+    assert not add_label.called
+
+
+def test_a_branch_notice_lifts_on_a_pull_request_found_by_its_commit():
+    comments, _, _ = sweep(
+        pulls={SHA: "[413]"}, bodies=[BRANCH_NOTICE],
+        board=[_board_card([BRANCH_NOTICE])],
+    )
+    assert len(_lifts(comments)) == 1, comments
+    assert "#413" in _lifts(comments)[0][1]
+
+
+def test_a_branch_notice_lifts_once_the_branch_is_no_longer_ahead():
+    comments, _, _ = sweep(
+        compare={BRANCH: (0, 999.0)}, bodies=[BRANCH_NOTICE],
+        board=[_board_card([BRANCH_NOTICE])],
+    )
+    assert len(_lifts(comments)) == 1, comments
+    assert "no longer ahead of `main`" in _lifts(comments)[0][1]
+
+
+def test_a_branch_notice_lifts_once_the_branch_is_gone():
+    comments, _, _ = sweep(
+        branches={}, bodies=[BRANCH_NOTICE],
+        board=[_board_card([BRANCH_NOTICE], labels=())],
+    )
+    assert len(_lifts(comments)) == 1, comments
+    assert "branch listing" in _lifts(comments)[0][1]
+
+
+def test_a_branch_notice_still_true_is_not_lifted():
+    comments, _, _ = sweep(bodies=[BRANCH_NOTICE], board=[_board_card([BRANCH_NOTICE])])
+    assert comments == []
+
+
+def test_a_no_branch_notice_lifts_once_the_card_has_a_branch_and_a_pull_request():
+    comments, _, add_label = sweep(
+        pr_refs=[BRANCH], pr_numbers={BRANCH: 414}, bodies=[CARD_NOTICE],
+        board=[_board_card([CARD_NOTICE])],
+    )
+    assert len(comments) == 1, comments
+    _, body = comments[0]
+    assert f"{reconcile.UNLANDED_LIFT_KEY} no branch:" in body
+    assert BRANCH in body and "#414" in body
+    assert reconcile.UNLANDED_TAG not in body
+    assert not add_label.called
+
+
+def test_a_no_branch_notice_still_true_is_not_lifted():
+    comments, _, _ = sweep(branches={}, bodies=[CARD_NOTICE],
+                           board=[_board_card([CARD_NOTICE], labels=())])
+    assert comments == []
+
+
+@pytest.mark.parametrize("notice, clear", [
+    (BRANCH_NOTICE, {"pr_refs": [BRANCH]}),
+    (CARD_NOTICE, {"pr_refs": [BRANCH]}),
+])
+def test_a_lifted_notice_is_not_lifted_again_on_the_next_pass(notice, clear):
+    posted = [notice]
+    for _ in range(2):
+        comments, _, _ = sweep(bodies=posted, board=[_board_card(posted)], **clear)
+        posted = [*posted, *(b for _, b in comments)]
+    assert len([b for b in posted if reconcile.UNLANDED_LIFT_KEY in b]) == 1, posted
+    assert sum(reconcile.UNLANDED_TAG in b for b in posted) == 1, \
+        "the once-per-key check still counts one notice"
+
+
+def test_a_card_of_another_repo_is_not_re_checked():
+    comments, _, _ = sweep(
+        branches={}, bodies=[BRANCH_NOTICE],
+        board=[_board_card([BRANCH_NOTICE], description="**Repo:** portico")],
+    )
+    assert comments == []
+
+
+def test_the_lift_ships_as_one_undeclared_act_row():
+    """Console-first: an `unconverted` `undeclared-act` row, one site for both
+    kinds of notice, spelled `_KEY` so pipeline_act reads no declared act."""
+    doc = json.loads((ROOT / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+    rows = [r for r in doc["unconverted"] if r.get("file") == "scripts/reconcile.py"
+            and "UNLANDED_LIFT_KEY" in (r.get("anchor") or "")]
+    assert [r["kind"] for r in rows] == ["undeclared-act"], rows
+    assert not hasattr(reconcile, "UNLANDED_LIFT_TAG")
+
+
+def test_a_pass_with_no_board_read_re_checks_nothing():
+    """A card the pass does not hold is never read for its notices."""
+    comments, _, _ = sweep(pr_refs=[BRANCH], bodies=[BRANCH_NOTICE], board=None)
+    assert comments == []
+
+
+def test_neither_the_notice_nor_the_lift_starts_a_workflow_or_opens_a_pull_request():
+    for kwargs in (
+        {},                                                   # the branch notice
+        {"branches": {}, "cards": [_card()]},                 # the no-branch notice
+        {"pr_refs": [BRANCH], "bodies": [BRANCH_NOTICE],       # the lift
+         "board": [_board_card([BRANCH_NOTICE])]},
+    ):
+        comments, calls, _ = sweep(**kwargs)
+        assert comments, kwargs
+        for args in calls:
+            assert args[:2] not in {("workflow", "run"), ("pr", "create"), ("run", "rerun")}, args
+            assert not any("dispatches" in str(a) or "rerun" in str(a) for a in args), args
 
 
 # --------------------------------------------------------------------------

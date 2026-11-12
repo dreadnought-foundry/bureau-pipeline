@@ -331,6 +331,9 @@ def _stale_verdict_driver(mp, verdicts):
     mp.setattr(reconcile, "branch_card", lambda _r: "DRE-1")
     mp.setattr(reconcile.linear_ops, "comment_bodies", lambda *_a, **_k: [])
     mp.setattr(reconcile, "critic_comment_bodies", lambda _p: verdicts)
+    # The re-test before the notice (DRE-9273) reads the pass's board read,
+    # which here holds no card: the body names that re-test as failed.
+    mp.setattr(reconcile, "active_cards", lambda *_a, **_k: [])
     _card_recorder(mp)
     reconcile._report_stale_verdict(
         {"number": 7, "headRefName": "agent/DRE-1-slug",
