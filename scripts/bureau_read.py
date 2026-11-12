@@ -28,7 +28,9 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
 * After ONE failure — network, timeout, 5xx, 401/403, 429, a malformed answer —
   the door is not asked again for the rest of the run: every later read goes
   straight to Linear (design §3). One slow door must not cost a sweep eight
-  seconds per read.
+  seconds per read. A 401 on one of the four reads below is first asked once
+  more, at once (the second ask, below); a second 401 stops the door as a
+  first one did.
 
   The one exception is a `scope=fleet` board or search read answered 401,
   403 or 404 (DRE-5848, DRE-7236). The door serves the fleet to steward
@@ -94,6 +96,24 @@ for the sweep's alert. Mode `off` never asks the door and mode `shadow` reads
 Linear by design, so neither prints it; a skip (below) is not a fallback; and
 `planning_order()`, `split_history()`, `groom_removals()` and `open_alerts()`
 have no Linear copy to fall back to, so they never print it.
+
+## Asked once more before the fallback (DRE-9250)
+
+An answer a few seconds behind, or one 401, is asked once more before the read
+falls back: `stale` on `board`, `cards`, `dependents` and `workflow_states`
+after the overage plus `ASK_AGAIN_SLACK_SECONDS`, capped at
+`ASK_AGAIN_MAX_WAIT_SECONDS` (the slack alone for the door's own UNKNOWN); a
+401 on those reads that is not a `scope=fleet` refusal, at once; and, in
+`linear_ops.card_via_door`, an answer older than the card's floor. At most one
+second ask per read and `ASK_AGAIN_LIMIT` per process; never a skip, and never
+in mode `off` or `shadow`. Each prints one line, and a second answer that
+still fails falls back exactly as before, in one `read-fallback:` line with
+the first answer's reason:
+
+    read-door: asked again read=<read> reason=<reason> trailing <s>s after <w>s — <served|fell back>
+
+A `refused` line ends ` first="HTTP 401 <body>"`, the first 80 characters of
+the first 401's body (`ask_again`; `docs/stage2-read-door-linear-ops.md`).
 
 ## The one UNKNOWN that is not a fallback
 
