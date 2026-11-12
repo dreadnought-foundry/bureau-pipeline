@@ -295,7 +295,9 @@ the plan afterwards needs to know.
   ("Blocked by: <A>"). Independent cards should be genuinely parallel-safe —
   touching disjoint files wherever possible. Never name the parent epic on a
   "Blocked by" line — epics stay In Progress for their whole life and would
-  deadlock the dependency gate.
+  deadlock the dependency gate. A relation from an EPIC to a PROOF card does
+  not hold the epic's cards once the proved epic is built; a card that must
+  wait for a proof carries the relation itself (DRE-9284).
 - **A dependency IS the `blockedBy` relation — the sentence is documentation**
   (DRE-2676): every "depends on / do not start until X lands" statement is a
   real Linear `blockedBy` relation to the exact blocking card id(s), or it does

@@ -1145,7 +1145,9 @@ or why the blocker still holds. An epic the CEO has already approved,
 its cards written, is `released at build-done`: once its blocker has no
 buildable card left (`epic_cap.buildable()` — open, not an epic, not a proof,
 not marked for a person) and no open child epic, even with the blocker's proof
-still open. Card-level `blockedBy` relations are still read, so a card that
+still open. A relation from an EPIC to a PROOF card does not hold the epic's
+cards once the proved epic is built; a card that must wait for a proof carries
+the relation itself (DRE-9284). Card-level `blockedBy` relations are still read, so a card that
 really needs an earlier card waits for it; a blocker with work left is `not
 built out` and holds. The sweep's `epic-gate:` line names the rule. A card
 blocked by an approved epic is released at build-done the same way (DRE-7774):

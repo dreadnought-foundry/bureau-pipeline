@@ -7533,7 +7533,11 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
         blocker counts as cleared once it is BUILT OUT (`_not_built_out`):
         the proof those cards would otherwise wait on confirms the blocker's
         own work, not theirs, and a card that really needs an earlier one
-        carries a card-level `blockedBy` relation the card gate still reads;
+        carries a card-level `blockedBy` relation the card gate still reads.
+        A blocker it holds for its state is then asked `_proof_blocker`
+        (DRE-9284): a PROOF card whose parent epic is Done or built out is
+        released too, a proof that still holds is named with its reason, and
+        an ordinary blocker holds with the line it always had;
       * `release_at_build_done=False` — the auto-advance and the return pass
         (`return_waiting_epics`, DRE-6653). Its dependent is an epic still to
         be PLANNED, and it is never held by a proof (DRE-7831, the CEO's
@@ -7633,15 +7637,35 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
     # Every blocker is asked, not just the first: each is one read per pass at
     # most, and the log then names every one that holds.
     unbuilt = {blocker: _not_built_out(blocker, states[blocker]) for blocker in held}
+    holds, proofs = {}, {}
     for blocker, why in unbuilt.items():
-        if why is not None:
-            print(
-                f"epic-gate: {epic_identifier} is held by a formal blockedBy "
-                f"relation on {blocker} ({states[blocker]}) — **not built out**: {why}"
-            )
-    if any(why is not None for why in unbuilt.values()):
+        if why is None:
+            continue
+        if states[blocker] != epic_cap.IN_PROGRESS:
+            # A proof of a built-out epic holds no approved epic (DRE-9284):
+            # the planning branch's rule 2, asked of the same one read.
+            parent, proof_why = _proof_blocker(blocker)
+            if parent is not None:
+                proofs[blocker] = parent
+                continue
+            if proof_why is not None:
+                holds[blocker] = proof_why
+                continue
+        holds[blocker] = f"**not built out**: {why}"
+    for blocker, why in holds.items():
+        print(
+            f"epic-gate: {epic_identifier} is held by a formal blockedBy "
+            f"relation on {blocker} ({states[blocker]}) — {why}"
+        )
+    if holds:
         return True
     for blocker in held:
+        if blocker in proofs:
+            print(
+                f"epic-gate: {epic_identifier} is **released**: {blocker} is a "
+                f"proof of a built-out epic, {proofs[blocker]}"
+            )
+            continue
         print(
             f"epic-gate: {epic_identifier} is **released at build-done**: "
             f"{blocker} ({states[blocker]}) has no buildable child left — open: "
