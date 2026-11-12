@@ -97,9 +97,12 @@ listed by neither. An idle pass, a held board read and `promote_only` call
 
 ## Where the sweep reads `unlanded-work-watchdog` (DRE-7966)
 
-`flag_unlanded_work` keeps its two `🚨 unlanded-work-watchdog` comments
-exactly as before — once per branch, once per no-branch card, and those are
-the chase — and hands `settle` one late list per pass, after both halves:
+`flag_unlanded_work` keeps its two `🚨 unlanded-work-watchdog` comments —
+once per branch, once per no-branch card, and those are the chase — and hands
+`settle` one late list per pass, after both halves. Since DRE-9273 each
+comment names, in one line, what its re-test found, and a later pass answers
+a standing one once under `unlanded-cleared` when the pull request or branch
+it asked for appears. Neither changes this list:
 
 - **A branch** the watchdog would report — commits ahead of the default, no
   pull request ever opened, its card not finished and not in a promoted lane

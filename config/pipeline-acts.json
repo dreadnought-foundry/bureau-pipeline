@@ -2107,6 +2107,20 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "f\"🧹 Reconcile: {STALE_VERDICT_LIFT_KEY} PR #{number} @{sha}: the \"",
+      "kind": "undeclared-act",
+      "means": "A standing `verdict-left-behind` notice — `stale-verdict-watchdog PR #<n> @<sha>:` — is answered on a later pass, once per notice key under `verdict-caught-up PR #<n> @<sha>:`, when that open pull request's verdict now binds its head (naming the verdict and the commit it was written at) or its head is no longer `<sha>` (naming the new head). It moves no card and changes no label, because the notice set none (DRE-9273).",
+      "why": "Act-shaped — it reports that a hold cleared — and the registry has no row for it. Declaring it as a `recovery` act that `discharges` `verdict-left-behind` is a REGISTRY change that ships console-first (docs/pipeline-acts.md): agent-bureau's console/backend/receipts.py first, then a bureau-pipeline card that moves this row into `acts`. Its key never repeats the notice's marker, so the notice's once-per-head check and routing_verdict's substring reader of `stale-verdict` still count one notice. Spelled `_KEY`, not `_TAG`, so pipeline_act does not read it as a declared act."
+    },
+    {
+      "file": "scripts/reconcile.py",
+      "anchor": "f\"🧹 Reconcile: {UNLANDED_LIFT_KEY} {key}: the notice about \"",
+      "kind": "undeclared-act",
+      "means": "A standing `work-never-landed` notice is answered on a later pass, once per notice key: `unlanded-cleared branch <name>:` when a pull request now exists from the branch (naming it), the branch is no longer ahead of the default branch, or it is gone from the branch listing; `unlanded-cleared no branch:` when the card now has a card branch or a pull request (naming it). It moves no card, changes no label and opens no pull request (DRE-9273).",
+      "why": "Act-shaped — it reports that a hold cleared — and the registry has no row for it. Declaring it as a `recovery` act that `discharges` `work-never-landed` is a REGISTRY change that ships console-first (docs/pipeline-acts.md): agent-bureau's console/backend/receipts.py first, then a bureau-pipeline card that moves this row into `acts`. Its key never repeats the notice's marker, so each notice's once-per-key check and hold_deadline's reader still count one notice. Spelled `_KEY`, not `_TAG`, so pipeline_act does not read it as a declared act."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "{REVIEW_LANE} with no PR after {dead}",
       "kind": "undeclared-act",
       "means": "A review-lane card whose PR keeps reading as gone parks for a human once the requeue cap is spent.",

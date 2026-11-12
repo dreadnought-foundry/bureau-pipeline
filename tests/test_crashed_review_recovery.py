@@ -175,7 +175,7 @@ def _run_factory(state):
 
 
 def _sweep(prs, checks=CRASHED, runs=(), card_bodies=(), threads=None, alerts=(),
-           views=None):
+           views=None, cards=()):
     """Run recover_crashed_reviews once. `checks` is the jq'd review-check
     payload for every head; `runs` the review runs every `gh run list`
     answers (the workflow_dispatch probe and the per-head listing alike);
@@ -183,7 +183,8 @@ def _sweep(prs, checks=CRASHED, runs=(), card_bodies=(), threads=None, alerts=()
     whole comment thread `gh pr view` answers per PR number (None = refused);
     `alerts` the open console alerts the door serves, and `views` the pull
     request `gh pr view` answers for an alert whose PR is not listed
-    (DRE-8690)."""
+    (DRE-8690). `cards` is the pass's board read (DRE-9273), served both to
+    a read of it and as the snapshot an earlier phase left behind."""
     state = {
         "prs": prs,
         "checks": checks,
@@ -216,6 +217,10 @@ def _sweep(prs, checks=CRASHED, runs=(), card_bodies=(), threads=None, alerts=()
     ), patch.object(
         reconcile.linear_ops, "cmd_comment",
         side_effect=lambda ident, body: state["reports"].append((ident, body)),
+    ), patch.object(
+        reconcile, "active_cards", side_effect=lambda *_a, **_k: list(cards),
+    ), patch.object(
+        reconcile, "_swept_cards", list(cards),
     ):
         reconcile.recover_crashed_reviews()
     return state
@@ -501,6 +506,221 @@ def test_verdict_bound_to_head_settles_everything():
     (the retry that produced the verdict left one behind)."""
     state = _sweep([_pr(comments=[_receipt(), _verdict(SHA)])])
     assert state["dispatches"] == []
+    assert state["reports"] == []
+
+
+# --------------------------------------------------------------------------
+# 3b. DRE-9273: the stale-verdict notice re-tests before it is written, says
+#     which re-test failed, and is lifted on a later pass once it clears
+# --------------------------------------------------------------------------
+NEW_SHA = "c" * 40
+NOTICE_CARD = "DRE-2280"
+
+
+def _card(ident=NOTICE_CARD, state="In Review", labels=(), bodies=()):
+    """One card of the pass's board read, its comment window newest-first as
+    the API answers it."""
+    return {
+        "identifier": ident,
+        "title": "a card",
+        "description": "",
+        "updatedAt": "2026-11-12T10:00:00Z",
+        "state": {"name": state},
+        "labels": {"nodes": [{"name": n} for n in ("repo:atlas", *labels)]},
+        "comments": {"nodes": [{"body": b} for b in reversed(list(bodies))]},
+    }
+
+
+def _nudge(sha=SHA, n=1):
+    """The In Review nudge's review re-trigger receipt for `sha`."""
+    return (f"🧹 Reconcile: {reconcile.REVIEW_NUDGE_KEY} @{sha} "
+            f"({n}/{reconcile.REVIEW_NUDGE_CAP}) — no critic verdict bound to "
+            "this head after 2h; review re-triggered.")
+
+
+def _notice(number=128, sha=SHA):
+    return (f"🚨 {reconcile.STALE_VERDICT_TAG} PR #{number} @{sha}: open PR "
+            f"#{number} has its newest review verdict bound to an older commit.")
+
+
+def _stale(sha=SHA, comments=None):
+    return _pr(number=128, sha=sha, branch="agent/DRE-2280-relay",
+               comments=[_verdict(OLD_SHA)] if comments is None else comments)
+
+
+def _retest_line(body):
+    lines = [line for line in body.splitlines() if line.startswith("Re-tested before posting:")]
+    assert len(lines) == 1, body
+    return lines[0]
+
+
+def test_an_in_review_card_with_budget_left_gets_no_notice(capsys):
+    """ACCEPTANCE: the In Review nudge re-reviews a head with no bound verdict
+    by itself, so the notice saying nothing will is held back, and the pass
+    says so in one line naming the PR, the head and the budget spent."""
+    bodies = [_nudge(n=1)]
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, card_bodies=bodies,
+                   cards=[_card(bodies=bodies)])
+    assert state["reports"] == []
+    assert state["dispatches"] == [], "the stale-verdict path is report-only"
+    lines = [line for line in capsys.readouterr().out.splitlines()
+             if line.startswith("stale-verdict:")]
+    assert len(lines) == 1, lines
+    assert "PR #128" in lines[0]
+    assert SHA[:8] in lines[0]
+    assert f"1/{reconcile.REVIEW_NUDGE_CAP}" in lines[0]
+    assert reconcile.REVIEW_NUDGE_CAP == 3
+
+
+def test_held_back_at_two_re_triggers_and_written_naming_three_of_three_at_three():
+    """The cap is REVIEW_NUDGE_CAP, read and not copied: two spent leaves the
+    nudge one more, three spent means it asks a person instead."""
+    two = [_nudge(n=1), _nudge(n=2)]
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, card_bodies=two,
+                   cards=[_card(bodies=two)])
+    assert state["reports"] == []
+    three = [*two, _nudge(n=3)]
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, card_bodies=three,
+                   cards=[_card(bodies=three)])
+    assert len(state["reports"]) == 1
+    assert "3/3" in _retest_line(state["reports"][0][1])
+    assert state["dispatches"] == []
+
+
+def test_receipts_for_another_head_spend_nothing_here():
+    """The budget is per head: an older head's receipts leave this one's
+    untouched, so the notice is still held back."""
+    other = [_nudge(OLD_SHA, n) for n in (1, 2, 3)]
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, card_bodies=other,
+                   cards=[_card(bodies=other)])
+    assert state["reports"] == []
+
+
+def test_a_card_outside_in_review_gets_the_notice_naming_its_lane():
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS,
+                   cards=[_card(state="In Progress")])
+    assert len(state["reports"]) == 1
+    ident, body = state["reports"][0]
+    assert ident == NOTICE_CARD
+    assert "In Progress" in _retest_line(body)
+    assert "has its newest review verdict bound to" in body, "the act's anchor stays"
+    assert state["dispatches"] == []
+
+
+def test_a_held_card_gets_the_notice_naming_the_hold_label():
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS,
+                   cards=[_card(labels=(reconcile.HOLD_LABEL,))])
+    assert len(state["reports"]) == 1
+    assert reconcile.HOLD_LABEL in _retest_line(state["reports"][0][1])
+
+
+def test_a_card_missing_from_the_board_read_gets_the_notice_saying_so():
+    """The nudge loop walks the board read and nothing else, so a card it
+    does not hold is not re-reviewed by the sweep."""
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, cards=())
+    assert len(state["reports"]) == 1
+    assert "board read" in _retest_line(state["reports"][0][1])
+
+
+def test_a_cap_of_zero_writes_the_notice_on_the_first_pass(monkeypatch):
+    monkeypatch.setattr(reconcile, "REVIEW_NUDGE_CAP", 0)
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, cards=[_card()])
+    assert len(state["reports"]) == 1
+    assert "0/0" in _retest_line(state["reports"][0][1])
+
+
+def test_a_notice_whose_head_moved_on_is_lifted_naming_the_new_head():
+    """ACCEPTANCE: the notice for the old head stands until a later pass sees
+    the open PR at a new head; one lift, under its own key, naming it."""
+    bodies = [_notice(sha=OLD_SHA)]
+    state = _sweep([_stale(sha=NEW_SHA, comments=[_verdict(OLD_SHA)])],
+                   checks=NO_REVIEW_CHECKS, card_bodies=bodies,
+                   cards=[_card(bodies=bodies)])
+    assert len(state["reports"]) == 1, state["reports"]
+    ident, body = state["reports"][0]
+    assert ident == NOTICE_CARD
+    assert f"{reconcile.STALE_VERDICT_LIFT_KEY} PR #128 @{OLD_SHA}:" in body
+    assert NEW_SHA[:8] in body
+    assert "stale-verdict" not in body, "a lift never repeats the notice's marker"
+    assert "has its newest review verdict bound to" not in body
+    assert state["dispatches"] == []
+
+
+def test_a_notice_whose_verdict_caught_up_is_lifted_naming_the_verdict():
+    bodies = [_notice(sha=SHA)]
+    state = _sweep([_stale(comments=[_verdict(OLD_SHA), _verdict(SHA)])],
+                   checks=NO_REVIEW_CHECKS, card_bodies=bodies,
+                   cards=[_card(bodies=bodies)])
+    assert len(state["reports"]) == 1, state["reports"]
+    _, body = state["reports"][0]
+    assert body.startswith("🧹")
+    assert f"{reconcile.STALE_VERDICT_LIFT_KEY} PR #128 @{SHA}:" in body
+    assert "APPROVE" in body and SHA[:8] in body
+    assert "stale-verdict" not in body
+    assert state["dispatches"] == []
+
+
+def test_a_notice_still_true_is_not_lifted():
+    bodies = [_notice(sha=SHA)]
+    state = _sweep([_stale()], checks=NO_REVIEW_CHECKS, card_bodies=bodies,
+                   cards=[_card(state="In Progress", bodies=bodies)])
+    assert state["reports"] == []
+
+
+def test_a_lifted_notice_is_not_lifted_again_on_the_next_pass():
+    posted = [_notice(sha=SHA)]
+    for _ in range(2):
+        state = _sweep([_stale(comments=[_verdict(SHA)])], checks=NO_REVIEW_CHECKS,
+                       card_bodies=posted, cards=[_card(bodies=posted)])
+        posted = [*posted, *(b for _, b in state["reports"])]
+    lifts = [b for b in posted if reconcile.STALE_VERDICT_LIFT_KEY in b]
+    assert len(lifts) == 1, posted
+
+
+def test_a_lift_counts_as_no_second_notice():
+    """The once-per-head check, and routing_verdict's substring reader, still
+    count one notice on a card that carries a lift."""
+    posted = [_notice(sha=SHA)]
+    state = _sweep([_stale(comments=[_verdict(SHA)])], checks=NO_REVIEW_CHECKS,
+                   card_bodies=posted, cards=[_card(bodies=posted)])
+    posted += [b for _, b in state["reports"]]
+    assert sum(f"{reconcile.STALE_VERDICT_TAG} PR #128 @{SHA}:" in b for b in posted) == 1
+    assert sum("stale-verdict" in b for b in posted) == 1
+
+
+def test_a_lift_moves_no_card_and_changes_no_label():
+    bodies = [_notice(sha=OLD_SHA)]
+    with patch.object(reconcile.linear_ops, "cmd_state") as cmd_state, \
+            patch.object(reconcile.linear_ops, "cmd_advance") as advance, \
+            patch.object(reconcile.linear_ops, "add_label") as add_label, \
+            patch.object(reconcile.linear_ops, "remove_label") as remove_label:
+        state = _sweep([_stale(sha=NEW_SHA)], checks=NO_REVIEW_CHECKS,
+                       card_bodies=bodies, cards=[_card(bodies=bodies)])
+    assert any(reconcile.STALE_VERDICT_LIFT_KEY in b for _, b in state["reports"])
+    for write in (cmd_state, advance, add_label, remove_label):
+        write.assert_not_called()
+    assert state["dispatches"] == []
+
+
+def test_the_lift_ships_as_one_undeclared_act_row_and_the_guard_passes():
+    """Console-first: the lift is an `unconverted` `undeclared-act` row until
+    agent-bureau gives it a registered act, and the receipt guard passes."""
+    import check_act_receipts
+
+    root = Path(__file__).resolve().parent.parent
+    doc = json.loads((root / "config" / "pipeline-acts.json").read_text(encoding="utf-8"))
+    rows = [r for r in doc["unconverted"] if r.get("file") == "scripts/reconcile.py"
+            and "STALE_VERDICT_LIFT_KEY" in (r.get("anchor") or "")]
+    assert [r["kind"] for r in rows] == ["undeclared-act"], rows
+    assert check_act_receipts.problems() == []
+
+
+def test_a_card_outside_the_board_read_is_not_re_checked():
+    """Its merge, close or lane move is the visible change; nothing here reads
+    a card the pass does not already hold."""
+    bodies = [_notice(sha=OLD_SHA)]
+    state = _sweep([_stale(sha=NEW_SHA, comments=[_verdict(NEW_SHA)])],
+                   checks=NO_REVIEW_CHECKS, card_bodies=bodies, cards=())
     assert state["reports"] == []
 
 
