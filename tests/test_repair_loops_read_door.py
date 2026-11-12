@@ -383,6 +383,8 @@ tests, scripts, script = sys.argv[1], sys.argv[2], sys.argv[3]
 sys.path[:0] = [scripts, tests]
 from test_repair_loops_read_door import LinearBoard
 urllib.request.urlopen = LinearBoard(os.environ["LINEAR_BOARD"]).urlopen
+import bureau_read
+bureau_read._wait = lambda _seconds: None  # a second ask never sleeps here (DRE-9250)
 sys.argv = [os.path.join(scripts, script), *sys.argv[4:]]
 runpy.run_path(os.path.join(scripts, script), run_name="__main__")
 '''
@@ -664,6 +666,8 @@ tests, scripts, lanes = sys.argv[1], sys.argv[2], sys.argv[3]
 sys.path[:0] = [scripts, tests]
 from test_repair_loops_read_door import LinearBoard
 urllib.request.urlopen = LinearBoard(os.environ["LINEAR_BOARD"]).urlopen
+import bureau_read
+bureau_read._wait = lambda _seconds: None  # a second ask never sleeps here (DRE-9250)
 import hygiene
 hygiene.LANE_DIR = lanes
 hygiene.GH_RUNNER = lambda argv: "[]"
@@ -737,7 +741,7 @@ def test_hygiene_keep_finds_the_prior_pass_receipt_the_door_has_not_caught(
     assert proc.returncode == 0, proc.stderr
     assert board.comments_posted() == []
     assert [a["outcome"] for a in ledger["actions"]] == ["suppressed"]
-    assert asked == ["DRE-7"]
+    assert asked == ["DRE-7", "DRE-7"]  # asked once more past the floor (DRE-9250)
     assert callers(proc.stderr).get("linear_ops._fetch_thread") == 1
     (line,) = fallback_lines(proc.stderr)
     assert "read=cards reason=older-than-needed" in line

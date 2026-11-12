@@ -252,7 +252,8 @@ def test_a_stale_retiring_answer_says_so_and_reads_linear_as_today(monkeypatch, 
     lines = _lines(capsys.readouterr().out)
     # Today's flow: the fleet scope answers UNKNOWN, the repo scope is asked,
     # and when it too answers UNKNOWN the lanes are read from Linear once.
-    assert len(door.asked("/board")) == 2
+    # Each `stale` answer is asked once more first (DRE-9250).
+    assert len(door.asked("/board")) == 4
     assert lines == [{"decision": "retiring-lanes", "verdict": "UNKNOWN", "age": "-",
                       "max_age": "900", "reason": "stale"}] * 2
     assert linear.lanes() == [reconcile.RETIRING_LANES]
