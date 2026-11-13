@@ -29,26 +29,30 @@ What this file pins, in three layers:
    look like it unblocked nothing, which would be silent and permanent).
 2. **The fallbacks** — an unreadable board must still sweep; an exhausted
    quota must not (retrying at an exhausted limit deepens it — DRE-1921).
-3. **The invocation count**, which is the acceptance criterion. The scenario
-   tests EXECUTE the merge step's own shell, lifted verbatim from
-   linear-sync.yml, against a stub `reconcile.py` that logs every call — so
-   the number counted is the number the workflow would really run. The gate
-   the shell calls is the real module, driven by a fixture board: fixture →
-   gate → shipped shell → invocation count, with nothing re-implemented.
+3. **The invocation count**, which is the acceptance criterion, counted where
+   the passes now run. Until DRE-9254 that was linear-sync.yml's merge step,
+   whose shell these tests executed verbatim. That step ran in the merge's
+   `pull_request` run, where the read door refuses every read but the merged
+   card's own, so its passes read Linear; the relay's card-done dispatch ran
+   the same gate and the same passes a minute later in a Reconcile run the
+   door serves (DRE-3645). DRE-9254 removed the inline passes, so the relay
+   pass is the one place a merge's passes run, and `RelayPassTest` drives it:
+   `reconcile.run([])` with `SWEEP_REASON=card-done`, the real gate over a
+   fixture board, and a `reconcile.main` that records each pass it is asked
+   for — fixture → gate → relay pass → invocation count.
 
 The 15-minute cron sweep is deliberately untouched and `WorkflowWiringTest`
-asserts it: this card changes the merge-triggered path only, and the cron
-remains the backstop for everything the gate declines to run now.
+asserts it: it is the backstop for everything the gate declines to run, and
+for a relay dispatch that is lost.
 """
 
-import json
+import contextlib
+import io
 import os
-import subprocess
 import sys
-import tempfile
-import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import yaml
 
@@ -59,10 +63,18 @@ LINEAR_SYNC = WORKFLOWS / "linear-sync.yml"
 RECONCILE_YML = WORKFLOWS / "reconcile.yml"
 
 sys.path.insert(0, str(SCRIPTS))
+# `reconcile` binds these at import. The values test_sweep_dispatch_scope.py
+# sets, so whichever file imports it first, the sweep's GitHub reads stay off
+# the live repository.
+os.environ.setdefault("LINEAR_API_KEY", "test-key")
+os.environ.setdefault("REPO", "dreadnought-foundry/agent-bureau")
+os.environ.setdefault("REPO_SLUG", "agent-bureau")
+os.environ.setdefault("GH_TOKEN", "x")
 
 import check_wip_cap as cwc  # noqa: E402
 import lane_contract  # noqa: E402
 import merge_sweep_gate as gate  # noqa: E402
+import reconcile  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -272,212 +284,162 @@ class ReadFailureTest(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# The shipped shell, lifted verbatim (pattern: test_linear_sync_done_gate.py).
+# Where the gate runs on a merge (DRE-9254).
 # ---------------------------------------------------------------------------
-MARKER_OPEN = "# >>> DRE-2930 merge-sweep gate"
-MARKER_CLOSE = "# <<< DRE-2930 merge-sweep gate"
-
-
-def merge_step_run() -> str:
-    """The whole `run:` script of linear-sync.yml's merge step."""
-    doc = yaml.safe_load(LINEAR_SYNC.read_text())
-    runs = [
-        step["run"]
-        for job in (doc.get("jobs") or {}).values()
-        for step in (job or {}).get("steps") or []
-        if isinstance(step.get("run"), str) and MARKER_OPEN in step["run"]
-    ]
-    assert len(runs) == 1, (
-        f"expected exactly one merge-sweep gate block in linear-sync.yml, "
-        f"found {len(runs)}"
-    )
-    return runs[0]
-
-
-def gate_block() -> str:
-    """Just the fenced gate region — the part the scenario tests execute."""
-    lines = merge_step_run().splitlines()
-    start = next(i for i, ln in enumerate(lines) if MARKER_OPEN in ln)
-    end = next(i for i, ln in enumerate(lines) if MARKER_CLOSE in ln)
-    assert start < end, "gate markers are out of order in linear-sync.yml"
-    return textwrap.dedent("\n".join(lines[start + 1 : end]))
-
-
-def reconcile_invocations(run: str) -> list[str]:
-    """Every logical command line in `run` that executes reconcile.py, with
-    shell continuations folded (the same fold check_wip_cap.py does)."""
+def _commands(run: str) -> list[str]:
+    """Every logical command line in `run`, with shell continuations folded
+    (the same fold check_wip_cap.py does) and comment lines dropped."""
     folded = run.replace("\\\n", " ")
     return [
         ln.strip()
         for ln in folded.splitlines()
-        if "reconcile.py" in ln and not ln.strip().startswith("#")
+        if ln.strip() and not ln.strip().startswith("#")
     ]
 
 
+def reconcile_invocations(run: str) -> list[str]:
+    """Every command line in `run` that executes reconcile.py."""
+    return [ln for ln in _commands(run) if "reconcile.py" in ln]
+
+
 class WorkflowWiringTest(unittest.TestCase):
-    """The workflow side of the acceptance criteria."""
+    """Linear Sync runs neither the gate nor a pass (DRE-9254). A merge's
+    `pull_request` run is refused every read but the merged card's own, so
+    the passes there read Linear. The relay's card-done dispatch runs the
+    same gate and the same passes in a Reconcile run the door serves."""
 
-    def test_the_merge_step_has_exactly_one_reconcile_invocation(self):
-        """`:115` and `:123` collapse to ONE invocation site, parameterised by
-        the gate — two hardcoded full-board passes become zero, one or two
-        decided passes."""
-        self.assertEqual(1, len(reconcile_invocations(merge_step_run())))
+    def test_the_card_done_job_runs_no_gate_and_no_pass(self):
+        steps = yaml.safe_load(LINEAR_SYNC.read_text())["jobs"]["card-done"]["steps"]
+        for step in steps:
+            run = step.get("run") or ""
+            name = step.get("name") or step.get("uses")
+            self.assertEqual([], reconcile_invocations(run), name)
+            self.assertEqual(
+                [], [ln for ln in _commands(run) if "merge_sweep_gate" in ln], name
+            )
 
-    def test_no_sweep_flag_is_hardcoded_in_the_merge_step(self):
-        """A literal flag left behind is an ungated sweep: it would run on
-        every merge again and the gate above it would be decoration."""
-        line = reconcile_invocations(merge_step_run())[0]
-        for flag in gate.ALL_SWEEPS:
-            self.assertNotIn(flag, line, f"{flag} is still hardcoded on the merge path")
-
-    def test_the_merge_step_runs_the_gate(self):
-        self.assertIn("merge_sweep_gate.py", merge_step_run())
-
-    def test_linear_sync_is_still_a_wip_cap_promotion_path(self):
+    def test_linear_sync_is_no_longer_a_wip_cap_promotion_path(self):
         """DRE-2529's guard finds promotion paths by reading reconcile.py
-        invocations out of the workflows. Parameterising the flag must not
-        hide this path from it — a promotion path the guard cannot see is one
-        that can silently re-acquire a hardcoded cap."""
+        invocations out of the workflows. With the passes gone, the merge
+        handler promotes nothing; the relay pass promotes at the cap the
+        Reconcile job already takes."""
         doc = yaml.safe_load(LINEAR_SYNC.read_text())
-        self.assertTrue(cwc.promotion_steps(doc), "linear-sync.yml no longer detected")
+        self.assertEqual([], cwc.promotion_steps(doc))
         self.assertEqual([], cwc.check_workflow(doc, "linear-sync.yml"))
 
     def test_the_cron_sweep_is_untouched(self):
-        """Scope: this card changes the merge-triggered path only. The
-        15-minute sweep stays ungated — it is the backstop for everything the
-        gate declines."""
+        """The 15-minute sweep stays ungated — it is the backstop for
+        everything the gate declines, and for a relay dispatch that is lost."""
         reconcile_yml = RECONCILE_YML.read_text()
         self.assertNotIn("merge_sweep_gate", reconcile_yml)
         self.assertIn("reconcile.py", reconcile_yml)
 
-    def test_no_other_workflow_gates_its_sweep(self):
-        """plan.yml's epic-activate promotion is a different event (an epic
-        was approved, not a card merged) and this gate answers a question
-        about a MERGED card — wiring it there would refuse every activation."""
+    def test_no_workflow_runs_the_gate(self):
+        """The gate runs in-process, inside the relay pass
+        (`reconcile.sweep_scope`). A workflow that ran it again would be a
+        second pass per merge, on whatever reads that run is served."""
         for path in sorted(WORKFLOWS.glob("*.yml")):
-            if path.name == LINEAR_SYNC.name:
-                continue
-            self.assertNotIn("merge_sweep_gate", path.read_text(), path.name)
-
-
-# ---------------------------------------------------------------------------
-# Sweep invocation counting — the acceptance criterion, run end to end.
-# ---------------------------------------------------------------------------
-#: A stand-in reconcile.py that records its argv instead of sweeping Linear.
-COUNTING_RECONCILE = (
-    "import os, sys\n"
-    "with open(os.environ['SWEEP_LOG'], 'a') as fh:\n"
-    "    fh.write(' '.join(sys.argv[1:]) + '\\n')\n"
-)
-
-#: A stand-in gate that emits whatever the test asks for — used only to pin
-#: the SHELL's behaviour (one reconcile call per emitted flag, none for none).
-ECHO_GATE = (
-    "import os\n"
-    "print(os.environ.get('GATE_FLAGS', ''))\n"
-)
-
-#: The REAL gate, driven by a fixture board instead of the live API. This is
-#: what makes the counts below end-to-end rather than a mock of themselves.
-REAL_GATE = (
-    "import json, os, sys\n"
-    f"sys.path.insert(0, {str(SCRIPTS)!r})\n"
-    "import linear_ops, merge_sweep_gate\n"
-    "payload = json.load(open(os.environ['BOARD_FIXTURE']))\n"
-    "merge_sweep_gate.linear_ops.gql = lambda *a, **k: payload\n"
-    "sys.exit(merge_sweep_gate.main(['merge_sweep_gate.py', 'DRE-1']))\n"
-)
-
-
-class SweepInvocationCountTest(unittest.TestCase):
-    """Counts the board-wide passes ONE merge actually costs, by running the
-    workflow's own shell against a counting stub."""
-
-    def _run(self, gate_script, tmp, **env):
-        scripts = tmp / ".bureau-pipeline" / "scripts"
-        scripts.mkdir(parents=True, exist_ok=True)
-        (scripts / "reconcile.py").write_text(COUNTING_RECONCILE)
-        (scripts / "merge_sweep_gate.py").write_text(gate_script)
-        log = tmp / "sweeps.log"
-        script = 'CARD="DRE-1"\n' + gate_block()
-        proc = subprocess.run(  # nosec B603 — fixed argv, test-local script
-            ["bash", "-e", "-c", script],
-            cwd=tmp,
-            capture_output=True,
-            text=True,
-            env={
-                "PATH": os.environ["PATH"],
-                "GITHUB_REPOSITORY": "dreadnought-foundry/bureau-pipeline",
-                "MAX_WIP": "8",
-                "SWEEP_LOG": str(log),
-                **env,
-            },
-        )
-        self.assertEqual(0, proc.returncode, proc.stderr)
-        return [ln for ln in log.read_text().splitlines() if ln] if log.exists() else []
-
-    def _with_board(self, tmp, card):
-        fixture = tmp / "board.json"
-        fixture.write_text(json.dumps({"issue": card}))
-        return self._run(REAL_GATE, tmp, BOARD_FIXTURE=str(fixture))
-
-    # -- the shell contract -------------------------------------------------
-    def test_no_flags_invokes_no_sweep(self):
-        with tempfile.TemporaryDirectory() as d:
-            self.assertEqual([], self._run(ECHO_GATE, Path(d), GATE_FLAGS=""))
-
-    def test_each_emitted_flag_invokes_the_sweep_exactly_once(self):
-        with tempfile.TemporaryDirectory() as d:
-            calls = self._run(
-                ECHO_GATE,
-                Path(d),
-                GATE_FLAGS=f"{gate.PROMOTE}\n{gate.CLOSE_EPICS}",
+            commands = _commands(path.read_text())
+            self.assertEqual(
+                [], [ln for ln in commands if "merge_sweep_gate" in ln], path.name
             )
-        self.assertEqual([gate.PROMOTE, gate.CLOSE_EPICS], calls)
 
-    # -- fixture board → real gate → shipped shell -------------------------
+
+# ---------------------------------------------------------------------------
+# The relay pass — the one place a merge's passes run (DRE-3645, DRE-9254).
+# ---------------------------------------------------------------------------
+def _flag(kwargs: dict) -> str:
+    """The pass `reconcile.main` was asked for, as the gate's flag."""
+    if kwargs.get("promote_only"):
+        return gate.PROMOTE
+    if kwargs.get("close_only"):
+        return gate.CLOSE_EPICS
+    return "full"
+
+
+class RelayPassTest(unittest.TestCase):
+    """The relay fires `repository_dispatch: reconcile` with `{reason:
+    "card-done", identifier: "DRE-…"}` when a card reaches Done, and the
+    reusable hands both to the pass as `SWEEP_REASON` / `SWEEP_CARD`.
+    `reconcile.run([])` then asks this gate and runs one scoped pass per flag
+    it names, each with `MERGED_CARD` set. `reconcile.main` is stubbed to
+    record what it was asked for, so what is counted is what the pass would
+    really run."""
+
+    def _relay_pass(self, *, decide=None, board=None, card="DRE-1"):
+        calls = []
+
+        def record(**kwargs):
+            calls.append((_flag(kwargs), os.environ.get("MERGED_CARD")))
+
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(
+                os.environ, {"SWEEP_REASON": "card-done", "SWEEP_CARD": card}
+            ))
+            for name in ("MERGED_CARD", "BUREAU_READ"):
+                os.environ.pop(name, None)
+            stack.enter_context(mock.patch.object(reconcile, "main", side_effect=record))
+            if decide is not None:
+                stack.enter_context(
+                    mock.patch.object(reconcile.merge_sweep_gate, "decide", side_effect=decide)
+                )
+            if board is not None:
+                stack.enter_context(mock.patch.object(
+                    gate.linear_ops, "gql", side_effect=lambda *_a, **_k: {"issue": board}
+                ))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            reconcile.run([])
+            self.assertNotIn("MERGED_CARD", os.environ)
+        return calls
+
+    def test_the_relay_pass_asks_this_gate_for_its_card(self):
+        asked = []
+        self._relay_pass(decide=lambda card: asked.append(card) or [], card="dre-1")
+        self.assertEqual(["DRE-1"], asked)
+
+    def test_no_flags_runs_no_pass(self):
+        self.assertEqual([], self._relay_pass(decide=lambda _card: []))
+
+    def test_each_flag_runs_one_pass_with_the_merged_card_set(self):
+        calls = self._relay_pass(decide=lambda _card: list(gate.ALL_SWEEPS))
+        self.assertEqual(
+            [(gate.PROMOTE, "DRE-1"), (gate.CLOSE_EPICS, "DRE-1")], calls
+        )
+
+    def test_the_merged_card_is_cleared_after_the_pass(self):
+        """Left behind, it would scope the next pass in the same process to a
+        card nobody named. `_relay_pass` asserts it on every case; this one
+        runs a pass so the assertion is not vacuous."""
+        self.assertTrue(self._relay_pass(decide=lambda _card: [gate.PROMOTE]))
+
+    # -- fixture board → real gate → relay pass ----------------------------
     def test_a_merge_that_unblocks_nothing_costs_zero_board_passes(self):
-        """The 94: today this same merge runs two full-board passes."""
-        with tempfile.TemporaryDirectory() as d:
-            self.assertEqual([], self._with_board(Path(d), _card()))
+        self.assertEqual([], self._relay_pass(board=_card()))
 
     def test_a_merge_that_unblocks_a_card_still_promotes_it(self):
-        """The behaviour that must not regress, asserted through the shell the
-        workflow actually runs."""
-        with tempfile.TemporaryDirectory() as d:
-            calls = self._with_board(
-                Path(d), _card(relations=[_rel("blocks", "DRE-3", "Backlog")])
-            )
-        self.assertEqual([gate.PROMOTE], calls)
+        calls = self._relay_pass(
+            board=_card(relations=[_rel("blocks", "DRE-3", "Backlog")])
+        )
+        self.assertEqual([(gate.PROMOTE, "DRE-1")], calls)
 
     def test_a_merge_that_finishes_an_epic_still_closes_it(self):
-        with tempfile.TemporaryDirectory() as d:
-            calls = self._with_board(
-                Path(d), _card(parent=_parent(children=("Done", "Done")))
-            )
-        self.assertEqual([gate.CLOSE_EPICS], calls)
+        calls = self._relay_pass(board=_card(parent=_parent(children=("Done", "Done"))))
+        self.assertEqual([(gate.CLOSE_EPICS, "DRE-1")], calls)
 
     def test_a_merge_that_does_both_costs_two_passes_and_no_more(self):
-        with tempfile.TemporaryDirectory() as d:
-            calls = self._with_board(
-                Path(d),
-                _card(
-                    relations=[_rel("blocks", "DRE-3", "Backlog")],
-                    parent=_parent(children=("Done", "Done")),
-                ),
+        calls = self._relay_pass(
+            board=_card(
+                relations=[_rel("blocks", "DRE-3", "Backlog")],
+                parent=_parent(children=("Done", "Done")),
             )
-        self.assertEqual([gate.PROMOTE, gate.CLOSE_EPICS], calls)
+        )
+        self.assertEqual([(gate.PROMOTE, "DRE-1"), (gate.CLOSE_EPICS, "DRE-1")], calls)
 
     def test_a_busy_day_of_merges_that_change_nothing_costs_nothing(self):
-        """The card's arithmetic, as a test: 47 merges that unblock nothing
-        bought 94 board passes and now buy 0. The scaling IS the defect —
-        a good day was the worst day for the quota."""
-        total = 0
-        with tempfile.TemporaryDirectory() as d:
-            tmp = Path(d)
-            for _ in range(47):
-                (tmp / "sweeps.log").unlink(missing_ok=True)
-                total += len(self._with_board(tmp, _card()))
+        """The DRE-2930 arithmetic: 47 merges that unblock nothing bought 94
+        board passes before the gate, and buy 0 through the relay pass."""
+        total = sum(len(self._relay_pass(board=_card())) for _ in range(47))
         self.assertEqual(0, total)
 
 

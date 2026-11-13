@@ -131,8 +131,9 @@ class ReconcileCallSitesDeclareTheirArguments(unittest.TestCase):
     def test_every_shipped_call_site_provides_every_required_variable(self):
         violations, stats = lint.check_dir()
         self.assertEqual([], violations)
-        # A lint that finds no call sites passes vacuously.
-        self.assertGreaterEqual(stats["call_sites"], 4, stats)
+        # A lint that finds no call sites passes vacuously. Three since
+        # DRE-9254 took linear-sync's merge-step passes to the relay pass.
+        self.assertGreaterEqual(stats["call_sites"], 3, stats)
 
     def test_the_conflict_sweep_is_one_of_the_call_sites(self):
         self.assertIn(

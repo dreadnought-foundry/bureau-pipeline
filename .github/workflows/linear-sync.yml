@@ -84,10 +84,23 @@
 # closes it through the same `card-done` with the same guard. It recurses one
 # level per landed head for a grandchild, bounded; a GitHub read that fails
 # closes nothing and says so. It runs inside the step below, after the merged
-# card's own `card-done` and before the merge sweeps, so `--promote-only` sees
-# the whole set of cards this landing made Done — and after the gate above, so
-# it runs only on a default-branch merge. That read is the one thing this job
-# never had: it mints the qa-bot token for it, and survives a mint that fails.
+# card's own `card-done` — and after the gate above, so it runs only on a
+# default-branch merge. Every card it closes reaches Done, so the relay's
+# card-done Reconcile pass (below) runs for each of them. That read is the one
+# thing this job never had: it mints the qa-bot token for it, and survives a
+# mint that fails.
+#
+# The merge's follow-up passes are not here (DRE-9254). Until then the step
+# below ran the merge-sweep gate and then `reconcile.py --promote-only` and/or
+# `--close-epics` with MERGED_CARD set (DRE-2930, DRE-3236). This is a
+# `pull_request` run, and the read door refuses it every read but the merged
+# card's own, so those passes read the board and the other cards from Linear.
+# The same gate and the same passes already ran a minute later in the relay's
+# card-done Reconcile pass — the relay fires `repository_dispatch: reconcile`
+# with `{reason: "card-done", identifier}` whenever a card reaches Done, and
+# `reconcile.py`'s `sweep_scope` runs them (DRE-3645) where the door serves
+# them. That pass is now the only one, and the `*/15` sweep is the backstop
+# when its dispatch is lost.
 #
 # Reusable workflow: permissions live in the calling stub.
 name: Linear Sync (reusable)
@@ -105,18 +118,13 @@ on:
         type: string
         required: true
       max_wip:
-        # The repo's ONE work-in-progress cap (DRE-2529). When the merge
-        # handler below promotes (gated since DRE-2930) it runs the same
-        # `reconcile.py --promote-only` the reconcile sweep runs, so it
-        # must promote at the same cap the caller gives
-        # reconcile.yml — it used to hardcode 8, which meant a repo capped at
-        # 12 had this fast path refuse between 8 and 11 in flight while the
-        # cron promoted the very same card an hour later, at 12.
-        # NO DEFAULT, on purpose (DRE-3994). A stub that passes nothing renders
-        # an empty input, and reconcile.py then reads the cap from the caller's
-        # own reconcile.yml stub — the value the sweep runs at. A declared "8"
-        # here promoted a merged card's dependents at 8 in repos held at "0".
-        description: WIP cap for the dependency gate's auto-promotion (empty = the caller's reconcile.yml stub)
+        # Read by nothing since DRE-9254. The merge handler promoted a merged
+        # card's dependents with `reconcile.py --promote-only` at this cap
+        # (DRE-2529, DRE-3994); that pass now runs in the relay's card-done
+        # Reconcile pass, at the cap the caller's reconcile.yml stub gives.
+        # Still declared because a stub that passes it would otherwise fail
+        # to start — and with no default, as DRE-3994 left it.
+        description: Unused since DRE-9254 — a merge's promotion runs in the Reconcile pass, at its cap
         type: string
         required: false
     secrets:
@@ -195,8 +203,9 @@ jobs:
       # moves the merged card to Done off GitHub's merge event (DRE-2027), and a
       # refused ref must never cost a card its Done. Nothing is lost by going
       # on: the client refuses the door for the same mismatch on every request
-      # (`pipeline-ref-mismatch`), so the gate and the passes read Linear. This
-      # step is the loud annotation.
+      # (`pipeline-ref-mismatch`), so `linear_ops.py card-done`'s read of the
+      # merged card and its workflow-state lookup read Linear. This step is
+      # the loud annotation.
       - name: Refuse a pipeline_ref the stub did not call
         continue-on-error: true
         env:
@@ -208,11 +217,10 @@ jobs:
       - name: Card → Done
         env:
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
-          # The read door (Stage 2 #15). The merge-sweep gate and the scoped
-          # passes below read the merged card's dependents from it in `on` —
-          # the same four variables, the same `off` default, as reconcile.yml's
-          # Sweep. The Done stays on GitHub's merge event: what moves the card is
-          # the merge, and the write is Linear's either way. NO
+          # The read door (Stage 2 #15) — the same four variables, the same
+          # `off` default, as reconcile.yml's Sweep. The Done stays on
+          # GitHub's merge event: what moves the card is the merge, and the
+          # write is Linear's either way. NO
           # `permissions:` block anywhere in this file: the stub
           # grants `id-token: write`, and a reusable can only take permissions
           # away.
@@ -220,16 +228,17 @@ jobs:
           # This is a `pull_request` run, and the door serves it THREE reads
           # for the card its head branch names: `/cards` for it (agent-bureau
           # DRE-8807), and `/workflow-states` and `/cards/<it>/dependents`
-          # (agent-bureau DRE-9166, DRE-9170). `card-done`'s own reads of the
+          # (agent-bureau DRE-9166, DRE-9170). This job asks the first two.
+          # `/cards/<it>/dependents` was `merge_sweep_gate.py`'s, which runs
+          # here no longer (DRE-9254); the client still sends it to the door
+          # (`bureau_read.py` says why it is kept). `card-done`'s own reads of the
           # merged card — a PROOF card's whole thread, the pre-read before each
           # comment — ask the door for it first (`linear_ops.card_via_door`,
           # DRE-8899), at most BUREAU_READ_CARD_MAX_AGE old: 60 seconds,
           # because the card has just merged. The workflow-state list for the
-          # Done and `merge_sweep_gate.py`'s dependents of the merged card ask
-          # the door too. Everything else stays on Linear, each read named by
-          # its `read-fallback:` line or its `linear-reads:` caller: the write
-          # path's own reads, the passes' board, other cards and their
-          # dependents, `stacked_landing.py`'s other cards, and
+          # Done asks the door too. Everything else stays on Linear, each read
+          # named by its `read-fallback:` line or its `linear-reads:` caller:
+          # the write path's own reads, `stacked_landing.py`'s other cards, and
           # `proof_gap.epic_of`'s parent read for a fix card a PROOF record
           # with gaps files. A dependabot head names no card, so its run reads
           # Linear as it always did.
@@ -254,14 +263,6 @@ jobs:
           # never assumed to be `main` — the fleet's repos are free to differ.
           BASE_REF: ${{ github.event.pull_request.base.ref }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
-          # The caller's cap, never a literal (DRE-2529). Through env, not
-          # interpolated into the shell line.
-          MAX_WIP: ${{ inputs.max_wip }}
-          # The caller's BUREAU_MAX_WIP Actions variable (DRE-6631) — `vars` is
-          # the caller's in a reusable. reconcile.py reads it after the input
-          # and the caller's reconcile stub, so it is never folded into the
-          # line above: that would leave the stub no place between them.
-          BUREAU_MAX_WIP: ${{ vars.BUREAU_MAX_WIP }}
         run: |
           # Own-branch provenance only (DRE-2027): anchored agent/DRE-<n>- or
           # repair/DRE-<n>- with the delimiter required after the number;
@@ -324,10 +325,10 @@ jobs:
           #
           # HERE, and not a step of its own, because the position is the
           # contract: after the merged card's own `card-done` so the parent is
-          # closed first, and before the merge-sweep gate below so
-          # `--promote-only` sees the whole set of cards this landing made Done
-          # rather than one of them. It is also below the DRE-4647 gate's
-          # `exit 0`, which is what makes it run on a default-branch merge only.
+          # closed first. It is also below the DRE-4647 gate's `exit 0`, which
+          # is what makes it run on a default-branch merge only. Each card it
+          # closes reaches Done, and the relay's card-done Reconcile pass then
+          # runs that card's scoped passes, as it does for the merged card.
           #
           # Fail-closed and exit 0 by construction (see the script): a GitHub
           # read that fails lists nothing and says so, so a closer that could
@@ -335,47 +336,13 @@ jobs:
           # Done. Values come from the step env; nothing is interpolated.
           python3 .bureau-pipeline/scripts/stacked_landing.py landed "$GITHUB_REPOSITORY" "$HEAD_REF" "$DEFAULT_BRANCH"
           # <<< DRE-4650 stacked landing
-          # Event-driven sweeps, but only the ones THIS merge can have changed
-          # (DRE-2930). Two board-wide passes used to run here unconditionally:
-          #   --promote-only  a Done may have unblocked dependent Queued
-          #                   children — promote them NOW rather than waiting
-          #                   on the drifting cron ("*/15" delivers 78-100 min
-          #                   apart in practice). Pure Linear; the
-          #                   Queued→In Progress transition rides the relay
-          #                   webhook for the actual agent dispatch.
-          #   --close-epics   a Done may have been an epic's LAST child — close
-          #                   the parent NOW rather than letting it read "still
-          #                   working" until the next full sweep, which is the
-          #                   only other place epic-close runs. (DRE-1496 sat In
-          #                   Progress with 9/9 children Done; DRE-1552.)
-          # They do different work on different cards, which is why both are
-          # still here — but neither was conditional on the merge having made
-          # its work true. 47 merges on 2026-09-01 therefore bought ~94 extra
-          # full-board passes and helped exhaust Linear's 2,500/hour quota: a
-          # cost unbounded in merge rate, worst on our best days.
-          # merge_sweep_gate reads the merged card ONCE and prints the flags
-          # this merge justifies — usually none. It falls back to both on an
-          # unreadable card, and to none on an exhausted quota (a sweep cannot
-          # succeed against a spent limit and would deepen it — DRE-1921).
-          # MAX_WIP comes from the step env above — the caller's cap, so this
-          # fast path and the cron sweep never disagree (DRE-2529). Empty when
-          # the stub passes none: reconcile.py then reads the caller's
-          # reconcile.yml stub from the checkout above (DRE-3994).
-          # MERGED_CARD scopes each pass to what THIS merge can have changed
-          # (DRE-3236): the merged card's own dependents for --promote-only,
-          # its own parent for --close-epics. A pass that read the whole board
-          # and walked every epic to act on one card cost 110 requests per
-          # merge on 2026-09-05; everything else waits for the cron, as the
-          # gate above already decided for what it declines.
-          # >>> DRE-2930 merge-sweep gate — executed verbatim by tests/test_merge_sweep_gate.py
-          SWEEPS=$(python3 .bureau-pipeline/scripts/merge_sweep_gate.py "$CARD")
-          for SWEEP in $SWEEPS; do
-            REPO="$GITHUB_REPOSITORY" \
-              REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]') \
-              MERGED_CARD="$CARD" \
-              python3 .bureau-pipeline/scripts/reconcile.py "$SWEEP"
-          done
-          # <<< DRE-2930 merge-sweep gate
+          # No follow-up pass runs here (DRE-9254). The merge-sweep gate and
+          # the scoped `--promote-only` / `--close-epics` passes it chose for
+          # this card read the board and other cards, which the door refuses
+          # this `pull_request` run, so they read Linear. They run once, in the
+          # relay's card-done Reconcile pass (`reconcile.py`'s `sweep_scope`,
+          # DRE-3645), where the door serves them; the `*/15` sweep is the
+          # backstop when that dispatch is lost (see the header).
 
   # Event-driven conflict sweep: a merge to the default branch is the exact
   # moment sibling PRs touching the same files go DIRTY — and DIRTY PRs emit

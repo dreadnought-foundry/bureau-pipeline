@@ -73,7 +73,12 @@ have forged. A failure to write the file never fails or slows the process.
   `linear_ops` card reads of Linear Sync, QA Review and Verify steps that name
   a `BUREAU_READ_CARD_MAX_AGE` — and, since DRE-9170 (agent-bureau DRE-9166),
   `/workflow-states` and `/cards/<id>/dependents` for that same card: Linear
-  Sync `card-done`'s lane lookup and `merge_sweep_gate`'s dependents. Every
+  Sync `card-done`'s lane lookup and, until DRE-9254, `merge_sweep_gate`'s
+  dependents. Since DRE-9254 the gate runs only in the relay's card-done
+  Reconcile pass, a `repository_dispatch` run, so no `pull_request` run asks
+  for its own card's dependents today. The read is kept anyway: the door
+  serves it, a client that sends it costs nothing until something asks, and
+  retiring it is a change on the door's side as well as this one. Every
   other read on those runs — another card's dependents included — reads
   Linear exactly as before.
 
@@ -264,8 +269,11 @@ REVIEW_CARD_MAX_AGE = 120
 #: that card, at repo scope, since agent-bureau DRE-8807 — QA Review's and
 #: Verify's card read, `card_snapshot._door` (DRE-8812) — and, since
 #: agent-bureau DRE-9166, `/workflow-states` and `/cards/<id>/dependents` for
-#: that same card — Linear Sync `card-done`'s two other reads (DRE-9170). The
-#: client sends those three like any other read and asks nothing else on these
+#: that same card — Linear Sync `card-done`'s two other reads (DRE-9170).
+#: Since DRE-9254 that job asks only the first of the two: the dependents were
+#: `merge_sweep_gate`'s, which now runs only in the Reconcile pass, and the
+#: read stays served for the reason the module docstring gives. The client
+#: sends those three like any other read and asks nothing else on these
 #: events: every other read is refused here, before a token is minted, because
 #: asking buys nothing but a refusal the door counts toward its
 #: refused-and-never-served alarm (M2), and the run reads Linear as it always
@@ -919,9 +927,10 @@ def _reads_own_card(endpoint: str, query: dict) -> bool:
     """Is this one of the three reads the door serves a `pull_request` run?
     `/cards` with `ids` exactly the run's own card and `scope` absent or
     `repo` (DRE-8807), `/workflow-states`, or `/cards/<own card>/dependents`
-    (DRE-9166) — and only on a run whose branch names a card. Only the path,
-    `ids` and `scope` are checked: `lanes`, `comments`, `relations` and the
-    max-age headers go out as on every other read."""
+    (DRE-9166; asked by no `pull_request` run since DRE-9254, and kept — see
+    the module docstring) — and only on a run whose branch names a card. Only
+    the path, `ids` and `scope` are checked: `lanes`, `comments`, `relations`
+    and the max-age headers go out as on every other read."""
     card = own_card()
     if card is None:
         return False

@@ -772,10 +772,14 @@ def test_an_unreadable_merge_scope_falls_open_to_the_full_pass():
     assert fake.whole_backlog_reads >= 1
 
 
-def test_the_merge_step_hands_reconcile_the_merged_card():
-    """The wiring: linear-sync.yml's gate block passes MERGED_CARD to every
-    reconcile invocation it makes, or the scoping above never engages live."""
-    import test_merge_sweep_gate as gate_tests
-
-    line = gate_tests.reconcile_invocations(gate_tests.merge_step_run())[0]
-    assert 'MERGED_CARD="$CARD"' in line, line
+def test_the_relay_pass_hands_reconcile_the_merged_card():
+    """The wiring: the relay's card-done pass — since DRE-9254 the one place a
+    merge's scoped passes run — sets MERGED_CARD on every pass it makes, or
+    the scoping above never engages live."""
+    seen = []
+    scope = reconcile.SweepScope(reconcile.CARD_DONE, "DRE-1998",
+                                 tuple(merge_sweep_gate.ALL_SWEEPS))
+    with mock.patch.object(reconcile, "main",
+                           side_effect=lambda **_k: seen.append(os.environ.get("MERGED_CARD"))):
+        reconcile._run_card_done(scope)
+    assert seen == ["DRE-1998", "DRE-1998"]

@@ -71,8 +71,9 @@ reconcile_invocations = check_wip_cap._reconcile_invocations
 #: derive a value in shell rather than declaring it in `env:`.
 _ASSIGNMENT = re.compile(r"(?m)^\s*(?:export\s+)?([A-Z][A-Z0-9_]*)=")
 
-#: `VAR=value python3 …` — the per-command prefix form (linear-sync's merge
-#: step and plan.yml's epic-activate route both pass REPO/REPO_SLUG that way).
+#: `VAR=value python3 …` — the per-command prefix form (plan.yml's
+#: epic-activate route passes REPO/REPO_SLUG that way, as linear-sync's merge
+#: step did until DRE-9254).
 _PREFIXED = re.compile(r"([A-Z][A-Z0-9_]*)=")
 
 

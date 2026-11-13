@@ -260,7 +260,7 @@ Division of labor:
 | `on:` triggers (incl. product-specific `workflow_run` lists) | job-level `if:` event filters |
 | workflow-level `concurrency:` | job-level `concurrency:` (merge-gate, reconcile) |
 | `permissions:` (constrains `GITHUB_TOKEN`) | — (jobs inherit the caller's token scope) |
-| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on all three promotion paths; `intake_hold` on the groomer stub — the reconcile stub's three Intake inputs are retired and read by nothing since DRE-4141) | `secrets:`/`inputs:` declarations |
+| `secrets: inherit` + `with:` inputs (`pipeline_ref` everywhere; `max_wip` on the promotion paths, and still declared on `linear-sync.yml`, which reads it no longer; `intake_hold` on the groomer stub — the reconcile stub's three Intake inputs are retired and read by nothing since DRE-4141) | `secrets:`/`inputs:` declarations |
 
 ### The agent-fix stub's concurrency group (DRE-2810)
 
@@ -534,21 +534,22 @@ from every discovered workflow in turn, rather than by asserting that it would.
 
 ## One WIP cap per repo (DRE-2529)
 
-A repo has ONE work-in-progress cap, and **three** workflows promote Queued
+A repo has ONE work-in-progress cap, and **two** workflows promote Queued
 children through the dependency gate at it:
 
 | workflow | when it promotes |
 |---|---|
-| `reconcile.yml` | the `*/15` cron sweep (GitHub delivers it 78–100 min apart in practice) |
+| `reconcile.yml` | the `*/15` cron sweep (GitHub delivers it 78–100 min apart in practice), and the relay's card-done pass the moment a card reaches Done — **only when that card actually unblocked one** (DRE-2930, DRE-3645) |
 | `plan.yml` | the moment an epic is activated |
-| `linear-sync.yml` | the moment a merge marks a card Done — **and only when that merge actually unblocked a card** (DRE-2930) |
 
-The last two are the anti-stall fast paths: they exist purely to promote work
-*now* instead of up to ~80 minutes later. They used to hardcode `MAX_WIP=8`
-while `reconcile.yml` took the caller's value — so on a repo capped at 12,
-between 8 and 11 cards in flight both fast paths refused and the cron sweep
-promoted the same card an hour later at 12. The optimisation switched itself
-off exactly inside the band it was built for, and nothing reported it.
+The relay's card-done pass and `plan.yml` are the anti-stall fast paths: they
+exist purely to promote work *now* instead of up to ~80 minutes later. Until
+DRE-9254 there was a third, `linear-sync.yml`'s merge step. The two event
+paths there used to hardcode `MAX_WIP=8` while `reconcile.yml` took the
+caller's value — so on a repo capped at 12, between 8 and 11 cards in flight
+both fast paths refused and the cron sweep promoted the same card an hour
+later at 12. The optimisation switched itself off exactly inside the band it
+was built for, and nothing reported it.
 
 The merge path is also **gated** (DRE-2930), because it is the one whose cost
 scales with how hard we ship: it used to run a promotion sweep *and* an
@@ -559,8 +560,21 @@ when that merge cleared a blocker (promotion) or finished the card's own parent
 epic (epic-close). The `*/15` cron is unchanged and remains the backstop for
 everything the gate declines.
 
+**The gate and its passes run on a merge only in the relay's card-done
+Reconcile pass** (DRE-9254). The relay fires `repository_dispatch: reconcile`
+with `{reason: "card-done", identifier}` whenever a card reaches Done, and
+`reconcile.py`'s `sweep_scope` runs the gate and its passes for that card
+(DRE-3645). Until DRE-9254 `linear-sync.yml`'s merge step ran the same gate
+and the same passes too, a minute earlier, in the merge's `pull_request` run —
+where the read door refuses every read but the merged card's own, so their
+board and other-card reads fell back to Linear (`read-fallback: …
+reason=pull-request`). Now the relay's pass is the only one. When its dispatch
+is lost, the cards a merge unblocked are promoted by the next `*/15` sweep,
+not within a minute; a repo whose reconcile stub does not take
+`repository_dispatch: reconcile` waits for that sweep on every merge.
+
 Each pass the gate does run is **scoped to the merge** (DRE-3236): the
-workflow hands `reconcile.py` the merged card as `MERGED_CARD`, and the
+pass hands `reconcile.py`'s own passes the merged card as `MERGED_CARD`, and the
 promotion pass evaluates only that card's own dependents while the epic-close
 pass evaluates only its own parent — one read of the card, one read of the
 dependents, never the whole Queued lane or every active epic. Measured on a busy
@@ -571,12 +585,14 @@ reader that takes an identifier is served from that read, so a full sweep on
 the same board fell from 284 read requests to 20 — a function of the epics,
 not of the cards.
 
-All three now take a `max_wip` input. To override the cap, pass it on **all
-three stubs or none** — a half-repointed stub set gives the repo two caps
-again, which is the same defect one level down:
+Both take a `max_wip` input, and `linear-sync.yml` still declares one — read
+by nothing since DRE-9254 — so a stub that passes it keeps starting. To
+override the cap, pass it on **every promotion stub or none** — a
+half-repointed stub set gives the repo two caps again, which is the same
+defect one level down:
 
 ```yaml
-# .github/workflows/reconcile.yml, plan.yml AND linear-sync.yml in the product repo
+# .github/workflows/reconcile.yml AND plan.yml in the product repo
 jobs:
   call:
     uses: dreadnought-foundry/bureau-pipeline/.github/workflows/reconcile.yml@stable
@@ -590,13 +606,13 @@ jobs:
 A stub may also pass nothing at all, and that is how the console sets a
 project's cap with no code push (DRE-6631). `cap_and_source` in
 `scripts/sweep_holds.py` (which `scripts/reconcile.py` imports, DRE-7750) is
-the one place the number is resolved, for all three paths, from four sources
+the one place the number is resolved, for every path, from four sources
 in order:
 
 1. **The run's `max_wip` input**, when the stub passes a number.
 2. **The `max_wip:` line of the caller's own reconcile stub**, read off the
    caller checkout, when the input is empty (DRE-3994). This is what makes a
-   plan or linear-sync stub that passes nothing agree with the sweep.
+   plan stub that passes nothing agree with the sweep.
 3. **The caller's `BUREAU_MAX_WIP` Actions variable**, when neither names a
    number. GitHub resolves it repo-level first, then org-level, so each
    project has its own setting and each org a default. Each promotion step
@@ -607,8 +623,8 @@ in order:
    the sources above are actually read.
 
 The variable sits below the stub on purpose: setting it changes nothing while
-a project's stubs still pass a literal, and removing the literal from all
-three stubs hands the number to the variable. This repo's own three `self-`
+a project's stubs still pass a literal, and removing the literal from every
+promotion stub hands the number to the variable. This repo's own `self-`
 stubs pass none (DRE-6783), as atlas's and deltasolv's do, so its number is
 its `BUREAU_MAX_WIP` variable — the default 8 while that is unset. A
 non-empty value at any source
@@ -879,8 +895,10 @@ Four properties, each pinned by `tests/test_stacked_landing.py`:
   reason to fail a merge that succeeded.
 
 Its position in the step is the contract — after the merged card's `card-done`,
-before the merge-sweep gate, so `--promote-only` sees the whole set of cards
-this landing made Done. The `card-done` job mints the qa-bot token for the one
+so the parent is closed first. Nothing follows it in the step since DRE-9254:
+each card it closes reaches Done, and the relay's card-done Reconcile pass runs
+the merge-sweep gate and its scoped passes for that card, as it does for the
+card that merged. The `card-done` job mints the qa-bot token for the one
 GitHub read, `continue-on-error`, so a repo without that App still closes the
 card that merged.
 

@@ -2,11 +2,12 @@
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
-# The activate route promotes cards, so this stub is one of the repo's three
-# WIP-cap paths. Like self-reconcile and self-linear-sync it passes no
-# max_wip — all three or none (DRE-2529) — so the number is this repo's
-# BUREAU_MAX_WIP Actions variable, which the console writes, and default 8
-# while it is unset (DRE-6783).
+# The activate route promotes cards, so this stub is one of the repo's two
+# WIP-cap paths. Like self-reconcile it passes no max_wip — both or none
+# (DRE-2529) — so the number is this repo's BUREAU_MAX_WIP Actions variable,
+# which the console writes, and default 8 while it is unset (DRE-6783).
+# self-linear-sync was the third until DRE-9254, when a merge's promotion
+# moved to the relay's card-done Reconcile pass.
 name: Agent Plan
 
 on:

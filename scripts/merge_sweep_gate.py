@@ -102,8 +102,10 @@ door that says Linear is held (`linear-hold`) runs no pass and makes no Linear
 call, the same fall-closed as a rate-limited read. In `shadow` both are read,
 the difference is printed as `read-door-diff:` lines, and Linear decides.
 
-STDOUT IS THE FLAGS AND NOTHING ELSE: `linear-sync.yml` word-splits it into
-`reconcile.py` arguments. Every door line goes to stderr.
+STDOUT IS THE FLAGS AND NOTHING ELSE: a caller word-splits it into
+`reconcile.py` arguments, as `linear-sync.yml` did until DRE-9254. Every door
+line goes to stderr. On a merge the gate now runs only in-process, as
+`decide`, inside the relay's card-done Reconcile pass (`reconcile.sweep_scope`).
 """
 
 from __future__ import annotations
