@@ -799,6 +799,67 @@ jobs:
         if: steps.scope.outputs.in_scope == 'true'
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
+      # The read token broker, started ONCE for every agent session in this
+      # job (DRE-9253, plan.yml's DRE-9169 step copied). A model session is
+      # never handed the runner's OIDC request variables, so every door read
+      # the verifier's `linear_ops` made fell back with `reason=no-token`, in
+      # lines that reached its transcript and never this log. The broker
+      # (scripts/read_token_broker.py, DRE-9168) holds the variables and mints
+      # door tokens only; it serves the two model steps below — `verifier` and
+      # `verifier_retry` — each of which carries its URL, its secret and the
+      # lines file in `env:`. "Read token broker — print the sessions' read
+      # lines, and stop" after the last of them prints the lines and ends it.
+      #
+      # Gated on the install above having run, so an out-of-scope run starts
+      # none, and never in a shadow replay: a replay is handed no door
+      # (DRE-8899), and a broker would hand it one. Its outputs stay empty and
+      # the model steps' broker variables with them.
+      #
+      # This job runs on a `pull_request` run, called from QA Review, so the
+      # door serves its token only for the card its head branch names
+      # (`bureau_read.own_card`). With the broker a session's read of its own
+      # card is served; a read of any other card is refused before a token is
+      # minted, as on every `pull_request` run, and still falls back with
+      # `reason=pull-request` — now printed in this job's log, where it was
+      # hidden before. That is the honest count, and this step does not try
+      # to change it.
+      #
+      # The vendor boundary (standards/vendor-boundaries.md):
+      #   Q1 the actor — unchanged: the same verify job, the same identity.
+      #   Q2 the credentials — this step holds the job's OIDC request
+      #      variables, which the calling stub already grants
+      #      (`id-token: write`, DRE-4348), and passes them to the broker on
+      #      its stdin. The model steps receive only the broker's URL and
+      #      secret, as this step's outputs — the secret masked before it is
+      #      written, never echoed, and never put in $GITHUB_ENV, so no other
+      #      step holds it. With them a session obtains door tokens and
+      #      nothing else, and a door token cannot assume an AWS role: its
+      #      audience is the door's.
+      #   Q3 a re-run — starts its own broker, on a fresh port, on a fresh
+      #      runner; nothing of a previous attempt's broker survives it.
+      #   Q4 the limits — one token per door request, as today, so the door's
+      #      one-claim-per-`jti` rule still holds.
+      #   Q5 our crash — `continue-on-error`: a broker that fails to start
+      #      leaves its outputs empty, and every session falls back with
+      #      `no-token` exactly as before. The print-and-stop step runs under
+      #      `always()`, so those lines still reach the log.
+      - name: Read token broker — start it for the agent sessions
+        id: read_broker
+        if: steps.install_claude.outcome == 'success' && !inputs.shadow
+        continue-on-error: true
+        env:
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+        run: |
+          python3 .bureau-pipeline/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
+          python3 - "$RUNNER_TEMP/read-token-broker.json" <<'PY'
+          import json, os, sys
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"::add-mask::{state['secret']}", flush=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"url={state['url']}\n")
+              out.write(f"secret={state['secret']}\n")
+          PY
+
       - name: Verifier run
         id: verifier
         if: steps.scope.outputs.in_scope == 'true'
@@ -825,6 +886,11 @@ jobs:
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
           BUREAU_READ_CARD_MAX_AGE: 120
+          # The read door for this session (DRE-9253) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1034,6 +1100,11 @@ jobs:
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
           BUREAU_READ_CARD_MAX_AGE: 120
+          # The read door for this session (DRE-9253) — see the step
+          # "Read token broker — start it for the agent sessions".
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1139,6 +1210,29 @@ jobs:
               and the screenshot/log evidence. Paste the independent test (or its
               key assertions) so the behavior you proved/disproved is reproducible.
               This is the ONLY place technical language belongs.
+
+      # The agent sessions' read lines, into this job's log, and the broker
+      # stopped (DRE-9253, plan.yml's DRE-9169 step copied). After
+      # `verifier_retry`, the last model step, so whichever attempts ran,
+      # every session has finished writing. A session's stderr lands in its
+      # transcript, not the job log, so its `read-fallback:` and
+      # `linear-door:` lines reach check_linear_budget.py only from here.
+      #
+      # The lines file sits where the sessions can write, and a session reads
+      # card text the pipeline does not trust, so it is NEVER printed raw — no
+      # cat, no echo. `print-lines` prints only the lines of the tags in
+      # bureau_read.LINES_FILE_TAGS that speak for this job's own reader, each
+      # unchanged, and drops every other line, a workflow command among them.
+      # A missing file — an out-of-scope run, a shadow — prints one line
+      # saying so. Both commands exit 0 whatever they find; `always()` so a
+      # failed model step still has its lines printed and its broker stopped,
+      # and `continue-on-error` so cleanup never changes the job's conclusion.
+      - name: Read token broker — print the sessions' read lines, and stop
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 .bureau-pipeline/scripts/read_token_broker.py print-lines --file "$RUNNER_TEMP/agent-read-lines.log" || true
+          python3 .bureau-pipeline/scripts/read_token_broker.py stop --state-file "$RUNNER_TEMP/read-token-broker.json"
 
       - name: Gate verifier result (attempt 2)
         id: gate2
