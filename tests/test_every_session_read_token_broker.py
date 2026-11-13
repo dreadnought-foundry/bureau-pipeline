@@ -13,12 +13,16 @@ reads them the same way, so a session added later cannot fall back out of
 sight again:
 
   * It reads every file under `.github/workflows/` and DISCOVERS every step
-    whose `uses:` is `anthropics/claude-code-action` and whose step or job
-    `env:` sets `BUREAU_READ`. Nothing here lists them.
+    whose `uses:` is `anthropics/claude-code-action` and whose `env:`, merged
+    workflow → job → step as GitHub merges it, sets `BUREAU_READ`. Nothing
+    here lists them. Its reach is those files: a model step inside a
+    composite action under `.github/actions/` is not read (none holds one).
   * Each such step's `env:` carries `BUREAU_READ_TOKEN_BROKER`,
-    `BUREAU_READ_TOKEN_BROKER_SECRET` and `BUREAU_READ_LINES_FILE`, and its
-    job has a `read_token_broker.py print-lines` step after its last model
-    step. A failure names the workflow, the job and the step's `id:`.
+    `BUREAU_READ_TOKEN_BROKER_SECRET` and `BUREAU_READ_LINES_FILE`; its job
+    has a `read_token_broker.py start` step before it, whose `id:` the first
+    two name as `${{ steps.<id>.outputs.url }}` and `.secret`; and its job
+    has a `read_token_broker.py print-lines` step after its last model step.
+    A failure names the workflow, the job and the step's `id:`.
   * `config/proof-reach.json`'s `agent read lines:` entry names, by workflow
     name and file, every workflow holding a discovered step, so a ninth one
     wired later fails here until the entry names it.
@@ -27,8 +31,10 @@ A model step that reads Linear with the door off is outside the set: its
 reads are direct reads, not fallbacks.
 
 The check is proved against doctored copies of a real workflow: one with the
-broker variables taken off one step, one with the print step removed, and one
-with a new unwired session added.
+broker variables taken off one step, one with the print step removed, one
+with the start step removed or moved after the session, one with the start
+step's id misspelled in the variables, and new unwired sessions added under a
+job-level and a workflow-level `BUREAU_READ`.
 
 Run: python3 -m pytest tests/test_every_session_read_token_broker.py -v
 """
@@ -78,19 +84,27 @@ def _is_model(step: dict) -> bool:
     return str(step.get("uses", "")).startswith(MODEL_ACTION)
 
 
-def _door_on(job: dict, step: dict) -> bool:
-    return "BUREAU_READ" in (step.get("env") or {}) or "BUREAU_READ" in (job.get("env") or {})
+def _door_on(doc: dict, job: dict, step: dict) -> bool:
+    # GitHub merges `env:` workflow → job → step.
+    merged = {**(doc.get("env") or {}), **(job.get("env") or {}), **(step.get("env") or {})}
+    return "BUREAU_READ" in merged
 
 
 def discover(root: Path) -> list[tuple[Session, dict, dict]]:
     """Every model step under `root` that runs with `BUREAU_READ` set."""
     found = []
     for path in _workflow_files(root):
-        for job_name, job in (_load(path).get("jobs") or {}).items():
+        doc = _load(path)
+        for job_name, job in (doc.get("jobs") or {}).items():
             for step in job.get("steps") or []:
-                if _is_model(step) and _door_on(job, step):
+                if _is_model(step) and _door_on(doc, job, step):
                     found.append((Session(path.name, job_name, str(step.get("id"))), job, step))
     return found
+
+
+def _names(env: dict, variable: str, start_id: str, output: str) -> bool:
+    want = f"${{{{ steps.{start_id}.outputs.{output} }}}}"
+    return re.sub(r"\s+", "", str(env.get(variable, ""))) == re.sub(r"\s+", "", want)
 
 
 def unwired(root: Path) -> list[str]:
@@ -102,6 +116,19 @@ def unwired(root: Path) -> list[str]:
         if missing:
             problems.append(f"{session}: env: does not carry {', '.join(missing)}")
         steps = job.get("steps") or []
+        at = next(i for i, s in enumerate(steps) if s is step)
+        starts = [i for i, s in enumerate(steps) if START in (s.get("run") or "")]
+        if not starts:
+            problems.append(f"{session}: no `{START}` step in its job")
+        elif not [i for i in starts if i < at]:
+            problems.append(f"{session}: the job's `{START}` step does not come before it")
+        else:
+            start_id = steps[max(i for i in starts if i < at)].get("id")
+            for variable, output in (("BUREAU_READ_TOKEN_BROKER", "url"),
+                                     ("BUREAU_READ_TOKEN_BROKER_SECRET", "secret")):
+                if variable in env and not _names(env, variable, start_id, output):
+                    problems.append(f"{session}: {variable} is not "
+                                    f"`${{{{ steps.{start_id}.outputs.{output} }}}}`")
         last_model = max(i for i, s in enumerate(steps) if _is_model(s))
         if not any(PRINT_LINES in (s.get("run") or "") for s in steps[last_model + 1:]):
             problems.append(f"{session}: no `{PRINT_LINES}` step after the job's last model step")
