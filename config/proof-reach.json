@@ -341,7 +341,7 @@
       "tag": "agent read lines:",
       "printed_by": "scripts/read_token_broker.py",
       "constant": "SUMMARY_TAG",
-      "when": "since DRE-9168, once on stdout wherever `python3 scripts/read_token_broker.py print-lines --file <path>` runs, after the filtered lines of a session's `BUREAU_READ_LINES_FILE`: `agent read lines: kept <k>, dropped <d>`, or `agent read lines: no file at <path>` when the session wrote none; in the planning run's log since DRE-9169, and in Proof Task / execute's and Verify / verify's since DRE-9253"
+      "when": "since DRE-9168, once on stdout wherever `python3 scripts/read_token_broker.py print-lines --file <path>` runs, after the filtered lines of a session's `BUREAU_READ_LINES_FILE`: `agent read lines: kept <k>, dropped <d>`, or `agent read lines: no file at <path>` when the session wrote none; in the planning run's log since DRE-9169 (plan.yml), in Agent Task's and Agent Fix's run logs since DRE-9252 (agent-task.yml's `execute` job, agent-fix.yml's `fix` job), and in Proof Task / execute's and Verify / verify's since DRE-9253"
     },
     {
       "tag": "operator-agent:",
