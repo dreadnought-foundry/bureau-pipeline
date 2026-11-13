@@ -150,12 +150,95 @@ or after the card's floor. The floor is the latest of three instants:
 3. the newest write this job made to that card through `linear_ops`, from the
    job's own-write record (below).
 
-An `as_of` before the floor, an `as_of` that cannot be read, or a `seen_after`
-that cannot be read (`soon`, or an instant with no offset) is refused. The
-refusal is one `read-fallback:` line with `read=cards reason=older-than-needed`,
-and the caller reads Linear. With none of the three there is no floor.
+An `as_of` before the floor is asked once more before the fallback (the
+second ask, below): after the gap plus `ASK_AGAIN_SLACK_SECONDS`, capped at
+`ASK_AGAIN_MAX_WAIT_SECONDS`, and a second answer at or after the floor is
+taken. A second answer still before the floor, an `as_of` that cannot be read,
+or a `seen_after` that cannot be read (`soon`, or an instant with no offset) is
+refused. The refusal is one `read-fallback:` line with `read=cards
+reason=older-than-needed`, and the caller reads Linear. With none of the three
+there is no floor.
 `floor=False` skips it, for a read of what never changes: the card's `id`,
 which `_comment_target` reads.
+
+## The second ask: once more before the fallback (DRE-9250)
+
+Most of the fallbacks still standing were an answer a few seconds behind or
+one token refused: over the 14 hours to 10:06 AM PT on 2026-11-06,
+bureau-pipeline's run logs held 29 `read-fallback:` lines, and 24 of them were
+`older-than-needed` (20), `stale` (2) or `refused` (2). Each of those is now
+asked once more before the read falls back to Linear. Three reasons are asked
+again, and nothing else:
+
+| Reason | Where | The wait before the second ask |
+|---|---|---|
+| `older-than-needed` | `linear_ops.card_via_door`, when the door's `as_of` is before the card's floor | the gap (the floor minus `as_of`) plus `ASK_AGAIN_SLACK_SECONDS` |
+| `stale` | `bureau_read`'s four reads with a Linear copy — `board`, `cards`, `dependents`, `workflow_states` — answered the door's own UNKNOWN with `freshness.reason` `stale`, or past the reader's max-age by the client's own check in `_accept` | the overage (the age minus the max-age) plus the slack; the door's UNKNOWN carries no age, so its wait is the slack alone |
+| `refused` | `bureau_read._get`, a 401 on one of those four reads that is not a `scope=fleet` refusal (those already leave the door in use, DRE-5848) | none: it is asked again at once |
+
+The constants live in `scripts/bureau_read.py`, and `linear_ops` reads them
+from there: `ASK_AGAIN_SLACK_SECONDS = 2`, `ASK_AGAIN_MAX_WAIT_SECONDS = 10`
+(no wait is longer) and `ASK_AGAIN_LIMIT = 3`. A gap is counted in whole
+seconds, rounded up.
+
+The `refused` ask is a plain retry: a second request, with its own fresh token
+from `_token()`, as every request has. It carries nothing the first did not,
+and nothing on record says it cures Hygiene's 401 ("This is not a token the
+read door accepts."), which came at 08:39 and 04:39 UTC and not at 13:39 UTC
+on the same job. Its line's `first=` words are there to diagnose a 401 it does
+not cure: the first 80 characters of the first 401's body, so a clock-skew,
+audience or replay answer is on the line. Before this, that body was printed
+only by the answer that stopped the door, on its `read-door: unavailable`
+line, and was lost once a second ask was made. A `refused` row still standing
+in the epic's proof hour is expected to need its own follow-up card, which
+starts from the `first=` words.
+
+**The bounds.**
+
+* At most one second ask per read: a read asked again for a 401 is not asked
+  again for a `stale` second answer, and `card_via_door` does not ask again
+  after a read that already has.
+* At most `ASK_AGAIN_LIMIT` (3) second asks per process, the three reasons
+  together. After the third, every later read falls back at once, exactly as
+  before, with no `asked again` line. The limit is per process, not per job:
+  `reconcile.yml`'s sweep job runs six steps that read the door, each its own
+  process, so a door stale for the whole sweep can add up to 6 × 3 ×
+  `ASK_AGAIN_MAX_WAIT_SECONDS`, three minutes of waiting, inside the job's
+  10-minute `timeout-minutes`.
+* A `linear-hold` skip is never asked again, and neither is an `as_of` that
+  cannot be read. In mode `off` or `shadow` nothing changes.
+* A second ask spends no Linear request.
+
+**Nothing is switched off.** A second answer that is still older than the
+floor, still stale or still refused falls back to Linear exactly as before. It
+prints the same one `read-fallback:` line, with the reason of the first answer,
+so the budget check counts it as before, and the door is stopped for the run
+after a second 401 as it was after a first one. The exit line counts the read
+once, by its second answer.
+
+**The line.** Every second ask prints one line through `bureau_read._say`, so
+it reaches stderr and the lines file (`BUREAU_READ_LINES_FILE`):
+
+```
+read-door: asked again read=<read> reason=<reason> trailing <s>s after <w>s — served
+read-door: asked again read=<read> reason=<reason> trailing <s>s after <w>s — fell back
+read-door: asked again read=<read> reason=refused trailing 0s after 0s — <served|fell back> first="HTTP 401 <body>"
+```
+
+* `<read>` is `board`, `cards`, `dependents` or `workflow-states`, as on the
+  `read-fallback:` line, and `<reason>` is `older-than-needed`, `stale` or
+  `refused`.
+* `<s>` is how far the first answer trailed, in whole seconds: the floor minus
+  `as_of`, or the age minus the max-age, and `0` for `refused` and for a door
+  UNKNOWN that gives no age. `<w>` is the seconds waited.
+* `served` means the second answer was taken (for `refused`, that the second
+  request was answered 200); `fell back` means the read went to Linear.
+* `<body>` is the first 80 characters of the first 401's body, with each line
+  break, control character and `"` written as a space, so the line stays one
+  line. Only a `refused` line carries `first=`.
+
+The line opens with the `read-door:` tag that `config/proof-reach.json`
+already declares. The tests are `tests/test_read_door_ask_again.py`.
 
 ## The job's own-write record
 

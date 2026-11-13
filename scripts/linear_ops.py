@@ -2058,10 +2058,14 @@ def card_via_door(identifier: str, *, comments: int | str = 50, relations: bool 
         if not readable:
             bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
             return None
-    try:
-        read = bureau_read.cards(
+
+    def ask_door() -> bureau_read.DoorRead:
+        return bureau_read.cards(
             [identifier], max_age=max_age, comments=comments, relations=relations,
             relations_max_age=bureau_read.RELATIONS_MAX_AGE if relations else None)
+
+    try:
+        read = ask_door()
     except bureau_read.ReadUnknown as e:
         if e.skip:
             print(f"read-door: {identifier} unknown ({bureau_read.LINEAR_HOLD}) — read "
@@ -2074,10 +2078,45 @@ def card_via_door(identifier: str, *, comments: int | str = 50, relations: bool 
         return None
     if wanted is not None:
         as_of = _instant(read.as_of)
+        if as_of is not None and as_of < wanted and bureau_read.may_ask_again():
+            return _card_asked_again(ask_door, wanted, (wanted - as_of).total_seconds())
         if as_of is None or as_of < wanted:
             bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
             return None
     return read.nodes[0], read
+
+
+def _card_asked_again(ask_door, wanted: datetime, gap: float
+                      ) -> tuple[dict, bureau_read.DoorRead] | None:
+    """`card_via_door`'s one second ask (DRE-9250): an answer `gap` seconds
+    older than the floor is asked once more, after the gap plus
+    `bureau_read.ASK_AGAIN_SLACK_SECONDS`, capped at
+    `bureau_read.ASK_AGAIN_MAX_WAIT_SECONDS`. A second answer at or after the
+    floor is taken; any other falls back as the first would have, in one
+    `older-than-needed` line."""
+    def ask():
+        again = ask_door()
+        at = _instant(again.as_of)
+        if at is None or at < wanted:
+            return None, False
+        return (again.nodes[0], again), True
+
+    try:
+        served = bureau_read.ask_again("cards", OLDER_THAN_NEEDED, gap, ask,
+                                       superseded="served")
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            print(f"read-door: unknown ({bureau_read.LINEAR_HOLD}) on the second ask "
+                  "— read from Linear: a card read has no phase to skip", file=sys.stderr)
+        return None  # named by `ask_again`, with the first answer's reason
+    except Exception as e:  # noqa: BLE001 — Linear on ANY door error
+        print(f"read-door: card unreadable on the second ask ({type(e).__name__}: {e}) "
+              "— read from Linear", file=sys.stderr)
+        bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
+        return None
+    if served is None:
+        bureau_read.note_fallback("cards", OLDER_THAN_NEEDED)
+    return served
 
 
 def state_id(team_id: str, name: str) -> str:

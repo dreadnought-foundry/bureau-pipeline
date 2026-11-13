@@ -28,7 +28,9 @@ an empty In Progress lane promote twelve cards at once, Stage 2 review H2).
 * After ONE failure — network, timeout, 5xx, 401/403, 429, a malformed answer —
   the door is not asked again for the rest of the run: every later read goes
   straight to Linear (design §3). One slow door must not cost a sweep eight
-  seconds per read.
+  seconds per read. A 401 on one of the four reads below is first asked once
+  more, at once (the second ask, below); a second 401 stops the door as a
+  first one did.
 
   The one exception is a `scope=fleet` board or search read answered 401,
   403 or 404 (DRE-5848, DRE-7236). The door serves the fleet to steward
@@ -94,6 +96,24 @@ for the sweep's alert. Mode `off` never asks the door and mode `shadow` reads
 Linear by design, so neither prints it; a skip (below) is not a fallback; and
 `planning_order()`, `split_history()`, `groom_removals()` and `open_alerts()`
 have no Linear copy to fall back to, so they never print it.
+
+## Asked once more before the fallback (DRE-9250)
+
+An answer a few seconds behind, or one 401, is asked once more before the read
+falls back: `stale` on `board`, `cards`, `dependents` and `workflow_states`
+after the overage plus `ASK_AGAIN_SLACK_SECONDS`, capped at
+`ASK_AGAIN_MAX_WAIT_SECONDS` (the slack alone for the door's own UNKNOWN); a
+401 on those reads that is not a `scope=fleet` refusal, at once; and, in
+`linear_ops.card_via_door`, an answer older than the card's floor. At most one
+second ask per read and `ASK_AGAIN_LIMIT` per process; never a skip, and never
+in mode `off` or `shadow`. Each prints one line, and a second answer that
+still fails falls back exactly as before, in one `read-fallback:` line with
+the first answer's reason:
+
+    read-door: asked again read=<read> reason=<reason> trailing <s>s after <w>s — <served|fell back>
+
+A `refused` line ends ` first="HTTP 401 <body>"`, the first 80 characters of
+the first 401's body (`ask_again`; `docs/stage2-read-door-linear-ops.md`).
 
 ## The one UNKNOWN that is not a fallback
 
@@ -183,12 +203,14 @@ import base64
 import functools
 import http.client
 import json
+import math
 import os
 import re
 import ssl
 import sys
 import threading
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -271,6 +293,25 @@ FALLBACK_TAG = "read-fallback:"
 EVENT_REFUSED = "event-refused"
 PULL_REQUEST_REASON = "pull-request"
 
+#: The second ask (DRE-9250): an answer a few seconds behind, or one 401, is
+#: asked once more before the read falls back. The wait is how far the first
+#: answer trailed, in whole seconds, plus the slack, never more than the cap;
+#: a 401 is asked again at once. At most one second ask per read, and at most
+#: `ASK_AGAIN_LIMIT` per process. `linear_ops.card_via_door` reads these too.
+ASK_AGAIN_SLACK_SECONDS = 2
+ASK_AGAIN_MAX_WAIT_SECONDS = 10
+ASK_AGAIN_LIMIT = 3
+#: The line every second ask prints, once, after its answer:
+#: `read-door: asked again read=<read> reason=<reason> trailing <s>s after
+#: <w>s — <served|fell back>`, and for `refused` ` first="HTTP 401 <body>"`.
+ASK_AGAIN_TAG = "read-door: asked again"
+#: The reads asked again: the four with a Linear copy, as the lines spell them.
+ASK_AGAIN_READS = frozenset({"board", "cards", "dependents", "workflow-states"})
+STALE = "stale"
+REFUSED = "refused"
+#: How much of the first 401's body the `refused` line carries after `first=`.
+FIRST_WORDS = 80
+
 #: The token broker a model session mints through (DRE-9168): its URL, the
 #: secret it checks, and the one host it may be on.
 BROKER_ENV = "BUREAU_READ_TOKEN_BROKER"
@@ -333,15 +374,19 @@ class ReadUnknown(Exception):
     `reason` is the machine reason (the door's `freshness.reason`, or the
     client's own: `unavailable`, `timeout`, `refused`, `throttled`,
     `malformed`, `not-found`, `no-token`, `pipeline-ref-mismatch`, …).
+    `trailing` is how many seconds past the reader's max-age a FRESH answer
+    was, on the client's own `stale`; None everywhere else.
     """
 
     def __init__(self, reason: str, detail: str = "", *, status: int | None = None,
-                 unavailable: bool = False, linear_held: bool = False):
+                 unavailable: bool = False, linear_held: bool = False,
+                 trailing: float | None = None):
         super().__init__(f"{reason}: {detail}" if detail else reason)
         self.reason = reason
         self.detail = detail
         self.status = status
         self.unavailable = unavailable
+        self.trailing = trailing
         self._linear_held = linear_held
 
     @property
@@ -382,6 +427,9 @@ def reset_for_tests() -> None:
         disabled=None,  # the reason the door stopped being asked, or None
         reported=False,
         fallbacks=[],  # (reader, read, reason), one per `read-fallback:` line
+        asked_again=0,  # second asks this process (DRE-9250)
+        read_asked=False,  # the read in hand has had its second ask
+        second_ask=None,  # the first answer's reason while a second ask is out
     )
 
 
@@ -482,20 +530,103 @@ def served() -> int:
     return _state["served"]
 
 
+def _wait(seconds: float) -> None:
+    """The second ask's wait, one name the tests replace."""
+    time.sleep(seconds)
+
+
+def may_ask_again() -> bool:
+    """May the read in hand be asked once more (DRE-9250)? Mode `on` only,
+    with the door still in use, not during a second ask, not twice for one
+    read, and not past `ASK_AGAIN_LIMIT` second asks this process."""
+    return (mode() == "on" and _state["disabled"] is None
+            and _state["second_ask"] is None and not _state["read_asked"]
+            and _state["asked_again"] < ASK_AGAIN_LIMIT)
+
+
+def _first_words(body: bytes) -> str:
+    """The first `FIRST_WORDS` characters of an answer's body on one line:
+    each line break, control character and `"` written as a space."""
+    text = body.decode("utf-8", "replace")[:FIRST_WORDS]
+    return "".join(" " if ch == '"' or unicodedata.category(ch) in ("Cc", "Zl", "Zp")
+                   else ch for ch in text)
+
+
+def ask_again(read: str, reason: str, trailing: float | None, ask, *,
+              first: str | None = None, superseded: str | None = None):
+    """The read's one second ask (DRE-9250): wait, call `ask()`, say one line.
+
+    The caller has checked `may_ask_again()`. `ask()` returns `(value,
+    served)`, and `value` is returned. `trailing` is how far the first answer
+    was behind, in seconds, or None when it gave no age; the wait is that,
+    rounded up to whole seconds, plus `ASK_AGAIN_SLACK_SECONDS`, never more
+    than `ASK_AGAIN_MAX_WAIT_SECONDS`, and none for `refused`. `first` is the
+    first answer's own words, on a `refused` line only. `superseded` names the
+    counter the first answer was counted in: the read is counted once, by its
+    second answer. A `ReadUnknown` that `ask()` raises falls back with the
+    FIRST answer's reason, in one `read-fallback:` line — none for a skip."""
+    _state["asked_again"] += 1
+    _state["read_asked"] = True
+    behind = max(0, math.ceil(trailing)) if trailing else 0
+    waited = 0 if reason == REFUSED else min(behind + ASK_AGAIN_SLACK_SECONDS,
+                                             ASK_AGAIN_MAX_WAIT_SECONDS)
+    if superseded:
+        _state[superseded] -= 1
+
+    def say(served: bool) -> None:
+        line = (f"{ASK_AGAIN_TAG} read={read} reason={reason} trailing {behind}s "
+                f"after {waited}s — {'served' if served else 'fell back'}")
+        _say(line + (f' first="{first}"' if first is not None else ""))
+
+    if waited:
+        _wait(waited)
+    _state["second_ask"] = reason
+    try:
+        value, served = ask()
+    except ReadUnknown as e:
+        _state["second_ask"] = None
+        say(False)
+        if not e.skip:
+            note_fallback(read, reason)
+        raise
+    except BaseException:
+        _state["second_ask"] = None
+        say(False)
+        raise
+    _state["second_ask"] = None
+    say(served)
+    return value
+
+
 def _falls_back(read: str):
     """Wrap a read with a Linear copy behind it: each `ReadUnknown` it raises
     that is not a skip is one fallback, named once. A pull_request run's
-    later reads find the door stopped by the event, and say so too."""
+    later reads find the door stopped by the event, and say so too.
+
+    One of the four `ASK_AGAIN_READS` answered `stale` is asked once more
+    first (`ask_again`): the wrapped read again, after the overage plus the
+    slack. Inside that second ask the read names no fallback itself —
+    `ask_again` names it, with the first answer's reason."""
+    asks_again = read in ASK_AGAIN_READS
+
     def wrap(func):
         @functools.wraps(func)
         def reading(*args, **kwargs):
+            second = _state["second_ask"] is not None
+            if not second:
+                _state["read_asked"] = False
             try:
                 return func(*args, **kwargs)
             except ReadUnknown as e:
-                if not e.skip:
-                    stopped_by_event = (e.reason == "unavailable"
-                                        and _state["disabled"] == EVENT_REFUSED)
-                    note_fallback(read, EVENT_REFUSED if stopped_by_event else e.reason)
+                if second or e.skip:
+                    raise
+                if asks_again and e.reason == STALE and may_ask_again():
+                    return ask_again(read, STALE, e.trailing,
+                                     lambda: (reading(*args, **kwargs), True),
+                                     superseded="unknown")
+                stopped_by_event = (e.reason == "unavailable"
+                                    and _state["disabled"] == EVENT_REFUSED)
+                note_fallback(read, EVENT_REFUSED if stopped_by_event else e.reason)
                 raise
         return reading
     return wrap
@@ -799,16 +930,38 @@ def _reads_own_card(endpoint: str, query: dict) -> bool:
     return endpoint in ("/workflow-states", f"/cards/{card}/dependents")
 
 
+def _ask_refused_again(read: str, body: bytes, exchange) -> tuple[int, bytes]:
+    """A 401's second ask (DRE-9250): `exchange()` once more, at once, with
+    its own fresh token. A plain second request — the line's `first=` words
+    are there to diagnose a 401 it does not cure. Returns the second answer,
+    or raises what the second request raised, for `_get` to handle as it
+    would a first."""
+    def ask():
+        try:
+            answer = exchange()
+        except BaseException as e:  # noqa: BLE001 — raised by the caller below
+            return e, False
+        return answer, answer[0] == 200
+
+    answer = ask_again(read, REFUSED, None, ask, first=f"HTTP 401 {_first_words(body)}")
+    if isinstance(answer, BaseException):
+        raise answer
+    return answer
+
+
 def _get(endpoint: str, query: dict, *, max_age: int,
          relations_max_age: int | None = None, not_found_ok: bool = False,
-         refusal_ok: bool = False, any_mode: bool = False) -> dict:
+         refusal_ok: bool = False, any_mode: bool = False,
+         read: str | None = None) -> dict:
     """The envelope for one read, or ReadUnknown. Counts and times everything.
 
     `refusal_ok` reads a 401, 403 or 404 as UNKNOWN for this one read and
     leaves the door in use: a scope the door does not serve this caller
     (DRE-5848), never the door failing. `any_mode` asks whatever `BUREAU_READ`
     says: a read with no Linear copy behind it has nothing to roll out
-    against (`split_history`)."""
+    against (`split_history`). `read` names one of the `ASK_AGAIN_READS`: a
+    401 there that `refusal_ok` does not cover is asked once more, at once,
+    before it stops the door (`_ask_refused_again`)."""
     _require_max_age("max_age", max_age)
     if relations_max_age is not None:
         _require_max_age("relations_max_age", relations_max_age)
@@ -826,18 +979,25 @@ def _get(endpoint: str, query: dict, *, max_age: int,
         raise ReadUnknown(EVENT_REFUSED, f"a {event} run's token is refused by the door",
                           unavailable=True)
     started = time.monotonic()
+
+    def exchange() -> tuple[int, bytes]:
+        _base()  # refused BEFORE a token is minted for it
+        token = _token()
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "X-Bureau-Max-Age": str(max_age),
+        }
+        if relations_max_age is not None:
+            headers["X-Bureau-Relations-Max-Age"] = str(relations_max_age)
+        return _http_get(endpoint, query, headers)
+
     try:
         try:
-            _base()  # refused BEFORE a token is minted for it
-            token = _token()
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-                "X-Bureau-Max-Age": str(max_age),
-            }
-            if relations_max_age is not None:
-                headers["X-Bureau-Relations-Max-Age"] = str(relations_max_age)
-            status, body = _http_get(endpoint, query, headers)
+            status, body = exchange()
+            if (status == 401 and read in ASK_AGAIN_READS and not refusal_ok
+                    and may_ask_again()):
+                status, body = _ask_refused_again(read, body, exchange)
         except ReadUnknown as e:
             _state["unavailable"] += 1
             _disable(e.reason, e.detail)
@@ -934,7 +1094,8 @@ def _accept(envelope: dict, *, max_age: int, shape: dict,
     if age > max_age:
         # The door should have said UNKNOWN; the client holds the line anyway.
         _state["unknown"] += 1
-        raise ReadUnknown("stale", f"age {age}s is past this reader's {max_age}s")
+        raise ReadUnknown(STALE, f"age {age}s is past this reader's {max_age}s",
+                          trailing=age - max_age)
     if relations and not fresh.get("relations_as_of"):
         raise _malformed("relations asked for and no freshness.relations_as_of")
     caller = envelope.get("caller") or {}
@@ -989,7 +1150,7 @@ def board(lanes, *, scope: str = "repo", max_age: int, comments: int = 50,
         relations_max_age = relations_max_age or RELATIONS_MAX_AGE
     envelope = _get("/board", query, max_age=max_age,
                     relations_max_age=relations_max_age if relations else None,
-                    refusal_ok=scope == "fleet")
+                    refusal_ok=scope == "fleet", read="board")
     read = _accept(envelope, max_age=max_age, shape=_card_shape(relations),
                    relations=relations)
     echoed = envelope.get("lanes")
@@ -1026,7 +1187,7 @@ def cards(ids, *, max_age: int, comments: int | str = 50, relations: bool = True
         relations_max_age = relations_max_age or RELATIONS_MAX_AGE
     envelope = _get("/cards", query, max_age=max_age,
                     relations_max_age=relations_max_age if relations else None,
-                    not_found_ok=True)
+                    not_found_ok=True, read="cards")
     read = _accept(envelope, max_age=max_age, shape=_card_shape(relations),
                    relations=relations)
     got = [str(n.get("identifier") or "").upper() for n in read.nodes]
@@ -1060,7 +1221,7 @@ def dependents(identifier: str, *, max_age: int, lanes=None, comments: int = 50,
     envelope = _get(f"/cards/{urllib.parse.quote(ident, safe='')}/dependents", query,
                     max_age=max_age,
                     relations_max_age=relations_max_age or RELATIONS_MAX_AGE,
-                    not_found_ok=True)
+                    not_found_ok=True, read="dependents")
     read = _accept(envelope, max_age=max_age, shape=_card_shape(True), relations=True)
     for node in read.nodes:
         lane = (node.get("state") or {}).get("name")
@@ -1079,7 +1240,7 @@ def dependents(identifier: str, *, max_age: int, lanes=None, comments: int = 50,
 @_falls_back("workflow-states")
 def workflow_states(*, max_age: int) -> DoorRead:
     """The team's workflow states (`id name type`), for BP-3's state cache."""
-    envelope = _get("/workflow-states", {}, max_age=max_age)
+    envelope = _get("/workflow-states", {}, max_age=max_age, read="workflow-states")
     read = _accept(envelope, max_age=max_age, shape=WORKFLOW_STATE_FIELDS,
                    relations=False, nodes_key="workflowStates")
     if not read.nodes:
