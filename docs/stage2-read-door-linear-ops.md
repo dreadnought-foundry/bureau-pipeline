@@ -200,7 +200,11 @@ starts from the `first=` words.
   after a read that already has.
 * At most `ASK_AGAIN_LIMIT` (3) second asks per process, the three reasons
   together. After the third, every later read falls back at once, exactly as
-  before, with no `asked again` line.
+  before, with no `asked again` line. The limit is per process, not per job:
+  `reconcile.yml`'s sweep job runs six steps that read the door, each its own
+  process, so a door stale for the whole sweep can add up to 6 × 3 ×
+  `ASK_AGAIN_MAX_WAIT_SECONDS`, three minutes of waiting, inside the job's
+  10-minute `timeout-minutes`.
 * A `linear-hold` skip is never asked again, and neither is an `as_of` that
   cannot be read. In mode `off` or `shadow` nothing changes.
 * A second ask spends no Linear request.

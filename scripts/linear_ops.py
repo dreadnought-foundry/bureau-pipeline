@@ -2104,7 +2104,10 @@ def _card_asked_again(ask_door, wanted: datetime, gap: float
     try:
         served = bureau_read.ask_again("cards", OLDER_THAN_NEEDED, gap, ask,
                                        superseded="served")
-    except bureau_read.ReadUnknown:
+    except bureau_read.ReadUnknown as e:
+        if e.skip:
+            print(f"read-door: unknown ({bureau_read.LINEAR_HOLD}) on the second ask "
+                  "— read from Linear: a card read has no phase to skip", file=sys.stderr)
         return None  # named by `ask_again`, with the first answer's reason
     except Exception as e:  # noqa: BLE001 — Linear on ANY door error
         print(f"read-door: card unreadable on the second ask ({type(e).__name__}: {e}) "
