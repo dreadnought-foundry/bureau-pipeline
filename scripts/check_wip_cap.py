@@ -14,6 +14,10 @@ for the slow sweep, which promoted it anyway at 12. The anti-stall
 optimisation switched itself off exactly inside the WIP band it was built
 for, and nothing reported it.
 
+Since DRE-9254 `linear-sync.yml` runs no pass: a merge's promotion runs in the
+relay's card-done Reconcile pass, inside `reconcile.yml`, at that job's cap. So
+two workflows promote, and the checker finds them from the files either way.
+
 This checker FAILS (exit 1) when:
   * any workflow assigns `MAX_WIP` a literal — in a workflow/job/step `env:`
     block or inline on a `run:` line — instead of threading the caller's

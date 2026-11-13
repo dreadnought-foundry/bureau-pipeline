@@ -75,7 +75,7 @@ read from Linear's native "blocks" relations AND from "Blocked by: DRE-N" /
 DEFAULT_MAX_WIP active cards) throttles promotion so the pipeline never floods.
 The calling workflow passes the repo's own cap through its `max_wip` input;
 every promotion path in the pipeline uses that one value (DRE-2529). When the
-input is empty — a plan.yml or linear-sync.yml stub that passes nothing — the
+input is empty — a plan.yml stub that passes nothing — the
 cap is read from the caller's own reconcile.yml stub, so a repo held at "0"
 builds nothing on any path (DRE-3994), and when the stub names no cap either,
 from the caller's BUREAU_MAX_WIP Actions variable (DRE-6631; see
@@ -16729,8 +16729,9 @@ def _door_dependents(merged: str) -> dict | None:
     Raises BoardHeld on `linear-hold` in `on`: no Linear fallback (item 34).
 
     The rebuild is `merge_sweep_gate.door_card` — ONE rebuild for the merge
-    path (Stage 2 #15): Linear Sync's gate decides on it, and the pass the
-    gate starts scopes itself on it here. This wrapper only turns the door's
+    path (Stage 2 #15): the gate decides on it, and the pass the gate starts
+    scopes itself on it here — both inside the relay's card-done pass since
+    DRE-9254. This wrapper only turns the door's
     hold into this pass's skip.
     """
     try:
@@ -17206,7 +17207,8 @@ def main(
     changes at two precise events, so those workflows invoke this directly:
       - plan.yml, the moment an epic activates (In Progress, the one lane the
         gate counts an epic as active in — DRE-5347)
-      - linear-sync.yml, the moment a merge flips a card to Done
+      - the relay's card-done dispatch (`sweep_scope`), the moment a merge
+        flips a card to Done — linear-sync.yml's inline pass until DRE-9254
     Promotion is pure Linear (the Queued→In Progress transition rides the Linear
     webhook → relay → repository_dispatch for the actual agent start), so
     the event hooks need only LINEAR_API_KEY. (Origin: DRE-1260 activated
@@ -17216,8 +17218,8 @@ def main(
     a merge that flips the last child to Done is the exact moment its parent
     epic becomes all-Done, yet epic-close otherwise runs only on the drifting
     full sweep — so an epic read "still working" for up to ~an hour after it
-    shipped (DRE-1496 sat In Progress with 9/9 children Done). linear-sync
-    invokes this on every merge. Pure Linear, like promote_only — needs only
+    shipped (DRE-1496 sat In Progress with 9/9 children Done). The relay's
+    card-done pass invokes this when the merge-sweep gate names it. Pure Linear, like promote_only — needs only
     LINEAR_API_KEY. (Origin: DRE-1552.)
 
     conflicts_only runs JUST the DIRTY-PR backstop, for the same cron-drift
@@ -18158,9 +18160,12 @@ def main(
 #
 # A card going Done can change exactly two things: whether the cards it blocks
 # are promotable, and whether its parent epic is finished. That is the scoped
-# pass `linear-sync.yml` already runs on a merge (DRE-2930, DRE-3236), so the
-# dispatch runs the SAME one — the gate, then one pass per flag it names, each
-# with `MERGED_CARD` set — and nothing else. The backstops, the watchdogs, the
+# pass a merge has run since DRE-2930 and DRE-3236 — the gate, then one pass per
+# flag it names, each with `MERGED_CARD` set — and the dispatch runs it and
+# nothing else. Since DRE-9254 this is the ONLY place those passes run on a
+# merge: `linear-sync.yml` ran them inline too, in the merge's `pull_request`
+# run, where the read door refuses every read but the merged card's own, so
+# they read Linear. The `*/15` sweep is the backstop when a dispatch is lost. The backstops, the watchdogs, the
 # Intake age-out and the nudge loop are the cron's: a Done changes nothing any
 # of them reads. The dispatch cannot simply be dropped instead: a `no-code`
 # card the operator closes by hand reaches the board through the relay alone.
@@ -18207,10 +18212,10 @@ def sweep_scope() -> SweepScope:
 def _run_card_done(scope: SweepScope) -> None:
     """The merge path's scoped passes for `scope.card`, in-process.
 
-    `MERGED_CARD` is how `merged_card_scope` learns the card, as it is on the
-    merge path; it is restored afterwards so it cannot scope anything else in
-    this process. A pass that exits red stops the rest, the same as
-    linear-sync's `bash -e` loop over the same flags.
+    `MERGED_CARD` is how `merged_card_scope` learns the card; it is restored
+    afterwards so it cannot scope anything else in this process. A pass that
+    exits red stops the rest, as linear-sync's `bash -e` loop over the same
+    flags did until DRE-9254 left this the only place they run.
     """
     before = os.environ.get("MERGED_CARD")
     os.environ["MERGED_CARD"] = scope.card or ""
