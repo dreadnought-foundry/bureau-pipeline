@@ -1370,7 +1370,8 @@ jobs:
       #
       # Gated on the install above having run: a run that reaches the model
       # starts it, and a run that could not act or escalated, which runs
-      # none, does not.
+      # none, does not. Both broker steps also carry the unfixable gate's
+      # guard, like every step after it (tests/test_unfixable_check_escalation.py).
       #
       # The vendor boundary (standards/vendor-boundaries.md):
       #   Q1 the actor — unchanged: the same fix job, the same identity.
@@ -1394,7 +1395,7 @@ jobs:
       #      under `always()`.
       - name: Read token broker — start it for the agent session
         id: read_broker
-        if: steps.install_claude.outcome == 'success'
+        if: steps.install_claude.outcome == 'success' && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
         run: |
           python3 .bureau-pipeline/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
@@ -1796,7 +1797,7 @@ jobs:
       # lines printed and its broker stopped, and `continue-on-error` so
       # cleanup never changes the job's conclusion.
       - name: Read token broker — print the session's read lines, and stop
-        if: always()
+        if: always() && steps.unfixable.outputs.escalate != 'true'
         continue-on-error: true
         run: |
           python3 .bureau-pipeline/scripts/read_token_broker.py print-lines --file "$RUNNER_TEMP/agent-read-lines.log" || true
