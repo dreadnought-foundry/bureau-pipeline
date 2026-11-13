@@ -373,6 +373,62 @@ jobs:
         if: steps.claim.outputs.claimed == 'true'
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
+      # The read token broker, started for the agent's session (DRE-9255,
+      # plan.yml's DRE-9169 step copied). This job sets `BUREAU_READ` at job
+      # level, so a `linear_ops` read the session made would ask the door; a
+      # model session is never handed the runner's OIDC request variables, so
+      # it would fall back with `reason=no-token`, in a line that reached only
+      # its transcript. The broker (scripts/read_token_broker.py, DRE-9168)
+      # holds the variables and mints door tokens only; it serves the one
+      # model step below — `repair` — which carries its URL, its secret and
+      # the lines file in `env:`. "Read token broker — print the session's
+      # read lines, and stop" directly after it prints the lines and ends it.
+      #
+      # Today the session's tools are Read/Glob/Grep/Write, with no Bash, so
+      # it runs no `linear_ops` and makes no door read: its lines file is
+      # absent and the print step logs `agent read lines: no file at <path>`.
+      # The wiring is here so a session handed more later reads through the
+      # broker, and tests/test_every_session_read_token_broker.py holds it.
+      # Both broker steps run the trusted copy (see the header): the agent's
+      # Write reaches the checkout, and the broker outlives the agent.
+      #
+      # The vendor boundary (standards/vendor-boundaries.md):
+      #   Q1 the actor — unchanged: the same repair job, the same identity.
+      #   Q2 the credentials — this step holds the job's OIDC request
+      #      variables, which this job's own `permissions:` already grants
+      #      (`id-token: write`, left as it is), and passes them to the broker
+      #      on its stdin. The model step receives only the broker's URL and
+      #      secret, as this step's outputs — the secret masked before it is
+      #      written, never echoed, and never put in $GITHUB_ENV, so no other
+      #      step holds it. With them a session obtains door tokens and
+      #      nothing else, and a door token cannot assume an AWS role: its
+      #      audience is the door's.
+      #   Q3 a re-run — starts its own broker, on a fresh port, on a fresh
+      #      runner; nothing of a previous attempt's broker survives it. Each
+      #      matrix leg is its own job and starts its own.
+      #   Q4 the limits — one token per door request, as today, so the door's
+      #      one-claim-per-`jti` rule still holds.
+      #   Q5 our crash — `continue-on-error`: a broker that fails to start
+      #      leaves its outputs empty, and the session falls back with
+      #      `no-token` exactly as before. The print-and-stop step runs under
+      #      `always()`, so those lines still reach the log.
+      - name: Read token broker — start it for the agent session
+        id: read_broker
+        if: steps.install_claude.outcome == 'success'
+        continue-on-error: true
+        env:
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
+        run: |
+          python3 "$TRUSTED_PIPELINE"/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
+          python3 - "$RUNNER_TEMP/read-token-broker.json" <<'PY'
+          import json, os, sys
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"::add-mask::{state['secret']}", flush=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"url={state['url']}\n")
+              out.write(f"secret={state['secret']}\n")
+          PY
+
       # THE AGENT, through the vendor action (DRE-3074). NO LINEAR KEY: see the
       # header and DRE-2696's waiver in tests/test_agent_linear_key.py. It
       # writes one file to one directory outside the checkout (`--add-dir`),
@@ -385,6 +441,10 @@ jobs:
         env:
           # BACKGROUND TASKS OFF (DRE-5564) — see plan.yml's Plan epic step.
           CLAUDE_CODE_DISABLE_BACKGROUND_TASKS: "1"
+          # The read token broker (DRE-9255): see its start step above.
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           path_to_claude_code_executable: ${{ steps.install_claude.outputs.executable }}
           anthropic_api_key: ${{ vars.CLAUDE_AUTH_MODE != 'subscription' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -454,6 +514,28 @@ jobs:
             Write `why` in plain English for a non-technical reader: what is
             holding the alert open, and what the next person should do. Name
             no file path and quote no code.
+
+      # The agent session's read lines, into this job's log, and the broker
+      # stopped (DRE-9255, plan.yml's DRE-9169 step copied). Directly after
+      # `repair`, the job's one model step, so the session has finished
+      # writing, and before the trusted copy it runs from is removed. The
+      # lines file sits where the session can write, and the session reads
+      # text the pipeline does not trust, so it is NEVER printed raw — no
+      # cat, no echo. `print-lines` prints only the lines of the tags in
+      # bureau_read.LINES_FILE_TAGS that speak for this job's own reader, each
+      # unchanged, and drops every other line, a workflow command among them.
+      # A missing file — today's case, see the start step — prints one line
+      # saying so. Both commands exit 0 whatever they find; `always()` so an
+      # unclaimed leg or a failed session still stops any broker, and
+      # `continue-on-error` so cleanup never changes the job's conclusion.
+      - name: Read token broker — print the session's read lines, and stop
+        if: always()
+        continue-on-error: true
+        env:
+          TRUSTED_PIPELINE: ${{ runner.temp }}/pipeline-trusted
+        run: |
+          python3 "$TRUSTED_PIPELINE"/scripts/read_token_broker.py print-lines --file "$RUNNER_TEMP/agent-read-lines.log" || true
+          python3 "$TRUSTED_PIPELINE"/scripts/read_token_broker.py stop --state-file "$RUNNER_TEMP/read-token-broker.json"
 
       # ALWAYS once the alert is claimed, whatever the agent did: a dead or
       # half-done agent reaches the `unfinished` receipt here. The agent's

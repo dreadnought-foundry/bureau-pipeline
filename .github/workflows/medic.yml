@@ -1386,6 +1386,54 @@ jobs:
         id: install_claude
         uses: ./.bureau-pipeline/.github/actions/install-claude-code
 
+      # The read token broker, started for the diagnosis agent's session
+      # (DRE-9255, plan.yml's DRE-9169 step copied). This job sets
+      # `BUREAU_READ` at job level, so every `linear_ops` read the session
+      # makes asks the door; a model session is never handed the runner's
+      # OIDC request variables, so each of those reads fell back with
+      # `reason=no-token`, in lines that reached its transcript and never this
+      # log. The broker (scripts/read_token_broker.py, DRE-9168) holds the
+      # variables and mints door tokens only; it serves the one model step
+      # below — `claude` — which carries its URL, its secret and the lines
+      # file in `env:`. "Read token broker — print the session's read lines,
+      # and stop" directly after it prints the lines and ends it.
+      #
+      # The vendor boundary (standards/vendor-boundaries.md):
+      #   Q1 the actor — unchanged: the same diagnose job, the same identity.
+      #   Q2 the credentials — this step holds the job's OIDC request
+      #      variables, which the calling stub already grants
+      #      (`id-token: write`, DRE-4348; this file narrows no
+      #      `permissions:`), and passes them to the broker on its stdin. The
+      #      model step receives only the broker's URL and secret, as this
+      #      step's outputs — the secret masked before it is written, never
+      #      echoed, and never put in $GITHUB_ENV, so no other step holds it.
+      #      With them the session obtains door tokens and nothing else, and a
+      #      door token cannot assume an AWS role: its audience is the door's.
+      #   Q3 a re-run — starts its own broker, on a fresh port, on a fresh
+      #      runner; nothing of a previous attempt's broker survives it.
+      #   Q4 the limits — one token per door request, as today, so the door's
+      #      one-claim-per-`jti` rule still holds.
+      #   Q5 our crash — `continue-on-error`: a broker that fails to start
+      #      leaves its outputs empty, and the session falls back with
+      #      `no-token` exactly as before. The print-and-stop step runs under
+      #      `always()`, so those lines still reach the log.
+      - name: Read token broker — start it for the agent session
+        id: read_broker
+        if: steps.install_claude.outcome == 'success'
+        continue-on-error: true
+        env:
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+        run: |
+          python3 .bureau-pipeline/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
+          python3 - "$RUNNER_TEMP/read-token-broker.json" <<'PY'
+          import json, os, sys
+          state = json.load(open(sys.argv[1], encoding="utf-8"))
+          print(f"::add-mask::{state['secret']}", flush=True)
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              out.write(f"url={state['url']}\n")
+              out.write(f"secret={state['secret']}\n")
+          PY
+
       - name: Diagnosis agent
         # Identified for the death-cause receipt at the foot of this job
         # (DRE-4340) — the execution file it writes, and GitHub's own outcome
@@ -1397,6 +1445,12 @@ jobs:
         # comes in as a snapshot (step `target`) and the report goes out
         # through step `deliver`. The diagnosis itself reads the failed run's
         # logs, never Linear.
+        env:
+          # The read token broker (DRE-9255): see its start step above. Door
+          # reads only — the session still holds no Linear key.
+          BUREAU_READ_TOKEN_BROKER: ${{ steps.read_broker.outputs.url }}
+          BUREAU_READ_TOKEN_BROKER_SECRET: ${{ steps.read_broker.outputs.secret }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/agent-read-lines.log
         with:
           # DRE-3414: the launcher the shared install step above PROVED
           # runs. Without it the vendor action installs a second copy of
@@ -1526,6 +1580,29 @@ jobs:
                is not a real question is parked in Triage for the operator, not
                put to the CEO.
             Do NOT attempt to fix anything — diagnose and report only.
+
+      # The agent session's read lines, into this job's log, and the broker
+      # stopped (DRE-9255, plan.yml's DRE-9169 step copied). Directly after
+      # `claude`, the job's one model step, so the session has finished
+      # writing. A session's stderr lands in its transcript, not the job log,
+      # so its `read-fallback:` and `linear-door:` lines reach
+      # check_linear_budget.py only from here.
+      #
+      # The lines file sits where the session can write, and the session
+      # reads text the pipeline does not trust, so it is NEVER printed raw —
+      # no cat, no echo. `print-lines` prints only the lines of the tags in
+      # bureau_read.LINES_FILE_TAGS that speak for this job's own reader, each
+      # unchanged, and drops every other line, a workflow command among them.
+      # A missing file prints one line saying so. Both commands exit 0
+      # whatever they find; `always()` so a failed session still has its
+      # lines printed and its broker stopped, and `continue-on-error` so
+      # cleanup never changes the job's conclusion.
+      - name: Read token broker — print the session's read lines, and stop
+        if: always()
+        continue-on-error: true
+        run: |
+          python3 .bureau-pipeline/scripts/read_token_broker.py print-lines --file "$RUNNER_TEMP/agent-read-lines.log" || true
+          python3 .bureau-pipeline/scripts/read_token_broker.py stop --state-file "$RUNNER_TEMP/read-token-broker.json"
 
       # THE CLASS, THE STEP, AND ONE RESUME (DRE-7526, DRE-7793; weekly report
       # DRE-7512 fix-3). Every diagnosis used to be delivered as
