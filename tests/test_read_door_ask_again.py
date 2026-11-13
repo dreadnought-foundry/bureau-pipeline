@@ -224,6 +224,18 @@ def test_a_second_answer_that_is_unknown_falls_back_once_as_older(card_door, wai
     assert fallback.endswith(" read=cards reason=older-than-needed")
 
 
+def test_a_second_answer_that_is_a_linear_hold_says_so_and_names_no_fallback(
+        card_door, waits, capsys):
+    answers(card_door, "/cards", as_of(_iso(-3)),
+            card_door.unknown(bureau_read.LINEAR_HOLD))
+    assert linear_ops.card_via_door("DRE-1") is None
+    err = capsys.readouterr().err
+    assert lines(err, LINE)[0].endswith(" — fell back")
+    assert lines(err, "read-door: unknown (linear-hold) on the second ask — read from "
+                      "Linear: a card read has no phase to skip") != []
+    assert lines(err, bureau_read.FALLBACK_TAG) == []
+
+
 def test_the_wait_is_the_gap_plus_the_slack_capped(card_door, waits, capsys):
     _two_card_answers(card_door, _iso(-30), _iso(1))
     assert linear_ops.card_via_door("DRE-1") is not None

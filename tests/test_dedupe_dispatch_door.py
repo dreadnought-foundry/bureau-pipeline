@@ -330,8 +330,8 @@ def test_a_door_older_than_the_dispatch_makes_the_hand_back_read_linear(
     assert _read_off_linear(linear)
     (line,) = fallback_lines(capsys.readouterr().err)
     assert "read=cards" in line and "reason=older-than-needed" in line
-    # Asked once more after the gap (DRE-9250), and the thread is not asked again.
-    assert len(door.asked("/cards")) == 2, "the thread is not asked of the door again"
+    # Asked once more after the gap (DRE-9250), and the thread is not asked a third time.
+    assert len(door.asked("/cards")) == 2, "the thread is not asked of the door a third time"
 
 
 def test_a_rerun_reads_the_hand_back_card_off_linear(linear, meta, monkeypatch):
