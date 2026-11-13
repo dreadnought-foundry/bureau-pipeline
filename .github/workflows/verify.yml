@@ -847,6 +847,8 @@ jobs:
         id: read_broker
         if: steps.install_claude.outcome == 'success' && !inputs.shadow
         continue-on-error: true
+        env:
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
         run: |
           python3 .bureau-pipeline/scripts/read_token_broker.py start --state-file "$RUNNER_TEMP/read-token-broker.json"
           python3 - "$RUNNER_TEMP/read-token-broker.json" <<'PY'
