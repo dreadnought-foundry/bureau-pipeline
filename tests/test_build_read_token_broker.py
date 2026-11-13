@@ -231,6 +231,16 @@ def test_the_print_and_stop_step_follows_the_last_model_step_under_always(build)
     assert "${{" not in run, "substitutions go in env: (DRE-3484)"
 
 
+def test_agent_fix_broker_steps_stand_down_when_the_unfixable_gate_escalates():
+    """agent-fix.yml's unfixable-checks gate skips every step after it when it
+    escalates (tests/test_unfixable_check_escalation.py); both broker steps
+    say so in their own `if:`."""
+    steps = _steps("agent-fix")
+    guard = "steps.unfixable.outputs.escalate != 'true'"
+    for i in (_start_index(steps), _stop_index(steps)):
+        assert guard in str(steps[i].get("if", "")), steps[i]["name"]
+
+
 @builds
 def test_the_only_step_naming_the_lines_file_after_the_model_steps_prints_it_filtered(build):
     steps = _steps(build)
