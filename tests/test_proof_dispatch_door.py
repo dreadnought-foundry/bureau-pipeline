@@ -362,8 +362,9 @@ def test_a_stale_work_lane_read_falls_back_to_today_and_decides_the_same(
         _pass(h)
     assert ("lane", "Hand-work") in today.calls
     assert ("lane", "In Review") in today.calls
-    # The UNKNOWN is remembered: the second work lane asks the door nothing.
-    assert len(door.asked("/board")) == 1
+    # Asked once more (DRE-9250), and the UNKNOWN is remembered: the second
+    # work lane asks the door nothing.
+    assert len(door.asked("/board")) == 2
     assert h.fired == FIRST_RUN
     (lane,) = [x for x in _lines(capsys.readouterr().out)
                if x["decision"] == "proof-dispatch-lane"]
@@ -449,7 +450,8 @@ def test_a_stale_card_read_falls_back_to_today_and_decides_the_same(
     (card,) = [x for x in _lines(capsys.readouterr().out)
                if x["decision"] == "proof-dispatch-card"]
     assert (card["verdict"], card["reason"]) == ("UNKNOWN", "stale")
-    assert len(door.asked("/cards")) == 2  # the card, then the thread
+    # the card, asked once more (DRE-9250), then the thread
+    assert len(door.asked("/cards")) == 3
 
 
 def test_a_held_card_read_refuses_the_candidate_and_reads_no_linear_card(

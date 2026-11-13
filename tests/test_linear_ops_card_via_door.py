@@ -558,6 +558,8 @@ sys.path[:0] = [scripts, tests]
 from test_linear_ops_card_via_door import LinearStub
 stub = LinearStub()
 urllib.request.urlopen = stub
+import bureau_read
+bureau_read._wait = lambda _seconds: None  # a second ask never sleeps here (DRE-9250)
 import atexit
 def _save():
     with open(os.environ["STUB_SENT"], "w") as fh:

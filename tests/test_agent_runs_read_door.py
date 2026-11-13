@@ -254,6 +254,8 @@ sys.path[:0] = [scripts, tests]
 from test_agent_runs_read_door import LinearCard
 stub = LinearCard(os.environ["STUB_CARD"])
 urllib.request.urlopen = stub
+import bureau_read
+bureau_read._wait = lambda _seconds: None  # a second ask never sleeps here (DRE-9250)
 import atexit
 def _save():
     with open(os.environ["STUB_SENT"], "w") as fh:

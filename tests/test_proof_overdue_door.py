@@ -510,7 +510,8 @@ def test_any_other_unknown_on_the_batch_reads_every_card_through_linear_reads(
                                  "not-found": (404, {"error": {"code": "NOT_FOUND"}}),
                                  "malformed": _missing_one(door)}[reason]
         _, out = run_sweep()
-    assert len(door.asked("/cards")) == 1
+    # A stale answer is asked once more before the fallback (DRE-9250).
+    assert len(door.asked("/cards")) == (2 if reason == "stale" else 1)
     assert [line["reason"] for line in door_lines(out)
             if line["decision"] == "proof-overdue-cards"] == [reason]
     assert "proof-overdue-card" not in decisions(out)

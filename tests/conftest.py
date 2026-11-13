@@ -58,6 +58,16 @@ def _reset_read_door() -> None:
         reset()
 
 
+def _no_ask_again_wait(monkeypatch) -> None:
+    """The read door's second ask waits up to ten seconds before it asks
+    (DRE-9250). Dozens of suites drive a stale or older-than-the-floor answer
+    on purpose, and none of them is about the wait, so none of them sleeps
+    for it. `tests/test_read_door_ask_again.py` records the waits it asserts."""
+    bureau_read = sys.modules.get("bureau_read")
+    if getattr(bureau_read, "_wait", None) is not None:
+        monkeypatch.setattr(bureau_read, "_wait", lambda _seconds: None)
+
+
 def _empty_epic_queue(monkeypatch) -> None:
     """The sweep's two epic-queue phases read Linear directly, not through the
     pass's board snapshot (DRE-5152): `epic_cap.labeled_elsewhere` in every
@@ -176,6 +186,7 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_model_home(monkeypatch)
     _own_runner_temp(monkeypatch, tmp_path_factory)
     _own_agent_notes(monkeypatch, tmp_path_factory)
+    _no_ask_again_wait(monkeypatch)
     _empty_epic_queue(monkeypatch)
     _no_inherited_red_main_holds(monkeypatch)
     _reset_sweep_board()

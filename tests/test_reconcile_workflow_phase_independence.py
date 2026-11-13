@@ -42,13 +42,32 @@ WORKFLOW = ROOT / ".github" / "workflows" / "reconcile.yml"
 SWEEP_STEP = "Sweep"
 REF_GATE = "Refuse a pipeline_ref the stub did not call"
 
-#: The three phases the 2026-10-25 runs skipped, by name — the floor. The
-#: rule itself is read over EVERY step after `Sweep` (`_after_sweep`).
+#: The three phases the 2026-10-25 runs skipped, by name, and the job's last
+#: step since DRE-9251 — the floor. The rule itself is read over EVERY step
+#: after `Sweep` (`_after_sweep`).
+SETTLE_STEP = "Settle the read-fallback alert"
 PHASES = (
     "Dispatch proof runs",
     "Reply to the CEO's Green Light comments",
     "Read the switches",
+    SETTLE_STEP,
 )
+
+#: The steps whose processes read the door and copy their read lines to the
+#: one lines file the Settle step counts (DRE-9251): the Sweep step and the
+#: five phases after it. No other step writes it.
+LINES_FILE_STEPS = (
+    SWEEP_STEP,
+    "Dispatch proof runs",
+    "Close proof records that cannot merge",
+    "Proof overdue",
+    "Reply to the CEO's Green Light comments",
+    "Read the switches",
+)
+LINES_FILE = "${{ runner.temp }}/sweep-read-lines.log"
+#: The door's variables the Settle step carries as the Sweep step does.
+DOOR_VARIABLES = ("BUREAU_READ", "BUREAU_READ_URL", "BUREAU_READ_AUDIENCE",
+                  "BUREAU_PIPELINE_REF")
 
 #: A step after `Sweep` that is exempt from the rule, by name, with the reason
 #: it should NOT run after a failed sweep. Empty today: every phase after the
@@ -366,7 +385,64 @@ def test_a_cancelled_job_runs_no_later_phase():
 
 
 # --------------------------------------------------------------------------
-# 4: the evaluator itself — it must read GitHub's rules, or the scenarios lie
+# 4: the read-fallback alert is settled once, by the job's last step, over
+#    every door-reading step's lines (DRE-9251)
+# --------------------------------------------------------------------------
+def _step(name: str) -> dict:
+    found = [s for s in _steps() if s.get("name") == name]
+    assert len(found) == 1, f"{name!r} is not one step of reconcile.yml"
+    return found[0]
+
+
+def test_the_settle_step_is_the_last_step_of_the_job():
+    assert _steps()[-1].get("name") == SETTLE_STEP
+
+
+def test_the_settle_step_carries_the_phases_condition():
+    settle = _bare(_step(SETTLE_STEP).get("if") or "")
+    assert settle == _bare(_step("Dispatch proof runs")["if"])
+
+
+@pytest.mark.parametrize("name", LINES_FILE_STEPS)
+def test_each_door_reading_step_copies_its_lines_to_the_one_file(name):
+    env = _step(name).get("env") or {}
+    assert env.get("BUREAU_READ_LINES_FILE") == LINES_FILE, (
+        f"{name!r} does not copy its read lines to {LINES_FILE}, so its fallbacks "
+        "never reach the alert")
+
+
+def test_no_other_step_sets_the_lines_file():
+    setters = [s.get("name") or s.get("uses") for s in _steps()
+               if "BUREAU_READ_LINES_FILE" in (s.get("env") or {})]
+    assert sorted(setters) == sorted(LINES_FILE_STEPS)
+
+
+@pytest.mark.parametrize("variable", DOOR_VARIABLES)
+def test_the_settle_step_reads_the_door_as_the_sweep_does(variable):
+    sweep_env = _sweep()["env"]
+    assert variable in sweep_env, f"the Sweep step no longer sets {variable}"
+    assert (_step(SETTLE_STEP).get("env") or {}).get(variable) == sweep_env[variable]
+
+
+def test_the_settle_step_does_not_write_the_lines_file_it_reads():
+    assert "BUREAU_READ_LINES_FILE" not in (_step(SETTLE_STEP).get("env") or {})
+
+
+def test_the_settle_step_runs_the_settle_command_over_both_files():
+    run = " ".join(_step(SETTLE_STEP)["run"].split())
+    assert ('python3 .bureau-pipeline/scripts/read_fallback_alert.py settle '
+            '--lines-file "$RUNNER_TEMP/sweep-read-lines.log" '
+            '--settle-file "$RUNNER_TEMP/read-fallback-settle.json" '
+            '--repo "$REPO_SLUG"') in run
+    assert "REPO_SLUG=" in run
+
+
+def test_a_failed_sweep_still_settles():
+    assert _simulate(fails={SWEEP_STEP})[SETTLE_STEP]
+
+
+# --------------------------------------------------------------------------
+# 5: the evaluator itself — it must read GitHub's rules, or the scenarios lie
 # --------------------------------------------------------------------------
 @pytest.mark.parametrize("condition,failed,cancelled,expected", [
     ("inputs.sweep_reason == ''", False, False, True),
