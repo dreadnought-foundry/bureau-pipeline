@@ -203,8 +203,9 @@ jobs:
       # moves the merged card to Done off GitHub's merge event (DRE-2027), and a
       # refused ref must never cost a card its Done. Nothing is lost by going
       # on: the client refuses the door for the same mismatch on every request
-      # (`pipeline-ref-mismatch`), so the gate and the passes read Linear. This
-      # step is the loud annotation.
+      # (`pipeline-ref-mismatch`), so `linear_ops.py card-done`'s read of the
+      # merged card and its workflow-state lookup read Linear. This step is
+      # the loud annotation.
       - name: Refuse a pipeline_ref the stub did not call
         continue-on-error: true
         env:
@@ -227,7 +228,10 @@ jobs:
           # This is a `pull_request` run, and the door serves it THREE reads
           # for the card its head branch names: `/cards` for it (agent-bureau
           # DRE-8807), and `/workflow-states` and `/cards/<it>/dependents`
-          # (agent-bureau DRE-9166, DRE-9170). `card-done`'s own reads of the
+          # (agent-bureau DRE-9166, DRE-9170). This job asks the first two.
+          # `/cards/<it>/dependents` was `merge_sweep_gate.py`'s, which runs
+          # here no longer (DRE-9254); the client still sends it to the door
+          # (`bureau_read.py` says why it is kept). `card-done`'s own reads of the
           # merged card — a PROOF card's whole thread, the pre-read before each
           # comment — ask the door for it first (`linear_ops.card_via_door`,
           # DRE-8899), at most BUREAU_READ_CARD_MAX_AGE old: 60 seconds,
