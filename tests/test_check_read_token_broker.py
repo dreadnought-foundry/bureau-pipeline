@@ -144,6 +144,19 @@ def test_a_verify_shadow_replay_starts_no_broker():
 
 
 @pytest.mark.parametrize("w", WIRINGS, ids=_IDS)
+def test_the_start_step_sees_the_repo_s_read_audience(w):
+    # The broker mints for the audience it was started with and refuses any
+    # query that would change it, so a start step that cannot see the repo's
+    # BUREAU_READ_AUDIENCE mints for the default, and the door refuses every
+    # token the day a caller sets the variable. Workflow, job and step env:
+    # are merged in that order, as GitHub resolves them.
+    doc = yaml.safe_load(w.path.read_text(encoding="utf-8"))
+    env = {**(doc.get("env") or {}), **(doc["jobs"][w.job].get("env") or {}),
+           **(_start(w).get("env") or {})}
+    assert env.get("BUREAU_READ_AUDIENCE") == "${{ vars.BUREAU_READ_AUDIENCE }}", env
+
+
+@pytest.mark.parametrize("w", WIRINGS, ids=_IDS)
 def test_the_secret_is_masked_before_it_is_written_and_never_echoed(w):
     run = _start(w)["run"]
     mask = run.index("::add-mask::")
