@@ -2,11 +2,10 @@
 # consumes its OWN reusable workflows exactly like a product repo.
 # @main on purpose: this repo is the canary channel; the fleet rides tags.
 #
-# The merge handler promotes cards, so this stub is one of the repo's three
-# WIP-cap paths. Like self-reconcile and self-plan it passes no max_wip —
-# all three or none (DRE-2529) — so the number is this repo's BUREAU_MAX_WIP
-# Actions variable, which the console writes, and default 8 while it is
-# unset (DRE-6783).
+# The merge handler promotes nothing since DRE-9254: a merge's promotion runs
+# in the relay's card-done Reconcile pass, at self-reconcile's cap. It passes
+# no max_wip, like self-reconcile and self-plan (DRE-6783), so nothing here
+# ever names a cap.
 name: Linear Sync
 
 on:

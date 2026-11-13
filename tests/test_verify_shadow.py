@@ -111,11 +111,17 @@ MAIN_STEPS = [
     ("Mint the model-home read token", IN_SCOPE),
     ("Select model", IN_SCOPE),
     ("Install Claude Code (asserted)", IN_SCOPE),
+    # DRE-9253: the read token broker for the agent sessions' door reads,
+    # never started in a shadow replay.
+    ("Read token broker — start it for the agent sessions",
+     "steps.install_claude.outcome == 'success' && !inputs.shadow"),
     ("Verifier run", IN_SCOPE),
     ("Gate verifier result (attempt 1)", LIVE),
     ("Clear stale verdict before retry", LIVE + " && steps.gate1.outputs.real != 'true'"),
     ("Back off before the verifier retry", RETRY),
     ("Verifier run (retry)", RETRY),
+    # DRE-9253: the sessions' read lines printed, and the broker stopped.
+    ("Read token broker — print the sessions' read lines, and stop", "always()"),
     ("Gate verifier result (attempt 2)", LIVE + " && steps.gate1.outputs.real != 'true'"),
     ("Mint qa-bot token (verdicts author as qa-bot)", LIVE),
     ("Post verdict or neutral status", LIVE),

@@ -10,10 +10,13 @@ fleet's 2,500 requests an hour; portico alone ran six in fourteen minutes.
 
 A card going Done can change exactly two things: whether the cards it BLOCKS
 are now promotable, and whether its PARENT epic is now finished. That is the
-scoped pass `linear-sync.yml` already runs on a merge — `merge_sweep_gate.decide`
-reads the card once and names the passes worth running, and each runs with
-`MERGED_CARD` set so `reconcile.merged_card_scope` narrows it to that card's
-dependents and parent (DRE-2930, DRE-3236). The dispatch cannot simply be
+scoped pass `linear-sync.yml` ran on a merge until DRE-9254 —
+`merge_sweep_gate.decide` reads the card once and names the passes worth
+running, and each runs with `MERGED_CARD` set so `reconcile.merged_card_scope`
+narrows it to that card's dependents and parent (DRE-2930, DRE-3236). Since
+DRE-9254 this card-done pass is the only place it runs: Linear Sync's merge
+step runs no gate and no pass, and a merge's follow-up passes ride the relay's
+dispatch, with the `*/15` sweep as the backstop. The dispatch cannot simply be
 dropped: a `no-code` card the operator closes by hand reaches the board only
 through the relay, never through a merge.
 
@@ -21,10 +24,10 @@ DRE-3640 already carries the payload into the sweep's environment as
 `SWEEP_REASON` / `SWEEP_CARD`. What is under test here is the sweep READING
 them:
 
-  * `SWEEP_REASON=card-done` with `SWEEP_CARD` naming a card: `run([])` does
-    what linear-sync's merge step does — the gate, then one scoped pass per
-    flag it returns — and NOTHING else. No backstop, no watchdog, no Intake
-    age-out, no nudge loop: those are the cron's.
+  * `SWEEP_REASON=card-done` with `SWEEP_CARD` naming a card: `run([])` runs
+    the gate, then one scoped pass per flag it returns — what linear-sync's
+    merge step did until DRE-9254 — and NOTHING else. No backstop, no
+    watchdog, no Intake age-out, no nudge loop: those are the cron's.
   * Any other reason (`epic-activated`, empty, a word the sweep does not
     know), or card-done with no card: the full pass it runs today, and the
     one line says why.

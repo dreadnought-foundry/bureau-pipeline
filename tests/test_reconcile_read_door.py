@@ -1167,7 +1167,8 @@ def test_any_other_door_answer_reads_every_epic_thread_from_linear_as_today(
         door.routes["/cards"] = (door.unknown(answer) if isinstance(answer, str)
                                  else (answer, {"error": {"code": "X"}}))
         assert reconcile.promote_ready(active_count=0) == 2
-    assert len(_all_reads(door)) == 1  # one ask, no second read
+    # A `stale` answer is asked once more before the fallback (DRE-9250).
+    assert len(_all_reads(door)) == (2 if answer == "stale" else 1)
     assert linear.thread_reads() == today
     assert len(today) == 4  # each epic: the newest fifty with the viewer, one older page
     assert seen == expected

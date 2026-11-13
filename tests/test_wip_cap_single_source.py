@@ -54,10 +54,12 @@ import check_wip_cap as cwc  # noqa: E402
 
 WORKFLOWS = ROOT / ".github" / "workflows"
 
-# The three promotion paths audited on 2026-08-19. New reusable workflows that
+# The promotion paths: three audited on 2026-08-19, two since DRE-9254 took
+# linear-sync.yml's merge-step passes to the relay's card-done Reconcile pass,
+# which promotes inside reconcile.yml at its cap. New reusable workflows that
 # promote are covered automatically by the directory sweep; this floor guards
 # against the sweep going vacuous (a path typo finding zero files).
-KNOWN_PROMOTERS = {"plan.yml", "linear-sync.yml", "reconcile.yml"}
+KNOWN_PROMOTERS = {"plan.yml", "reconcile.yml"}
 
 
 def wf(text):
@@ -86,11 +88,11 @@ class LiveWorkflowsTest(unittest.TestCase):
     def test_sweep_is_not_vacuous(self):
         """A checker that inspects nothing passes everything."""
         self.assertGreaterEqual(self.stats["workflows"], 20)
-        self.assertGreaterEqual(self.stats["promotion_steps"], 3)
+        self.assertGreaterEqual(self.stats["promotion_steps"], 2)
 
-    def test_the_three_known_promoters_are_all_found(self):
-        """plan.yml / linear-sync.yml / reconcile.yml are the audited paths —
-        if the extractor stops seeing one, the guard has rotted."""
+    def test_the_known_promoters_are_all_found(self):
+        """plan.yml / reconcile.yml are the audited paths — if the extractor
+        stops seeing one, the guard has rotted."""
         found = {
             name for name, doc in self.docs.items() if cwc.promotion_steps(doc)
         }
@@ -98,6 +100,15 @@ class LiveWorkflowsTest(unittest.TestCase):
             KNOWN_PROMOTERS <= found,
             f"promotion paths not detected: {sorted(KNOWN_PROMOTERS - found)}",
         )
+
+    def test_linear_sync_promotes_nothing(self):
+        """DRE-9254: the merge handler runs no `reconcile.py` pass, so it is
+        no promotion path, and its `max_wip` input is declared only so a stub
+        that still passes one keeps starting."""
+        self.assertEqual([], cwc.promotion_steps(self.docs["linear-sync.yml"]))
+        spec = cwc.max_wip_input(self.docs["linear-sync.yml"])
+        self.assertIsNotNone(spec)
+        self.assertNotIn("default", spec)
 
     def test_all_promotion_paths_agree_on_the_callers_cap(self):
         """The defect, stated as a test: for ONE repo passing ONE value, every
@@ -143,7 +154,7 @@ class LiveWorkflowsTest(unittest.TestCase):
             self.assertNotIn("default", spec, name)
 
     def test_every_known_promoter_threads_the_callers_variable(self):
-        """DRE-6631: the variable reaches all three paths, beside the input."""
+        """DRE-6631: the variable reaches every path, beside the input."""
         for name in sorted(KNOWN_PROMOTERS):
             doc = self.docs[name]
             steps = cwc.promotion_steps(doc)
@@ -184,19 +195,19 @@ class SelfHostStubsTest(unittest.TestCase):
             name for name, doc in cls.docs.items() if cwc.promotion_steps(doc)
         }
 
-    def test_all_three_promotion_stubs_are_detected(self):
-        """The stub sweep must see this repo's three promotion stubs — if it
-        sees none, the all-or-none rule below is vacuously true."""
+    def test_both_promotion_stubs_are_detected(self):
+        """The stub sweep must see this repo's promotion stubs — if it sees
+        none, the all-or-none rule below is vacuously true."""
         caps = cwc.stub_caps(self.docs, self.promoters)
         self.assertEqual(
-            {"self-plan.yml", "self-linear-sync.yml", "self-reconcile.yml"},
+            {"self-plan.yml", "self-reconcile.yml"},
             set(caps),
             caps,
         )
 
     def test_stubs_are_all_or_none_on_one_value(self):
         """Live gate: either every promotion stub passes the same cap, or none
-        do and all three inherit the one default."""
+        do and all of them inherit the one default."""
         self.assertEqual([], cwc.check_stubs(self.docs, self.promoters))
 
     def test_a_partially_repointed_stub_set_is_caught(self):
@@ -222,20 +233,20 @@ class SelfHostStubsTest(unittest.TestCase):
         """`max_wip: 12` unquoted is a YAML int; GitHub rejects it against a
         `type: string` input and the whole call fails to start."""
         docs = dict(self.docs)
-        for name in ("self-plan.yml", "self-linear-sync.yml", "self-reconcile.yml"):
+        for name in SELF_STUBS:
             docs[name] = yaml.safe_load(yaml.safe_dump(self.docs[name]))
             next(iter(docs[name]["jobs"].values()))["with"] = {"max_wip": 12}
         violations = cwc.check_stubs(docs, self.promoters)
         self.assertTrue(any("quoted string" in v for v in violations), violations)
 
 
-SELF_STUBS = ("self-reconcile.yml", "self-plan.yml", "self-linear-sync.yml")
+SELF_STUBS = ("self-reconcile.yml", "self-plan.yml")
 
 
 class SelfHostCapFollowsTheConsoleTest(unittest.TestCase):
-    """DRE-6783: this repo's three promotion stubs pass no `max_wip`, so the
+    """DRE-6783: this repo's promotion stubs pass no `max_wip`, so the
     number the console writes — this repo's `BUREAU_MAX_WIP` variable — is
-    what all three paths promote at, and with none set they promote at the
+    what every path promotes at, and with none set they promote at the
     default 8, the number the stubs used to write. While a stub wrote "8",
     that literal beat the variable (DRE-6631's order) and the console showed
     Bureau Pipeline's number as locked (DRE-6782)."""
@@ -261,7 +272,7 @@ class SelfHostCapFollowsTheConsoleTest(unittest.TestCase):
         for stub in SELF_STUBS:
             job = self._job(stub)
             reusable = cwc._called_reusable(job)
-            self.assertIn(reusable, ("reconcile.yml", "plan.yml", "linear-sync.yml"), stub)
+            self.assertIn(reusable, ("reconcile.yml", "plan.yml"), stub)
             raw = cwc.effective_cap(self.docs[reusable], job.get("with") or {})
             self.assertIsNotNone(raw, f"{stub} -> {reusable} exposes no cap")
             resolved[stub] = reconcile.cap_and_source(raw, str(ROOT), variable)

@@ -6,9 +6,10 @@
 # variable, which the console writes — default 8 (reconcile.DEFAULT_MAX_WIP)
 # while it is unset. This stub passes no max_wip on purpose (DRE-6783): a
 # number written here would beat the variable (DRE-6631) and lock the
-# console out. All THREE of this repo's promotion stubs (this one,
-# self-plan, self-linear-sync) pass none — all three or none (DRE-2529,
-# enforced by scripts/check_wip_cap.py).
+# console out. Both of this repo's promotion stubs (this one and self-plan)
+# pass none — both or none (DRE-2529, enforced by scripts/check_wip_cap.py).
+# self-linear-sync is no longer one of them: since DRE-9254 a merge's
+# promotion runs in the relay's card-done pass of this stub, at this cap.
 name: Reconcile
 
 on:

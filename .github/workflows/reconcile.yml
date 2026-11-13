@@ -342,6 +342,12 @@ jobs:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          # Every `read-fallback:` and `read-door:` line this step's process
+          # prints is copied here too (DRE-9168), and so is every line of the
+          # five phases after it, which set the same path. The job's last step
+          # settles the read-fallback alert over all of them (DRE-9251). No
+          # model session runs in this job, so only the pipeline writes it.
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/sweep-read-lines.log
           GH_TOKEN: ${{ steps.app.outputs.token }}
           # The sweep's READS go out as the pool app selected above (DRE-4282):
           # reconcile.py's gh_read() swaps this in, the way gh_dispatch() swaps
@@ -493,6 +499,7 @@ jobs:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/sweep-read-lines.log
           # The dispatch (`plan_run.fire`, contents:write) and the receipt go
           # out as the bot token; the reads ride the pool App, as the sweep's do.
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -555,6 +562,7 @@ jobs:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/sweep-read-lines.log
           # The close and its comment go out as the bot token, as the
           # dispatch's writes do.
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -610,6 +618,7 @@ jobs:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/sweep-read-lines.log
           # The dispatch's tokens: the record reads go out as they do, and
           # nothing here writes to GitHub — the comments are Linear's.
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -663,6 +672,7 @@ jobs:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/sweep-read-lines.log
           # The dispatch (`plan_run.fire`, contents:write) and the receipt go
           # out as the bot token; the reads ride the pool App, as the sweep's do.
           GH_TOKEN: ${{ steps.app.outputs.token }}
@@ -709,6 +719,7 @@ jobs:
           BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
           BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
           BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+          BUREAU_READ_LINES_FILE: ${{ runner.temp }}/sweep-read-lines.log
           GH_TOKEN: ${{ steps.app.outputs.token }}
           GH_READ_TOKEN: ${{ steps.reader.outputs.token }}
           REPO: ${{ github.repository }}
@@ -749,3 +760,30 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
           exit "$STATUS"
+      # DRE-9251: the read-fallback alert (DRE-8798), settled ONCE, LAST, over
+      # every step of this job. The Sweep step and the five phases above copy
+      # their `read-fallback:` and `read-door:` lines to one lines file
+      # (`BUREAU_READ_LINES_FILE`), and the Sweep step writes the settle file
+      # only on a full pass that reached its end — `idle (<why>)` on an idle
+      # one. No settle file settles nothing, so a crashed sweep leaves the
+      # alert as the last full pass left it, and a missing lines file never
+      # resolves it. The line counts the processes it read, `from <p>
+      # process(es)`, one per `read-door: served` line of the file
+      # (scripts/read_fallback_alert.py).
+      #
+      # The door's four variables are the Sweep step's: `BUREAU_READ` is the
+      # mode `settle` reads — without it the alert is never raised or resolved
+      # again — and `BUREAU_READ_URL` is where the notice client posts, with
+      # the job's OIDC token (the stub grants `id-token: write`). It sets NO
+      # `BUREAU_READ_LINES_FILE`: this process reads that file and never adds
+      # its own lines to it.
+      - name: Settle the read-fallback alert
+        if: ${{ !cancelled() && inputs.sweep_reason == '' && (steps.sweep.outcome == 'success' || steps.sweep.outcome == 'failure') }}
+        env:
+          BUREAU_READ: ${{ vars.BUREAU_READ || 'off' }}
+          BUREAU_READ_URL: ${{ vars.BUREAU_READ_URL }}
+          BUREAU_READ_AUDIENCE: ${{ vars.BUREAU_READ_AUDIENCE }}
+          BUREAU_PIPELINE_REF: ${{ inputs.pipeline_ref }}
+        run: |
+          REPO_SLUG=$(basename "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          python3 .bureau-pipeline/scripts/read_fallback_alert.py settle --lines-file "$RUNNER_TEMP/sweep-read-lines.log" --settle-file "$RUNNER_TEMP/read-fallback-settle.json" --repo "$REPO_SLUG"

@@ -25,8 +25,9 @@ What this file pins:
 3. **One level of recursion per landed head** — the grandchild stacked on a
    child is closed too, the depth is bounded, and a cycle terminates.
 4. **The step order** — the closer runs in the `card-done` job, only on a
-   default-branch merge, after the merged card's own `card-done` and before the
-   merge-sweep gate.
+   default-branch merge, after the merged card's own `card-done`, and is the
+   step's last call: the merge-sweep gate and its passes left this step for
+   the relay's card-done Reconcile pass (DRE-9254).
 5. **Fail closed** — a GitHub read failure exits 0, says "could not list stacked
    pull requests", and closes nothing. No card is guessed Done.
 
@@ -603,8 +604,9 @@ class StepScenario:
 
 class TheCloserRunsOnALandingInOrder(unittest.TestCase):
     """In the `card-done` job, only on a default-branch merge, after the
-    merged card's own `card-done` and before the merge-sweep gate — so
-    `--promote-only` sees the whole set of cards this landing made Done."""
+    merged card's own `card-done`. Nothing follows it in the step since
+    DRE-9254: every card it closes reaches Done, and the relay's card-done
+    Reconcile pass runs the scoped passes for each one."""
 
     def _landed(self, td):
         scenario = StepScenario(td)
@@ -614,14 +616,10 @@ class TheCloserRunsOnALandingInOrder(unittest.TestCase):
         self.assertEqual(0, proc.returncode, proc.stderr)
         return scenario
 
-    def test_the_order_is_card_done_then_the_closer_then_the_sweep_gate(self):
+    def test_the_order_is_card_done_then_the_closer_and_nothing_after(self):
         with tempfile.TemporaryDirectory() as td:
             order = self._landed(td).order
-        self.assertEqual(
-            ["linear_ops.py card-done", "stacked_landing.py",
-             "merge_sweep_gate.py", "reconcile.py"],
-            order,
-        )
+        self.assertEqual(["linear_ops.py card-done", "stacked_landing.py"], order)
 
     def test_the_closer_is_given_the_repo_the_head_and_the_default_branch(self):
         with tempfile.TemporaryDirectory() as td:

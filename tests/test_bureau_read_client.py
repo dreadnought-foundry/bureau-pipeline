@@ -253,7 +253,10 @@ def test_a_failed_status_stops_the_door_for_the_rest_of_the_run(monkeypatch, sta
         assert first.value.reason == reason and first.value.unavailable
         with pytest.raises(bureau_read.ReadUnknown):
             bureau_read.cards(["DRE-1"], max_age=120)
-        assert len(door.requests) == 1  # never asked again
+        # never asked again — a 401 is asked once more before it stops the
+        # door (DRE-9250), and after that the same
+        assert len(door.requests) == (2 if status == 401 else 1)
+        assert door.asked("/cards") == []
     assert "unavailable 1" in bureau_read.exit_line()
 
 

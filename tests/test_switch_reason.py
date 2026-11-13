@@ -560,9 +560,12 @@ def _unplumbed(step: dict, rows: list) -> list:
 
 
 class TestStep:
-    def test_it_is_the_last_step_of_the_sweep_job_on_a_full_pass(self):
+    def test_it_is_the_last_phase_of_the_sweep_job_on_a_full_pass(self):
         step = _read_step()
-        assert _steps()[-1]["name"] == READ_STEP
+        # DRE-9251: only the step that settles the read-fallback alert over
+        # every phase's read lines comes after it.
+        assert [s["name"] for s in _steps()[-2:]] == [
+            READ_STEP, "Settle the read-fallback alert"]
         # DRE-8000: it also runs after a failed Sweep
         # (tests/test_reconcile_workflow_phase_independence.py).
         assert "inputs.sweep_reason == ''" in step["if"]

@@ -9,11 +9,17 @@ fell back on its other two reads:
     read-fallback: reader="Linear Sync / card-done / merge_sweep_gate.py" read=dependents reason=pull-request
 
 The door serves those two to a pull-request token since agent-bureau
-DRE-9166. What these pin, each against the failure it exists to stop:
+DRE-9166. Since DRE-9254 only the first of those lines could still occur:
+`merge_sweep_gate.py` no longer runs in Linear Sync, only in the relay's
+card-done Reconcile pass, so no `pull_request` run asks for its own card's
+dependents. The read is kept, and pinned below, for the reason
+`bureau_read.py`'s docstring gives; the gate test drives the reader directly
+on a `pull_request` run to prove the read still works for any reader that
+asks it. What these pin, each against the failure it exists to stop:
 
 * on a `pull_request` run whose head branch names `DRE-<n>`,
   `workflow_states()` and `dependents("DRE-<n>", …)` are sent to the door and
-  served from it — and so are the two Linear Sync readers that ask them;
+  served from it — and so are the two readers that asked them in Linear Sync;
 * on the same run every other read — another card's dependents, the board, a
   search — is still refused before a token is minted, and the
   `read-fallback:` line still names it with reason `pull-request`;
@@ -147,7 +153,7 @@ def test_all_three_reads_go_to_the_door_on_one_run(monkeypatch, capsys):
     assert _lines(capsys.readouterr().err) == []
 
 
-# ── Linear Sync's two card-done readers, end to end ─────────────────────────
+# ── Linear Sync's card-done readers (two until DRE-9254), end to end ────────
 
 
 def test_linear_syncs_lane_lookup_reads_the_door_on_a_merged_pull_request(monkeypatch,
@@ -166,7 +172,9 @@ def test_linear_syncs_lane_lookup_reads_the_door_on_a_merged_pull_request(monkey
 def test_linear_syncs_merge_sweep_gate_reads_the_door_on_a_merged_pull_request(monkeypatch,
                                                                               capsys):
     """`merge_sweep_gate.py`'s rebuild of the merged card: its own card and its
-    dependents, both from the door, and no Linear fallback named."""
+    dependents, both from the door, and no Linear fallback named. Linear Sync
+    no longer runs the gate (DRE-9254); this drives it on a `pull_request` run
+    to keep the kept read proved end to end."""
     with FakeIssuer() as issuer, FakeDoor(WORLD) as door:
         _pull_request_run(monkeypatch, door, issuer)
         monkeypatch.setenv("GITHUB_WORKFLOW", "Linear Sync")

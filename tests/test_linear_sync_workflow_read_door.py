@@ -1,8 +1,8 @@
 """The reusable Linear Sync workflow wires the read door (Stage 2 BP-7, #15 and item 38).
 
 The same wiring `reconcile.yml` carries (BP-2,
-`tests/test_reconcile_workflow_read_door.py`), on the step that runs the
-merge-sweep gate and the scoped passes:
+`tests/test_reconcile_workflow_read_door.py`), on the step that moves the
+merged card to Done and closes the cards a landing carried:
 
 * the mode comes from the CALLER's repository variable, `off` when unset;
 * the door's address and audience come from variables; the scripts' ref is
@@ -15,8 +15,14 @@ One deliberate difference from reconcile.yml: the check here is
 `continue-on-error`. The step it guards is the one that moves the merged card
 to Done (GitHub's merge is the ground truth, DRE-2027), and a refused ref must
 never cost a card its Done. The client refuses the door on its own for the
-same mismatch (`bureau_read._token`, `pipeline-ref-mismatch`), so the gate and
-the passes fall back to Linear; the check's job here is the loud annotation.
+same mismatch (`bureau_read._token`, `pipeline-ref-mismatch`), so the step's
+reads fall back to Linear; the check's job here is the loud annotation.
+
+The merge-sweep gate and its scoped passes no longer run here (DRE-9254). A
+`pull_request` run is served no read but the merged card's own, so their
+board and other-card reads printed `read-fallback: … reason=pull-request` and
+read Linear. The relay's card-done Reconcile pass runs the same gate and
+passes where the door serves them, and the `*/15` sweep is the backstop.
 """
 from __future__ import annotations
 
@@ -83,11 +89,43 @@ def test_the_ref_check_runs_before_the_merge_step_and_never_blocks_the_done():
     assert "if" not in _step(STEP)
 
 
+def _commands(run: str) -> list[str]:
+    """The command lines of a `run:` block, continuations folded, comments
+    dropped — a comment that names a script runs nothing."""
+    return [ln.strip() for ln in run.replace("\\\n", " ").splitlines()
+            if ln.strip() and not ln.strip().startswith("#")]
+
+
 def test_the_done_itself_is_untouched():
     run = _step(STEP)["run"]
     assert 'python3 .bureau-pipeline/scripts/linear_ops.py card-done "$CARD" "$PR_URL"' in run
-    # The gate and the passes are the only readers the door wiring is for.
-    assert 'SWEEPS=$(python3 .bureau-pipeline/scripts/merge_sweep_gate.py "$CARD")' in run
+
+
+def test_no_step_of_the_card_done_job_runs_a_reconcile_pass():
+    """DRE-9254: the passes run in the relay's card-done Reconcile pass, where
+    the door serves them — not here, where it refuses all but the merged
+    card. The gate that chose them goes with them."""
+    for step in _steps():
+        commands = _commands(step.get("run") or "")
+        name = step.get("name") or step.get("uses")
+        assert [c for c in commands if "reconcile.py" in c] == [], name
+        assert [c for c in commands if "merge_sweep_gate" in c] == [], name
+
+
+def test_the_merge_steps_door_variables_are_unchanged():
+    """The door still serves `card-done`'s own reads of the merged card and
+    its workflow-state list (DRE-8807, DRE-9166), so every door variable
+    stays exactly as it was."""
+    env = _step(STEP)["env"]
+    door = {k: str(v) for k, v in env.items() if k.startswith("BUREAU_READ")
+            or k == "BUREAU_PIPELINE_REF"}
+    assert door == {
+        "BUREAU_READ": "${{ vars.BUREAU_READ || 'off' }}",
+        "BUREAU_READ_URL": "${{ vars.BUREAU_READ_URL }}",
+        "BUREAU_READ_AUDIENCE": "${{ vars.BUREAU_READ_AUDIENCE }}",
+        "BUREAU_PIPELINE_REF": "${{ inputs.pipeline_ref }}",
+        "BUREAU_READ_CARD_MAX_AGE": "60",
+    }
 
 
 def test_the_conflict_sweep_is_wired_so_its_linear_reads_are_named():

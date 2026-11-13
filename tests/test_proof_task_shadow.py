@@ -161,6 +161,8 @@ PRE_CHANGE_STEPS = [
     ("Set up the consumer's node for the local run", "steps.local_decl.outputs.declared == 'true' && steps.local_decl.outputs.node_dir != '' && steps.local_node.outputs.setup == 'true'"),
     ('Stand up a local run of the released commit', "steps.local_decl.outputs.declared == 'true' || steps.local_decl.outcome == 'failure'"),
     ('Install Claude Code (asserted)', None),
+    # DRE-9253: the read token broker for the agent sessions' door reads.
+    ('Read token broker — start it for the agent sessions', "steps.install_claude.outcome == 'success'"),
     ('Set the git identity every proof run commits as', None),
     # DRE-8168: the name guard, written as a pre-push hook before the agent.
     ('Install the name guard', None),
@@ -173,6 +175,8 @@ PRE_CHANGE_STEPS = [
     ('Retry decision (attempt 2)', 'always()'),
     ('Back off before the agent retry (attempt 2)', "always() && steps.install_claude.outcome == 'success' && steps.retry2.outputs.retry == 'true'"),
     ('Implement proof card (retry 2)', "always() && steps.install_claude.outcome == 'success' && steps.retry2.outputs.retry == 'true'"),
+    # DRE-9253: the sessions' read lines printed, and the broker stopped.
+    ("Read token broker — print the sessions' read lines, and stop", 'always()'),
     ('Resolve agent step result', 'always()'),
     ("Keep the run's Claude usage reading", 'always()'),
     ('Upload the usage reading', "always() && steps.usage.outputs.path != ''"),
@@ -242,6 +246,11 @@ PRE_CHANGE_AGENT_ENV = {
     "PROOF_SESSION_SECONDS": "${{ vars.PROOF_ROLE_DURATION_SECONDS || '3600' }}",
     # DRE-8258: background tasks off, so a live run never ends its turn on one.
     "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1",
+    # DRE-9253: the session's door reads through the read token broker, and
+    # its read lines to a file the job prints.
+    "BUREAU_READ_TOKEN_BROKER": "${{ steps.read_broker.outputs.url }}",
+    "BUREAU_READ_TOKEN_BROKER_SECRET": "${{ steps.read_broker.outputs.secret }}",
+    "BUREAU_READ_LINES_FILE": "${{ runner.temp }}/agent-read-lines.log",
 }
 
 # PRE_CHANGE_PROMPT — the agent's prompt on main at 16becdd2, byte for byte,
