@@ -53,6 +53,7 @@ MODEL_ACTION = "anthropics/claude-code-action"
 BROKER_VARIABLES = ("BUREAU_READ_TOKEN_BROKER", "BUREAU_READ_TOKEN_BROKER_SECRET",
                     "BUREAU_READ_LINES_FILE")
 PRINT_LINES = "read_token_broker.py print-lines"
+START = "read_token_broker.py start"
 
 
 @dataclass(frozen=True)
@@ -259,7 +260,107 @@ def test_a_new_session_with_the_door_on_and_no_broker_fails(doctored):
         }},
     }, sort_keys=False), encoding="utf-8")
     problems = unwired(doctored)
-    assert [p.split(":")[0] for p in problems] == ["new-session.yml / work / agent"] * 2, problems
+    assert [p.split(":")[0] for p in problems] == ["new-session.yml / work / agent"] * 3, problems
+
+
+def test_a_new_session_under_a_workflow_level_door_and_no_broker_fails(doctored):
+    # GitHub merges `env:` workflow → job → step, so a door opened for the
+    # whole workflow is open for the session too.
+    (doctored / "new-session.yml").write_text(yaml.safe_dump({
+        "name": "New Session",
+        "on": {"workflow_dispatch": {}},
+        "env": {"BUREAU_READ": "${{ vars.BUREAU_READ || 'off' }}"},
+        "jobs": {"work": {
+            "runs-on": "ubuntu-latest",
+            "steps": [{"id": "agent", "uses": f"{MODEL_ACTION}@v1", "with": {"prompt": "hi"}}],
+        }},
+    }, sort_keys=False), encoding="utf-8")
+    assert "new-session.yml / work / agent" in {str(s) for s, _, _ in discover(doctored)}
+    problems = unwired(doctored)
+    assert [p.split(":")[0] for p in problems] == ["new-session.yml / work / agent"] * 3, problems
+
+
+def test_a_new_session_with_the_variables_and_no_start_step_fails(doctored):
+    (doctored / "new-session.yml").write_text(yaml.safe_dump({
+        "name": "New Session",
+        "on": {"workflow_dispatch": {}},
+        "jobs": {"work": {
+            "runs-on": "ubuntu-latest",
+            "env": {"BUREAU_READ": "${{ vars.BUREAU_READ || 'off' }}"},
+            "steps": [
+                {"id": "agent", "uses": f"{MODEL_ACTION}@v1", "with": {"prompt": "hi"}, "env": {
+                    "BUREAU_READ_TOKEN_BROKER": "${{ steps.read_broker.outputs.url }}",
+                    "BUREAU_READ_TOKEN_BROKER_SECRET": "${{ steps.read_broker.outputs.secret }}",
+                    "BUREAU_READ_LINES_FILE": "${{ runner.temp }}/agent-read-lines.log"}},
+                {"name": "print", "if": "always()", "run":
+                 "python3 .bureau-pipeline/scripts/read_token_broker.py print-lines"
+                 ' --file "$RUNNER_TEMP/agent-read-lines.log"'},
+            ],
+        }},
+    }, sort_keys=False), encoding="utf-8")
+    assert unwired(doctored) == [
+        f"new-session.yml / work / agent: no `{START}` step in its job"]
+
+
+@pytest.mark.parametrize("session", [
+    Session("medic.yml", "diagnose", "claude"),
+    Session("alarm-repair.yml", "repair", "repair"),
+    Session("triage-repair.yml", "repair", "repair"),
+], ids=str)
+def test_removing_the_start_step_fails_naming_the_step(doctored, session):
+    path = doctored / session.workflow
+    doc = _load(path)
+    job = doc["jobs"][session.job]
+    job["steps"] = [s for s in job["steps"] if START not in (s.get("run") or "")]
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    assert unwired(doctored) == [f"{session}: no `{START}` step in its job"]
+
+
+def test_a_start_step_after_the_session_does_not_count(doctored):
+    path = doctored / "alarm-repair.yml"
+    doc = _load(path)
+    steps = doc["jobs"]["repair"]["steps"]
+    starter = next(s for s in steps if START in (s.get("run") or ""))
+    steps.remove(starter)
+    model = next(i for i, s in enumerate(steps) if _is_model(s))
+    steps.insert(model + 1, starter)
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    assert unwired(doctored) == [
+        f"alarm-repair.yml / repair / repair: the job's `{START}` step does not come before it"]
+
+
+def test_a_misspelled_start_step_id_in_the_values_fails_naming_the_step(doctored):
+    # A one-character slip copying the block: GitHub resolves an unknown step
+    # id to the empty string, and the session falls back on every read.
+    path = doctored / "triage-repair.yml"
+    doc = _load(path)
+    step = next(s for s in doc["jobs"]["repair"]["steps"] if s.get("id") == "repair")
+    for variable in ("BUREAU_READ_TOKEN_BROKER", "BUREAU_READ_TOKEN_BROKER_SECRET"):
+        step["env"][variable] = step["env"][variable].replace("read_broker", "read_brokr")
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    assert unwired(doctored) == [
+        "triage-repair.yml / repair / repair: BUREAU_READ_TOKEN_BROKER is not "
+        "`${{ steps.read_broker.outputs.url }}`",
+        "triage-repair.yml / repair / repair: BUREAU_READ_TOKEN_BROKER_SECRET is not "
+        "`${{ steps.read_broker.outputs.secret }}`"]
+
+
+def test_a_new_session_in_a_wired_job_naming_a_missing_step_fails(doctored):
+    # The critic's case B: a session added to plan.yml's job beside the 13
+    # wired ones, its variables naming a step id that does not exist.
+    path = doctored / "plan.yml"
+    doc = _load(path)
+    steps = doc["jobs"]["plan"]["steps"]
+    last = max(i for i, s in enumerate(steps) if _is_model(s))
+    steps.insert(last + 1, {"id": "new_agent", "uses": f"{MODEL_ACTION}@v1", "with": {"prompt": "hi"},
+                            "env": {"BUREAU_READ": "on",
+                                    "BUREAU_READ_TOKEN_BROKER": "${{ steps.read_brokr.outputs.url }}",
+                                    "BUREAU_READ_TOKEN_BROKER_SECRET":
+                                        "${{ steps.read_brokr.outputs.secret }}",
+                                    "BUREAU_READ_LINES_FILE": "${{ runner.temp }}/agent-read-lines.log"}})
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    problems = unwired(doctored)
+    assert [p.split(":")[0] for p in problems] == ["plan.yml / plan / new_agent"] * 2, problems
 
 
 def test_a_new_session_with_the_door_off_is_not_held(doctored):
