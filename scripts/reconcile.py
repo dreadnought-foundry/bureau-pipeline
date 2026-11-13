@@ -18165,10 +18165,11 @@ def main(
 # nothing else. Since DRE-9254 this is the ONLY place those passes run on a
 # merge: `linear-sync.yml` ran them inline too, in the merge's `pull_request`
 # run, where the read door refuses every read but the merged card's own, so
-# they read Linear. The `*/15` sweep is the backstop when a dispatch is lost. The backstops, the watchdogs, the
-# Intake age-out and the nudge loop are the cron's: a Done changes nothing any
-# of them reads. The dispatch cannot simply be dropped instead: a `no-code`
-# card the operator closes by hand reaches the board through the relay alone.
+# they read Linear. The `*/15` sweep is the backstop when a dispatch is lost.
+# The backstops, the watchdogs, the Intake age-out and the nudge loop are the
+# cron's: a Done changes nothing any of them reads. The dispatch could never
+# simply be dropped: a `no-code` card the operator closes by hand reaches the
+# board through the relay alone.
 CARD_DONE = "card-done"
 
 
