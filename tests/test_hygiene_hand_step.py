@@ -276,7 +276,9 @@ class TestThePlacement:
         the receipt still recomposes byte for byte."""
         action = the_action(plan([board_card("DRE-7328")]), "DRE-7328")
         body = action.writes[1].body
-        assert hygiene._receipt_parts(body)[2] == action.evidence
+        read_back = hygiene._receipt_parts(body)[2]
+        assert ", ".join(read_back) == ", ".join(action.evidence)
+        assert hygiene.receipt(ACT, action.cause, read_back, NOW) == body
 
     def test_a_group_with_no_row_is_unplaced_and_says_so(self, monkeypatch, capsys):
         import hold_placement
