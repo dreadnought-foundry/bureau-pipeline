@@ -66,8 +66,14 @@ DRE_3919_LINE = (
 ARCHIVED_AT = "2026-11-09T09:45:35.368Z"
 
 
+# The real read, kept at import: `conftest._no_archived_claims` stubs it for
+# every other suite, and this one is about it.
+_ARCHIVED_HISTORY = reconcile.archived_history
+
+
 @pytest.fixture(autouse=True)
 def _pin_and_reset(monkeypatch):
+    monkeypatch.setattr(reconcile, "archived_history", _ARCHIVED_HISTORY)
     monkeypatch.setattr(reconcile, "REPO_SLUG", "portico")
     reconcile._write_failures.clear()
     reconcile._read_failures.clear()
