@@ -10,7 +10,10 @@ The week ending 2026-11-07 (DRE-9269) put two holds at the top of the table —
 read answers that for every open hold of the three kinds in `TAGS`, grouped by
 the words of the hold's own receipt, so the answer is a short list of kinds
 rather than a row per card. It reads and nothing else: no hold is lifted, no
-card moved, nothing posted.
+card moved, nothing posted. Each group says where it belongs, off
+`config/hold-placements.json` (DRE-9290, `scripts/hold_placement.py`), so a
+deliberate hold (`operator`, with its reason) reads apart from an unhandled
+one (`unplaced`).
 
 ## Where a hold is read
 
@@ -42,6 +45,14 @@ the stay the newest is the hold. Standing hours run from the receipt to the
 board's `taken_at`, and for `hyg-hand-step` from the later of the receipt and
 the card's newest entry into `Hand-work`.
 
+**Ended** (DRE-9290). A hold is no longer open once a comment on the card the
+pipeline's own Linear user wrote — the user the reading key belongs to,
+`linear_ops.viewer_id()`, the test `proof_run_state.reading` applies — newer
+than its receipt carries a line opening `hold_placement.END_LINE` that names
+the hold's kind in `hold_placement.END_WORDS`. The viewer is read once, and
+only when a card holding a hold carries such a line; a line from anyone else,
+or a viewer that cannot be read, ends nothing.
+
 **What it waits on.** `hyg-blocker-owner` waits on the cards it holds up. Their
 states come from `hygiene_blockers.read_cards` through a read-only hygiene
 context, because a held-up card is often in a lane the board file does not
@@ -70,18 +81,23 @@ for the other two — and for `hyg-blocker-owner` only a lane it waits in
 **A cut-short window.** A card in `Intake` or `Hand-work`, or a `PROOF:` card
 in any lane, whose comment window Linear cut short
 (`linear_ops.window_is_partial`) and that shows none of the three receipts is
-listed under `CUT_SHORT`, never counted as unheld.
+listed under `CUT_SHORT`, never counted as unheld — unless it is a standing
+card `config/hand-work-age.json` declares, which none of the three writers can
+hold.
 
 ## The output
 
 `hold-waits: taken_at=<PT> lanes=<…> open=<n> hyg-hand-step=<n>
-hyg-blocker-owner=<n> hand-work-overdue=<n> unreadable=<n> cut-short=<n>` —
-`open` is every hold listed, each kind's count its readable holds, and
-`unreadable` the rest. Then the groups, largest total standing hours first:
-one header each — kind, group, count, total hours, oldest hours, and how many
-of its holds wait on an open card, a closed one, the step itself, or a card
-the read did not answer — and one line per hold under it. The cut-short cards
-come last.
+hyg-blocker-owner=<n> hand-work-overdue=<n> unreadable=<n> cut-short=<n>
+pipeline=<n> owner=<n> operator=<n> unplaced=<n>` — `open` is every hold
+listed, each kind's count its readable holds, `unreadable` the rest, and the
+last four count the holds by their group's bucket. Then the groups, largest
+total standing hours first: one header each — kind, group, count, total
+hours, oldest hours, how many of its holds wait on an open card, a closed one,
+the step itself, or a card the read did not answer, and ` · bucket <bucket>:
+<who>` off the group's row, or ` · unplaced` for a group with none — and one
+line per hold under it. The cut-short cards come last, under a header that
+says its bucket the same way.
 """
 
 from __future__ import annotations
