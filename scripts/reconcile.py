@@ -7094,6 +7094,50 @@ def fresh_undeclared_claims(card: dict) -> tuple[set, str | None]:
     return prose_blockers.undeclared_claims(card), None
 
 
+def archived_history(claims: Iterable[str]) -> tuple[set, str | None]:
+    """Of a defect's `claims`, the ones that are HISTORY (DRE-9319).
+
+    `(history, None)` — the claimed cards Linear has ARCHIVED and that are
+    closed (`prose_blockers.TERMINAL`); `(set(), reason)` when a claim could
+    not be read, so there is no answer to call the line a defect on.
+
+    An archived card drops off every `inverseRelations` page, so a relation
+    the board held stops corroborating its prose the day Linear archives the
+    blocker, with nobody touching either card. On 2026-11-09 at about 1:46 AM
+    PT Linear's own auto-archive took DRE-3777 and DRE-3949, Done since
+    2026-09-29; epic DRE-3919's `**Blocked by:**` line naming them read as a
+    defect from that sweep on, held the epic's PROOF, and every portico
+    Reconcile run went red. A dependency that shipped and was archived is the
+    case `prose_blockers.undeclared_claims` already calls documentation when
+    its relation is visible; this reads the one field that tells it apart
+    when the relation is not.
+
+    An archived card that is still open is NOT history — its relation is
+    hidden and it may still block — and a card that is not archived has a
+    relation the page would show: both stay defects, exactly as before.
+    A claim Linear answers "not found" for is a defect too (a typo is not
+    unknown). Asked only of a suspected defect, one `linear_ops.get_issue`
+    per claim — a listed read site, so a corroborated line costs nothing and
+    the Linear-reads ledger gains no row.
+    """
+    history: set = set()
+    for identifier in sorted(claims):
+        try:
+            issue = linear_ops.get_issue(identifier, fresh=True)
+        except linear_ops.LinearRateLimited:
+            raise  # the run's own exit code (DRE-2923), never one claim's problem
+        except linear_ops.LinearError as e:
+            if "not found" in str(e).lower():
+                continue  # Linear answered: there is no such card
+            return set(), f"{identifier} could not be read ({e})"
+        if not issue:
+            continue
+        state = (issue.get("state") or {}).get("name")
+        if issue.get("archivedAt") and state in prose_blockers.TERMINAL:
+            history.add(identifier)
+    return history, None
+
+
 def card_state(identifier: str) -> str:
     data = linear_ops.gql(
         "query($id: String!) { issue(id: $id) { state { name } } }", {"id": identifier}
@@ -7574,6 +7618,27 @@ def epic_blockers_unmet(epic_identifier: str, *, release_at_build_done: bool = T
     # itself, and the wrong sentence is the one nobody is coming to fix unless
     # something says so.
     undeclared = prose_blockers.undeclared_claims(epic)
+    if undeclared:
+        # A claim on a card Linear archived after it closed is history, not a
+        # defect (DRE-9319): the relation is hidden, not missing. A claim that
+        # cannot be read is neither — held, and no defect clock is started.
+        history, unread = archived_history(undeclared)
+        if unread is not None:
+            print(
+                f"epic-gate: {epic_identifier}'s description declares "
+                f"{', '.join(sorted(undeclared))} a blocker with no relation on "
+                f"the page, and {unread} — holding its children, and no prose "
+                "defect is recorded on a claim nobody could read"
+            )
+            return True
+        if history:
+            print(
+                f"epic-gate: {epic_identifier}'s prose names "
+                f"{', '.join(sorted(history))}, archived by Linear after it "
+                "closed — its relation is off the page, and the line is "
+                "history, not a defect"
+            )
+        undeclared -= history
     if undeclared:
         print(
             f"epic-gate: {epic_identifier} is held by a PROSE DEFECT "
@@ -8960,6 +9025,26 @@ def promote_ready(
                     f"relation for {', '.join(sorted(suspected - undeclared))}; "
                     "a fresh read does — not refused"
                 )
+        if undeclared:
+            # The epic gate's rule (DRE-9319): an archived, closed claim is
+            # history, and an unreadable one decides nothing.
+            history, unread = archived_history(undeclared)
+            if unread is not None:
+                print(
+                    f"promotion: {card['identifier']}'s description claims "
+                    f"{', '.join(sorted(undeclared))} with no relation, and "
+                    f"{unread} — no {prose_blockers.CARD_TAG} refusal on a "
+                    "claim nobody could read; neither refused nor promoted — "
+                    "skipping"
+                )
+                continue
+            if history:
+                print(
+                    f"promotion: {card['identifier']}'s prose names "
+                    f"{', '.join(sorted(history))}, archived by Linear after "
+                    "it closed — history, not a defect; not refused"
+                )
+            undeclared -= history
         if undeclared:
             notice = prose_blockers.card_refusal(card["identifier"], undeclared)
             print(

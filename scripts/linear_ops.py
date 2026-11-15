@@ -1872,6 +1872,11 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
     `fresh=True` bypasses `_card_read_once`'s memo: the caller needs the card
     as it is NOW, not as it was when the command began.
 
+    `archivedAt` is selected for `reconcile.archived_history` (DRE-9319):
+    Linear answers `issue(id:)` for an archived card too, and an archived
+    card drops off every relation page, so a prose blocker naming one is
+    told from a defect by this field. `null` when the card is not archived.
+
     It stays on Linear (DRE-8898): it is the write path's read, and
     `team { id }`, `state { id type }` and `project { id }` are not on the
     door's node; `fresh=True` is the DRE-2316 pre-write re-read, which must
@@ -1885,6 +1890,7 @@ def get_issue(identifier: str, *, fresh: bool = False) -> dict:
              labels { nodes { name } }
              children(first: 1) { nodes { id } }
              project { id }
+             archivedAt
            } }""",
         {"id": identifier},
     )
