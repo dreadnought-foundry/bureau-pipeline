@@ -356,3 +356,155 @@ class TestTheRegistries:
         promoted = {w.lane for w in ready_lane_writers.writes()
                     if w.writer == "reconcile.py" and "destination" in w.expression}
         assert {"In Progress", HAND_WORK} <= promoted, promoted
+
+
+# --------------------------------------------------------------------------
+# 6: the Hand-work age alarm says why a person is needed (DRE-9295)
+# --------------------------------------------------------------------------
+PLACEMENTS = ROOT / "config" / "hold-placements.json"
+HAND_STEP_ACT = "hygiene-hand-step-class"
+OVERDUE_KIND = "hand-work-overdue"
+STEP_KIND = "hyg-hand-step"
+
+
+def _row(kind: str, group: str) -> dict:
+    """The table's row for `group`, read off the file itself — never through
+    the reader under test. A template's `<…>` part matches any text."""
+    import json
+    import re
+
+    for row in json.loads(PLACEMENTS.read_text(encoding="utf-8"))["rows"]:
+        parts = re.split(r"<[^<>]+>", row["group"])
+        if row["kind"] == kind and re.fullmatch(
+                ".+?".join(map(re.escape, parts)), group):
+            return row
+    raise AssertionError(f"no row places {kind} — {group}")
+
+
+def _sentence(row: dict) -> str:
+    """A `why` inside the `Kind:` line, whose own closing period ends it."""
+    return row["why"].rstrip(".")
+
+
+def _ago(hours: float) -> str:
+    from datetime import UTC, datetime, timedelta
+
+    return (datetime.now(UTC) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+
+
+def _class_receipt(cause: str, phrase: str) -> str:
+    import hygiene
+
+    return hygiene.receipt(HAND_STEP_ACT, cause, [phrase, "placed: a former reading"],
+                           "09:00 PT")
+
+
+def _overdue_card(*bodies: str, entered: float = 30.0) -> dict:
+    """An `operator-step` card in Hand-work `entered` hours ago, with `bodies`
+    after its promotion receipt — newest first, as Linear answers."""
+    nodes = [{"body": "🧹 Auto-promoted Queued → Hand-work: routed **OPERATOR**",
+              "createdAt": _ago(entered)}]
+    nodes += [{"body": b, "createdAt": _ago(entered - 1 - i)} for i, b in enumerate(bodies)]
+    return {"identifier": "DRE-9295", "title": "OPERATOR: an operator step",
+            "state": {"name": HAND_WORK},
+            "labels": {"nodes": [{"name": "repo:portico"}, {"name": OPERATOR_STEP}]},
+            "comments": {"nodes": list(reversed(nodes))}}
+
+
+def _alarmed(card: dict) -> tuple:
+    """`(first line, Kind: line)` of the one alarm `_hand_work_age` posts."""
+    posted = []
+    with mock.patch.object(reconcile.linear_ops, "cmd_comment",
+                           side_effect=lambda ident, body: posted.append((ident, body))):
+        reconcile._hand_work_age(card, "labeled 'operator-step'")
+    assert len(posted) == 1, posted
+    first, second, *_ = posted[0][1].split("\n")
+    return first, second
+
+
+def _today(card: dict) -> str:
+    entered = card["comments"]["nodes"][-1]["createdAt"]
+    return (f"Kind: the operator's card, labeled 'operator-step' — it entered Hand-work "
+            f"{reconcile._pt(entered)}, and no run is dispatched for it")
+
+
+class TestTheAlarmSaysWhy:
+    """The alarm's `Kind:` line keeps today's words and gains, before its
+    closing period, where its own group is placed and — for an operator's
+    card — where its classed step is placed."""
+
+    OWN = _row(OVERDUE_KIND, "the operator's card, labeled 'operator-step'")
+
+    def _placed(self) -> str:
+        return f" — placed: operator, {self.OWN['who']}: {_sentence(self.OWN)}"
+
+    def test_a_card_classed_a_deploy_says_its_step_is_the_operators(self):
+        card = _overdue_card(_class_receipt("machine, kind deploy", "deploy"))
+        first, second = _alarmed(card)
+        assert first == ("🚨 hand-work-overdue: DRE-9295 has waited in Hand-work 30 "
+                         "hours, past its 24 — the operator's to look at.")
+        step = _row(STEP_KIND, "machine, kind deploy")
+        assert step["bucket"] == "operator"
+        assert second == (f"{_today(card)}{self._placed()} — its step: operator, "
+                          f"{_sentence(step)}.")
+
+    def test_a_card_classed_a_variable_says_the_pipeline_does_its_step(self):
+        card = _overdue_card(_class_receipt("machine, kind variable", "environment variable"))
+        _, second = _alarmed(card)
+        step = _row(STEP_KIND, "machine, kind variable")
+        assert step["bucket"] == "pipeline"
+        assert second == (f"{_today(card)}{self._placed()} — its step: pipeline, "
+                          f"{_sentence(step)}.")
+
+    def test_a_card_not_yet_classed_says_so(self):
+        card = _overdue_card()
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not classed yet."
+
+    @pytest.mark.parametrize("label", ["hand-step:person", "Hand-Step:Machine"])
+    def test_a_card_wearing_its_class_label_with_no_receipt_in_view_is_not_read(self, label):
+        card = _overdue_card()
+        card["labels"]["nodes"].append({"name": label})
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not read."
+
+    def test_a_partial_window_with_no_receipt_in_view_is_not_read(self):
+        card = _overdue_card()
+        card["comments"]["pageInfo"] = {"hasNextPage": True, "endCursor": "x"}
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not read."
+
+    def test_a_whole_window_says_not_classed_yet(self):
+        card = _overdue_card()
+        card["comments"]["pageInfo"] = {"hasNextPage": False, "endCursor": None}
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not classed yet."
+
+    def test_the_newest_class_receipt_is_the_one_read(self):
+        card = _overdue_card(_class_receipt("person, kind person", "the operator's Mac"),
+                             _class_receipt("machine, kind variable", "environment variable"))
+        _, second = _alarmed(card)
+        assert second.endswith(" — its step: pipeline, "
+                               f"{_sentence(_row(STEP_KIND, 'machine, kind variable'))}.")
+
+    def test_the_lead_hold_waits_reads_is_todays(self):
+        card = _overdue_card(_class_receipt("machine, kind deploy", "deploy"))
+        _, second = _alarmed(card)
+        lead = second[len("Kind:"):].split("—", 1)[0].strip()
+        assert lead == "the operator's card, labeled 'operator-step'"
+
+    def test_a_group_with_no_row_is_unplaced_and_says_so(self, monkeypatch, capsys):
+        import hold_placement
+
+        rows = [r for r in hold_placement.load()
+                if not (r["kind"] == OVERDUE_KIND and "labeled" in r["group"])
+                and not (r["kind"] == STEP_KIND and r["group"] == "machine, kind deploy")]
+        index = hold_placement.placements(rows, hold_placement.groups())[0]
+        monkeypatch.setattr(hold_placement, "_shipped", lambda: index)
+        card = _overdue_card(_class_receipt("machine, kind deploy", "deploy"))
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)} — placed: unplaced — its step: unplaced."
+        err = capsys.readouterr().err
+        assert "the operator's card, labeled 'operator-step'" in err
+        assert "machine, kind deploy" in err
+        assert "unplaced" in err

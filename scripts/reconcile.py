@@ -2819,6 +2819,62 @@ HAND_WORK_AGE_CONFIG = os.path.join(
     "config", "hand-work-age.json")
 
 
+def placed_row(kind: str, group: str, ident: str) -> dict | None:
+    """The row of `config/hold-placements.json` that places `group` of `kind`
+    (DRE-9295), through `hold_placement.placement`, or None. None is said on
+    stderr, and its writer writes `placed: unplaced` — never a guessed reason."""
+    import hold_placement  # noqa: PLC0415 — it reads hold_waits, which imports this module
+
+    try:
+        row = hold_placement.placement(kind, group)
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        print(f"hold-placement: {ident} — the table could not be read ({e}), so "
+              f"{kind} — {group} is written placed: unplaced", file=sys.stderr)
+        return None
+    if row is None:
+        print(f"hold-placement: {ident} — no row in config/hold-placements.json places "
+              f"{kind} — {group}, so it is written placed: unplaced", file=sys.stderr)
+    return row
+
+
+def _why(row: dict) -> str:
+    """A row's `why` inside a `Kind:` line, whose own closing period ends it."""
+    return row["why"].rstrip(".")
+
+
+def placed_clause(group: str, ident: str) -> str:
+    """` — placed: <bucket>, <who>: <why>` for a `hand-work-overdue` alarm's
+    own group, its `Kind:` lead (DRE-9295)."""
+    row = placed_row(hold_deadline.HAND_WORK_TAG, group, ident)
+    if row is None:
+        return " — placed: unplaced"
+    return f" — placed: {row['bucket']}, {row['who']}: {_why(row)}"
+
+
+def step_clause(card: dict) -> str:
+    """` — its step: <bucket>, <why>` off the group of the card's newest
+    `hyg-hand-step` class receipt in its window (DRE-9295). With none in view,
+    ` — its step: not read` for a card that wears its class label or whose
+    window is partial — its receipt may lie beyond the window — and ` — its
+    step: not classed yet` only for a whole window and no class label."""
+    import hold_waits  # noqa: PLC0415 — it imports hygiene_hand_step, which imports this module
+    import hygiene_hand_step  # noqa: PLC0415 — it imports this module
+
+    found = [r for r in (hold_waits.receipt_of(n, card)
+                         for n in linear_ops.window_nodes(card.get("comments")))
+             if r is not None and r.kind == hold_waits.HAND_STEP]
+    if not found:
+        marks = {(lbl.get("name") or "").lower()
+                 for lbl in (card.get("labels") or {}).get("nodes", [])}
+        if (linear_ops.window_is_partial(card.get("comments"))
+                or marks & {hygiene_hand_step.MACHINE_LABEL, hygiene_hand_step.PERSON_LABEL}):
+            return " — its step: not read"
+        return " — its step: not classed yet"
+    newest = max(found, key=lambda r: r.at or datetime.min.replace(tzinfo=UTC))
+    row = placed_row(hold_waits.HAND_STEP, newest.group, card["identifier"])
+    return f" — its step: {row['bucket']}, {_why(row)}" if row else " — its step: unplaced"
+
+
 def _hand_work_age(card: dict, reason: str, *, judged: list | None = None) -> str:
     """The tail `flag_stranded` appends to a Hand-work card's line, after
     posting the one `hand-work-overdue` alarm the card is owed (DRE-6409).
@@ -2922,10 +2978,12 @@ def _hand_work_age(card: dict, reason: str, *, judged: list | None = None) -> st
             why = "could not be read" if got.state == "unknown" else "is in flight"
             note(None if got.state == "unknown" else entered, None)
             return f"; in Hand-work {hours}h, past {limit} — no alarm: its proof run {why}"
-        kind = f"{hold_deadline.KIND_LEAD_PROOF_NOT_IN_FLIGHT} — {'; '.join(got.lines)}."
+        lead = hold_deadline.KIND_LEAD_PROOF_NOT_IN_FLIGHT
+        kind = f"{lead} — {'; '.join(got.lines)}{placed_clause(lead, ident)}."
     else:
-        kind = (f"{hold_deadline.kind_lead_operators_card(reason)} — it entered Hand-work "
-                f"{_pt(entered)}, and no run is dispatched for it.")
+        lead = hold_deadline.kind_lead_operators_card(reason)
+        kind = (f"{lead} — it entered Hand-work {_pt(entered)}, and no run is dispatched "
+                f"for it{placed_clause(lead, ident)}{step_clause(card)}.")
     try:
         linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
             f"🚨 hand-work-overdue: {ident} has waited in Hand-work {hours} hours, "
@@ -3272,17 +3330,19 @@ def alarm_held_proofs(cards: list[dict], *, board_read: bool = True,
             continue
         quoted = proof_record._cut(
             (clock.get("body") or "").strip().split("\n", 1)[0].strip(), 120)
-        held_by = (f"{hold_deadline.kind_lead_ceo_press(lane)} — only his signed console answer "
+        lead = (hold_deadline.kind_lead_ceo_press(lane) if kind == PRESS_HOLD_KIND
+                else hold_deadline.KIND_LEAD_PROOF_HELD)
+        held_by = (f"{lead} — only his signed console answer "
                    f"lifts it, and the return branch reads {proof_dispatch.RETURN_LANE} "
                    f"only: get his answer, or re-sort the hold — {quoted}"
                    f"{f'; {note}' if note else ''}"
                    if kind == PRESS_HOLD_KIND
-                   else f"{hold_deadline.KIND_LEAD_PROOF_HELD} — {quoted}")
+                   else f"{lead} — {quoted}")
         try:
             linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
                 f"🚨 hand-work-overdue: {ident} has waited {lane} for the operator "
                 f"{hours} hours, past its {limit} — the operator's to look at.\n"
-                f"Kind: {held_by}.")))
+                f"Kind: {held_by}{placed_clause(lead, ident)}.")))
         except Exception as e:  # noqa: BLE001 — recorded like every other failed write
             _write_failures.append(f"{ident} hand-work-overdue alarm: {e}")
             print(f"ERROR: hand-work-overdue alarm on {ident}: {e}", file=sys.stderr)

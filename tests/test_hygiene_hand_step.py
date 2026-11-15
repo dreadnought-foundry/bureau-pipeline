@@ -51,6 +51,15 @@ VARIABLE_BODY = ("Turn the relay's no-record return on, live. The code ships beh
                  "deploy sets a relay environment variable.")
 
 
+def placed(group: str) -> str:
+    """The receipt's second evidence item (DRE-9295): `placed: <bucket>,
+    <why>` off the `hyg-hand-step` row of `config/hold-placements.json` that
+    places `group`, read off the file itself."""
+    rows = json.loads((ROOT / "config" / "hold-placements.json").read_text())["rows"]
+    (row,) = [r for r in rows if r["kind"] == TAG and r["group"] == group]
+    return f"placed: {row['bucket']}, {row['why']}"
+
+
 def load_lane():
     if not MODULE_PATH.exists():
         return None
@@ -162,9 +171,10 @@ class TestTheMainCase:
         lines = action.writes[1].body.splitlines()
         assert lines[0] == (f"🧹 hygiene: {TAG} — machine, kind variable · "
                             f"{hygiene.pt(NOW)}")
-        assert lines[1] == "evidence: environment variable"
+        assert lines[1] == (
+            f"evidence: environment variable, {placed('machine, kind variable')}")
         assert action.cause == "machine, kind variable"
-        assert action.evidence == ["environment variable"]
+        assert action.evidence == ["environment variable", placed("machine, kind variable")]
 
     def test_the_receipt_is_hygienes_own_and_carries_the_acts_trailer(self):
         action = the_action(plan([board_card("DRE-7328")]), "DRE-7328")
@@ -181,14 +191,15 @@ class TestTheMainCase:
         assert action.writes[0].label == PERSON
         lines = action.writes[1].body.splitlines()
         assert lines[0] == (f"🧹 hygiene: {TAG} — person, kind person · {hygiene.pt(NOW)}")
-        assert lines[1] == "evidence: the operator's Mac"
+        assert lines[1] == f"evidence: the operator's Mac, {placed('person, kind person')}"
 
     def test_no_phrase_is_a_person_saying_no_machine_kind_matched(self):
         card = board_card("DRE-500", title="agent-bureau: agree the onboarding wording",
                           description="Read the notes and say what was decided.")
         action = the_action(plan([card]), "DRE-500")
         assert action.writes[0].label == PERSON
-        assert action.writes[1].body.splitlines()[1] == "evidence: no machine kind matched"
+        assert action.writes[1].body.splitlines()[1] == (
+            f"evidence: no machine kind matched, {placed('person, kind person')}")
 
     def test_a_verdict_whose_actor_is_the_operator_qualifies_without_the_label(self):
         assert routing_verdict.actor("WORKBENCH") == "operator"
@@ -214,14 +225,73 @@ class TestTheEvidenceLine:
         card = board_card("DRE-502", title="synthetic",
                           description="The operator does it from their own\nsession.")
         action = the_action(plan([card]), "DRE-502")
-        assert action.writes[1].body.splitlines()[1] == "evidence: from their own session"
+        assert action.writes[1].body.splitlines()[1] == (
+            f"evidence: from their own session, {placed('person, kind person')}")
 
     def test_a_middle_dot_in_the_quoted_phrase_becomes_a_space(self, monkeypatch):
         monkeypatch.setattr(lane.operator_step_kind, "classify",
                             lambda title, description: ("machine", "script", "run·it"))
         action = the_action(plan([board_card("DRE-503")]), "DRE-503")
-        assert action.writes[1].body.splitlines()[1] == "evidence: run it"
+        assert action.writes[1].body.splitlines()[1] == (
+            f"evidence: run it, {placed('machine, kind script')}")
         assert "·" not in action.cause
+
+
+# --------------------------------------------------------------------------- #
+# where the step is placed (DRE-9295)                                          #
+# --------------------------------------------------------------------------- #
+
+
+class TestThePlacement:
+    """The receipt's second evidence item says where the group its cause names
+    is placed, so a reader can tell why a person is needed, or that the
+    pipeline does the step. The cause and the deciding phrase do not change."""
+
+    def test_a_person_card_says_a_person_is_needed(self):
+        card = board_card("DRE-7874",
+                          title="OPERATOR: install the launcher on the operator's Mac",
+                          description="This is that refresh, done on the Mac.")
+        action = the_action(plan([card]), "DRE-7874")
+        assert action.cause == "person, kind person"
+        assert action.evidence[0] == "the operator's Mac"
+        assert action.evidence[1] == placed("person, kind person")
+        assert action.evidence[1].startswith("placed: operator, ")
+
+    def test_a_deploy_card_says_the_operator_does_it(self):
+        card = board_card("DRE-520", title="OPERATOR: redeploy the relay",
+                          description="Redeploy the relay so the new image is live.")
+        action = the_action(plan([card]), "DRE-520")
+        assert action.cause == "machine, kind deploy"
+        assert action.evidence == ["redeploy", placed("machine, kind deploy")]
+        assert action.evidence[1].startswith("placed: operator, ")
+
+    def test_a_variable_card_says_the_pipeline_does_it(self):
+        action = the_action(plan([board_card("DRE-7328")]), "DRE-7328")
+        assert action.cause == "machine, kind variable"
+        assert action.evidence == ["environment variable", placed("machine, kind variable")]
+        assert action.evidence[1].startswith("placed: pipeline, ")
+
+    def test_the_receipt_reads_back_through_the_core(self):
+        """A `why` carries commas, which the evidence line joins items with:
+        the receipt still recomposes byte for byte."""
+        action = the_action(plan([board_card("DRE-7328")]), "DRE-7328")
+        body = action.writes[1].body
+        read_back = hygiene._receipt_parts(body)[2]
+        assert ", ".join(read_back) == ", ".join(action.evidence)
+        assert hygiene.receipt(ACT, action.cause, read_back, NOW) == body
+
+    def test_a_group_with_no_row_is_unplaced_and_says_so(self, monkeypatch, capsys):
+        import hold_placement
+
+        rows = [r for r in hold_placement.load()
+                if not (r["kind"] == TAG and r["group"] == "machine, kind variable")]
+        index = hold_placement.placements(rows, hold_placement.groups())[0]
+        monkeypatch.setattr(hold_placement, "_shipped", lambda: index)
+        action = the_action(plan([board_card("DRE-7328")]), "DRE-7328")
+        assert action.cause == "machine, kind variable"
+        assert action.evidence == ["environment variable", "placed: unplaced"]
+        err = capsys.readouterr().err
+        assert "DRE-7328" in err and "machine, kind variable" in err and "unplaced" in err
 
 
 # --------------------------------------------------------------------------- #
@@ -247,7 +317,7 @@ class TestTheCardIsReadWhole:
         action = the_action(plan(cut(full), full=full), "DRE-510")
         assert action.writes[0].label == MACHINE
         assert action.cause == "machine, kind variable"
-        assert action.evidence == ["environment variable"]
+        assert action.evidence == ["environment variable", placed("machine, kind variable")]
 
     def test_a_person_phrase_past_the_cut_wins_over_a_machine_phrase_before_it(self):
         full = {"DRE-511": ("Run bash infra/rotate.sh first. " + FILLER
@@ -255,7 +325,7 @@ class TestTheCardIsReadWhole:
         action = the_action(plan(cut(full), full=full), "DRE-511")
         assert action.writes[0].label == PERSON
         assert action.cause == "person, kind person"
-        assert action.evidence == ["own signed-in session"]
+        assert action.evidence == ["own signed-in session", placed("person, kind person")]
 
     def test_a_card_whose_whole_read_fails_is_skipped_never_classed_from_the_cut(
             self, capsys):

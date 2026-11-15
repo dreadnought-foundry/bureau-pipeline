@@ -28,7 +28,11 @@ the cut text, which could miss a person phrase and claim a machine step. Each
 classed card is one `hygiene.Action` of two writes: the label
 `hand-step:<class>`, then hygiene's own receipt, whose cause is `<class>, kind
 <kind>` and whose evidence is the phrase that decided it — with any `·` or line
-break in it read as a space, because the receipt refuses both.
+break in it read as a space, because the receipt refuses both — then `placed:
+<bucket>, <why>` off the row of `config/hold-placements.json` that places the
+group the cause names (DRE-9295), so the receipt says why a person is needed
+or that the pipeline does the step. A group no row places writes `placed:
+unplaced` and says so on stderr, never a guessed reason.
 
 The core's (tag, cause) key and the label's presence both keep a card from
 being classed twice. The lane reads nothing beyond the board and each such
@@ -101,6 +105,14 @@ def quoted(evidence: str) -> str:
     return " ".join(_UNQUOTABLE.sub(" ", evidence).split())
 
 
+def placed(cause: str, ident: str) -> str:
+    """`placed: <bucket>, <why>` for the group `cause` names (DRE-9295), off
+    `config/hold-placements.json`; `placed: unplaced` for a group no row
+    places, said on stderr by `reconcile.placed_row`."""
+    row = reconcile.placed_row(hygiene.TAGS[ACT], cause, ident)
+    return f"placed: {row['bucket']}, {quoted(row['why'])}" if row else "placed: unplaced"
+
+
 def description(card: dict, ctx: hygiene.Context) -> str | None:
     """The card's whole description — one `ctx.linear` read. None when the read
     fails, said on stderr: the card waits for the next pass."""
@@ -125,7 +137,8 @@ def classed(card: dict, text: str, ctx: hygiene.Context) -> hygiene.Action:
     if cls == operator_step_kind.PERSON:
         label = PERSON_LABEL
     cause = f"{cls}, kind {kind}"
-    evidence = [quoted(evidence) or operator_step_kind.NO_MATCH]
+    evidence = [quoted(evidence) or operator_step_kind.NO_MATCH,
+                placed(cause, card["identifier"])]
     return hygiene.Action(
         lane=LANE, target=card["identifier"], act=ACT, cause=cause, evidence=evidence,
         writes=[hygiene.linear_label(card, label, add=True),
