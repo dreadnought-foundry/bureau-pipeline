@@ -10,7 +10,10 @@ The week ending 2026-11-07 (DRE-9269) put two holds at the top of the table —
 read answers that for every open hold of the three kinds in `TAGS`, grouped by
 the words of the hold's own receipt, so the answer is a short list of kinds
 rather than a row per card. It reads and nothing else: no hold is lifted, no
-card moved, nothing posted.
+card moved, nothing posted. Each group says where it belongs, off
+`config/hold-placements.json` (DRE-9290, `scripts/hold_placement.py`), so a
+deliberate hold (`operator`, with its reason) reads apart from an unhandled
+one (`unplaced`).
 
 ## Where a hold is read
 
@@ -42,6 +45,14 @@ the stay the newest is the hold. Standing hours run from the receipt to the
 board's `taken_at`, and for `hyg-hand-step` from the later of the receipt and
 the card's newest entry into `Hand-work`.
 
+**Ended** (DRE-9290). A hold is no longer open once a comment on the card the
+pipeline's own Linear user wrote — the user the reading key belongs to,
+`linear_ops.viewer_id()`, the test `proof_run_state.reading` applies — newer
+than its receipt carries a line opening `hold_placement.END_LINE` that names
+the hold's kind in `hold_placement.END_WORDS`. The viewer is read once, and
+only when a card holding a hold carries such a line; a line from anyone else,
+or a viewer that cannot be read, ends nothing.
+
 **What it waits on.** `hyg-blocker-owner` waits on the cards it holds up. Their
 states come from `hygiene_blockers.read_cards` through a read-only hygiene
 context, because a held-up card is often in a lane the board file does not
@@ -70,24 +81,30 @@ for the other two — and for `hyg-blocker-owner` only a lane it waits in
 **A cut-short window.** A card in `Intake` or `Hand-work`, or a `PROOF:` card
 in any lane, whose comment window Linear cut short
 (`linear_ops.window_is_partial`) and that shows none of the three receipts is
-listed under `CUT_SHORT`, never counted as unheld.
+listed under `CUT_SHORT`, never counted as unheld — unless it is a standing
+card `config/hand-work-age.json` declares, which none of the three writers can
+hold.
 
 ## The output
 
 `hold-waits: taken_at=<PT> lanes=<…> open=<n> hyg-hand-step=<n>
-hyg-blocker-owner=<n> hand-work-overdue=<n> unreadable=<n> cut-short=<n>` —
-`open` is every hold listed, each kind's count its readable holds, and
-`unreadable` the rest. Then the groups, largest total standing hours first:
-one header each — kind, group, count, total hours, oldest hours, and how many
-of its holds wait on an open card, a closed one, the step itself, or a card
-the read did not answer — and one line per hold under it. The cut-short cards
-come last.
+hyg-blocker-owner=<n> hand-work-overdue=<n> unreadable=<n> cut-short=<n>
+pipeline=<n> owner=<n> operator=<n> unplaced=<n>` — `open` is every hold
+listed, each kind's count its readable holds, `unreadable` the rest, and the
+last four count the holds by their group's bucket. Then the groups, largest
+total standing hours first: one header each — kind, group, count, total
+hours, oldest hours, how many of its holds wait on an open card, a closed one,
+the step itself, or a card the read did not answer, and ` · bucket <bucket>:
+<who>` off the group's row, or ` · unplaced` for a group with none — and one
+line per hold under it. The cut-short cards come last, under a header that
+says its bucket the same way.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+from collections.abc import Callable
 import os
 import re
 import sys
@@ -117,6 +134,10 @@ OVERDUE_MARK = f"🚨 {OVERDUE}:"
 UNREADABLE = "unreadable receipt"
 CUT_SHORT = "window cut short — not read"
 STATE_UNREAD = "state unread"
+HOLDS_OPEN = "holds up open work"
+HOLDS_NOTHING = "holds up nothing open"
+#: What follows a `hyg-blocker-owner` group's lane (`blocker_group`).
+BLOCKER_SPLITS = (HOLDS_OPEN, HOLDS_NOTHING, STATE_UNREAD)
 
 #: What a hold waits on, as its group's header counts it.
 OPEN, CLOSED, STEP, UNREAD = "open", "closed", "step", "unread"
@@ -315,13 +336,19 @@ def held_states(ctx: hygiene.Context, idents: list) -> dict:
     return {i: (_lane(got[i]) if got.get(i) else None) or STATE_UNREAD for i in idents}
 
 
+def blocker_group(lane: str, split: str) -> str:
+    """A `hyg-blocker-owner` hold's group: the lane its cause names, then one
+    of `BLOCKER_SPLITS`."""
+    return f"{lane}, {split}"
+
+
 def _blocker_wait(receipt: Receipt, states: dict) -> tuple:
     named = [(h, states.get(h, STATE_UNREAD)) for h in receipt.held]
     waits_on = "waits on " + ", ".join(f"{h} ({s})" for h, s in named)
     if any(s != STATE_UNREAD and not _closed(s) for _, s in named):
-        return OPEN, "holds up open work", waits_on
+        return OPEN, HOLDS_OPEN, waits_on
     if all(_closed(s) for _, s in named):
-        return CLOSED, "holds up nothing open", waits_on
+        return CLOSED, HOLDS_NOTHING, waits_on
     return UNREAD, STATE_UNREAD, waits_on
 
 
@@ -349,18 +376,73 @@ def _cards(board_doc: dict) -> list:
     return [c for cards in (board_doc.get("lanes") or {}).values() for c in cards or []]
 
 
-def _cut_short(card: dict) -> bool:
+def _standing() -> set:
+    """The standing cards `config/hand-work-age.json` declares — none of the
+    three writers holds one."""
+    with open(hold_deadline.HAND_WORK_AGE, encoding="utf-8") as fh:
+        return {s["card"] for s in json.load(fh)["standing"]}
+
+
+def _cut_short(card: dict, standing: set) -> bool:
     waits = _lane(card) in hygiene_blockers.WAITING or proof_and_demo.is_proof(card.get("title"))
-    return (waits and linear_ops.window_is_partial(card.get("comments"))
+    return (card.get("identifier") not in standing and waits
+            and linear_ops.window_is_partial(card.get("comments"))
             and not _any_receipt(card))
 
 
-def read(board_doc: dict, ctx: hygiene.Context) -> Report:
+def end_lines(card: dict) -> list:
+    """`(at, author id, {words})` for each line on the card opening
+    `hold_placement.END_LINE`, the words it names before its first `—`."""
+    import hold_placement  # noqa: PLC0415 — it reads this module's groups
+
+    found = []
+    for node in (card.get("comments") or {}).get("nodes") or []:
+        for line in (node.get("body") or "").splitlines():
+            line = line.strip()
+            if not line.startswith(hold_placement.END_LINE):
+                continue
+            named = line[len(hold_placement.END_LINE):].split("—", 1)[0]
+            found.append((_when(node.get("createdAt")), ((node.get("user") or {}).get("id")),
+                          {w.strip() for w in named.split(",") if w.strip()}))
+    return found
+
+
+def _ended(receipt: Receipt, ends: list, me: str | None) -> bool:
+    """Whether a line the pipeline's own user wrote after the receipt names
+    its kind's `END_WORDS`. With no viewer read, none did."""
+    import hold_placement  # noqa: PLC0415
+
+    words = hold_placement.END_WORDS.get(receipt.kind)
+    if not me or words is None or receipt.at is None:
+        return False
+    return any(user == me and at is not None and at > receipt.at and words in named
+               for at, user, named in ends)
+
+
+def _not_ended(found: list, viewer: Callable) -> list:
+    """`found` less every hold an end line ended. The viewer is read once, and
+    only when a card holding one carries an end line; a read that fails ends
+    nothing."""
+    ends = {id(card): end_lines(card) for card, _ in found}
+    if not any(ends.values()):
+        return found
+    try:
+        me = viewer()
+    except Exception as e:  # noqa: BLE001 — an unread viewer ends nothing
+        print(f"hold-waits: the pipeline's Linear user could not be read — {e}", file=sys.stderr)
+        me = None
+    return [(card, r) for card, r in found if not _ended(r, ends[id(card)], me)]
+
+
+def read(board_doc: dict, ctx: hygiene.Context, viewer: Callable | None = None) -> Report:
+    """The open holds on the board. `viewer` answers the Linear user the
+    reading key belongs to, `linear_ops.viewer_id` unless handed in."""
     taken_at = _when(board_doc.get("taken_at"))
     if taken_at is None:
         raise ValueError("the board file carries no readable taken_at")
     cards = _cards(board_doc)
     found = [(card, r) for card in cards for r in open_receipts(card)]
+    found = _not_ended(found, viewer or linear_ops.viewer_id)
     states = held_states(ctx, [h for _, r in found
                                if r.kind == BLOCKER_OWNER and r.group != UNREADABLE
                                for h in r.held])
@@ -370,7 +452,7 @@ def read(board_doc: dict, ctx: hygiene.Context) -> Report:
             waits, waits_on, group = UNREAD, "the receipt names no held card it can read", r.group
         elif r.kind == BLOCKER_OWNER:
             waits, split, waits_on = _blocker_wait(r, states)
-            group = f"{r.group}, {split}"
+            group = blocker_group(r.group, split)
         else:
             (waits, waits_on), group = _step_wait(card), r.group
         start = _start(r, card)
@@ -378,7 +460,9 @@ def read(board_doc: dict, ctx: hygiene.Context) -> Report:
         holds.append(Hold(kind=r.kind, group=group, card=card["identifier"], lane=_lane(card),
                           hours=round(hours, 1), waits=waits, waits_on=waits_on,
                           first_line=r.first_line, reason=r.reason))
-    cut = [CutShort(card["identifier"], _lane(card)) for card in cards if _cut_short(card)]
+    standing = _standing()
+    cut = [CutShort(card["identifier"], _lane(card)) for card in cards
+           if _cut_short(card, standing)]
     return Report(taken_at=taken_at, lanes=list((board_doc.get("lanes") or {}).keys()),
                   holds=holds, cut_short=cut)
 
@@ -396,12 +480,26 @@ def _plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+def _placed(kind: str | None, group: str) -> str:
+    """A group header's tail: its bucket and who acts, or `unplaced`."""
+    import hold_placement  # noqa: PLC0415
+
+    row = hold_placement.placement(kind, group)
+    return f" · bucket {row['bucket']}: {row['who']}" if row else " · unplaced"
+
+
 def render(report: Report) -> str:
+    import hold_placement  # noqa: PLC0415
+
     readable = [h for h in report.holds if h.group != UNREADABLE]
     counts = " ".join(f"{k}={sum(1 for h in readable if h.kind == k)}" for k in TAGS)
+    rows = [hold_placement.placement(h.kind, h.group) for h in report.holds]
+    buckets = " ".join(f"{b}={sum(1 for r in rows if r and r['bucket'] == b)}"
+                       for b in hold_placement.BUCKETS)
     lines = [f"hold-waits: taken_at={_pt(report.taken_at)} lanes={','.join(report.lanes)} "
              f"open={len(report.holds)} {counts} "
-             f"unreadable={len(report.holds) - len(readable)} cut-short={len(report.cut_short)}"]
+             f"unreadable={len(report.holds) - len(readable)} cut-short={len(report.cut_short)} "
+             f"{buckets} unplaced={sum(1 for r in rows if r is None)}"]
     groups: dict = {}
     for h in report.holds:
         groups.setdefault((h.kind, h.group), []).append(h)
@@ -412,13 +510,15 @@ def render(report: Report) -> str:
         lines += ["", f"{kind} — {group}: {_plural(len(holds), 'hold')}, "
                       f"{sum(h.hours for h in holds):.1f} h total, oldest {holds[0].hours:.1f} h"
                       f" — waits on open {tally[OPEN]} · closed {tally[CLOSED]} · "
-                      f"step itself {tally[STEP]} · unread {tally[UNREAD]}"]
+                      f"step itself {tally[STEP]} · unread {tally[UNREAD]}"
+                      f"{_placed(kind, group)}"]
         for h in holds:
             first = f'"{h.first_line}"' if h.group == UNREADABLE else h.first_line
             lines.append(f"- {h.card} | {h.lane} | {h.hours:.1f} h | {h.waits_on} | "
                          f"{first} | {h.reason}")
     if report.cut_short:
-        lines += ["", f"{CUT_SHORT}: {_plural(len(report.cut_short), 'card')}"]
+        lines += ["", f"{CUT_SHORT}: {_plural(len(report.cut_short), 'card')}"
+                      f"{_placed(None, CUT_SHORT)}"]
         lines += [f"- {c.card} | {c.lane}" for c in report.cut_short]
     return "\n".join(lines)
 

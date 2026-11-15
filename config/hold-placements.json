@@ -1,0 +1,138 @@
+{
+  "_readme": "Where every group a hygiene hold can be read into belongs (DRE-9290). `scripts/hold_waits.py` (DRE-9274) reads each open `hyg-hand-step`, `hyg-blocker-owner` and `hand-work-overdue` hold into a group by its receipt's own words and prints it as `<kind> — <group>`; this table places each group in exactly one of three buckets. `pipeline` — the pipeline does the step and the hold ends with a receipt. `owner` — the hold goes to its real owner automatically. `operator` — it stays a hold and says why. One row per group: `kind` is the hold's tag (null for the kindless `window cut short — not read`), `group` the group as `hold_waits.py` prints it after `<kind> — `, `bucket` one of the three words, `who` who acts, and `why` one plain sentence with no `·` and no line break, because hygiene's receipt refuses both and later cards quote it into receipts. A `group` may be a template: each `<…>` part is a placeholder, and the row places every group `scripts/hold_placement.py`'s `groups()` enumerates that the template matches. `groups()` reads every group off the three writers' own vocabularies — `config/operator-step-kinds.json`, `hygiene_blockers.WAITING`, `routing_verdict`, the lane contract and the `Kind:` leads `scripts/hold_deadline.py` composes for `reconcile.py` — never off this file, and groups compare case-blind. `python3 scripts/hold_placement.py check` exits 1 on a group no row places, a row that places no group, a group placed twice, a bucket outside the three words, and a `why` a receipt would refuse; tests/test_hold_placement.py runs it, which is how CI runs it.",
+  "rows": [
+    {
+      "kind": "hyg-hand-step",
+      "group": "machine, kind variable",
+      "bucket": "pipeline",
+      "who": "the Operator Agent's `do` (`variable-set`, `variable-delete`)",
+      "why": "A repository variable is set with the bureau App's own token, and a card the Operator Agent refuses stands with the refusal as its reason."
+    },
+    {
+      "kind": "hyg-hand-step",
+      "group": "machine, kind bot-pr",
+      "bucket": "pipeline",
+      "who": "the Operator Agent's `do` (`branch-create`, `file-put`, `pr-open`)",
+      "why": "The branch, the file and the pull request are each an op the Operator Agent runs with the bureau App's own token, so no person's hand is needed."
+    },
+    {
+      "kind": "hyg-hand-step",
+      "group": "machine, kind linear-admin",
+      "bucket": "pipeline",
+      "who": "the Operator Agent's `do` (`project-status`)",
+      "why": "A project's status is an op the Operator Agent runs, and filing a card has no op, so such a card is refused and stands with the refusal as its reason."
+    },
+    {
+      "kind": "hyg-hand-step",
+      "group": "machine, kind script",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "A script run from a checkout reaches an AWS account, a production store or a machine the pipeline holds no credential for, and the Operator Agent runs only the read-only scripts `config/operator-do.json` allows."
+    },
+    {
+      "kind": "hyg-hand-step",
+      "group": "machine, kind deploy",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "A deploy needs production access and the operator's AWS profile, and `config/operator-do.json` refuses it."
+    },
+    {
+      "kind": "hyg-hand-step",
+      "group": "person, kind person",
+      "bucket": "operator",
+      "who": "the person the card names",
+      "why": "The card names a person acting, or no machine kind matched and it is read as a person's so nothing claims more automation than exists, and the receipt's evidence says which."
+    },
+    {
+      "kind": "hyg-blocker-owner",
+      "group": "Intake, holds up open work",
+      "bucket": "owner",
+      "who": "the blocking card's owner — its assignee, else its creator, when a person (a Linear mention)",
+      "why": "The notice goes to the person who owns the blocking card, and a blocker with no person owner stays with the operator and its notice says so."
+    },
+    {
+      "kind": "hyg-blocker-owner",
+      "group": "Hand-work, holds up open work",
+      "bucket": "operator",
+      "who": "the blocking card's own step",
+      "why": "It is not a separate wait: the notice rides on that step and ends when the step is done, the Operator Agent takes such a card first and does a step of a kind it does, and the notice names its step's placement."
+    },
+    {
+      "kind": "hyg-blocker-owner",
+      "group": "<lane>, holds up nothing open",
+      "bucket": "pipeline",
+      "who": "the hygiene agent",
+      "why": "Every card it held up is closed, so nothing waits on it and the hygiene agent ends it."
+    },
+    {
+      "kind": "hyg-blocker-owner",
+      "group": "<lane>, state unread",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "The held-up cards' states did not come back from the read, so the hold-end lane names the hold as a left row in the hygiene summary on every pass it cannot decide and ends it on the first pass that reads every held-up card closed."
+    },
+    {
+      "kind": "hand-work-overdue",
+      "group": "the operator's card, labeled '<mark>'",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "It is the 24-hour chase on a step that is still a person's: the card's hand-step group says why, and a step the Operator Agent does closes the card first."
+    },
+    {
+      "kind": "hand-work-overdue",
+      "group": "the operator's card, routed <VERDICT> to <lane>",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "It is the 24-hour chase on a step that is still a person's: the card's hand-step group says why, and a step the Operator Agent does closes the card first."
+    },
+    {
+      "kind": "hand-work-overdue",
+      "group": "a PROOF: card whose proof run is not in flight",
+      "bucket": "pipeline",
+      "who": "the proof dispatcher and the overdue-proof action (`scripts/proof_overdue_act.py`)",
+      "why": "They start the proof run, and the alarm ends when a proof run is dispatched."
+    },
+    {
+      "kind": "hand-work-overdue",
+      "group": "a hold naming the CEO's press on a card in <lane>, not Green Light",
+      "bucket": "operator",
+      "who": "the CEO",
+      "why": "Only the CEO's signed console answer lifts it."
+    },
+    {
+      "kind": "hand-work-overdue",
+      "group": "a PROOF: card held for the operator",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "The proof hold names a person's reading."
+    },
+    {
+      "kind": "hyg-hand-step",
+      "group": "unreadable receipt",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "The receipt could not be read, so a person reads the card."
+    },
+    {
+      "kind": "hyg-blocker-owner",
+      "group": "unreadable receipt",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "The receipt could not be read, so a person reads the card."
+    },
+    {
+      "kind": "hand-work-overdue",
+      "group": "unreadable receipt",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "The receipt could not be read, so a person reads the card."
+    },
+    {
+      "kind": null,
+      "group": "window cut short — not read",
+      "bucket": "operator",
+      "who": "the operator",
+      "why": "The read could not see the card's whole thread."
+    }
+  ]
+}

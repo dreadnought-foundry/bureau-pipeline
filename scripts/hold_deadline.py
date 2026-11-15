@@ -93,6 +93,50 @@ UNREAD_LINE = ("Some holds of this kind could not be read on this pass, "
 _PT = ZoneInfo("America/Los_Angeles")
 
 
+# ── the Hand-work alarm's `Kind:` leads (DRE-9290) ──────────────────────────
+#
+# The text a `hand-work-overdue` alarm's `Kind:` line opens with, before its
+# first `—`: the group `hold_waits.py` reads the hold into. `reconcile.py`
+# writes each one through these, and `hold_placement.groups()` enumerates
+# them through the same code — every module-level `KIND_LEAD_` text here is
+# read as a lead, so a new one with no row in `config/hold-placements.json`
+# fails `hold_placement.py check`. Changing a word here changes the posted
+# alarm, whose first line is its idempotency key.
+
+#: A `PROOF:` card in Hand-work whose proof run is not in flight.
+KIND_LEAD_PROOF_NOT_IN_FLIGHT = "a PROOF: card whose proof run is not in flight"
+#: A `PROOF:` card held `In Review` for the operator.
+KIND_LEAD_PROOF_HELD = "a PROOF: card held for the operator"
+
+
+def labeled_reason(mark: str) -> str:
+    """`reconcile.hand_built_reason`'s answer for a card wearing a person
+    mark, the label as the card carries it."""
+    return f"labeled '{mark}'"
+
+
+def routed_reason(verdict: str, lane: str) -> str:
+    """`reconcile.hand_built_reason`'s answer for a card in the lane a
+    person's verdict sends it to."""
+    return f"routed {verdict} to {lane}"
+
+
+def kind_lead_operators_card(reason: str) -> str:
+    """The operator's card, `reason` being `reconcile.hand_built_reason`'s
+    answer."""
+    return f"the operator's card, {reason}"
+
+
+def kind_lead_ceo_press(lane: str) -> str:
+    """A hold naming the CEO's press on a card in `lane`, outside the lane the
+    return branch reads."""
+    import proof_dispatch  # noqa: PLC0415 — it imports reconcile, which imports this
+    import proof_record  # noqa: PLC0415
+
+    return (f"a hold naming {proof_record.CEO_PRESS} on a card in {lane}, not "
+            f"{proof_dispatch.RETURN_LANE}")
+
+
 @dataclass(frozen=True)
 class LateHold:
     """One hold a site read as late: its card, its clock's start, and what it
