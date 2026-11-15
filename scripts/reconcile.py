@@ -859,7 +859,7 @@ def hand_built_reason(card: dict) -> str | None:
     marked = {m.lower() for m in routing_verdict.hand_marks()}
     for lbl in (card.get("labels") or {}).get("nodes", []):
         if lbl["name"].lower() in marked:
-            return f"labeled '{lbl['name']}'"
+            return hold_deadline.labeled_reason(lbl["name"])
     if proof_and_demo.is_proof(card.get("title")):
         return _PROOF_REASON
     lane = (card.get("state") or {}).get("name")
@@ -872,7 +872,7 @@ def hand_built_reason(card: dict) -> str | None:
         return None
     for name in routing_verdict.verdicts_on(card_comment_bodies(card)):
         if name in persons:
-            return f"routed {name} to {lane}"
+            return hold_deadline.routed_reason(name, lane)
     return None
 
 
@@ -2922,9 +2922,9 @@ def _hand_work_age(card: dict, reason: str, *, judged: list | None = None) -> st
             why = "could not be read" if got.state == "unknown" else "is in flight"
             note(None if got.state == "unknown" else entered, None)
             return f"; in Hand-work {hours}h, past {limit} — no alarm: its proof run {why}"
-        kind = f"a PROOF: card whose proof run is not in flight — {'; '.join(got.lines)}."
+        kind = f"{hold_deadline.KIND_LEAD_PROOF_NOT_IN_FLIGHT} — {'; '.join(got.lines)}."
     else:
-        kind = (f"the operator's card, {reason} — it entered Hand-work "
+        kind = (f"{hold_deadline.kind_lead_operators_card(reason)} — it entered Hand-work "
                 f"{_pt(entered)}, and no run is dispatched for it.")
     try:
         linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
@@ -3272,13 +3272,12 @@ def alarm_held_proofs(cards: list[dict], *, board_read: bool = True,
             continue
         quoted = proof_record._cut(
             (clock.get("body") or "").strip().split("\n", 1)[0].strip(), 120)
-        held_by = (f"a hold naming {proof_record.CEO_PRESS} on a card in {lane}, not "
-                   f"{proof_dispatch.RETURN_LANE} — only his signed console answer "
+        held_by = (f"{hold_deadline.kind_lead_ceo_press(lane)} — only his signed console answer "
                    f"lifts it, and the return branch reads {proof_dispatch.RETURN_LANE} "
                    f"only: get his answer, or re-sort the hold — {quoted}"
                    f"{f'; {note}' if note else ''}"
                    if kind == PRESS_HOLD_KIND
-                   else f"a PROOF: card held for the operator — {quoted}")
+                   else f"{hold_deadline.KIND_LEAD_PROOF_HELD} — {quoted}")
         try:
             linear_ops.cmd_comment(ident, pipeline_act.receipt("hand-work-overdue", (
                 f"🚨 hand-work-overdue: {ident} has waited {lane} for the operator "
