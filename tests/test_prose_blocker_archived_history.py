@@ -26,7 +26,8 @@ dropped from the defect. Anything else is a defect exactly as before.
   2. THE CONTROLS — an archived claim still open, and an unarchived claim
      with no relation, are still defects.
   3. THE CARD GATE — a Queued card whose only claim is archived and Done is
-     not sent to Triage.
+     not sent to Triage, and the live re-check a door-sourced card gets
+     releases it too, so the second read cannot hold what the first released.
   4. UNKNOWN — a claim that cannot be read holds the epic with no defect
      recorded, and leaves a card neither refused nor promoted.
 
@@ -34,6 +35,7 @@ Run: cd bureau-pipeline && python3 -m pytest tests/test_prose_blocker_archived_h
 """
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 from datetime import UTC, datetime, timedelta
@@ -56,7 +58,7 @@ import routing_verdict  # noqa: E402
 FLEET_VERDICT = routing_verdict.verdict_comment(
     "FLEET", "the acceptance criteria are unit-testable")
 
-# DRE-3919's own line, link-wrapped the way Linear serialises a pasted issue.
+# DRE-3919's own line, link-wrapped the way Linear serializes a pasted issue.
 DRE_3919_LINE = (
     "**Blocked by:** [DRE-3777](https://linear.app/dreadnoughtfoundry/issue/"
     "DRE-3777/epic-portico-source-list-rebuild-part-4a-the-app-shell-and-the-"
@@ -265,6 +267,64 @@ def test_a_card_whose_claim_is_not_archived_is_still_sent_to_triage():
                                 {"DRE-3777": _issue("DRE-3777", archived_at=None)})
     assert moves == [("DRE-9152", "Triage")]
     assert [c for c in comments if prose_blockers.CARD_TAG in c]
+
+
+def _live_sweep(card: dict, issues: dict):
+    """`_sweep` for a card the read door sourced: the live re-check runs, and
+    it reads the card back from Linear as it stands."""
+    with patch.object(reconcile, "_door_sourced", {card["identifier"]}), \
+        patch.object(reconcile, "_fetch_backlog_linear",
+                     lambda idents, **_: [dict(card)]):
+        return _sweep(card, issues)
+
+
+def _live_refusal(card: dict, issues: dict):
+    with patch.object(reconcile, "_fetch_backlog_linear",
+                      lambda idents, **_: [dict(card)]), \
+        patch.object(reconcile.linear_ops, "get_issue", _linear(issues)):
+        _, why = reconcile.live_promotion_refusal(
+            card, reconcile.card_comment_bodies(card))
+    return why
+
+
+def test_a_door_sourced_card_whose_only_claim_is_archived_and_done_is_promoted():
+    """The live re-check is the card gate's second read: a card the first
+    released as history is promoted, not left standing every sweep."""
+    promoted, moves, comments = _live_sweep(_card("**Blocked by:** DRE-3777"),
+                                            {"DRE-3777": _issue("DRE-3777")})
+    assert ("DRE-9152", "Triage") not in moves
+    assert not [c for c in comments if prose_blockers.CARD_TAG in c]
+    assert promoted == 1
+
+
+def test_the_live_recheck_passes_an_archived_done_claim():
+    assert _live_refusal(_card("**Blocked by:** DRE-3777"),
+                         {"DRE-3777": _issue("DRE-3777")}) is None
+
+
+def test_the_live_recheck_still_refuses_an_unarchived_claim():
+    why = _live_refusal(_card("**Blocked by:** DRE-3777"),
+                        {"DRE-3777": _issue("DRE-3777", archived_at=None)})
+    assert why is not None and "claims a blocker" in why
+
+
+def test_the_live_recheck_still_refuses_an_archived_claim_still_open():
+    why = _live_refusal(_card("**Blocked by:** DRE-3777"),
+                        {"DRE-3777": _issue("DRE-3777", "In Progress")})
+    assert why is not None and "claims a blocker" in why
+
+
+def test_the_live_recheck_holds_on_an_unreadable_claim():
+    why = _live_refusal(_card("**Blocked by:** DRE-3777"),
+                        {"DRE-3777": linear_ops.LinearError("linear error: HTTP 502")})
+    assert why is not None and "DRE-3777" in why
+
+
+def test_both_card_gate_reads_ask_the_archived_history_rule():
+    """One reading of "is this claim history" on both card-gate reads, in the
+    shape of `test_the_card_gate_writes_no_second_definition_of_built_out`."""
+    for caller in (reconcile.promote_ready, reconcile.live_promotion_refusal):
+        assert "archived_history(" in inspect.getsource(caller), caller.__name__
 
 
 # ---------------------------------------------------------------------------
