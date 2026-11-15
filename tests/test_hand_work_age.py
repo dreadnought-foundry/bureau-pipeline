@@ -136,6 +136,22 @@ def _workbench_card(**kw) -> dict:
                  **kw)
 
 
+def _placed(group: str) -> str:
+    """The clause the alarm's `Kind:` line gains before its closing period
+    (DRE-9295): ` — placed: <bucket>, <who>: <why>` off the row of
+    `config/hold-placements.json` that places `group`, read off the file
+    itself. A template's `<…>` part matches any text; the `why`'s own period
+    is the line's."""
+    import re
+
+    rows = json.loads((ROOT / "config" / "hold-placements.json").read_text())["rows"]
+    for row in rows:
+        parts = re.split(r"<[^<>]+>", row["group"])
+        if row["kind"] == ACT and re.fullmatch(".+?".join(map(re.escape, parts)), group):
+            return f" — placed: {row['bucket']}, {row['who']}: {row['why'].rstrip('.')}"
+    raise AssertionError(f"no row places {ACT} — {group}")
+
+
 def _reading(state: str, lines=("the reading's own line",)):
     return SimpleNamespace(state=state, lines=list(lines), dispatches=1,
                            run_id=None, receipts=[], record_pr=None)
@@ -309,6 +325,16 @@ class TestAProofCard:
         assert body.startswith("🚨 hand-work-overdue: DRE-7001 has waited in Hand-work 25 hours")
         assert f"{state} — read off the thread" in body.split("\n")[1]
         got.add_label.assert_not_called()
+
+    def test_its_alarm_says_the_pipeline_starts_the_proof_run(self, capsys):
+        """DRE-9295: the pipeline, not the operator, starts a proof run, and
+        the alarm says so off the table's row for its own group. A `PROOF:`
+        card is never classed, so it carries no step clause."""
+        got = _sweep([_proof_card()], capsys, reading=_reading("none", ("no run on record",)))
+        second = got.comment.call_args.args[1].split("\n")[1]
+        group = "a PROOF: card whose proof run is not in flight"
+        assert _placed(group).startswith(" — placed: pipeline, ")
+        assert second == f"Kind: {group} — no run on record{_placed(group)}."
 
     def test_the_reading_is_the_dispatchers_own(self, capsys):
         got = _sweep([_proof_card()], capsys)
@@ -584,7 +610,8 @@ def _wrote_nothing(got):
 
 
 def _kind(line: str) -> str:
-    return f"Kind: a PROOF: card held for the operator — {proof_record._cut(line, 120)}."
+    group = "a PROOF: card held for the operator"
+    return f"Kind: {group} — {proof_record._cut(line, 120)}{_placed(group)}."
 
 
 def _alarmed_once(got, held_by: dict, hours=25):
@@ -801,11 +828,12 @@ def _fake_voices(nodes, viewer, *, card):
         for n in nodes]
 
 
-def _press_kind(line: str, lane=REVIEW) -> str:
-    return (f"Kind: a hold naming {proof_record.CEO_PRESS} on a card in {lane}, "
-            "not Green Light — only his signed console answer lifts it, and the "
+def _press_kind(line: str, lane=REVIEW, note: str = "") -> str:
+    group = f"a hold naming {proof_record.CEO_PRESS} on a card in {lane}, not Green Light"
+    return (f"Kind: {group} — only his signed console answer lifts it, and the "
             "return branch reads Green Light only: get his answer, or re-sort "
-            f"the hold — {proof_record._cut(line, 120)}.")
+            f"the hold — {proof_record._cut(line, 120)}{f'; {note}' if note else ''}"
+            f"{_placed(group)}.")
 
 
 class TestACeoPressHoldOutsideGreenLight:
@@ -893,8 +921,8 @@ class TestACeoPressHoldOutsideGreenLight:
         press = _hold(CEO_NEEDS, 25.5)
         got = _held_sweep([_review_card(nodes=[press, _unchecked(2.0)])], capsys)
         got.comment.assert_called_once()
-        assert got.comment.call_args.args[1].split("\n")[1] == (
-            f"{_press_kind(_first(press))[:-1]}; {proof_dispatch.UNCHECKED_NOTE}.")
+        assert got.comment.call_args.args[1].split("\n")[1] == _press_kind(
+            _first(press), note=proof_dispatch.UNCHECKED_NOTE)
         assert _held_line(got).endswith(
             f"(clock: its CEO's-press hold of {reconcile._pt(press['createdAt'])}; "
             f"{proof_dispatch.UNCHECKED_NOTE})")
