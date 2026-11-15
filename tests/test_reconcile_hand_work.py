@@ -461,6 +461,25 @@ class TestTheAlarmSaysWhy:
         _, second = _alarmed(card)
         assert second == f"{_today(card)}{self._placed()} — its step: not classed yet."
 
+    @pytest.mark.parametrize("label", ["hand-step:person", "Hand-Step:Machine"])
+    def test_a_card_wearing_its_class_label_with_no_receipt_in_view_is_not_read(self, label):
+        card = _overdue_card()
+        card["labels"]["nodes"].append({"name": label})
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not read."
+
+    def test_a_partial_window_with_no_receipt_in_view_is_not_read(self):
+        card = _overdue_card()
+        card["comments"]["pageInfo"] = {"hasNextPage": True, "endCursor": "x"}
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not read."
+
+    def test_a_whole_window_says_not_classed_yet(self):
+        card = _overdue_card()
+        card["comments"]["pageInfo"] = {"hasNextPage": False, "endCursor": None}
+        _, second = _alarmed(card)
+        assert second == f"{_today(card)}{self._placed()} — its step: not classed yet."
+
     def test_the_newest_class_receipt_is_the_one_read(self):
         card = _overdue_card(_class_receipt("person, kind person", "the operator's Mac"),
                              _class_receipt("machine, kind variable", "environment variable"))
