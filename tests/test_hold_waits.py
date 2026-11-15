@@ -84,8 +84,8 @@ def ago(hours: float, now: datetime = NOW) -> datetime:
 # --------------------------------------------------------------------------- #
 
 
-def comment(body: str, at: datetime) -> dict:
-    return {"body": body, "createdAt": iso(at), "user": None}
+def comment(body: str, at: datetime, user: str | None = None) -> dict:
+    return {"body": body, "createdAt": iso(at), "user": {"id": user} if user else None}
 
 
 def card(ident, lane, *, entered=None, comments=(), labels=(), blockers=(), title=None,
@@ -546,3 +546,218 @@ def test_the_script_adds_no_direct_linear_read_site():
     sites = check_linear_reads.scan(ROOT)
     assert MODULE_PATH.exists()
     assert not [name for name in sites if name.startswith("hold_waits.")]
+
+
+# --------------------------------------------------------------------------- #
+# DRE-9290: each group says its bucket, from the one table                     #
+# --------------------------------------------------------------------------- #
+
+try:
+    import hold_placement  # noqa: E402
+except ImportError:  # RED: the table's reader does not exist yet
+    hold_placement = None
+
+#: The Linear user the reading key belongs to, as the tests hand it in.
+BOT = "pipeline-bot"
+PERSON = "a-person"
+
+
+def header(text: str, kind: str, group: str) -> str:
+    (line,) = [ln for ln in text.splitlines() if ln.startswith(f"{kind} — {group}: ")]
+    return line
+
+
+def row(kind, group) -> dict:
+    found = hold_placement.placement(kind, group)
+    assert found is not None, (kind, group)
+    return found
+
+
+def bucket_board():
+    """One open hold in each bucket, and one in a group nobody placed."""
+    owner = blocker_receipt("DRE-111", "Intake", "2026-10-23", ["DRE-211"])
+    pipeline = hand_step_receipt("machine", "variable", "repository variable")
+    operator = hand_step_receipt("machine", "deploy", "deploy")
+    unplaced = overdue_in_hand_work("DRE-311", 30, "the operator's card, operator-step — it "
+                                    "entered Hand-work Nov 10 23:00 PT, and no run is "
+                                    "dispatched for it.")
+    return board(
+        card("DRE-111", "Intake", entered=ago(24 * 20), comments=[comment(owner, ago(24))]),
+        card("DRE-411", "Hand-work", entered=ago(50), labels=["hand-step:machine"],
+             comments=[comment(pipeline, ago(20))]),
+        card("DRE-412", "Hand-work", entered=ago(50), labels=["hand-step:machine"],
+             comments=[comment(operator, ago(10))]),
+        card("DRE-311", "Hand-work", entered=ago(30), labels=["operator-step"],
+             comments=[comment(unplaced, ago(6))]),
+    )
+
+
+def test_a_placed_group_header_says_its_bucket_and_who():
+    _, text, _ = read(bucket_board(), {"DRE-211": "In Progress"})
+    for kind, group in ((BLOCKER_OWNER, "Intake, holds up open work"),
+                        (HAND_STEP, "machine, kind variable"),
+                        (HAND_STEP, "machine, kind deploy")):
+        placed = row(kind, group)
+        assert header(text, kind, group).endswith(
+            f" · bucket {placed['bucket']}: {placed['who']}")
+    assert row(BLOCKER_OWNER, "Intake, holds up open work")["bucket"] == "owner"
+    assert row(HAND_STEP, "machine, kind variable")["bucket"] == "pipeline"
+    assert row(HAND_STEP, "machine, kind deploy")["bucket"] == "operator"
+
+
+def test_a_group_with_no_row_reads_unplaced():
+    _, text, _ = read(bucket_board(), {"DRE-211": "In Progress"})
+    line = header(text, OVERDUE, "the operator's card, operator-step")
+    assert line.endswith(" · unplaced")
+    assert "bucket" not in line
+
+
+def test_the_opening_line_counts_holds_by_bucket():
+    _, text, _ = read(bucket_board(), {"DRE-211": "In Progress"})
+    first = text.splitlines()[0]
+    for part in ("pipeline=1", "owner=1", "operator=1", "unplaced=1"):
+        assert f" {part}" in first, part
+
+
+def test_the_counts_are_holds_not_groups():
+    a = hand_step_receipt("machine", "deploy", "deploy")
+    doc = board(*(card(f"DRE-42{i}", "Hand-work", entered=ago(50), labels=["hand-step:machine"],
+                       comments=[comment(a, ago(10 + i))]) for i in range(3)))
+    _, text, _ = read(doc)
+    first = text.splitlines()[0]
+    for part in ("pipeline=0", "owner=0", "operator=3", "unplaced=0"):
+        assert f" {part}" in first, part
+
+
+def test_an_unreadable_receipt_and_a_cut_short_window_are_placed():
+    no_kind = pipeline_act.receipt("hand-work-overdue", (
+        "🚨 hand-work-overdue: DRE-312 has waited in Hand-work 30 hours, past its 24 — "
+        "the operator's to look at."))
+    doc = board(card("DRE-312", "Hand-work", entered=ago(40), comments=[comment(no_kind, ago(9))]),
+                card("DRE-113", "Intake", entered=ago(50), partial=True))
+    _, text, _ = read(doc)
+    placed = row(OVERDUE, script().UNREADABLE)
+    assert header(text, OVERDUE, script().UNREADABLE).endswith(
+        f" · bucket {placed['bucket']}: {placed['who']}")
+    cut = row(None, script().CUT_SHORT)
+    (line,) = [ln for ln in text.splitlines() if ln.startswith(script().CUT_SHORT)]
+    assert line.endswith(f" · bucket {cut['bucket']}: {cut['who']}")
+    assert " operator=1" in text.splitlines()[0]
+    assert " unplaced=0" in text.splitlines()[0]
+
+
+def test_a_card_labeled_in_another_case_is_placed_not_unplaced(monkeypatch):
+    """`hand_built_reason` writes the label as the card carries it — the
+    group compares case-blind to the `labeled '<mark>'` row."""
+    now = datetime.now(UTC)
+    posted: list = []
+    monkeypatch.setattr(reconcile.linear_ops, "cmd_comment",
+                        lambda ident, body: posted.append((ident, body)))
+    promoted = comment("🧹 Auto-promoted Queued → Hand-work: routed OPERATOR", ago(30, now))
+    subject = card("DRE-313", "Hand-work", entered=ago(30, now), labels=["Operator-Step"],
+                   comments=[promoted])
+    reason = reconcile.hand_built_reason(subject)
+    assert reason == "labeled 'Operator-Step'"
+    reconcile._hand_work_age(subject, reason)
+    assert posted and posted[0][0] == "DRE-313"
+    subject["comments"]["nodes"].insert(0, comment(posted[0][1], now - timedelta(minutes=5)))
+    report, text, _ = read(board(subject, taken_at=now))
+    (hold,) = rows(report, "DRE-313")
+    assert hold.group == "the operator's card, labeled 'Operator-Step'"
+    placed = row(OVERDUE, hold.group)
+    assert placed["group"] == "the operator's card, labeled '<mark>'"
+    assert header(text, OVERDUE, hold.group).endswith(
+        f" · bucket operator: {placed['who']}")
+    assert " unplaced=0" in text.splitlines()[0]
+    assert " operator=1" in text.splitlines()[0]
+
+
+# --------------------------------------------------------------------------- #
+# DRE-9290: a hold ends on the pipeline's own `wait ended:` line               #
+# --------------------------------------------------------------------------- #
+
+
+def ended(*words, by="the Operator Agent set the variable") -> str:
+    return f"Done.\n{hold_placement.END_LINE} {', '.join(words)} — {by}"
+
+
+def read_as(doc, viewer=BOT, states=None):
+    fake = FakeLinear(states or {})
+    report = script().read(doc, context(fake), viewer=lambda: viewer)
+    return report, script().render(report)
+
+
+def step_card(ident, *more):
+    step = hand_step_receipt("machine", "variable", "repository variable")
+    return card(ident, "Hand-work", entered=ago(50), labels=["hand-step:machine"],
+                comments=[comment(step, ago(20)), *more])
+
+
+def test_a_newer_pipeline_end_line_naming_the_kind_ends_the_hold():
+    words = hold_placement.END_WORDS[HAND_STEP]
+    doc = board(step_card("DRE-430", comment(ended(words), ago(2), BOT)))
+    report, text = read_as(doc)
+    assert rows(report, "DRE-430") == []
+    assert " open=0" in text.splitlines()[0]
+
+
+def test_an_end_line_naming_several_kinds_ends_each():
+    blocker = blocker_receipt("DRE-114", "Intake", "2026-10-23", ["DRE-212"])
+    line = ended(hold_placement.END_WORDS[BLOCKER_OWNER], hold_placement.END_WORDS[HAND_STEP])
+    doc = board(card("DRE-114", "Intake", entered=ago(24 * 20),
+                     comments=[comment(blocker, ago(24)), comment(line, ago(1), BOT)]))
+    report, _ = read_as(doc, states={"DRE-212": "Done"})
+    assert rows(report, "DRE-114") == []
+
+
+def test_an_end_line_older_than_the_receipt_ends_nothing():
+    words = hold_placement.END_WORDS[HAND_STEP]
+    doc = board(step_card("DRE-431", comment(ended(words), ago(30), BOT)))
+    report, _ = read_as(doc)
+    (hold,) = rows(report, "DRE-431")
+    assert hold.kind == HAND_STEP
+
+
+def test_an_end_line_from_a_person_counts_for_nothing():
+    words = hold_placement.END_WORDS[HAND_STEP]
+    for user in (PERSON, None):
+        doc = board(step_card("DRE-432", comment(ended(words), ago(2), user)))
+        report, _ = read_as(doc)
+        (hold,) = rows(report, "DRE-432")
+        assert hold.kind == HAND_STEP
+
+
+def test_an_end_line_with_no_viewer_counts_for_nothing():
+    words = hold_placement.END_WORDS[HAND_STEP]
+    doc = board(step_card("DRE-433", comment(ended(words), ago(2), BOT)))
+    report, _ = read_as(doc, viewer=None)
+    assert len(rows(report, "DRE-433")) == 1
+
+
+def test_an_end_line_naming_another_kind_or_its_tag_ends_nothing():
+    for words in (hold_placement.END_WORDS[OVERDUE], HAND_STEP):
+        doc = board(step_card("DRE-434", comment(ended(words), ago(2), BOT)))
+        report, _ = read_as(doc)
+        assert len(rows(report, "DRE-434")) == 1, words
+
+
+def test_the_viewer_is_read_only_when_an_end_line_is_there():
+    def refused():
+        raise AssertionError("the viewer was read with no end line on the board")
+
+    report = script().read(every_kind_board(), context(FakeLinear(
+        {"DRE-201": "In Progress", "DRE-202": "Done"})), viewer=refused)
+    assert len(report.holds) == 4
+
+
+def test_a_standing_card_is_never_listed_as_cut_short():
+    standing = [s["card"] for s in json.loads(
+        (ROOT / "config" / "hand-work-age.json").read_text(encoding="utf-8"))["standing"]]
+    assert {"DRE-4541", "DRE-5774", "DRE-9090"} <= set(standing)
+    doc = board(*(card(ident, "Hand-work", entered=ago(50), partial=True,
+                       comments=[comment("posted", ago(1))]) for ident in standing),
+                card("DRE-435", "Hand-work", entered=ago(50), partial=True))
+    report, text, _ = read(doc)
+    assert [c.card for c in report.cut_short] == ["DRE-435"]
+    for ident in standing:
+        assert ident not in text
