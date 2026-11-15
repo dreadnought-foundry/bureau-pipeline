@@ -7035,8 +7035,16 @@ def live_promotion_refusal(card: dict, bodies: list[str]) -> tuple[dict | None, 
                       f"{(now.get('state') or {}).get('name')} now, not active")
     if prose_blockers.relations_unknown(live):
         return live, "its relations could not be read to the end"
-    if prose_blockers.undeclared_claims(live):
-        return live, "its description now claims a blocker the board does not hold"
+    undeclared = prose_blockers.undeclared_claims(live)
+    if undeclared:
+        # The gate's own rule (DRE-9319): an archived, closed claim is history,
+        # so this read cannot hold a card the first one released.
+        history, unread = archived_history(undeclared)
+        if unread is not None:
+            return live, (f"its description claims {', '.join(sorted(undeclared))} "
+                          f"with no relation, and {unread}")
+        if undeclared - history:
+            return live, "its description now claims a blocker the board does not hold"
     # The gate's own reading (DRE-7774): an epic blocker built out is released
     # here as it was there, off the same pass's read.
     unmet, _ = card_relation_blockers(live)
