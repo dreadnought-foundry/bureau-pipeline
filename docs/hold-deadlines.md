@@ -43,8 +43,9 @@ Each row also carries a `why`, the reason for its numbers.
 ## Where the sweep reads them (DRE-7965)
 
 Two sites in `scripts/reconcile.py` keep their 24-hour `hand-work-overdue`
-comment exactly as before — that comment is the chase — and each now hands
-`settle` its late list once per pass, after its loop:
+comment — that comment is the chase, and only its `Kind:` line's tail has
+grown since (DRE-9295, below) — and each now hands `settle` its late list
+once per pass, after its loop:
 
 - **`proof-waiting`** — `alarm_held_proofs`, over this repo's `PROOF:` cards
   in every lane but Green Light: In Progress, In Review and Hand-work off the
@@ -66,6 +67,40 @@ comment exactly as before — that comment is the chase — and each now hands
   stands down for (`held`) is skipped before it is judged, as the watchdog
   always skipped it — it is already in a person's queue — so it is never
   listed here and never makes the pass incomplete.
+
+### The alarm says why a person is needed (DRE-9295)
+
+Before DRE-9295 every alarm read `the operator's to look at`, whether the step
+was a CEO decision, a production deploy or a repository variable the pipeline
+could set itself. Now the alarm's second line, `Kind: <lead> — <detail>.`,
+keeps its lead and its detail word for word and gains, before its closing
+period, where its own group is placed in `config/hold-placements.json`
+(`scripts/hold_placement.py`, DRE-9290):
+
+    Kind: <lead> — <detail> — placed: <bucket>, <who>: <why>.
+
+The group is the lead, the text `scripts/hold_waits.py` reads the hold into.
+On an operator's card — the `_hand_work_age` alarm that is not a `PROOF:`
+card's — it also gains, after that, where the card's step is placed, off the
+group its newest `hyg-hand-step` class receipt in the comment window names
+(`machine, kind deploy`, `person, kind person`, …):
+
+    … — placed: operator, the operator: <why> — its step: operator, <the deploy row's why>.
+    … — placed: operator, the operator: <why> — its step: pipeline, <the variable row's why>.
+    … — placed: operator, the operator: <why> — its step: not classed yet.
+
+A `PROOF:` card is never classed, so its alarm carries no step clause: one
+whose proof run is not in flight reads `placed: pipeline, …`, because the
+proof dispatcher, not the operator, starts the run. The `why` sits inside the
+line, so its own closing period is the line's. A group no row places writes
+`placed: unplaced` (or `its step: unplaced`) and says so on stderr — never a
+guessed reason. The first line does not change: it is the act's idempotency
+key, and the line both sites find their own alarm by.
+
+The class receipt says the same from its side: its evidence is the deciding
+phrase and then `placed: <bucket>, <why>` for the group its cause names. The
+cause, `<class>, kind <kind>`, does not change — it is the hygiene core's key
+and the group `hold_waits.py` reads.
 
 ### A `proof-waiting` hold that lifts itself
 
