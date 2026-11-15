@@ -2853,14 +2853,22 @@ def placed_clause(group: str, ident: str) -> str:
 
 def step_clause(card: dict) -> str:
     """` — its step: <bucket>, <why>` off the group of the card's newest
-    `hyg-hand-step` class receipt in its window (DRE-9295), or ` — its step:
-    not classed yet` for a card that carries none."""
+    `hyg-hand-step` class receipt in its window (DRE-9295). With none in view,
+    ` — its step: not read` for a card that wears its class label or whose
+    window is partial — its receipt may lie beyond the window — and ` — its
+    step: not classed yet` only for a whole window and no class label."""
     import hold_waits  # noqa: PLC0415 — it imports hygiene_hand_step, which imports this module
+    import hygiene_hand_step  # noqa: PLC0415 — it imports this module
 
     found = [r for r in (hold_waits.receipt_of(n, card)
                          for n in linear_ops.window_nodes(card.get("comments")))
              if r is not None and r.kind == hold_waits.HAND_STEP]
     if not found:
+        marks = {(lbl.get("name") or "").lower()
+                 for lbl in (card.get("labels") or {}).get("nodes", [])}
+        if (linear_ops.window_is_partial(card.get("comments"))
+                or marks & {hygiene_hand_step.MACHINE_LABEL, hygiene_hand_step.PERSON_LABEL}):
+            return " — its step: not read"
         return " — its step: not classed yet"
     newest = max(found, key=lambda r: r.at or datetime.min.replace(tzinfo=UTC))
     row = placed_row(hold_waits.HAND_STEP, newest.group, card["identifier"])

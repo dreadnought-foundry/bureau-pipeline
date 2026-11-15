@@ -88,6 +88,13 @@ group its newest `hyg-hand-step` class receipt in the comment window names
     … — placed: operator, the operator: <why> — its step: operator, <the deploy row's why>.
     … — placed: operator, the operator: <why> — its step: pipeline, <the variable row's why>.
     … — placed: operator, the operator: <why> — its step: not classed yet.
+    … — placed: operator, the operator: <why> — its step: not read.
+
+`not classed yet` is said only off a whole window and a card wearing neither
+class label. A card with no class receipt in view that wears
+`hand-step:machine` or `hand-step:person`, or whose window is partial, reads
+`not read`: its receipt may lie beyond the window, and an absence the alarm
+could not see is never written as a state.
 
 A `PROOF:` card is never classed, so its alarm carries no step clause: one
 whose proof run is not in flight reads `placed: pipeline, …`, because the
