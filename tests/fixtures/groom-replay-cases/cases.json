@@ -17,9 +17,9 @@
       "title": "Extend name_implies_undeclared to the modifier catalog",
       "repo": "atlas",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "planning",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": false
       }
     },
     {
@@ -37,9 +37,9 @@
       "title": "MenuCalc serves soft-deleted ingredients into live recipes",
       "repo": "atlas",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "planning",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": false
       }
     },
     {
@@ -58,7 +58,7 @@
       "repo": "bureau-pipeline",
       "main": {
         "ended": "cancel",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": true
       }
     },
@@ -78,7 +78,7 @@
       "repo": "portico",
       "main": {
         "ended": "excluded",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": null
       }
     },
@@ -98,7 +98,7 @@
       "repo": "agent-bureau",
       "main": {
         "ended": "cancel",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": true
       }
     },
@@ -117,8 +117,8 @@
       "title": "A build on the mini LIGHT tier was SIGKILLed twice at ~34 m…",
       "repo": "agent-bureau",
       "main": {
-        "ended": "rewrite",
-        "at": "2026-11-08T10:14:47Z",
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
         "passes": true
       }
     },
@@ -137,9 +137,9 @@
       "title": "portico: DRE-5400's proof record carries the ship.sh --veri…",
       "repo": "portico",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     },
     {
@@ -158,7 +158,7 @@
       "repo": "portico",
       "main": {
         "ended": "cancel",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": true
       }
     },
@@ -177,9 +177,9 @@
       "title": "The console release row follows the NEWEST train run, so a …",
       "repo": "agent-bureau",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     },
     {
@@ -198,7 +198,7 @@
       "repo": "agent-bureau",
       "main": {
         "ended": "cancel",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": true
       }
     },
@@ -217,9 +217,9 @@
       "title": "agent-bureau's console, website and relay write their Linea…",
       "repo": "agent-bureau",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     },
     {
@@ -238,7 +238,7 @@
       "repo": "agent-bureau",
       "main": {
         "ended": "cancel",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": true
       }
     },
@@ -257,9 +257,9 @@
       "title": "Every new project is born on the release train — its first …",
       "repo": "agent-bureau",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     },
     {
@@ -277,9 +277,9 @@
       "title": "Every new company gets its Portico share when its first pro…",
       "repo": "portico",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     },
     {
@@ -298,7 +298,7 @@
       "repo": "portico",
       "main": {
         "ended": "excluded",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": null
       }
     },
@@ -318,7 +318,7 @@
       "repo": "portico",
       "main": {
         "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": null
       }
     },
@@ -338,7 +338,7 @@
       "repo": "portico",
       "main": {
         "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
+        "at": "2026-11-15T10:14:57Z",
         "passes": null
       }
     },
@@ -357,9 +357,9 @@
       "title": "qa-review posts a STALE verdict with no @sha when Resolve P…",
       "repo": "bureau-pipeline",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "planning",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": false
       }
     },
     {
@@ -377,9 +377,9 @@
       "title": "Flip the portal CSP from Report-Only to enforcing — author …",
       "repo": "portico",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     },
     {
@@ -397,9 +397,9 @@
       "title": "bureau-pipeline: groom_replay.py turns a stored groom proposal into a run's input and reports where each card ended",
       "repo": "bureau-pipeline",
       "main": {
-        "ended": "not-verified",
-        "at": "2026-11-08T10:14:47Z",
-        "passes": null
+        "ended": "cancel",
+        "at": "2026-11-15T10:14:57Z",
+        "passes": true
       }
     }
   ]
