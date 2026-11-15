@@ -96,6 +96,20 @@ def _no_inherited_red_main_holds(monkeypatch) -> None:
         monkeypatch.setattr(inherited_red_main, "held_cards", lambda *a, **k: [])
 
 
+def _no_archived_claims(monkeypatch) -> None:
+    """Before the sweep calls a prose claim a defect it asks Linear whether the
+    claimed card was archived after it closed (DRE-9319), one
+    `linear_ops.get_issue` per claim. The suites about the defect itself build
+    their claims from cards that exist only in the test, and under CI's key
+    that read is refused — an unread claim, which holds the card instead of
+    refusing it. For them no claim is archived, at no request.
+    `tests/test_prose_blocker_archived_history.py` puts back the real read."""
+    reconcile = sys.modules.get("reconcile")
+    if getattr(reconcile, "archived_history", None) is not None:
+        monkeypatch.setattr(reconcile, "archived_history",
+                            lambda claims: (set(), None))
+
+
 def _no_ambient_event(monkeypatch) -> None:
     """The read door's client refuses to ask from a `pull_request` run (the
     door refuses those tokens by design, S7) except for the three reads of the
@@ -189,6 +203,7 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_ask_again_wait(monkeypatch)
     _empty_epic_queue(monkeypatch)
     _no_inherited_red_main_holds(monkeypatch)
+    _no_archived_claims(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()
     _reset_workflow_states()
