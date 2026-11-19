@@ -145,8 +145,10 @@ class TestEveryActDeclaresItsCadence:
         already filed as a card gains on that card; sixty-six since DRE-8746
         added the receipt of the operator agent's pass on a card waiting on a
         person; sixty-seven since DRE-8849 added the note the sweep posts
-        when it returns a card the medic held on an inherited red main."""
-        assert len(pipeline_act.acts()) == 67
+        when it returns a card the medic held on an inherited red main; and
+        sixty-eight since DRE-9283 added the receipt that closes a medic stop
+        the card has already moved on from."""
+        assert len(pipeline_act.acts()) == 68
 
     def test_every_act_carries_a_cadence_and_a_reason(self):
         for name in pipeline_act.acts():
