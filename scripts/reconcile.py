@@ -10435,10 +10435,12 @@ def discharge_medic_stops() -> None:
     or a sweep had carried most of those on.
 
     THE CANDIDATES (`medic_discharge_cards`): this repo's cards in
-    `medic_discharge.LANES` and its Done cards completed in the last day —
-    the lanes the pass's own board read holds off that read (`active_cards`,
-    no request of its own), and Queued and Done in one paged Linear read
-    scoped by repo label as `inherited_red_main.held_cards` scopes it. Every `medic-next-step`
+    `medic_discharge.BOARD_LANES` and the queue (`QUEUE_LANES`), and its
+    `medic_discharge.DONE_LANE` cards completed in the last day — the board
+    lanes off the pass's own board read (`active_cards`, no request of its
+    own), and the queue and Done in one paged Linear read scoped by repo
+    label as `inherited_red_main.held_cards` scopes it. A card in both reads
+    is decided once, on the fresher. Every `medic-next-step`
     receipt on a card's comment window is one stop; a window that carries one
     and is not the whole thread is read whole first. A fix-path stop's pull
     request is read with `pr_for`, and its `mergedAt` and commits beside it.
@@ -10537,12 +10539,22 @@ def medic_discharge_cards() -> list:
     inside `medic_discharge.DONE_WINDOW`, which that read does not hold, in
     one paged read (`medic_discharge.CARDS_QUERY`) through the reader
     `inherited_red_main.held_cards` uses. A failed read raises
-    `linear_ops.LinearError`."""
+    `linear_ops.LinearError`.
+
+    The board read was made at the top of the pass and this one is made now,
+    so a card that moved in between — its pull request merged and it went to
+    Done, or it left Planning for the queue — is in both, as two windows.
+    Each is one card, kept once, and the later read wins: its window is the
+    current one, so a discharge posted since the board read is in it."""
     live = [] if _idle_pass else active_cards(medic_discharge.BOARD_LANES)
     own = repo_held_epics._paged(
         linear_ops.gql, medic_discharge.CARDS_QUERY % linear_ops.COMMENT_WINDOW_GQL,
-        medic_discharge.query_variables(REPO_SLUG, datetime.now(UTC)))
-    return [c for c in [*live, *own] if card_repo(c) == REPO_SLUG]
+        medic_discharge.query_variables(REPO_SLUG, datetime.now(UTC), QUEUE_LANES))
+    by_ident: dict = {}
+    for card in [*live, *own]:
+        if card_repo(card) == REPO_SLUG:
+            by_ident[card.get("identifier")] = card
+    return list(by_ident.values())
 
 
 def _medic_discharge_pr(ident: str) -> dict | None:

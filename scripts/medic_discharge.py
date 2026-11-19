@@ -42,8 +42,12 @@ report's "no step", and is never a candidate: the pass starts from receipts.
 The sweep reads a card's thread whole only when its comment window carries a
 receipt and is not the whole thread. A discharge, and every carrier, comes
 after the receipt it answers, so a window that holds the receipt holds them
-too: nothing is ever discharged twice. What a window with no receipt costs is
-a stop older than the card's newest fifty comments, which stays as it is.
+too, and rule 1 sees an earlier pass's discharge. Within one pass a card is
+decided once: a card that moved from a board lane to the queue or Done after
+the pass's board read is in both of the sweep's reads, and
+`reconcile.medic_discharge_cards` keeps only the later, fresher one. What a
+window with no receipt costs is a stop older than the card's newest fifty
+comments, which stays as it is.
 
 Import-safe and I/O-free: no file, network or Linear read at import or in any
 function here, so every case is a unit test over a fixture thread.
@@ -97,25 +101,24 @@ DISPATCHED = "dispatched"
 
 #: The lanes a card the sweep reads sits in. `BOARD_LANES` are in the
 #: sweep's own board read, so they cost the pass nothing; the queue is not,
-#: and it is read here with the closed lane, for the cards completed inside
-#: the window — a merged `fix-path` card is there.
-LANES = ("In Progress", "Queued", "In Review", "Planning")
+#: and it is read with the closed lane, for the cards completed inside the
+#: window — a merged `fix-path` card is there. The queue is read under every
+#: name it carries, which the caller passes (`lane_contract.QUEUE_LANES`).
 BOARD_LANES = ("In Progress", "In Review", "Planning")
-QUEUE_LANE = "Queued"
 DONE_LANE = "Done"
 DONE_WINDOW = timedelta(hours=24)
 
-#: This repo's `QUEUE_LANE` cards, and its `DONE_LANE` cards completed since
-#: `$since`, in one paged read. The label is matched the way
+#: This repo's cards in the queue under any of its names, and its `DONE_LANE`
+#: cards completed since `$since`, in one paged read. The label is matched the way
 #: `repo_held_epics` matches it — any label containing the slug, case-blind —
 #: and the caller keeps the cards whose `repo:` slug is exactly this repo.
-CARDS_QUERY = """query($needle: String!, $queue: String!, $done: String!,
+CARDS_QUERY = """query($needle: String!, $queue: [String!]!, $done: String!,
                        $since: DateTimeOrDuration!, $after: String) {
   issues(first: 100, after: $after, filter: {
     team: {key: {eq: "DRE"}},
     labels: {name: {containsIgnoreCase: $needle}},
     or: [
-      {state: {name: {eq: $queue}}},
+      {state: {name: {in: $queue}}},
       {and: [{state: {name: {eq: $done}}}, {completedAt: {gt: $since}}]}
     ]
   }) { nodes {
@@ -153,10 +156,11 @@ class Discharge:
     act: str | None = None
 
 
-def query_variables(slug: str, now: datetime) -> dict:
-    """The variables `CARDS_QUERY` is asked with, for `slug` at `now`."""
+def query_variables(slug: str, now: datetime, queue_lanes) -> dict:
+    """The variables `CARDS_QUERY` is asked with, for `slug` at `now`, the
+    queue read under each name in `queue_lanes`."""
     since = (now - DONE_WINDOW).astimezone(timezone.utc)
-    return {"needle": slug, "queue": QUEUE_LANE, "done": DONE_LANE,
+    return {"needle": slug, "queue": list(queue_lanes), "done": DONE_LANE,
             "since": since.strftime("%Y-%m-%dT%H:%M:%SZ")}
 
 
@@ -248,6 +252,15 @@ def decide(stop: Stop, thread, *, pr: dict | None = None,
 
 
 def _carrier(stop: Stop, thread, pr: dict | None, dispatch_acts) -> Discharge | None:
+    """Rule 6's carrier, or None.
+
+    The newest commit is read as the LAST of `gh pr view --json commits`,
+    which lists a pull request's commits oldest first — an assumption about
+    the vendor, pinned by no contract here. Both ways it can be wrong leave
+    the stop waiting rather than close it early: a list in the other order
+    reads its oldest commit as the head, and a list cut short at GitHub's
+    250-commit ceiling ends on a commit older than the head, so either reads
+    a head no later than the true one."""
     pr = pr or {}
     number = pr.get("number")
     state = (pr.get("state") or "").upper()
