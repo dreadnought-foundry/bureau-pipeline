@@ -96,6 +96,17 @@ def _no_inherited_red_main_holds(monkeypatch) -> None:
         monkeypatch.setattr(inherited_red_main, "held_cards", lambda *a, **k: [])
 
 
+def _no_medic_stops(monkeypatch) -> None:
+    """The sweep's close of medic stops the card has moved on from (DRE-9283)
+    reads this repo's cards straight from Linear in every full sweep, as the
+    return of held cards does above. For the suites that run a whole
+    `reconcile.main()` and are not about it, no card is read, at no request.
+    `tests/test_medic_discharge.py` puts back the real read."""
+    reconcile = sys.modules.get("reconcile")
+    if getattr(reconcile, "medic_discharge_cards", None) is not None:
+        monkeypatch.setattr(reconcile, "medic_discharge_cards", lambda *a, **k: [])
+
+
 def _no_archived_claims(monkeypatch) -> None:
     """Before the sweep calls a prose claim a defect it asks Linear whether the
     claimed card was archived after it closed (DRE-9319), one
@@ -203,6 +214,7 @@ def fresh_sweep_board(monkeypatch, tmp_path_factory):
     _no_ask_again_wait(monkeypatch)
     _empty_epic_queue(monkeypatch)
     _no_inherited_red_main_holds(monkeypatch)
+    _no_medic_stops(monkeypatch)
     _no_archived_claims(monkeypatch)
     _reset_sweep_board()
     _reset_linear_budget()

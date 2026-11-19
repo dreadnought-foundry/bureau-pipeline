@@ -50,6 +50,9 @@ SLUG = "bureau-pipeline"
 REPO = f"dreadnought-foundry/{SLUG}"
 RUN = "19283746"
 
+#: The real board read, kept before `conftest.py` stubs it for every test.
+_REAL_CARDS = reconcile.medic_discharge_cards
+
 BEFORE = "2026-11-10T17:00:00.000Z"
 RECEIPT_AT = "2026-11-10T18:00:00.000Z"
 AFTER = "2026-11-10T19:30:00.000Z"
@@ -383,6 +386,7 @@ class _Board:
 
 @pytest.fixture
 def board(monkeypatch):
+    monkeypatch.setattr(reconcile, "medic_discharge_cards", _REAL_CARDS)
     monkeypatch.setattr(reconcile, "REPO", REPO)
     monkeypatch.setattr(reconcile, "REPO_SLUG", SLUG)
     for ledger in (reconcile._write_failures, reconcile._read_failures, reconcile._degraded):
