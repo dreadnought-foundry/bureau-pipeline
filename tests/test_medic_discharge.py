@@ -58,7 +58,9 @@ RECEIPT_AT = "2026-11-10T18:00:00.000Z"
 AFTER = "2026-11-10T19:30:00.000Z"
 LATER = "2026-11-10T20:00:00.000Z"
 
-DIAGNOSIS = "## What failed\n\nThe build run failed twice; the medic read it as bad code."
+DIAGNOSIS = pipeline_act.receipt(
+    "run-failure-diagnosed",
+    "## What failed\n\nThe build run failed twice; the medic read it as bad code.")
 
 
 def _receipt(step, *, cls=None, run=RUN, moved=True):
@@ -148,6 +150,14 @@ class TestAskPerson:
                  comments=[_trailered("fix-loop-restarted", AFTER)])
         assert _decide(thread, pr) is None
 
+    def test_ask_person_is_refused_by_its_own_rule(self, monkeypatch):
+        """Rule 2 is what refuses it: with the step's own rule out of the way,
+        the same merge would close the stop as it closes a fix-path one."""
+        thread = _thread("ask-person")
+        pr = _pr(state="MERGED", merged_at=AFTER)
+        monkeypatch.setattr(medic_discharge, "ASK_PERSON", "no-such-step")
+        assert _decide(thread, pr).because == "merged"
+
     def test_ask_person_reads_no_pull_request(self):
         thread = _thread("ask-person")
         assert not medic_discharge.needs_pull_request(_stop(thread), thread)
@@ -155,7 +165,14 @@ class TestAskPerson:
 
 class TestNoConclusion:
     def test_a_diagnosis_with_no_receipt_is_not_a_stop(self):
+        assert pipeline_act.read_trailer(DIAGNOSIS)["act"] == "run-failure-diagnosed"
         assert medic_discharge.stops(CARD, [_c(DIAGNOSIS, BEFORE)]) == []
+
+    def test_a_step_the_reader_does_not_know_keeps_waiting(self):
+        body = (f"🩺 medic-next-step: class=bad-code step=some-new-step run={RUN}\n\n"
+                "A step this reader was never taught.")
+        thread = [_c(DIAGNOSIS, BEFORE), _c(body, RECEIPT_AT)]
+        assert _decide(thread, _pr(state="MERGED", merged_at=AFTER)) is None
 
     def test_a_receipt_quoted_past_the_first_line_is_not_a_stop(self):
         quoted = "Somebody wrote:\n" + _receipt("requeue-once")
@@ -454,6 +471,14 @@ class TestTheSweep:
             "DRE-2": f"🩺 medic-stop-discharged: because=sent-to-planning "
                      f"step=send-to-planning run={RUN}",
         }
+        assert reconcile._write_failures == reconcile._read_failures == []
+
+    def test_a_diagnosis_with_no_receipt_gets_nothing_written(self, board):
+        board.add("DRE-1", [_c(DIAGNOSIS, BEFORE)])
+        board.add("DRE-2", [_c(DIAGNOSIS, BEFORE)], lane="Done")
+        board.prs["DRE-1"] = _pr(state="MERGED", merged_at=AFTER)
+        reconcile.discharge_medic_stops()
+        assert board.posts == []
         assert reconcile._write_failures == reconcile._read_failures == []
 
     def test_a_second_pass_writes_nothing_more(self, board):
