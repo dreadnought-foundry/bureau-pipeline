@@ -576,6 +576,25 @@
       }
     },
     {
+      "name": "medic-stop-discharged",
+      "tag": "medic-stop-discharged",
+      "adopted": true,
+      "kind": "recovery",
+      "means": "A medic stop closed itself: the medic's own step moved the card (`because=re-ran`, `because=sent-to-planning`), or a `fix-path` card was carried on after the medic's receipt by its pull request merging (`because=merged`), taking a new commit (`because=new-head`) or a sweep dispatch (`because=sweep-dispatched`). The first line names the condition, the medic's step and its run, so a reader can tell a stop that closed itself from one a person closed.",
+      "state": "unchanged",
+      "next_actor": "reconcile.py",
+      "discharges": "run-failure-diagnosed",
+      "subscriber": "reconcile.yml",
+      "cadence_s": null,
+      "cadence_why": "Null: nothing is dispatched on this receipt — it records that the card already moved on, and scripts/reconcile.py's discharge_medic_stops posts it after the merge, head, sweep or medic step that moved the card, each timed by its own act.",
+      "why": "DRE-9283, fix-1 of the week ending 2026-11-07 (DRE-9269): 170 medic stops stood 1,488.3 hours, every one read as waiting on the operator because the diagnosis is a hold nothing discharged, though the medic had acted on most and a merge or a sweep had carried 154 on. `reconcile.discharge_medic_stops` reads this repo's cards on full sweeps and decides each `medic-next-step` receipt through `medic_discharge.decide`: an `ask-person` step or a ` moved=no` line keeps waiting, and a `fix-path` stop waits for a carrier after its receipt. The tag is a live key — a receipt with the same `run=` on the card is what stops a second discharge — so it may not be reworded. Shipped console-first: DRE-9272 (agent-bureau DRE-9317) added it to the console's ACTS.",
+      "emits": {
+        "file": "scripts/medic_discharge.py",
+        "anchor": "so this stop is not waiting on the operator",
+        "note": "The body is `medic_discharge.body`; `reconcile.discharge_medic_stops` composes it through `pipeline_act.receipt` and posts it. The anchor is the phrase that body names once, so it pins the wording the module owns rather than the sweep's call."
+      }
+    },
+    {
       "name": "retry-declined",
       "tag": "medic-retry-declined",
       "adopted": true,
