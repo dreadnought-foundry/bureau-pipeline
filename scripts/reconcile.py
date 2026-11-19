@@ -367,6 +367,9 @@ import repo_held_epics  # noqa: E402
 # only on checks `main` was red on too goes back to In Review once `main` is
 # green on them (`return_inherited_red_main_holds`, a full-sweep backstop).
 import inherited_red_main  # noqa: E402
+# DRE-9283: a medic stop the card has already moved on from is closed with one
+# receipt whose trailer discharges the diagnosis (`discharge_medic_stops`).
+import medic_discharge  # noqa: E402
 
 
 def resolve_max_wip(raw):
@@ -10415,6 +10418,156 @@ def _return_inherited_red_main(ident: str, pr: dict, stamped: str, because: str,
           f"to {REVIEW_LANE}; PR #{pr.get('number')} at {head[:8]}")
 
 
+#: DRE-9283: at most this many medic stops are discharged per sweep, oldest
+#: receipt first, so the first sweep after release does not post a burst of
+#: comments on old cards. The tail waits for the next sweep.
+MEDIC_DISCHARGE_SWEEP_CAP = 10
+
+
+def discharge_medic_stops() -> None:
+    """DRE-9283: close a medic stop once the medic's own step, or a later
+    merge, head or sweep dispatch, has moved the card.
+
+    Origin: the week ending 2026-11-07 counted 170 medic stops standing
+    still for 1,488.3 hours (DRE-9269), every one read as waiting on the
+    operator. The stop is the medic's diagnosis, `run-failure-diagnosed`, a
+    hold nothing discharged — though the medic had acted on most, and a merge
+    or a sweep had carried most of those on.
+
+    THE CANDIDATES (`medic_discharge_cards`): this repo's cards in
+    `medic_discharge.BOARD_LANES` and the queue (`QUEUE_LANES`), and its
+    `medic_discharge.DONE_LANE` cards completed in the last day — the board
+    lanes off the pass's own board read (`active_cards`, no request of its
+    own), and the queue and Done in one paged Linear read scoped by repo
+    label as `inherited_red_main.held_cards` scopes it. A card in both reads
+    is decided once, on the fresher. Every `medic-next-step`
+    receipt on a card's comment window is one stop; a window that carries one
+    and is not the whole thread is read whole first. A fix-path stop's pull
+    request is read with `pr_for`, and its `mergedAt` and commits beside it.
+
+    THE DECISION is `medic_discharge.decide`; each stop it closes gets one
+    card comment, `medic_discharge.body` composed through
+    `pipeline_act.receipt`, whose trailer reads
+    `discharges: run-failure-diagnosed`. At most `MEDIC_DISCHARGE_SWEEP_CAP`
+    per sweep, oldest receipt first. Nothing moves and nothing is dispatched.
+
+    A card waiting out a limit is left alone this pass: the discharge is a
+    pipeline receipt, and one posted after a `🪦 limit-death:` marker would
+    supersede it (`limit_recovery.waiting`), so the card would never be
+    brought back. Its stop is decided once the recovery has spoken.
+
+    An unreadable thread or pull request lands in `_read_failures`, and a
+    rate-limit refusal degrades — the next sweep reads it again. FULL SWEEPS
+    ONLY, right after the stale-merge-ref refresh, so a refresh this pass
+    posted is already on the thread it reads.
+    """
+    prefix = medic_discharge.LOG_PREFIX
+    try:
+        cards = medic_discharge_cards()
+    except linear_ops.LinearRateLimited as e:
+        _degrade("medic-discharge", "this repo's cards", e,
+                 then="nothing discharged this sweep; the next sweep retries")
+        return
+    except linear_ops.LinearError as e:
+        _read_failures.append(f"medic-discharge: this repo's cards: {e}")
+        print(f"ERROR: {prefix} this repo's cards unreadable — {e}", file=sys.stderr)
+        return
+    pending: list = []
+    for card in sorted(cards, key=lambda c: repo_held_epics._number(c.get("identifier"))):
+        ident = card.get("identifier") or ""
+        window = [{"body": n.get("body") or "", "createdAt": n.get("createdAt") or ""}
+                  for n in linear_ops.window_nodes(card.get("comments"))]
+        if not medic_discharge.stops(ident, window):
+            continue  # no receipt in the window: nothing here to decide
+        try:
+            thread = repo_held_epics._thread(card)
+        except repo_held_epics._Unreadable as unread:
+            _read_failures.append(f"medic-discharge on {ident}: {unread.what} unreadable")
+            print(f"ERROR: {prefix} {ident} — {unread.what} unreadable; left waiting",
+                  file=sys.stderr)
+            continue
+        stops = medic_discharge.stops(ident, thread)
+        if limit_recovery.waiting([c["body"] for c in thread]):
+            print(f"{prefix} {ident} — waiting out a limit; left waiting until the "
+                  "limit recovery has spoken")
+            continue
+        pending += [(stop, thread) for stop in stops]
+    pending.sort(key=lambda item: medic_discharge._ts(item[0].created_at)
+                 or datetime.max.replace(tzinfo=UTC))
+    acts = medic_discharge.sweep_dispatch_acts()
+    prs: dict = {}
+    posted = 0
+    for n, (stop, thread) in enumerate(pending):
+        if posted >= MEDIC_DISCHARGE_SWEEP_CAP:
+            print(f"{prefix} the cap of {MEDIC_DISCHARGE_SWEEP_CAP} is spent; "
+                  f"{len(pending) - n} stop(s) wait for the next sweep")
+            break
+        pr = None
+        if medic_discharge.needs_pull_request(stop, thread):
+            try:
+                if stop.card not in prs:
+                    prs[stop.card] = _medic_discharge_pr(stop.card)
+                pr = prs[stop.card]
+            except ReconcileRateLimited as e:
+                _degrade("medic-discharge", stop.card, e,
+                         then="left waiting; the next sweep reads it again")
+                continue
+            except (ReconcileReadError, ValueError) as e:
+                _read_failures.append(f"medic-discharge on {stop.card}: {e}")
+                print(f"ERROR: {prefix} {stop.card} unevaluated — {e}", file=sys.stderr)
+                continue
+        found = medic_discharge.decide(stop, thread, pr=pr, dispatch_acts=acts)
+        if found is None:
+            continue
+        body = pipeline_act.receipt(medic_discharge.ACT, medic_discharge.body(found))
+        try:
+            linear_ops.cmd_comment(stop.card, body)
+        except Exception as e:  # noqa: BLE001 — one card must not cost the rest
+            _write_failures.append(f"medic-discharge on {stop.card}: {e}")
+            print(f"ERROR: {prefix} {stop.card}: {e}", file=sys.stderr)
+            continue
+        posted += 1
+        print(f"{prefix} {stop.card} — run {stop.run} ({stop.step}) discharged "
+              f"because={found.because}")
+
+
+def medic_discharge_cards() -> list:
+    """The cards `discharge_medic_stops` decides over, this repo's only: its
+    cards in `medic_discharge.BOARD_LANES` off the pass's board read, which a
+    full pass makes anyway — none on an idle pass, which has no card of this
+    repo's in motion — then its Queued cards and its Done cards completed
+    inside `medic_discharge.DONE_WINDOW`, which that read does not hold, in
+    one paged read (`medic_discharge.CARDS_QUERY`) through the reader
+    `inherited_red_main.held_cards` uses. A failed read raises
+    `linear_ops.LinearError`.
+
+    The board read was made at the top of the pass and this one is made now,
+    so a card that moved in between — its pull request merged and it went to
+    Done, or it left Planning for the queue — is in both, as two windows.
+    Each is one card, kept once, and the later read wins: its window is the
+    current one, so a discharge posted since the board read is in it."""
+    live = [] if _idle_pass else active_cards(medic_discharge.BOARD_LANES)
+    own = repo_held_epics._paged(
+        linear_ops.gql, medic_discharge.CARDS_QUERY % linear_ops.COMMENT_WINDOW_GQL,
+        medic_discharge.query_variables(REPO_SLUG, datetime.now(UTC), QUEUE_LANES))
+    by_ident: dict = {}
+    for card in [*live, *own]:
+        if card_repo(card) == REPO_SLUG:
+            by_ident[card.get("identifier")] = card
+    return list(by_ident.values())
+
+
+def _medic_discharge_pr(ident: str) -> dict | None:
+    """The card's pull request as `pr_for` reads it, with `mergedAt` and
+    `commits` beside — or None when the card has none."""
+    pr = pr_for(ident)
+    if not pr:
+        return None
+    extra = json.loads(gh_read("pr", "view", str(pr.get("number")), "--repo", REPO,
+                               "--json", "mergedAt,commits") or "{}")
+    return {**pr, **extra}
+
+
 class _MergeRefReads:
     """The reads `stale_merge_ref.decide()` needs for one pull request, made
     once and shared by the two backstops that ask it (DRE-8849):
@@ -17492,6 +17645,11 @@ def main(
             # FULL sweeps only: on the merge event `main`'s CI has not
             # finished, so the decision would read `unevaluated` anyway.
             refresh_stale_merge_refs,
+            # DRE-9283, beside the return of held cards and after the refresh,
+            # so a refresh this pass posted is on the thread it reads: a medic
+            # stop the card has already moved on from is closed with one
+            # receipt. Full sweeps only, like both of them.
+            discharge_medic_stops,
             retrigger_dead_heads,
             # DRE-6217, beside the dead-head re-push because it is the case
             # that one cannot see: it reads the pull request's own head, and

@@ -1028,6 +1028,35 @@ The console must learn this act before this row merges. The `act registry
 consumers` job refuses a row the console does not carry, and it knows an act
 by its tag or its name.
 
+## The row that closes a medic stop — `🩺 medic-stop-discharged` (DRE-9283)
+
+| Field | Value |
+| -- | -- |
+| tag | `medic-stop-discharged` |
+| act name | `medic-stop-discharged` |
+| kind · state · next actor | `recovery` · `unchanged` · `reconcile.py` |
+| discharges | `run-failure-diagnosed` — the medic's diagnosis, a hold nothing else discharges |
+| cadence | `null` — nothing is dispatched on it; it records that the card already moved on |
+| emitted by | `scripts/medic_discharge.py`, whose `body` `reconcile.discharge_medic_stops` composes through `pipeline_act.receipt` and posts |
+
+On every full sweep, `reconcile.discharge_medic_stops` reads this repo's cards
+in In Progress, Queued, In Review and Planning, and its Done cards completed in
+the last day — the first three lanes off the pass's own board read, the other
+two in one paged read of its own — and decides every `medic-next-step` receipt on their threads
+through `medic_discharge.decide`: an `ask-person` step or a first line ending
+` moved=no` keeps waiting, `requeue-once` and `send-to-planning` discharge as
+`re-ran` and `sent-to-planning`, and a `fix-path` stop discharges only when
+its pull request merged (`merged`) or took a new commit (`new-head`) after the
+receipt, or a later comment carries the trailer of a `dispatched` act emitted
+from `scripts/reconcile.py` or `scripts/stale_merge_ref.py`
+(`sweep-dispatched`). Each closed stop gets one card comment whose first line
+is `🩺 medic-stop-discharged: because=<condition> step=<step> run=<run id>`
+and whose trailer reads `discharges: run-failure-diagnosed`, at most
+`MEDIC_DISCHARGE_SWEEP_CAP` (10) a sweep, oldest receipt first; a receipt with
+the same `run=` already on the card is the live key that stops a second one,
+and a person's close carries no such line. The console learned the tag first
+(DRE-9272).
+
 ## Why this exists
 
 The console has always checked this. Its
