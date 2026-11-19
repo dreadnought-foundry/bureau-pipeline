@@ -214,9 +214,17 @@ REAL_WAITING_LINE = epic_cap.waiting_line
 #: `lift_wip_cap_holds` took under DRE-7755. The board holds no such stamp, so
 #: no card is read further: 58 + 1 = 59.
 #:
+#: It is 60 since DRE-9283 (measured 2026-11-19: 59 before, 60 after) closed a
+#: medic stop the card has already moved on from. The close pass
+#: (`reconcile.discharge_medic_stops`) takes In Progress, In Review and
+#: Planning off the pass's own board read, and reads this repo's Queued cards
+#: and its Done cards of the last day once, on a full pass, charged to
+#: `discharge_medic_stops`. The board holds no medic receipt, so no thread is
+#: read whole: 59 + 1 = 60.
+#:
 #: It is the ONLY place the real-board ceiling lives. Each cut sibling lowers
 #: it to what IT measures, ending at 30.
-REAL_BOARD_SWEEP_BUDGET = 59
+REAL_BOARD_SWEEP_BUDGET = 60
 
 #: The replay is a CI test, not a benchmark: the card's 30 seconds, asserted so
 #: a sweep that starts walking the board per card fails here rather than slowing
@@ -355,6 +363,19 @@ class ReplayLinear(FakeLinear):
                         and any(needle in name for name in labels)
                         and reconcile.HOLD_LABEL in labels):
                     nodes.append(card)
+            return self._page(nodes, v.get("after"))
+        if query == reconcile.medic_discharge.CARDS_QUERY % linear_ops.COMMENT_WINDOW_GQL:
+            # The medic-stop discharge's one read of its own (DRE-9283): this
+            # repo's Queued cards, and its Done cards completed in the last
+            # day, with the filter Linear applies — the repo label and the two
+            # lanes. The snapshot records no completion time, so every Done
+            # card of the repo is inside the window, which is the dearer answer.
+            self.queries.append((query, v))
+            needle = (v.get("needle") or "").lower()
+            nodes = [card for card in self.cards.values()
+                     if card["state"]["name"] in (v.get("queue"), v.get("done"))
+                     and any(needle in l["name"].lower()
+                             for l in (card.get("labels") or {}).get("nodes") or [])]
             return self._page(nodes, v.get("after"))
         return super().gql(query, variables)
 

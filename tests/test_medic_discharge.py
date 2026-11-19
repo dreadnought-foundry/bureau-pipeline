@@ -102,6 +102,11 @@ def _decide(thread, pr=None):
     return medic_discharge.decide(_stop(thread), thread, pr=pr)
 
 
+def _composed(found):
+    """The comment the sweep posts for `found`."""
+    return pipeline_act.receipt(medic_discharge.ACT, medic_discharge.body(found))
+
+
 def _trailered(act, at, text="the sweep acted"):
     return _c(pipeline_act.receipt(act, text), at)
 
@@ -251,7 +256,7 @@ class TestAlreadyDischarged:
     def _discharged(self, run=RUN):
         stop = medic_discharge.Stop(CARD, run, "requeue-once",
                                     "transient-infrastructure", True, RECEIPT_AT)
-        body = medic_discharge.receipt(medic_discharge.Discharge(stop, "re-ran"))
+        body = _composed(medic_discharge.Discharge(stop, "re-ran"))
         return _c(body, AFTER)
 
     def test_a_run_with_a_discharge_is_not_discharged_again(self):
@@ -294,7 +299,7 @@ class TestTheReceipt:
     ])
     def test_the_first_line_and_the_trailer(self, step, pr, because):
         found = _decide(_thread(step), pr)
-        body = medic_discharge.receipt(found)
+        body = _composed(found)
         first = body.split("\n", 1)[0]
         assert first == f"🩺 medic-stop-discharged: because={because} step={step} run={RUN}"
         assert body.rstrip("\n").splitlines()[-1] == (
@@ -309,13 +314,13 @@ class TestTheReceipt:
 
     def test_merged_and_new_head_name_the_pull_request_and_the_time_in_pt(self):
         for pr in (_pr(state="MERGED", merged_at=AFTER), _pr(committed=AFTER)):
-            body = medic_discharge.receipt(_decide(_thread("fix-path"), pr))
+            body = _composed(_decide(_thread("fix-path"), pr))
             assert "#77" in body
             # 19:30 UTC on 2026-11-10 is 11:30 AM PT.
             assert "11:30 AM PT" in body
 
     def test_the_receipt_is_not_a_medic_receipt(self):
-        body = medic_discharge.receipt(_decide(_thread("requeue-once")))
+        body = _composed(_decide(_thread("requeue-once")))
         assert medic_next_step.parse_receipt(body) is None
         assert medic_discharge.stops(CARD, [_c(body, AFTER)]) == []
 
@@ -355,6 +360,8 @@ class _Board:
         self.cards: dict = {}
         self.posts: list = []
         self.queries: list = []
+        self.lanes_asked: list = []
+        self.whole_reads: list = []
         self.fail_comment = False
 
     def add(self, ident, thread, *, lane="In Review", labels=(f"repo:{SLUG}",),
@@ -371,11 +378,19 @@ class _Board:
                              "nodes": list(reversed(card["thread"]))}}
 
     def gql(self, query, variables=None, **_kw):
+        """The Queued and Done read: Linear applies the lanes and the
+        completion window; every Done card here completed inside it."""
         self.queries.append((query, dict(variables or {})))
         if "issues(" in query:
-            return {"issues": {"nodes": [self._node(i) for i in self.cards],
+            return {"issues": {"nodes": [self._node(i) for i, c in self.cards.items()
+                                         if c["lane"] in ("Queued", "Done")],
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         raise AssertionError(f"unexpected Linear query: {query[:80]}")
+
+    def active_cards(self, states=()):
+        """The pass's board read: every repo's cards, in the lanes asked."""
+        self.lanes_asked.append(tuple(states))
+        return [self._node(i) for i, c in self.cards.items() if c["lane"] in states]
 
     def cmd_comment(self, ident, body, *flags):
         if self.fail_comment:
@@ -394,8 +409,11 @@ def board(monkeypatch):
     b = _Board()
     monkeypatch.setattr(linear_ops, "gql", b.gql)
     monkeypatch.setattr(linear_ops, "cmd_comment", b.cmd_comment)
+    monkeypatch.setattr(reconcile, "active_cards", b.active_cards)
+    monkeypatch.setattr(reconcile, "_idle_pass", [])
 
     def no_whole_thread(identifier, whole_thread=False, **_kw):
+        b.whole_reads.append(identifier)
         raise linear_ops.LinearError(f"{identifier}: the whole thread would not read")
     monkeypatch.setattr(linear_ops, "comment_timeline", no_whole_thread)
     b.prs = {}
@@ -446,15 +464,49 @@ class TestTheSweep:
 
     def test_the_read_is_scoped_to_the_repo_and_the_lanes(self, board):
         board.add("DRE-1", _thread("requeue-once"), labels=("repo:agent-bureau",))
+        board.add("DRE-2", _thread("requeue-once"), lane="Done",
+                  labels=("repo:agent-bureau",))
+        board.add("DRE-3", _thread("requeue-once"), lane="Green Light")
         reconcile.discharge_medic_stops()
         assert board.posts == []
-        issues = [v for q, v in board.queries if "issues(" in q]
-        assert len(issues) == 1
-        variables = issues[0]
+        assert board.lanes_asked == [("In Progress", "In Review", "Planning")]
+        assert set(reconcile.BOARD_READ_LANES) >= set(board.lanes_asked[0]), (
+            "the lanes asked of the pass's board read are in it, at no request")
+        issues = [(q, v) for q, v in board.queries if "issues(" in q]
+        assert len(issues) == 1, "one Linear read of its own: Queued and Done"
+        query, variables = issues[0]
         assert variables["needle"] == SLUG
-        assert set(variables["states"]) == {"In Progress", "Queued", "In Review", "Planning"}
-        assert variables["done"] == "Done"
-        assert variables["since"]
+        assert (variables["queue"], variables["done"]) == ("Queued", "Done")
+        assert "completedAt: {gt: $since}" in query
+        since = medic_discharge._ts(variables["since"])
+        age = reconcile.datetime.now(reconcile.UTC) - since
+        assert abs(age.total_seconds() - 24 * 3600) < 120
+
+    def test_a_done_card_merged_after_the_receipt_is_discharged(self, board):
+        board.add("DRE-1", _thread("fix-path"), lane="Done")
+        board.prs["DRE-1"] = _pr(state="MERGED", merged_at=AFTER)
+        reconcile.discharge_medic_stops()
+        assert [b.split("\n", 1)[0] for _, b in board.posts] == [
+            f"🩺 medic-stop-discharged: because=merged step=fix-path run={RUN}"]
+
+    def test_a_queued_card_is_read(self, board):
+        board.add("DRE-1", _thread("requeue-once"), lane="Queued")
+        reconcile.discharge_medic_stops()
+        assert [i for i, _ in board.posts] == ["DRE-1"]
+
+    def test_an_idle_pass_reads_only_its_own_read(self, board, monkeypatch):
+        monkeypatch.setattr(reconcile, "_idle_pass", ["nothing in motion"])
+        board.add("DRE-1", _thread("requeue-once"))
+        board.add("DRE-2", _thread("requeue-once"), lane="Done")
+        reconcile.discharge_medic_stops()
+        assert board.lanes_asked == []
+        assert [i for i, _ in board.posts] == ["DRE-2"]
+
+    def test_a_partial_window_with_no_receipt_is_not_read_whole(self, board):
+        board.add("DRE-1", [_c(DIAGNOSIS, BEFORE)], partial=True)
+        reconcile.discharge_medic_stops()
+        assert board.whole_reads == []
+        assert board.posts == [] and reconcile._read_failures == []
 
     def test_a_fix_path_reads_its_pull_request(self, board):
         board.add("DRE-1", _thread("fix-path"))
@@ -516,8 +568,22 @@ class TestFailures:
         board.add("DRE-1", _thread("requeue-once"), partial=True)
         board.add("DRE-2", _thread("requeue-once"))
         reconcile.discharge_medic_stops()
+        assert board.whole_reads == ["DRE-1"]
         assert [i for i, _ in board.posts] == ["DRE-2"]
         assert any("DRE-1" in f for f in reconcile._read_failures)
+
+    def test_a_partial_window_with_a_receipt_is_decided_on_the_whole_thread(
+            self, board, monkeypatch):
+        older = _composed(medic_discharge.Discharge(
+            medic_discharge.Stop("DRE-1", RUN, "requeue-once",
+                                 "transient-infrastructure", True, RECEIPT_AT), "re-ran"))
+        board.add("DRE-1", [_c(_receipt("requeue-once"), RECEIPT_AT)], partial=True)
+        whole = [_c(_receipt("requeue-once"), RECEIPT_AT), _c(older, AFTER),
+                 _c("a person said something", LATER)]
+        monkeypatch.setattr(linear_ops, "comment_timeline",
+                            lambda identifier, whole_thread=False, **_k: whole)
+        reconcile.discharge_medic_stops()
+        assert board.posts == [], "the whole thread holds this run's discharge"
 
     def test_a_rate_limited_board_read_degrades(self, board, monkeypatch):
         def limited(*_a, **_k):
@@ -582,9 +648,8 @@ class TestWhereItRuns:
 
     def test_it_posts_through_the_act_writer(self):
         source = inspect.getsource(reconcile.discharge_medic_stops)
-        assert "medic_discharge.receipt(" in source
-        module = (ROOT / "scripts" / "medic_discharge.py").read_text(encoding="utf-8")
-        assert "pipeline_act.receipt(ACT" in module
+        assert ("pipeline_act.receipt(medic_discharge.ACT, "
+                "medic_discharge.body(found))") in source
 
     def test_the_module_does_no_io(self):
         module = (ROOT / "scripts" / "medic_discharge.py").read_text(encoding="utf-8")
