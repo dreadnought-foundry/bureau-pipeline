@@ -207,6 +207,16 @@ class TestFixPath:
     def test_a_head_from_before_the_receipt_writes_nothing(self):
         assert _decide(_thread("fix-path"), _pr(committed=BEFORE)) is None
 
+    def test_the_newest_commit_is_the_last_one_listed(self):
+        """`gh pr view --json commits` lists oldest first, so the last is the
+        head. A list in the other order reads its oldest commit as the head:
+        the stop keeps waiting rather than being closed on a commit that
+        came before the receipt."""
+        pr = _pr(committed=AFTER)
+        assert _decide(_thread("fix-path"), pr).because == "new-head"
+        pr["commits"].reverse()
+        assert _decide(_thread("fix-path"), pr) is None
+
     def test_a_new_head_on_a_closed_pull_request_is_not_a_carrier(self):
         assert _decide(_thread("fix-path"), _pr(state="CLOSED", committed=AFTER)) is None
 
@@ -382,32 +392,42 @@ class _Board:
         self.fail_comment = False
 
     def add(self, ident, thread, *, lane="In Review", labels=(f"repo:{SLUG}",),
-            partial=False):
+            partial=False, seen_in=None, seen_thread=None):
+        """`seen_in` is the lane the pass's board read, made at the top of
+        the pass, caught the card in before it moved to `lane`; `seen_thread`
+        the window it held then."""
         self.cards[ident] = {"lane": lane, "labels": list(labels),
-                             "thread": list(thread), "partial": partial}
+                             "thread": list(thread), "partial": partial,
+                             "seen_in": seen_in or lane,
+                             "seen_thread": seen_thread}
 
-    def _node(self, ident):
+    def _node(self, ident, *, seen=False):
         card = self.cards[ident]
+        thread = card["seen_thread"] if seen and card["seen_thread"] is not None \
+            else card["thread"]
         return {"id": f"id-{ident}", "identifier": ident,
-                "state": {"name": card["lane"]},
+                "state": {"name": card["seen_in" if seen else "lane"]},
                 "labels": {"nodes": [{"name": n} for n in card["labels"]]},
                 "comments": {"pageInfo": {"hasNextPage": card["partial"]},
-                             "nodes": list(reversed(card["thread"]))}}
+                             "nodes": list(reversed(thread))}}
 
     def gql(self, query, variables=None, **_kw):
-        """The Queued and Done read: Linear applies the lanes and the
-        completion window; every Done card here completed inside it."""
+        """The queue and Done read: Linear applies the lanes it is asked and
+        the completion window; every Done card here completed inside it."""
         self.queries.append((query, dict(variables or {})))
         if "issues(" in query:
+            asked = [*variables["queue"], variables["done"]]
             return {"issues": {"nodes": [self._node(i) for i, c in self.cards.items()
-                                         if c["lane"] in ("Queued", "Done")],
+                                         if c["lane"] in asked],
                                "pageInfo": {"hasNextPage": False, "endCursor": None}}}
         raise AssertionError(f"unexpected Linear query: {query[:80]}")
 
     def active_cards(self, states=()):
-        """The pass's board read: every repo's cards, in the lanes asked."""
+        """The pass's board read: every repo's cards, in the lanes asked, as
+        that read saw them at the top of the pass."""
         self.lanes_asked.append(tuple(states))
-        return [self._node(i) for i, c in self.cards.items() if c["lane"] in states]
+        return [self._node(i, seen=True) for i, c in self.cards.items()
+                if c["seen_in"] in states]
 
     def cmd_comment(self, ident, body, *flags):
         if self.fail_comment:
@@ -501,7 +521,9 @@ class TestTheSweep:
         assert len(issues) == 1, "one Linear read of its own: Queued and Done"
         query, variables = issues[0]
         assert variables["needle"] == SLUG
-        assert (variables["queue"], variables["done"]) == ("Queued", "Done")
+        assert (variables["queue"], variables["done"]) == (
+            list(reconcile.QUEUE_LANES), "Done")
+        assert "{state: {name: {in: $queue}}}" in query
         assert "completedAt: {gt: $since}" in query
         since = medic_discharge._ts(variables["since"])
         age = reconcile.datetime.now(reconcile.UTC) - since
@@ -518,6 +540,35 @@ class TestTheSweep:
         board.add("DRE-1", _thread("requeue-once"), lane="Queued")
         reconcile.discharge_medic_stops()
         assert [i for i, _ in board.posts] == ["DRE-1"]
+
+    @pytest.mark.parametrize("lane", reconcile.QUEUE_LANES)
+    def test_the_queue_is_read_under_every_name_it_carries(self, board, lane):
+        """The read does not lean on `drain_retiring_lanes` having moved a
+        card out of a retiring alias earlier in the pass."""
+        board.add("DRE-1", _thread("requeue-once"), lane=lane)
+        reconcile.discharge_medic_stops()
+        assert [i for i, _ in board.posts] == ["DRE-1"]
+
+    @pytest.mark.parametrize("now_in", ["Done", "Queued"])
+    def test_a_card_that_moved_during_the_pass_is_decided_once(self, board, now_in):
+        """The pass's board read caught the card in a board lane at the top
+        of the pass; it moved — its pull request merged, or it left Planning
+        — before this read, so it is in both reads, as two windows."""
+        board.add("DRE-1", _thread("requeue-once"), lane=now_in, seen_in="In Review")
+        reconcile.discharge_medic_stops()
+        assert [b.split("\n", 1)[0] for _, b in board.posts] == [
+            f"🩺 medic-stop-discharged: because=re-ran step=requeue-once run={RUN}"]
+
+    def test_the_fresh_read_of_a_card_in_both_is_the_one_decided(self, board):
+        """The board read's window predates a discharge another pass posted;
+        the card's own read holds it, so nothing more is written."""
+        discharged = _composed(medic_discharge.Discharge(
+            medic_discharge.Stop("DRE-1", RUN, "requeue-once",
+                                 "transient-infrastructure", True, RECEIPT_AT), "re-ran"))
+        board.add("DRE-1", _thread("requeue-once", extra=[_c(discharged, AFTER)]),
+                  lane="Done", seen_in="In Review", seen_thread=_thread("requeue-once"))
+        reconcile.discharge_medic_stops()
+        assert board.posts == []
 
     def test_an_idle_pass_reads_only_its_own_read(self, board, monkeypatch):
         monkeypatch.setattr(reconcile, "_idle_pass", ["nothing in motion"])
