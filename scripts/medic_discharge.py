@@ -242,9 +242,9 @@ def decide(stop: Stop, thread, *, pr: dict | None = None,
         return None                                        # rule 3
     if stop.step in OWN_STEP:
         return Discharge(stop, OWN_STEP[stop.step])        # rules 4 and 5
-    if stop.step != FIX_PATH:
-        return None
-    return _carrier(stop, thread, pr, dispatch_acts)       # rule 6
+    if stop.step not in medic_next_step.STEPS:
+        return None             # a step this reader was never taught waits
+    return _carrier(stop, thread, pr, dispatch_acts)       # rule 6: fix-path
 
 
 def _carrier(stop: Stop, thread, pr: dict | None, dispatch_acts) -> Discharge | None:
