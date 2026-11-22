@@ -297,6 +297,7 @@ import spoken_thread  # noqa: E402 — DRE-6414: whose voice answered the growth
 import standing_defect_alert  # noqa: E402 — DRE-8632: a standing card defect is a console alert
 import crashed_review_alert  # noqa: E402 — DRE-8690: a review stuck at its cap is a console alert
 import held_verdict  # noqa: E402 — DRE-9230: a verdict the evidence gate held is not a crashed review
+import review_too_large  # noqa: E402 — DRE-9328: a review refused for size is not a crashed review
 import read_fallback_alert  # noqa: E402 — DRE-8798/DRE-9251: whether this pass may settle that alert
 # DRE-3138/3144: ONE reading of "is this pull request red only on a fault
 # `main` has since fixed?" — the geometry, the three check-run comparisons,
@@ -14890,13 +14891,15 @@ def _read_pr_for_alert(number: int) -> dict:
     return pr
 
 
-def _settle_reviewer_down_alerts(capped: list, prs: list[dict], unread: set) -> None:
+def _settle_reviewer_down_alerts(capped: list, prs: list[dict], unread: set,
+                                 refused: set = frozenset()) -> None:
     """Hand this pass's capped heads to `crashed_review_alert.settle`
-    (DRE-8690). An alert never decides the sweep: a fault is one line."""
+    (DRE-8690), with the heads it read as refused for size (DRE-9328). An
+    alert never decides the sweep: a fault is one line."""
     try:
         crashed_review_alert.settle(
             capped, REPO_SLUG, unread, repo=REPO, prs=prs,
-            read_pr=_read_pr_for_alert, bound=verdict_bound,
+            read_pr=_read_pr_for_alert, bound=verdict_bound, refused=refused,
         )
     except Exception as e:  # noqa: BLE001 — an alert never fails the sweep
         print(f"{crashed_review_alert.TAG} not settled this pass — "
@@ -14956,6 +14959,55 @@ def _triage_held_twice(pr: dict, holds: list) -> None:
     runs = ", ".join(h.where() for h in holds)
     print(f"held-verdict: PR #{number} head {sha[:8]} — held twice ({runs}); "
           f"{card} moved to Triage")
+
+
+def _size_refusal_at_head(pr: dict) -> str | None:
+    """The measured size when the critic refused this head for size, else
+    None (DRE-9328).
+
+    Free for every other head: the critic's newest comment, already in the
+    listing, has to open the refusal before the head's check runs are read
+    again for the head-bound check's title (`review_too_large.size_at_head`
+    holds both records to the head). An unreadable second read answers None,
+    and the head is read as it always was."""
+    bodies = critic_comment_bodies(pr)
+    if not bodies or not review_too_large.opens_refusal(bodies[-1]):
+        return None
+    sha = pr.get("headRefOid") or ""
+    return review_too_large.size_at_head(_head_check_runs(sha) or [], bodies, sha)
+
+
+def _report_review_too_large(pr: dict, size: str) -> None:
+    """A head the critic refused for size: its own line on every pass, and ONE
+    Green Light question on the card per head (DRE-9328).
+
+    Nothing is re-dispatched — a re-run cannot change the size — nothing is
+    raised, and nothing goes on a ledger that turns the sweep red: the
+    question is the escalation, asked once. It is posted before the move, so
+    a card the move refuses still carries it, and the move is out of the
+    review lane only, so a card somebody already moved stays where it is.
+    Once per pull request and head — `review_too_large.marker` on the card is
+    the key, so a new head that is still too large is asked again."""
+    number, sha = pr["number"], pr["headRefOid"]
+    print(review_too_large.log_line(number, sha, size))
+    card = branch_card(pr["headRefName"])
+    if not card:
+        print(f"WARNING: {review_too_large.KEY}: PR #{number} "
+              f"({pr['headRefName']}) carries no card id — nowhere to ask")
+        return
+    key = review_too_large.marker(number, sha)
+    if any(key in b for b in linear_ops.comment_bodies(card)):
+        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — {card} "
+              "was asked for this head already")
+        return
+    linear_ops.cmd_comment(card, review_too_large.question(
+        card=card, number=number, sha=sha, size=size))
+    if linear_ops.cmd_advance(card, ESCALATED_STATE, REVIEW_LANE):
+        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — asked on "
+              f"{card}, moved to {ESCALATED_STATE}")
+    else:
+        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — asked on "
+              f"{card}, which is not in {REVIEW_LANE}; left where it is")
 
 
 def _report_stale_verdict(pr: dict) -> None:
@@ -15155,6 +15207,13 @@ def recover_crashed_reviews() -> None:
         spend the crash budget. A second hold on the same head moves the card
         to Triage with one line naming the pull request, both runs and the
         held finding, and nothing more is dispatched.
+      * a failed check that is the critic's SIZE REFUSAL (DRE-9328) — the
+        head-bound check says the head was too large to review, and the
+        critic's newest comment says so too (`review_too_large`) → not a
+        crash, and never logged, re-dispatched, alerted or receipted as one.
+        It is named `review-too-large` on every pass, a standing
+        reviewer-down alert for it resolves, and the card is asked once per
+        head in Green Light; nothing goes on a red ledger.
       * no crashed check but the newest verdict binds an older sha →
         reported once per head (_report_stale_verdict) — unless the In
         Review nudge will re-review the head itself, which is re-tested
@@ -15192,6 +15251,7 @@ def recover_crashed_reviews() -> None:
     reasks = {}  # PR number -> the evidence hold its re-ask answers (DRE-9230)
     capped = []  # heads that reached `_report_reviewer_down` (DRE-8690)
     unread = set()  # PRs this pass holds only part of — their alert stays open
+    refused = set()  # PRs whose head the critic refused for size (DRE-9328)
     # DRE-9273: the lift re-checks only what an earlier phase already read.
     swept = {c["identifier"]: c for c in board_read_cards() or ()
              if card_repo(c) == REPO_SLUG}
@@ -15250,6 +15310,14 @@ def recover_crashed_reviews() -> None:
                         "a workflow_dispatch review run is still in flight; "
                         "waiting, never double-dispatching"
                     )
+                    continue
+                # DRE-9328: a review the critic REFUSED for size fails its
+                # check exactly as a crash does, and it is not one — nobody is
+                # down, and a re-run cannot change the size.
+                size = _size_refusal_at_head(pr)
+                if size is not None:
+                    refused.add(pr["number"])
+                    _report_review_too_large(pr, size)
                     continue
                 # DRE-9230: a verdict the evidence gate HELD fails the review
                 # job exactly as a crash does, and it is not one — the critic
@@ -15365,7 +15433,7 @@ def recover_crashed_reviews() -> None:
     # DRE-8690: every capped head is a console alert naming its card, and an
     # alert resolves only on positive evidence — never because a head was
     # skipped this pass.
-    _settle_reviewer_down_alerts(capped, prs, unread)
+    _settle_reviewer_down_alerts(capped, prs, unread, refused)
 
 
 # The fleet-outage backstop (DRE-3435, the sweep half of epic DRE-3420).

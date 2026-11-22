@@ -44,7 +44,10 @@ only when the pull request its title names
 
 * is no longer open (closed or merged),
 * has a head that no longer starts with the title's sha, or
-* has a verdict bound to that head (`reconcile.verdict_bound`).
+* has a verdict bound to that head (`reconcile.verdict_bound`), or
+* has that head in `refused`: this pass read the critic's size refusal on it
+  (`review_too_large`, DRE-9328). A pull request too large to review is not a
+  reviewer that is down, and the alert that said so is wrong, not stuck.
 
 The pull request is read off the sweep's own listing, or with one `gh pr view`
 when it is not there. A read that fails resolves nothing for that alert; so
@@ -58,6 +61,7 @@ Each opens with `TAG`, on stdout, and `settle` returns them in order:
     crashed-review-alert: <raised|repeat|lost> card=<DRE-n>
     crashed-review-alert: raise failed card=<DRE-n> — <reason>
     crashed-review-alert: resolved card=<DRE-n> — <evidence>
+    crashed-review-alert: resolved card=<DRE-n> — the critic refused PR #<n> for size at <sha8>, not a crash
     crashed-review-alert: card=<DRE-n> PR #<n> still stuck — kept open
     crashed-review-alert: card=<DRE-n> PR #<n> unreadable — <reason>; kept open
     crashed-review-alert: open alerts unreadable — <reason>; nothing resolved this pass
@@ -159,7 +163,8 @@ def _open_alerts(answer: dict, repo_slug: str) -> list[tuple[str, str]]:
     return found
 
 
-def _recovered(pr: dict, short: str, bound: Callable[[dict], bool]) -> str | None:
+def _recovered(pr: dict, short: str, bound: Callable[[dict], bool],
+               refused: set) -> str | None:
     """The positive evidence that this review is no longer stuck, or None."""
     state = str(pr.get("state") or "OPEN").upper()
     if state != "OPEN":
@@ -168,19 +173,24 @@ def _recovered(pr: dict, short: str, bound: Callable[[dict], bool]) -> str | Non
         return f"its head moved past {short}"
     if bound(pr):
         return f"a verdict is bound to {short}"
+    if pr.get("number") in refused:
+        return f"the critic refused PR #{pr.get('number')} for size at {short}, not a crash"
     return None
 
 
 def settle(capped: Iterable[Capped], repo_slug: str, unread: Iterable[int] = (), *,
            repo: str, prs: list[dict], read_pr: Callable[[int], dict],
-           bound: Callable[[dict], bool]) -> list[str]:
+           bound: Callable[[dict], bool],
+           refused: Iterable[int] = ()) -> list[str]:
     """Raise one alert per card `capped` names, resolve this repo's alerts
     whose review is no longer stuck, and return the lines printed.
 
     `repo` is `<owner>/<repo>`, `prs` the sweep's open-PR listing,
     `read_pr(number)` reads one pull request the listing does not hold (and
     raises when it cannot), `bound(pr)` is `reconcile.verdict_bound`, and
-    `unread` the pull request numbers this pass could not read whole."""
+    `unread` the pull request numbers this pass could not read whole, and
+    `refused` the ones whose current head this pass read as refused for size
+    (DRE-9328)."""
     lines: list[str] = []
 
     def say(text: str) -> None:
@@ -208,6 +218,7 @@ def settle(capped: Iterable[Capped], repo_slug: str, unread: Iterable[int] = (),
         say(f"open alerts unreadable — {e}; nothing resolved this pass")
         return lines
     unread = set(unread)
+    refused = set(refused)
     listed = {p.get("number"): p for p in prs or []}
     for card, text in _open_alerts(answer, repo_slug):
         if card in by_card:
@@ -222,7 +233,7 @@ def settle(capped: Iterable[Capped], repo_slug: str, unread: Iterable[int] = (),
             continue
         try:
             pr = listed.get(number) or read_pr(number)
-            evidence = _recovered(pr, short, bound)
+            evidence = _recovered(pr, short, bound, refused)
         except Exception as e:  # noqa: BLE001 — a failed read resolves nothing
             say(f"card={card} PR #{number} unreadable — {type(e).__name__}: {e}; "
                 "kept open")

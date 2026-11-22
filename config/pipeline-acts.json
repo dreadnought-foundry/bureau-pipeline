@@ -1585,6 +1585,13 @@
     },
     {
       "file": "scripts/reconcile.py",
+      "anchor": "linear_ops.cmd_comment(card, review_too_large.question(",
+      "kind": "undeclared-act",
+      "means": "The critic refused the pull request's head as too large to review, so the sweep asks the card once per head, in the Green Light format, whether the change is split into smaller pull requests or a person reviews it, moves it out of In Review, and re-dispatches nothing — a size refusal is not a crashed review (DRE-9328).",
+      "why": "Act-shaped — a hold that ends with a person — and the registry has no row for it. Giving it a row is a REGISTRY change that would have to ship console-first (docs/pipeline-acts.md), not an emission change, and the existing `reviewer-unavailable` row is the outage this question exists to stop being called. Its body is written by scripts/review_too_large.py, and its `review-too-large PR #<n> @<head sha>:` marker is what keeps the sweep from asking twice, so a trailer is a change to that key; the card that declares the act owns both."
+    },
+    {
+      "file": "scripts/reconcile.py",
       "anchor": "head_desync.resync_notice(number, head, tip, age)",
       "kind": "undeclared-act",
       "means": "GitHub never moved this pull request to its branch's newest commit, so the sweep closed and reopened it once for that commit and says so, naming both commits (DRE-6217).",
