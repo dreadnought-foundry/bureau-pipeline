@@ -82,6 +82,11 @@ import urllib.parse
 #: dispatch a fix agent over the critic's own red check.
 CHECK_NAME = "QA critic review"
 
+#: The title a review declined for size publishes (DRE-2466). The sweep reads
+#: it back off the head-bound check to tell a size refusal from a crash
+#: (`review_too_large`, DRE-9328), so it is spelled once, here.
+TOO_LARGE_TITLE = "Review skipped — pull request too large"
+
 #: Load-bearing like the verdict comment: retry through a transient GitHub
 #: blip rather than leaving the head unmarked, then fail loudly.
 ATTEMPTS = 3
@@ -127,7 +132,7 @@ def decide(real: bool, verdict: str, too_large: str = "",
     if too_large:
         return (
             "failure",
-            "Review skipped — pull request too large",
+            TOO_LARGE_TITLE,
             f"This pull request is too large to review ({too_large}). No "
             "review was attempted, so there are no findings and this is NOT "
             "a code rejection. Split it into smaller pull requests — each "

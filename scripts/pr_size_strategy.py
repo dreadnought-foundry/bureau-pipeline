@@ -581,6 +581,12 @@ def strategy_context(strategy: str, m: dict, pr: str) -> str:
     )
 
 
+#: What the critic's size refusal opens with. The sweep reads it off the
+#: critic's own comment, beside the head-bound check, to tell the refusal from
+#: a crashed review (`review_too_large`, DRE-9328).
+OVERSIZE_OPENER = "🔎 QA Critic — this pull request is too large to review"
+
+
 def oversize_message(m: dict) -> str:
     """The PR comment + job-failure text for a PR too large to review.
 
@@ -590,8 +596,7 @@ def oversize_message(m: dict) -> str:
     so it must not borrow anyone else's.
     """
     return (
-        f"🔎 QA Critic — this pull request is too large to review "
-        f"({_size_phrase(m)}).\n\n"
+        f"{OVERSIZE_OPENER} ({_size_phrase(m)}).\n\n"
         f"No review was attempted, so there are no findings and this is NOT "
         f"a code rejection. The reviewer's working limit is "
         f"{OVERSIZED_FILES:,} files / {OVERSIZED_LINES:,} changed lines "

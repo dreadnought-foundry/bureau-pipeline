@@ -63,6 +63,7 @@ import lane_contract  # noqa: E402
 import medic_next_step  # noqa: E402
 import planning_escalation  # noqa: E402
 import review_cap_question  # noqa: E402
+import review_too_large  # noqa: E402
 import step_shell  # noqa: E402
 from test_no_unplanned_ready_lane_writer import _Staged  # noqa: E402
 
@@ -254,6 +255,17 @@ def _review_cap_question() -> None:
         assert esc.recommendation is not None
 
 
+def _review_too_large_question() -> None:
+    """`reconcile.py#_report_review_too_large` (DRE-9328): the sweep's park on
+    a pull request the critic declined to review for size posts
+    `review_too_large.question` — with the measured size, and with none read."""
+    head = "3b11dec6" + "4f" * 16
+    for size in ("80 files, 84,730 changed lines", ""):
+        esc = assert_declares_the_lines(review_too_large.question(
+            card="DRE-9278", number=10, sha=head, size=size))
+        assert esc.recommendation is not None
+
+
 def _epic_growth_question() -> None:
     """`reconcile.py#ask_epic_growth_question` (DRE-6414): the sweep's question
     about an epic grown past its green light is the card's description,
@@ -411,6 +423,7 @@ CASES = {
     "planning_escalation.py#escalate": _question_notes,
     "code_owner_hold.py#park": _code_owner_note,
     "reconcile.py#hand_review_nudge_to_person": _review_cap_question,
+    "reconcile.py#_report_review_too_large": _review_too_large_question,
     "reconcile.py#ask_epic_growth_question": _epic_growth_question,
     "blocker_ask.py#resolve": _blocker_ask_question,
     "agent-task.yml#Report result to Linear":

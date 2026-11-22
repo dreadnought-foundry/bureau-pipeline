@@ -202,6 +202,7 @@ EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
 RELEASED_EPIC = ("scripts/reconcile.py", "ask_cap_for_released_epic")
 DEFERRAL = ("scripts/release_deferral.py", "file_deferral")
+REVIEW_TOO_LARGE = ("scripts/reconcile.py", "_report_review_too_large")
 
 
 # --------------------------------------------------------------------------- #
@@ -268,12 +269,14 @@ class TestTheRepositoryPasses:
         contract = _contract()
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
-                                 BLOCKER_ASK, RELEASED_EPIC, DEFERRAL}
+                                 BLOCKER_ASK, RELEASED_EPIC, DEFERRAL,
+                                 REVIEW_TOO_LARGE}
         # The cause park writes no lane since DRE-6837, so it has no record.
         # The Triage repair's question is the eighth caller of the escalation
         # (DRE-7178), and the operator agent's apply the ninth (DRE-8746).
         counts = {ESCALATE: 9, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1}
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1,
+                  REVIEW_TOO_LARGE: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
@@ -639,6 +642,20 @@ class TestTheAgentEscalationGate:
         assert grl.BLOCKER_ASK_SITE in {unit for _, unit in grl.green_light_writes()}
         assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
 
+    def test_the_sweeps_review_too_large_park_is_an_agent_escalation_site(self):
+        # DRE-9328: the sweep parks a card whose pull request the critic
+        # declined to review for size, with the question in the one Green
+        # Light format — reached from the crashed-review pass and nowhere else.
+        assert grl.REVIEW_TOO_LARGE_SITE == "reconcile.py#_report_review_too_large"
+        record = next(r for r in grl.arrivals()
+                      if r["where"] == grl.REVIEW_TOO_LARGE_SITE)
+        assert record["kind"] == "agent-escalation"
+        assert record["writer"] == "reconcile.py"
+        assert record["card"] == "DRE-9328"
+        assert record["callers"] == ["reconcile.py#recover_crashed_reviews"]
+        assert grl.REVIEW_TOO_LARGE_SITE in {unit for _, unit in grl.green_light_writes()}
+        assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
+
     def test_the_blocker_ask_with_no_record_fails_by_location(self):
         contract = _contract()
         _entrance(contract)["arrivals"] = [
@@ -661,7 +678,7 @@ class TestTheAgentEscalationGate:
         found = grl._gate_problems(record, [], str(ROOT), grl.lane_name())
         assert len(found) == 1, found
         for site in (grl.CODE_OWNER_SITE, grl.REVIEW_CAP_SITE, grl.BLOCKER_ASK_SITE,
-                     *grl.AGENT_ESCALATION_STEPS):
+                     grl.REVIEW_TOO_LARGE_SITE, *grl.AGENT_ESCALATION_STEPS):
             assert site in found[0], site
             assert grl._gate_problems({**record, "where": site}, [], str(ROOT),
                                       grl.lane_name()) == [], site
