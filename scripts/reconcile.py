@@ -14983,11 +14983,18 @@ def _report_review_too_large(pr: dict, size: str) -> None:
 
     Nothing is re-dispatched — a re-run cannot change the size — nothing is
     raised, and nothing goes on a ledger that turns the sweep red: the
-    question is the escalation, asked once. It is posted before the move, so
-    a card the move refuses still carries it, and the move is out of the
-    review lane only, so a card somebody already moved stays where it is.
-    Once per pull request and head — `review_too_large.marker` on the card is
-    the key, so a new head that is still too large is asked again."""
+    question is the escalation, asked once. Once per pull request and head —
+    `review_too_large.marker` on the card is the key, so a new head that is
+    still too large is asked again.
+
+    The move comes first and the question after it, as `_triage_held_twice`
+    writes its line: the marker is the only key, so a question posted before
+    a move Linear failed would read as done on every later pass, with the
+    card still In Review. A move Linear failed writes nothing, and the next
+    pass makes the whole park. The move is out of the review lane only, so a
+    card somebody already moved stays where it is and is not asked. A
+    question that does not post after the move leaves a card in Green Light
+    no later pass can tell from a parked one — that goes on the ledger, once."""
     number, sha = pr["number"], pr["headRefOid"]
     print(review_too_large.log_line(number, sha, size))
     card = branch_card(pr["headRefName"])
@@ -15000,14 +15007,28 @@ def _report_review_too_large(pr: dict, size: str) -> None:
         print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — {card} "
               "was asked for this head already")
         return
-    linear_ops.cmd_comment(card, review_too_large.question(
-        card=card, number=number, sha=sha, size=size))
-    if linear_ops.cmd_advance(card, ESCALATED_STATE, REVIEW_LANE):
-        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — asked on "
-              f"{card}, moved to {ESCALATED_STATE}")
-    else:
-        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — asked on "
-              f"{card}, which is not in {REVIEW_LANE}; left where it is")
+    try:
+        moved = linear_ops.cmd_advance(card, ESCALATED_STATE, REVIEW_LANE)
+    except linear_ops.LinearError as e:
+        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — {card} "
+              f"was not moved to {ESCALATED_STATE} ({e}); nothing asked, the "
+              "next pass tries again")
+        return
+    if not moved:
+        print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — {card} "
+              f"is not in {REVIEW_LANE}; left where it is, nothing asked")
+        return
+    try:
+        linear_ops.cmd_comment(card, review_too_large.question(
+            card=card, number=number, sha=sha, size=size))
+    except linear_ops.LinearError as e:
+        err = (f"{review_too_large.KEY}: {card} (PR #{number}) was moved to "
+               f"{ESCALATED_STATE}, and its question did not post: {e}")
+        _write_failures.append(err)
+        print(f"ERROR: {err}", file=sys.stderr)
+        return
+    print(f"{review_too_large.KEY}: PR #{number} head {sha[:8]} — {card} moved "
+          f"to {ESCALATED_STATE}, asked")
 
 
 def _report_stale_verdict(pr: dict) -> None:

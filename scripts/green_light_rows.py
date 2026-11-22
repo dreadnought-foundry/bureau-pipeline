@@ -204,6 +204,11 @@ REVIEW_CAP_SITE = "reconcile.py#hand_review_nudge_to_person"
 #: the reason REVIEW_CAP_SITE is one: the module imports the pipeline's writers.
 BLOCKER_ASK_SITE = "blocker_ask.py#resolve"
 
+#: The sweep's park on a pull request the critic declined to review for size
+#: (DRE-9328) — a python `agent-escalation` site, reached from the
+#: crashed-review pass. A literal, for the reason REVIEW_CAP_SITE is one.
+REVIEW_TOO_LARGE_SITE = "reconcile.py#_report_review_too_large"
+
 #: The sweep's question about an epic grown past the size the CEO approved
 #: (DRE-6414) — the only unit an `epic-growth` row comes from. A literal, for
 #: the reason REVIEW_CAP_SITE is one.
@@ -625,12 +630,14 @@ def _gate_problems(record: dict, writes_here: list, root: str, lane: str) -> lis
                         "parked proof card with no hold on it is one the "
                         "dispatcher could chase"
                     )
-        elif where not in (CODE_OWNER_SITE, REVIEW_CAP_SITE, BLOCKER_ASK_SITE):
+        elif where not in (CODE_OWNER_SITE, REVIEW_CAP_SITE, BLOCKER_ASK_SITE,
+                           REVIEW_TOO_LARGE_SITE):
             out.append(
                 f"{where} is declared an 'agent-escalation' arrival, and the "
                 f"only agent-escalation sites are "
                 f"{', '.join(AGENT_ESCALATION_STEPS)}, {CODE_OWNER_SITE}, "
-                f"{REVIEW_CAP_SITE} and {BLOCKER_ASK_SITE}"
+                f"{REVIEW_CAP_SITE}, {BLOCKER_ASK_SITE} and "
+                f"{REVIEW_TOO_LARGE_SITE}"
             )
     return out
 
