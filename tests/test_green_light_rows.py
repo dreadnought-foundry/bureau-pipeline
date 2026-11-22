@@ -202,6 +202,7 @@ EPIC_GROWTH = ("scripts/reconcile.py", "ask_epic_growth_question")
 BLOCKER_ASK = ("scripts/blocker_ask.py", "resolve")
 RELEASED_EPIC = ("scripts/reconcile.py", "ask_cap_for_released_epic")
 DEFERRAL = ("scripts/release_deferral.py", "file_deferral")
+REVIEW_TOO_LARGE = ("scripts/reconcile.py", "_report_review_too_large")
 
 
 # --------------------------------------------------------------------------- #
@@ -268,12 +269,14 @@ class TestTheRepositoryPasses:
         contract = _contract()
         declared = _declared(contract)
         assert set(declared) == {ESCALATE, CMD_EXIT, PARK, REVIEW_CAP, EPIC_GROWTH,
-                                 BLOCKER_ASK, RELEASED_EPIC, DEFERRAL}
+                                 BLOCKER_ASK, RELEASED_EPIC, DEFERRAL,
+                                 REVIEW_TOO_LARGE}
         # The cause park writes no lane since DRE-6837, so it has no record.
         # The Triage repair's question is the eighth caller of the escalation
         # (DRE-7178), and the operator agent's apply the ninth (DRE-8746).
         counts = {ESCALATE: 9, CMD_EXIT: 2, PARK: 2, REVIEW_CAP: 1, EPIC_GROWTH: 1,
-                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1}
+                  BLOCKER_ASK: 1, RELEASED_EPIC: 1, DEFERRAL: 1,
+                  REVIEW_TOO_LARGE: 1}
         for (module, function), callers in declared.items():
             report = lane_callers.callers_of(module, function, str(ROOT))
             assert report.unread == frozenset(), (module, report.unread)
