@@ -122,7 +122,8 @@ class Sweep:
     one reads — and every dispatch, re-run, PR comment, card comment, lane
     move and console alert is recorded, never made."""
 
-    def __init__(self, prs, checks, *, card_bodies=(), alerts=()):
+    def __init__(self, prs, checks, *, card_bodies=(), alerts=(), moves=(),
+                 comment_errors=()):
         self.prs = prs
         self.checks = checks
         self.card_bodies = list(card_bodies)
@@ -134,6 +135,11 @@ class Sweep:
         self.advances: list = []
         self.raised: list = []
         self.resolved: list = []
+        #: What each lane move answers, in order — True, False, or an
+        #: exception to raise; past the end, every move is written.
+        self.moves = list(moves)
+        #: What each card comment raises, in order — None posts it.
+        self.comment_errors = list(comment_errors)
 
     def _gh(self, argv, **kwargs):
         assert argv[0] == "gh", f"unexpected call: {argv}"
@@ -159,12 +165,19 @@ class Sweep:
         raise AssertionError(f"unexpected gh call: {argv}")
 
     def _comment(self, ident, body):
+        error = self.comment_errors.pop(0) if self.comment_errors else None
+        if error is not None:
+            raise error
         self.card_comments.append((ident, body))
         self.card_bodies.append(body)
 
     def _advance(self, ident, to_state, from_csv, *flags, held=False):
-        self.advances.append((ident, to_state, from_csv))
-        return True
+        answer = self.moves.pop(0) if self.moves else True
+        if isinstance(answer, BaseException):
+            raise answer
+        if answer:
+            self.advances.append((ident, to_state, from_csv))
+        return answer
 
     def run(self):
         """One pass. Returns what it printed, stdout and stderr together."""
@@ -247,6 +260,8 @@ def test_a_standing_reviewer_down_alert_for_the_refused_head_resolves(capsys):
     sweep, out = _replay(capsys, alerts=[alert])
     assert sweep.resolved == [f"reviewer-down:deltasolv:{CARD}"], out
     assert sweep.raised == []
+    assert (f"crashed-review-alert: resolved card={CARD} — the critic refused "
+            f"PR #10 for size at {SHA[:8]}, not a crash") in out, out
 
 
 # --------------------------------------------------------------------------
@@ -344,6 +359,71 @@ def test_a_new_head_still_refused_is_asked_again(capsys):
     keys = [body for _c, body in sweep.card_comments]
     assert len(keys) == 2
     assert f"@{SHA}:" in keys[0] and f"@{NEW_SHA}:" in keys[1]
+
+
+# --------------------------------------------------------------------------
+# The park is written in an order a later pass can finish
+# --------------------------------------------------------------------------
+def test_a_move_that_raises_asks_nothing_and_the_next_pass_parks_it(capsys):
+    """Linear failed the move: nothing is written, so no marker says the card
+    was asked, and the next pass makes the whole park — never a question left
+    on a card that stayed In Review, with every later pass reading it as done."""
+    sweep = Sweep([_pr()], [_head_check(), _run_check()],
+                  moves=[reconcile.linear_ops.LinearError("Linear 500 on the move")])
+    sweep.run()
+    first = capsys.readouterr()
+    assert sweep.card_comments == [] and sweep.advances == []
+    assert _red_ledgers() == [], "a size refusal never turns the sweep red"
+    assert "ERROR:" not in first.out + first.err
+    assert "the next pass tries again" in first.out, first.out
+    sweep.run()
+    assert sweep.advances == [(CARD, "Green Light", reconcile.REVIEW_LANE)]
+    assert len(sweep.card_comments) == 1, sweep.card_comments
+    assert f"review-too-large PR #10 @{SHA}:" in sweep.card_comments[0][1]
+    sweep.run()
+    assert len(sweep.card_comments) == 1 and len(sweep.advances) == 1
+
+
+def test_a_card_somebody_already_moved_is_left_where_it_is_and_not_asked(capsys):
+    """The move is out of the review lane only. A card a person already moved
+    gets no question: it is not waiting in Green Light, and the question says
+    it is."""
+    sweep = Sweep([_pr()], [_head_check(), _run_check()], moves=[False])
+    sweep.run()
+    out = capsys.readouterr().out
+    assert sweep.card_comments == [] and sweep.advances == []
+    assert (f"review-too-large: PR #10 head {SHA[:8]} — {CARD} is not in "
+            f"{reconcile.REVIEW_LANE}; left where it is, nothing asked") in out, out
+    assert _red_ledgers() == []
+
+
+def test_a_question_that_does_not_post_after_the_move_is_a_write_failure(capsys):
+    """The card is in Green Light with no question on it, and no later pass
+    can tell: that half-written park is a person's to finish, so it is said
+    once, on the ledger that turns the sweep red."""
+    sweep = Sweep([_pr()], [_head_check(), _run_check()],
+                  comment_errors=[reconcile.linear_ops.LinearError("Linear 500")])
+    sweep.run()
+    err = capsys.readouterr().err
+    assert sweep.advances == [(CARD, "Green Light", reconcile.REVIEW_LANE)]
+    assert sweep.card_comments == []
+    assert len(reconcile._write_failures) == 1, reconcile._write_failures
+    assert reconcile._write_failures[0].startswith(
+        f"review-too-large: {CARD} (PR #10) was moved to Green Light, and its "
+        "question did not post"), reconcile._write_failures
+    assert "ERROR: review-too-large:" in err
+
+
+def test_a_pull_request_with_no_card_id_is_reported_and_nothing_is_written(capsys):
+    pr = dict(_pr(), headRefName="agent/live-frames")
+    sweep = Sweep([pr], [_head_check(), _run_check()])
+    sweep.run()
+    out = capsys.readouterr().out
+    assert sweep.card_comments == [] and sweep.advances == []
+    assert (f"WARNING: review-too-large: PR #10 (agent/live-frames) carries "
+            "no card id — nowhere to ask") in out, out
+    assert "review-too-large: PR #10 head" in out
+    assert _red_ledgers() == []
 
 
 # --------------------------------------------------------------------------

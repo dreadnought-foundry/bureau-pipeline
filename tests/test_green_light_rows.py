@@ -639,6 +639,20 @@ class TestTheAgentEscalationGate:
         assert grl.BLOCKER_ASK_SITE in {unit for _, unit in grl.green_light_writes()}
         assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
 
+    def test_the_sweeps_review_too_large_park_is_an_agent_escalation_site(self):
+        # DRE-9328: the sweep parks a card whose pull request the critic
+        # declined to review for size, with the question in the one Green
+        # Light format — reached from the crashed-review pass and nowhere else.
+        assert grl.REVIEW_TOO_LARGE_SITE == "reconcile.py#_report_review_too_large"
+        record = next(r for r in grl.arrivals()
+                      if r["where"] == grl.REVIEW_TOO_LARGE_SITE)
+        assert record["kind"] == "agent-escalation"
+        assert record["writer"] == "reconcile.py"
+        assert record["card"] == "DRE-9328"
+        assert record["callers"] == ["reconcile.py#recover_crashed_reviews"]
+        assert grl.REVIEW_TOO_LARGE_SITE in {unit for _, unit in grl.green_light_writes()}
+        assert grl._gate_problems(record, [], str(ROOT), grl.lane_name()) == []
+
     def test_the_blocker_ask_with_no_record_fails_by_location(self):
         contract = _contract()
         _entrance(contract)["arrivals"] = [
@@ -661,7 +675,7 @@ class TestTheAgentEscalationGate:
         found = grl._gate_problems(record, [], str(ROOT), grl.lane_name())
         assert len(found) == 1, found
         for site in (grl.CODE_OWNER_SITE, grl.REVIEW_CAP_SITE, grl.BLOCKER_ASK_SITE,
-                     *grl.AGENT_ESCALATION_STEPS):
+                     grl.REVIEW_TOO_LARGE_SITE, *grl.AGENT_ESCALATION_STEPS):
             assert site in found[0], site
             assert grl._gate_problems({**record, "where": site}, [], str(ROOT),
                                       grl.lane_name()) == [], site
